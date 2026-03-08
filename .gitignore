@@ -9,6 +9,8 @@ build/
 # Frontend
 frontend/node_modules/
 frontend/dist/
+*.tsbuildinfo
+.eslintcache
 
 # Built frontend assets served by backend
 src/lizystudio/static/
