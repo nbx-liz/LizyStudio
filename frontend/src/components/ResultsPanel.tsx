@@ -1,11 +1,11 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import {
   Accordion,
   Alert,
   Button,
   Group,
-  Loader,
   Paper,
+  Progress,
   Select,
   Stack,
   Table,
@@ -26,6 +26,10 @@ import {
   runFit,
   runTune,
 } from "../api/jobs";
+import {
+  type ProgressMessage,
+  connectJobProgress,
+} from "../api/websocket";
 import { PlotlyChart } from "./PlotlyChart";
 
 interface ResultsPanelProps {
@@ -103,18 +107,9 @@ export function ResultsPanel({ jobId, onJobCreated }: ResultsPanelProps) {
   if (job.status === "running" || job.status === "pending") {
     return (
       <Paper p="md" withBorder>
-        <Stack align="center" gap="md" py="xl">
-          <Group>
-            <Title order={5}>
-              {job.job_type === "fit" ? "Fit" : "Tune"} — {job.job_id}
-            </Title>
-            <Badge color="blue">Running</Badge>
-          </Group>
-          <Loader />
-          <Text size="sm" c="dimmed">
-            Processing...
-          </Text>
-        </Stack>
+        <RunningView jobId={job.job_id} jobType={job.job_type} onDone={() => {
+          queryClient.invalidateQueries({ queryKey: ["job", jobId] });
+        }} />
       </Paper>
     );
   }
@@ -210,6 +205,82 @@ export function ResultsPanel({ jobId, onJobCreated }: ResultsPanelProps) {
         </Group>
       </Stack>
     </Paper>
+  );
+}
+
+// --- Running view with WebSocket progress ---
+
+export function RunningView({
+  jobId,
+  jobType,
+  onDone,
+}: {
+  jobId: string;
+  jobType: string;
+  onDone: () => void;
+}) {
+  const [progress, setProgress] = useState<ProgressMessage | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const startRef = useRef(0);
+
+  // Elapsed time timer
+  useEffect(() => {
+    startRef.current = Date.now();
+    const timer = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startRef.current) / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [jobId]);
+
+  // WebSocket connection
+  useEffect(() => {
+    const disconnect = connectJobProgress(jobId, {
+      onProgress: (msg) => setProgress(msg),
+      onCompleted: () => onDone(),
+      onError: () => onDone(),
+      onDisconnect: () => {
+        // Fallback: poll will pick up the change via refetchInterval
+      },
+    });
+    return disconnect;
+  }, [jobId, onDone]);
+
+  const pct = progress && progress.total > 0
+    ? Math.round((progress.current / progress.total) * 100)
+    : 0;
+  const mins = Math.floor(elapsed / 60);
+  const secs = elapsed % 60;
+
+  return (
+    <Stack align="center" gap="md" py="xl">
+      <Group>
+        <Title order={5}>
+          {jobType === "fit" ? "Fit" : "Tune"} — {jobId}
+        </Title>
+        <Badge color="blue">Running</Badge>
+      </Group>
+      {progress ? (
+        <>
+          <Text size="sm" fw={500}>
+            {progress.message}
+          </Text>
+          <Progress value={pct} size="lg" w="80%" animated />
+          <Text size="xs" c="dimmed">
+            {progress.current} / {progress.total} ({pct}%)
+          </Text>
+        </>
+      ) : (
+        <>
+          <Progress value={100} size="lg" w="80%" animated striped />
+          <Text size="sm" c="dimmed">
+            Starting...
+          </Text>
+        </>
+      )}
+      <Text size="xs" c="dimmed">
+        Elapsed: {mins}m {secs.toString().padStart(2, "0")}s
+      </Text>
+    </Stack>
   );
 }
 

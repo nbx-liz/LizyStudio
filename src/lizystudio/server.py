@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -17,6 +18,7 @@ from lizystudio.api.errors import StudioError, studio_error_handler
 from lizystudio.backends.registry import get_adapter
 from lizystudio.services.jobs import JobStore
 from lizystudio.services.workspace import WorkspaceState
+from lizystudio.ws.progress import ProgressBroadcaster, websocket_progress
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -38,6 +40,9 @@ def create_app() -> FastAPI:
         adapter = get_adapter(backend_name)
         application.state.workspace = WorkspaceState(backend=adapter)
         application.state.job_store = JobStore(jobs_dir)
+        broadcaster = ProgressBroadcaster()
+        broadcaster.set_loop(asyncio.get_running_loop())
+        application.state.broadcaster = broadcaster
         yield
 
     application = FastAPI(
@@ -66,6 +71,12 @@ def create_app() -> FastAPI:
     application.include_router(
         inference.router, prefix="/api/inference", tags=["inference"]
     )
+
+    # WebSocket route for job progress (BLUEPRINT §5.5)
+    @application.websocket("/ws/jobs/{job_id}/progress")
+    async def ws_job_progress(ws: WebSocket, job_id: str) -> None:
+        broadcaster: ProgressBroadcaster = application.state.broadcaster
+        await websocket_progress(ws, job_id, broadcaster)
 
     # Serve built frontend (production)
     if STATIC_DIR.is_dir() and (STATIC_DIR / "index.html").exists():
