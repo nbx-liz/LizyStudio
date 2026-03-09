@@ -1,1 +1,1 @@
-"""Service layer — bridges API routers to LizyML."""
+"""Service layer — bridges API routers to backend adapters."""
