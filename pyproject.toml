@@ -39,6 +39,7 @@ dev = [
     "httpx>=0.28",
     "pandas-stubs>=2.3.3.260113",
     "types-pyyaml>=6.0.12.20250915",
+    "pyarrow>=23.0.1",
 ]
 
 [tool.hatch.version]
