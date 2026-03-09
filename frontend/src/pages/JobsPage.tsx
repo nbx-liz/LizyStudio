@@ -51,6 +51,7 @@ import {
   FoldDetailsSection,
   FeatureImportanceSection,
 } from "../components/ResultsPanel";
+import { ConfigTreeView } from "../components/ConfigTreeView";
 import { ExportDialog } from "../components/ExportDialog";
 import { formatRelativeTime } from "../utils/formatRelativeTime";
 
@@ -516,7 +517,7 @@ function JobDetailPanel({
           <Accordion.Item value="config">
             <Accordion.Control>Config</Accordion.Control>
             <Accordion.Panel>
-              <Code block>{JSON.stringify(config, null, 2)}</Code>
+              <ConfigTreeView data={config} defaultExpandDepth={1} />
             </Accordion.Panel>
           </Accordion.Item>
         )}
@@ -616,7 +617,7 @@ function ConfigAccordion({ config }: { config: Record<string, unknown> }) {
       <Accordion.Item value="config">
         <Accordion.Control>Config</Accordion.Control>
         <Accordion.Panel>
-          <Code block>{JSON.stringify(config, null, 2)}</Code>
+          <ConfigTreeView data={config} defaultExpandDepth={1} />
         </Accordion.Panel>
       </Accordion.Item>
     </Accordion>

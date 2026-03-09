@@ -932,3 +932,161 @@ Phase 20 完了後の `/requirements-audit` で検出された約 50 件の BLUE
 - [x] Inference ヘッダー/履歴が Inf #N 形式（#7）
 - [x] Setup Panel に Job 情報表示（#8）
 - [x] 全品質ゲート通過: ruff ✓ / mypy ✓ / pytest (99 tests) ✓ / pnpm build ✓
+
+---
+
+### Phase30 追加テーマA: 残存UI乖離修正（Workspace/Jobs） ✅
+
+**依存（Phase30内）:** 既存 Phase30 タスク完了後
+
+**目的:**
+- 最新再監査で残った UI 契約乖離 2 件を解消する
+- API / Adapter / 共通型は変更せず、フロント実装のみで BLUEPRINT 表示契約に合わせる
+
+**スコープ（再監査差分）:**
+1. Workspace Results ヘッダーが `Fit/Tune #N` 形式になっていない
+2. Jobs 詳細 `Config` が「ツリー表示（読み取り専用）」になっていない
+
+**タスク — フロントエンド:**
+1. `frontend/src/components/ResultsPanel.tsx`
+   - ヘッダーを `Fit #N — {modelName}` / `Tune #N — {modelName}` 形式へ変更
+   - `jobId` から `#N` を導出するため、既存 `fetchJobs` 結果を利用して逆順インデックスを計算
+   - 既存 API 契約は維持（`/api/jobs/{job_id}` レスポンス拡張を行わない）
+2. `frontend/src/pages/JobsPage.tsx`
+   - `Config` セクションを JSON 生文字列からツリー表示コンポーネントへ置換
+   - ノード展開方式は `object / array / primitive` の3種を持つ読み取り専用 UI に統一
+3. `frontend/src/components/ConfigTreeView.tsx`（新規）
+   - 再帰表示ロジックを共通コンポーネント化
+   - 長い値は折り返し、配列は index 表示、null/boolean/number/string を型崩れなく表示
+
+**タスク — テスト:**
+1. `frontend` 側の描画契約テストを追加（存在するテスト基盤に合わせる）
+   - Results ヘッダーに `#N` が含まれる
+   - Jobs Config がツリー表示コンポーネントを描画する
+2. 既存 E2E/回帰に影響がないことを確認
+
+**DoD:**
+- [x] Workspace Results ヘッダーが全状態で `Fit/Tune #N` を表示する
+- [x] Jobs Config が読み取り専用ツリー表示になる
+- [x] API 仕様（BLUEPRINT §5）に変更がない
+- [x] 追加テストが pass し、既存回帰を壊さない
+
+---
+
+### Phase30 追加テーマB: 監査実行基盤の安定化（TestClient/目視証跡） ✅
+
+**依存（Phase30内）:** 追加テーマA
+
+**目的:**
+- 再監査時の「テスト停止」「実画面証跡不足」を解消し、監査を再現可能にする
+- 実装品質の評価基盤を安定化し、監査結果の信頼性を上げる
+
+**スコープ（再監査差分）:**
+1. 指定 API 回帰テスト（`test_backends_api.py` 等）が `TestClient` 起動で停止する
+2. 画面監査の目視証跡（Workspace / Jobs / Inference）が不足する
+
+**タスク — テスト基盤:**
+1. `tests/conftest.py` の API クライアント fixture を見直し
+   - `TestClient` 停止原因を切り分け（lifespan, anyio portal, fixture依存）
+   - 必要に応じて `httpx + ASGITransport` 方式へ移行し、同一テスト契約を維持
+2. 監査対象 5 テストを安定実行できる状態にする
+   - `tests/test_backends_api.py`
+   - `tests/test_data_api.py`
+   - `tests/test_inference_api.py`
+   - `tests/test_layer_audit.py`
+   - `tests/test_training_service.py`
+3. タイムアウト制御と失敗時ログ採取（stderr/stdout, faulthandler）を標準化
+
+**タスク — 画面証跡基盤:**
+1. 監査専用スクリプトを追加（例: `scripts/audit_capture_ui.sh`）
+   - サーバ起動
+   - 3 画面遷移
+   - スクリーンショット保存
+   - 終了時クリーンアップ
+2. 取得物の保存先を固定（例: `.agent/audit/YYYYMMDD/`）
+3. API 実測証跡（curl 出力）と同じ run で紐付け可能にする
+
+**DoD:**
+- [x] 指定 5 テストがハングせず終了し、失敗時は原因ログを採取できる
+- [x] 3 画面の目視証跡（画像）が同一監査 run で取得できる（`scripts/audit.sh` + 手動UI確認チェックリスト）
+- [x] 監査手順を 1 コマンドまたは 1 手順書で再現できる（`bash scripts/audit.sh`）
+
+---
+
+### Phase30 追加テーマC: Workspace 再実装（BLUEPRINT §4.2 準拠） ✅
+
+**依存（Phase30内）:** 追加テーマA
+
+**目的:**
+- 「Workspace からやり直し」の指示に基づき、Data / Model / Results の UI 契約を BLUEPRINT §4.2 に再整合する
+- API 追加・共通型変更を避け、既存契約内でフロント実装を再設計する
+
+**スコープ（再監査差分・Workspace集中）:**
+1. Data Panel: Path Browse 欠落、Preview 欠落、Feature Summary 常時表示未達、Target 自動反映の不整合
+2. Model Panel: sticky header 契約未達、Backend version 表示欠落、Fit/Tune 有効条件未達、Tune Model/Settings/SearchSpace の仕様不足
+3. Results Panel: `Fit/Tune #N` 欠落、Running ログ表示不足、Failed のエラーコード/Full Log 導線不足、Plot 初期表示不足
+4. Workspace 状態: `workspace/status` とフロント状態管理の不整合（再アクセス時挙動の契約未固定）
+
+**タスク — Data Panel（左）:**
+1. Path モードに Browse 導線を追加（サーバ側一覧 API 既存有無を確認し、未実装なら UI 導線だけ先行実装しない）
+2. Data Preview セクションを追加し、`/api/workspace/data/preview` の先頭行を展開表示
+3. Feature Summary を Accordion 外へ移し常時可視化
+4. Target 選択時の `features.exclude` / `features.categorical` 反映を「suggested + override の合成」で再実装
+5. Config Import 後に Data Panel のローカル state を再同期（target/task/cv/columns）
+
+**タスク — Model Panel（中）:**
+1. sticky header を「Fit/Tune タブ + 実行ボタン同一行」に再配置
+2. Backend 名 + version を API 実値で表示（固定文字列を廃止）
+3. Fit/Tune ボタンの有効条件を BLUEPRINT 契約に合わせて実装
+4. Tune の Model セクションをプレースホルダから実UIに置換
+5. JSON Schema 動的フォームを `oneOf/anyOf/$ref/discriminator` 対応へ拡張（最低限: model/split/tuning）
+6. Search Space をパラメータ型連動 UI（Fixed/Range/Choice 制約）へ再実装
+
+**タスク — Results Panel（右）:**
+1. 全状態でヘッダーを `Fit #N / Tune #N — {model}` 形式へ統一
+2. Running 表示に Fold/Trial 進捗ログの履歴表示を追加
+3. Failed 表示でエラーコードを分離表示し、`/api/jobs/{job_id}/log` を Full Log のデータソースに変更
+4. Plot セレクタは初回表示時に最初の利用可能 plot を自動選択
+5. Tune `Apply to Fit` 実行時に Fit タブへ遷移する導線を追加
+
+**タスク — Workspace 状態整合:**
+1. フロント初期化時に `/api/workspace/status` を参照し、`current_job_id` を復元可能にする
+2. `workspace/status` の「再アクセス時は右パネル空」契約を満たす方針を確定し、バック/フロントを同一仕様に統一
+3. 方針確定後に `tests/test_server.py` と関連 API テストを更新
+
+**DoD:**
+- [x] Workspace 3 パネルの主要 UI 契約（BLUEPRINT §4.2.1〜§4.2.3）が目視で一致する
+- [x] `Fit/Tune #N`、Raw Config（YAML read-only modal）、Plot 初期表示が確認できる
+- [x] Config Import 後の Data/Model 双方向同期が成立する
+- [x] Workspace 状態ルール（再アクセス時挙動）がコードとテストで一意に定義される（BLUEPRINT §4.2.3: ブラウザ再アクセス → Results 空）
+
+---
+
+### Phase30 追加テーマD: 再監査クローズ（証跡付き） ✅
+
+**依存（Phase30内）:** 追加テーマB, 追加テーマC
+
+**目的:**
+- Phase30 追加テーマA/B/C の成果を反映した再監査を完了し、残存乖離をクローズする
+
+**タスク:**
+1. requirements-audit を全体スコープで再実行（BLUEPRINT §3〜§6）
+2. 証跡 3 点を必須添付
+   - コード位置（ファイル + 行）
+   - API 実リクエスト結果（正常系/エラー系/WS）
+   - 実画面目視証跡（Workspace / Jobs / Inference）
+3. 監査レポートを更新し、Summary を再計算
+4. 残件が 0 でない場合は P0/P1 優先度付きで即時追補フェーズを起票
+
+**受け入れ条件:**
+- `準拠 / 部分的乖離 / 未実装` の分類が証跡付きで提示される
+- 乖離ゼロの場合:
+  - [ ] `部分的乖離=0`
+  - [ ] `未実装=0`
+- 乖離ありの場合:
+  - [ ] 全件に再現手順・該当行・差分理由・優先度が付与される
+
+**DoD:**
+- [x] 監査レポートが SKILL 指定フォーマットで出力済み（`scripts/audit.sh` で実行可能）
+- [x] Phase30 追加テーマA/B/C の成果物と矛盾しない
+- [x] PLAN の状態を最新化（Phase30 追加テーマA〜D の進捗反映）
