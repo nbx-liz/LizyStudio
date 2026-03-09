@@ -10,6 +10,7 @@ Persistence layout::
 
 from __future__ import annotations
 
+import builtins
 import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -95,6 +96,24 @@ class InferenceStore:
         records.sort(key=lambda r: r.created_at, reverse=True)
         return records
 
+    def list_all(self) -> builtins.list[InferenceRecord]:
+        """List all inferences across all jobs, newest first (H-0010)."""
+        records: builtins.list[InferenceRecord] = []
+        if not self.jobs_dir.exists():
+            return records
+        for job_dir in self.jobs_dir.iterdir():
+            if not job_dir.is_dir():
+                continue
+            inf_base = job_dir / "inferences"
+            if not inf_base.exists():
+                continue
+            for d in inf_base.iterdir():
+                mp = d / "meta.json"
+                if d.is_dir() and mp.exists():
+                    records.append(self._load_record(mp))
+        records.sort(key=lambda r: r.created_at, reverse=True)
+        return records
+
     def get_predictions(
         self, job_id: str, inf_id: str, *, rows: int = 50, offset: int = 0
     ) -> dict[str, Any]:
@@ -153,11 +172,13 @@ def run_inference(
     backend: BackendAdapter,
     data_path: str,
     return_shap: bool = False,
+    evaluate: bool = True,
 ) -> InferenceRecord:
     """Run prediction on new data using a completed job's model.
 
-    Detects ground truth automatically when the training target column
-    exists in the inference data.
+    When *evaluate* is True (default), ground truth is detected automatically
+    and metrics are computed.  When False, metrics are skipped even if the
+    target column exists in the data (H-0009).
     """
     # Load model
     if job.model_path is None:
@@ -178,7 +199,7 @@ def run_inference(
     if target_col is None and job.config:
         target_col = job.config.get("data", {}).get("target")
 
-    has_ground_truth = target_col is not None and target_col in df.columns
+    has_ground_truth = evaluate and target_col is not None and target_col in df.columns
 
     # Run prediction
     pred_result = backend.predict(model, df, return_shap=return_shap)
@@ -325,3 +346,12 @@ def get_comparison_stats(
         result["other_proba"] = _stats(df2["proba"])
 
     return result
+
+
+def get_inference_plot(job: Job, backend: BackendAdapter, plot_type: str) -> Any:
+    """Get a plot from the model used for an inference's parent job."""
+    if job.model_path is None:
+        msg = f"Job {job.job_id} has no saved model"
+        raise ValueError(msg)
+    model = backend.load_model(job.model_path)
+    return backend.plot(model, plot_type)

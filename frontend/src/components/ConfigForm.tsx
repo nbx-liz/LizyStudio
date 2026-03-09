@@ -4,6 +4,7 @@ import {
   NumberInput,
   Select,
   Switch,
+  TagsInput,
   TextInput,
   Stack,
   Text,
@@ -21,6 +22,7 @@ interface JsonSchema {
   description?: string;
   minimum?: number;
   maximum?: number;
+  items?: JsonSchema;
   // Nested object sections
   [key: string]: unknown;
 }
@@ -67,8 +69,10 @@ export function ConfigForm({
   const typedSchema = schema as JsonSchema;
   const properties = typedSchema.properties ?? {};
 
-  // Group top-level properties into accordion sections
-  const sections = Object.entries(properties);
+  // Group top-level properties into accordion sections (hide config_version)
+  const sections = Object.entries(properties).filter(
+    ([key]) => key !== "config_version",
+  );
 
   return (
     <Stack gap="sm">
@@ -180,6 +184,20 @@ function SchemaField({
         max={schema.maximum}
         step={schema.type === "integer" ? 1 : undefined}
         allowDecimal={schema.type !== "integer"}
+      />
+    );
+  }
+
+  // Array → TagsInput
+  if (schema.type === "array") {
+    const current = Array.isArray(value) ? value.map(String) : [];
+    return (
+      <TagsInput
+        label={label}
+        description={description}
+        value={current}
+        onChange={(vals) => onChange(vals.length > 0 ? vals : undefined)}
+        placeholder="Type and press Enter"
       />
     );
   }

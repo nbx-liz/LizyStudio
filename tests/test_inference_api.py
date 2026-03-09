@@ -89,6 +89,54 @@ def test_inference_history(client: TestClient, sample_data_ref: DataRef) -> None
     assert records[0]["row_count"] == 10
 
 
+def test_inference_history_no_job_id(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    """GET /api/inference/history without job_id returns all records."""
+    _create_inference_setup(client, sample_data_ref)
+    res = client.get("/api/inference/history")
+    assert res.status_code == 200
+    records = res.json()
+    assert isinstance(records, list)
+    assert len(records) >= 1
+
+
+def test_inference_run_request_format(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    """POST /api/inference/run accepts BLUEPRINT §5.4 body format."""
+    job_id, _ = _create_inference_setup(client, sample_data_ref)
+    # Should accept the nested data format — will fail at backend (no real model)
+    # but should pass request validation (not 422)
+    res = client.post(
+        "/api/inference/run",
+        json={
+            "job_id": job_id,
+            "data": {"source_type": "path", "path": "/nonexistent/data.csv"},
+            "return_shap": False,
+            "evaluate": True,
+        },
+    )
+    # 500 is acceptable (BACKEND_ERROR due to missing model file), but not 422
+    assert res.status_code != 422
+
+
+def test_inference_run_old_format_rejected(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    """POST /api/inference/run rejects old flat data_path format."""
+    job_id, _ = _create_inference_setup(client, sample_data_ref)
+    res = client.post(
+        "/api/inference/run",
+        json={
+            "job_id": job_id,
+            "data_path": "/data/test.csv",
+            "return_shap": False,
+        },
+    )
+    assert res.status_code == 422
+
+
 # --- Get ---
 
 

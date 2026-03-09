@@ -24,6 +24,7 @@ from lizystudio.api.errors import (
 from lizystudio.services.inference import (
     InferenceStore,
     get_comparison_stats,
+    get_inference_plot,
     run_inference,
 )
 from lizystudio.services.jobs import JobStore, get_job_store
@@ -53,10 +54,16 @@ def _get_job_or_404(job_id: str, job_store: JobStore) -> Any:
 # --- Run ---
 
 
+class DataSource(BaseModel):
+    source_type: str  # "path" or "upload"
+    path: str
+
+
 class RunRequest(BaseModel):
     job_id: str
-    data_path: str
+    data: DataSource
     return_shap: bool = False
+    evaluate: bool = True
 
 
 @router.post("/run")
@@ -65,15 +72,16 @@ def inference_run(
     job_store: JobStore = Depends(get_job_store),
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, str]:
-    """Run inference with a path to data."""
+    """Run inference with a path to data (H-0009)."""
     job = _get_job_or_404(body.job_id, job_store)
     try:
         record = run_inference(
             job=job,
             job_store=job_store,
             backend=ws.backend,
-            data_path=body.data_path,
+            data_path=body.data.path,
             return_shap=body.return_shap,
+            evaluate=body.evaluate,
         )
         return {"inf_id": record.inf_id, "job_id": record.job_id}
     except Exception as exc:
@@ -83,32 +91,18 @@ def inference_run(
 @router.post("/upload")
 async def inference_upload(
     file: UploadFile,
-    job_id: str,
-    return_shap: bool = False,
-    job_store: JobStore = Depends(get_job_store),
-    ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, str]:
-    """Upload data and run inference in one step."""
-    job = _get_job_or_404(job_id, job_store)
-    # Save upload to temp file
+    """Upload data file for inference (H-0015)."""
     suffix = ".csv"
     if file.filename and file.filename.endswith(".parquet"):
         suffix = ".parquet"
     content = await file.read()
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+    with tempfile.NamedTemporaryFile(
+        suffix=suffix, delete=False, prefix="lizystudio_"
+    ) as tmp:
         tmp.write(content)
         tmp_path = tmp.name
-    try:
-        record = run_inference(
-            job=job,
-            job_store=job_store,
-            backend=ws.backend,
-            data_path=tmp_path,
-            return_shap=return_shap,
-        )
-        return {"inf_id": record.inf_id, "job_id": record.job_id}
-    except Exception as exc:
-        raise BackendError(exc) from exc
+    return {"upload_path": tmp_path, "filename": file.filename or "upload"}
 
 
 # --- Query ---
@@ -116,12 +110,12 @@ async def inference_upload(
 
 @router.get("/history")
 def inference_history(
-    job_id: str,
+    job_id: str | None = None,
     job_store: JobStore = Depends(get_job_store),
 ) -> list[dict[str, Any]]:
-    """List inference records for a job."""
+    """List inference records. job_id optional — omit for all records (H-0010)."""
     store = _get_inf_store(job_store)
-    records = store.list(job_id)
+    records = store.list_all() if job_id is None else store.list(job_id)
     return [asdict(r) for r in records]
 
 
@@ -168,7 +162,7 @@ def inference_metrics(
         raise InferenceNotFoundError(inf_id)
     metrics = store.get_metrics(job_id, inf_id)
     if metrics is None:
-        return {"error": "no ground truth available"}
+        raise InferenceNotFoundError(f"{inf_id}/metrics (no ground truth)")
     return metrics
 
 
@@ -185,13 +179,12 @@ def inference_plot(
     record = store.get(job_id, inf_id)
     if record is None:
         raise InferenceNotFoundError(inf_id)
-    # Load model from the job and generate plot
+    # Load model from the parent job and generate plot
     job = job_store.get(job_id)
     if job is None or job.model_path is None:
         raise JobNotFoundError(job_id)
     try:
-        model = ws.backend.load_model(job.model_path)
-        plot_data = ws.backend.plot(model, plot_type)
+        plot_data = get_inference_plot(job, ws.backend, plot_type)
         return {"plotly_json": plot_data.plotly_json}
     except Exception as exc:
         raise BackendError(exc) from exc

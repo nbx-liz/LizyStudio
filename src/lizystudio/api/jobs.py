@@ -16,9 +16,19 @@ from lizystudio.api.errors import (
     BackendError,
     JobNotCompletedError,
     JobNotFoundError,
+    StudioError,
 )
 from lizystudio.services.export import export_model, export_report
-from lizystudio.services.jobs import Job, JobStore, get_job_store
+from lizystudio.services.jobs import (
+    Job,
+    JobStore,
+    get_available_plots,
+    get_importance,
+    get_job_plot,
+    get_job_store,
+    get_metrics_table,
+    get_split_summary,
+)
 from lizystudio.services.workspace import WorkspaceState, get_workspace
 
 router = APIRouter()
@@ -37,12 +47,6 @@ def _get_job_or_404(job_id: str, job_store: JobStore) -> Job:
 def _require_completed(job: Job) -> None:
     if job.status != "completed":
         raise JobNotCompletedError(job.job_id)
-
-
-def _load_model(job: Job, ws: WorkspaceState) -> Any:
-    if job.model_path is None:
-        raise JobNotCompletedError(job.job_id)
-    return ws.backend.load_model(job.model_path)
 
 
 def _job_summary(job: Job) -> dict[str, Any]:
@@ -138,11 +142,28 @@ def delete_job(
     return {"status": "deleted"}
 
 
+@router.post("/{job_id}/cancel")
+def cancel_job(
+    job_id: str,
+    job_store: JobStore = Depends(get_job_store),
+) -> dict[str, str]:
+    """Cancel a running job (H-0011)."""
+    job = _get_job_or_404(job_id, job_store)
+    if job.status != "running":
+        raise StudioError(
+            "JOB_NOT_RUNNING",
+            f"Job {job_id} is not running (status: {job.status})",
+            400,
+        )
+    job_store.request_cancel(job_id)
+    return {"status": "cancelled"}
+
+
 # --- Result viewing ---
 
 
 @router.get("/{job_id}/metrics")
-def get_job_metrics(
+def get_job_metrics_endpoint(
     job_id: str,
     job_store: JobStore = Depends(get_job_store),
     ws: WorkspaceState = Depends(get_workspace),
@@ -151,14 +172,13 @@ def get_job_metrics(
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
     try:
-        model = _load_model(job, ws)
-        return ws.backend.evaluate_table(model)
+        return get_metrics_table(job, ws.backend)
     except Exception as exc:
         raise BackendError(exc) from exc
 
 
 @router.get("/{job_id}/split-summary")
-def get_job_split_summary(
+def get_job_split_summary_endpoint(
     job_id: str,
     job_store: JobStore = Depends(get_job_store),
     ws: WorkspaceState = Depends(get_workspace),
@@ -167,14 +187,13 @@ def get_job_split_summary(
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
     try:
-        model = _load_model(job, ws)
-        return ws.backend.split_summary(model)
+        return get_split_summary(job, ws.backend)
     except Exception as exc:
         raise BackendError(exc) from exc
 
 
 @router.get("/{job_id}/importance")
-def get_job_importance(
+def get_job_importance_endpoint(
     job_id: str,
     kind: str = "split",
     job_store: JobStore = Depends(get_job_store),
@@ -184,14 +203,13 @@ def get_job_importance(
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
     try:
-        model = _load_model(job, ws)
-        return ws.backend.importance(model, kind=kind)
+        return get_importance(job, ws.backend, kind=kind)
     except Exception as exc:
         raise BackendError(exc) from exc
 
 
 @router.get("/{job_id}/plot/{plot_type}")
-def get_job_plot(
+def get_job_plot_endpoint(
     job_id: str,
     plot_type: str,
     job_store: JobStore = Depends(get_job_store),
@@ -201,15 +219,14 @@ def get_job_plot(
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
     try:
-        model = _load_model(job, ws)
-        plot_data = ws.backend.plot(model, plot_type)
+        plot_data = get_job_plot(job, ws.backend, plot_type)
         return {"plotly_json": plot_data.plotly_json}
     except Exception as exc:
         raise BackendError(exc) from exc
 
 
 @router.get("/{job_id}/plots")
-def get_job_available_plots(
+def get_job_available_plots_endpoint(
     job_id: str,
     job_store: JobStore = Depends(get_job_store),
     ws: WorkspaceState = Depends(get_workspace),
@@ -218,8 +235,7 @@ def get_job_available_plots(
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
     try:
-        model = _load_model(job, ws)
-        return ws.backend.available_plots(model)
+        return get_available_plots(job, ws.backend)
     except Exception as exc:
         raise BackendError(exc) from exc
 

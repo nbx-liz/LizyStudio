@@ -6,7 +6,7 @@ import { apiFetch } from "./client";
 
 export interface JobSummary {
   job_id: string;
-  status: "pending" | "running" | "completed" | "failed";
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
   backend_name: string;
   job_type: "fit" | "tune";
   created_at: string;
@@ -97,6 +97,10 @@ export function exportJob(
     method: "POST",
     body: JSON.stringify({ export_type: exportType, output_path: outputPath }),
   });
+}
+
+export function cancelJob(jobId: string): Promise<{ status: string }> {
+  return apiFetch(`/jobs/${jobId}/cancel`, { method: "POST" });
 }
 
 export function runFit(): Promise<{ job_id: string }> {

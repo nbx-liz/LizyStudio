@@ -132,6 +132,50 @@ def test_available_plots_with_tuning() -> None:
     assert "tuning" in plots
 
 
+def test_fit_invokes_on_progress() -> None:
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.fit.return_value = MagicMock(
+        metrics={"raw": {"oof": {"auc": 0.9}}},
+        splits=MagicMock(outer=[([], [])]),
+    )
+    mock_model.params_table.return_value = MagicMock(
+        reset_index=MagicMock(
+            return_value=MagicMock(to_dict=MagicMock(return_value=[]))
+        )
+    )
+    calls: list[dict] = []
+
+    def progress_cb(*, current: int, total: int, message: str) -> None:
+        calls.append({"current": current, "total": total, "message": message})
+
+    adapter.fit(mock_model, on_progress=progress_cb)
+    assert len(calls) == 2
+    assert calls[0]["current"] == 0
+    assert calls[1]["current"] == 1
+
+
+def test_tune_invokes_on_progress() -> None:
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = MagicMock(
+        best_params={"lr": 0.1},
+        best_score=0.9,
+        trials=[],
+        metric_name="auc",
+        direction="maximize",
+    )
+    calls: list[dict] = []
+
+    def progress_cb(*, current: int, total: int, message: str) -> None:
+        calls.append({"current": current, "total": total, "message": message})
+
+    adapter.tune(mock_model, on_progress=progress_cb)
+    assert len(calls) == 2
+    assert calls[0]["current"] == 0
+    assert calls[1]["current"] == 1
+
+
 def test_model_info_returns_target() -> None:
     adapter = LizyMLAdapter()
     model = _make_mock_model(task="binary", target="price")

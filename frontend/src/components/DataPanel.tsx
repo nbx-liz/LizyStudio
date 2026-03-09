@@ -108,41 +108,46 @@ export function DataPanel() {
       const gc = overrides?.groupColOverride !== undefined ? overrides.groupColOverride : groupCol;
       const colOvr = overrides?.columnOverridesMap ?? columnOverrides;
 
-      const configPatch: Record<string, unknown> = {};
-      if (t) configPatch.target = t;
-      if (tk) configPatch.task = tk;
+      // Read current config from cache and deep-merge DataPanel fields
+      // PUT /config does full replace, so we must preserve ModelPanel fields
+      const currentConfig =
+        (queryClient.getQueryData(["config"]) as Record<string, unknown>) ?? {};
+      const merged: Record<string, unknown> = { ...currentConfig };
 
-      // CV config
-      const cvConfig: Record<string, unknown> = {
+      // data.target, data.task, data.path (BLUEPRINT §4.2.1)
+      const prevData = (merged.data ?? {}) as Record<string, unknown>;
+      merged.data = {
+        ...prevData,
+        ...(t ? { target: t } : {}),
+        ...(tk ? { task: tk } : {}),
+        ...(dataRef && sourceType === "path" ? { path: dataRef.path } : {}),
+      };
+
+      // split.strategy, split.n_splits, split.group_column (BLUEPRINT §4.2.1)
+      const splitConfig: Record<string, unknown> = {
         strategy: strat,
         n_splits: folds,
       };
       if (strat === "GroupKFold" && gc) {
-        cvConfig.group_col = gc;
+        splitConfig.group_column = gc;
       }
-      configPatch.cv = cvConfig;
+      merged.split = splitConfig;
 
-      // Column exclusions and type overrides
+      // features.exclude, features.categorical (BLUEPRINT §4.2.1)
       const excludedCols: string[] = [];
-      const featureTypes: Record<string, string> = {};
+      const categoricalCols: string[] = [];
       for (const [colName, ovr] of Object.entries(colOvr)) {
         if (ovr.excluded) {
           excludedCols.push(colName);
+        } else if (ovr.type === "categorical") {
+          categoricalCols.push(colName);
         }
-        if (ovr.type) {
-          featureTypes[colName] = ovr.type;
-        }
       }
-      if (excludedCols.length > 0) {
-        configPatch.exclude_columns = excludedCols;
-      }
-      if (Object.keys(featureTypes).length > 0) {
-        configPatch.feature_types = featureTypes;
-      }
+      merged.features = { exclude: excludedCols, categorical: categoricalCols };
 
-      updateConfigMutation.mutate(configPatch);
+      updateConfigMutation.mutate(merged);
     },
-    [target, task, cvStrategy, cvFolds, groupCol, columnOverrides, updateConfigMutation],
+    [target, task, cvStrategy, cvFolds, groupCol, columnOverrides, dataRef, sourceType, updateConfigMutation],
   );
 
   // Handlers
@@ -197,11 +202,10 @@ export function DataPanel() {
   const onTargetChange = useCallback(
     (value: string | null) => {
       setTarget(value);
-      // Use API-detected task from columns response when available
-      const detectedTask =
-        value && columnsQuery.data
-          ? guessTaskFromColumns(columnsQuery.data)
-          : null;
+      // Use API-computed suggested_task from columns response
+      const detectedTask = value && columnsQuery.data?.suggested_task
+        ? columnsQuery.data.suggested_task
+        : null;
       setTask(detectedTask);
       // Default CV strategy based on task
       const defaultStrategy =
@@ -358,7 +362,13 @@ export function DataPanel() {
                 label="Task"
                 data={["binary", "multiclass", "regression"]}
                 value={task}
-                onChange={setTask}
+                onChange={(v) => {
+                  setTask(v);
+                  // Update CV strategy based on task
+                  const strat = v === "regression" ? "KFold" : "StratifiedKFold";
+                  setCvStrategy(strat);
+                  syncConfigFromState({ taskOverride: v, cvStrategyOverride: strat });
+                }}
                 disabled={!target}
               />
               {task && (
@@ -533,20 +543,6 @@ function ColumnSettingsTable({
 }
 
 // --- Helpers ---
-
-/**
- * Guess task type from the columns response.
- * Uses target column metadata from the API rather than raw data.
- */
-function guessTaskFromColumns(response: ColumnsResponse): string | null {
-  if (!response.target) return null;
-  const targetCol = response.columns.find((c) => c.name === response.target);
-  if (!targetCol) return null;
-  if (targetCol.unique_count === 2) return "binary";
-  if (targetCol.suggested_type === "categorical" || targetCol.unique_count <= 20)
-    return "multiclass";
-  return "regression";
-}
 
 function computeFeatureSummary(
   response: ColumnsResponse | null,

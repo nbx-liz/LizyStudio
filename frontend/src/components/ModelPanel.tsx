@@ -4,8 +4,9 @@ import {
   ActionIcon,
   Badge,
   Button,
+  Code,
   Group,
-  JsonInput,
+  Modal,
   NumberInput,
   Paper,
   Select,
@@ -17,8 +18,10 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
+import { useDisclosure } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
 import { IconTrash, IconPlus } from "@tabler/icons-react";
+import { toYaml } from "../utils/toYaml";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -42,10 +45,17 @@ interface SearchSpaceEntry {
   rangeMin: string;
   rangeMax: string;
   rangeStep: string;
+  distribution: "uniform" | "log-uniform";
   choiceValues: string;
 }
 
-export function ModelPanel() {
+interface ModelPanelProps {
+  onFit?: () => void;
+  onTune?: () => void;
+  running?: boolean;
+}
+
+export function ModelPanel({ onFit, onTune, running }: ModelPanelProps) {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<string | null>("fit");
   const [errors, setErrors] = useState<Array<Record<string, unknown>>>([]);
@@ -161,16 +171,39 @@ export function ModelPanel() {
   const schema = schemaQuery.data;
   const config = configQuery.data ?? {};
 
+  // Check if search space has any Range/Choice entries for Tune enable condition
+  const hasTunableParams = hasRangeOrChoice(config);
+
   return (
     <Paper p="md" withBorder>
       {/* Sticky header */}
-      <Group justify="space-between" mb="sm">
+      <Group
+        justify="space-between"
+        mb="sm"
+        style={{ position: "sticky", top: 0, zIndex: 10, background: "var(--mantine-color-body)" }}
+        py="xs"
+      >
         <Group gap="xs">
           <Title order={5}>Model</Title>
           <Badge size="sm" variant="light">
             lizyml
           </Badge>
         </Group>
+        {activeTab === "fit" ? (
+          <Button size="xs" onClick={onFit} loading={running}>
+            Fit
+          </Button>
+        ) : (
+          <Button
+            size="xs"
+            onClick={onTune}
+            loading={running}
+            disabled={!hasTunableParams}
+            title={hasTunableParams ? undefined : "Add at least one Range or Choice parameter"}
+          >
+            Tune
+          </Button>
+        )}
       </Group>
 
       <Tabs value={activeTab} onChange={setActiveTab}>
@@ -252,7 +285,7 @@ export function ModelPanel() {
         >
           Export YAML
         </Button>
-        <RawConfigToggle config={config} onSave={onSaveConfig} />
+        <RawConfigToggle config={config} />
       </Group>
     </Paper>
   );
@@ -309,13 +342,22 @@ function TuneSettingsSection({
         value={timeout}
         onChange={(v) => updateTuningField("timeout", v ? Number(v) : 600)}
       />
-      <TextInput
+      <Select
         label="Scoring"
-        placeholder='Metric name (e.g., "auc", "rmse")'
-        value={scoring}
-        onChange={(e) =>
-          updateTuningField("scoring", e.currentTarget.value || undefined)
-        }
+        placeholder="Select metric"
+        data={[
+          { value: "auc", label: "AUC" },
+          { value: "log_loss", label: "Log Loss" },
+          { value: "accuracy", label: "Accuracy" },
+          { value: "f1", label: "F1" },
+          { value: "rmse", label: "RMSE" },
+          { value: "mae", label: "MAE" },
+          { value: "r2", label: "R²" },
+        ]}
+        value={scoring || null}
+        onChange={(v) => updateTuningField("scoring", v || undefined)}
+        searchable
+        clearable
       />
     </Stack>
   );
@@ -339,6 +381,7 @@ function createDefaultEntry(name: string): SearchSpaceEntry {
     rangeMin: "",
     rangeMax: "",
     rangeStep: "",
+    distribution: "uniform",
     choiceValues: "",
   };
 }
@@ -389,6 +432,9 @@ function SearchSpaceSection({
           };
           if (entry.rangeStep.trim()) {
             rangeObj.step = parseFloat(entry.rangeStep);
+          }
+          if (entry.distribution === "log-uniform") {
+            rangeObj.log = true;
           }
           searchSpace[entry.name] = rangeObj;
           break;
@@ -516,7 +562,7 @@ function SearchSpaceValueInputs({
             value={entry.rangeMin ? Number(entry.rangeMin) : ""}
             onChange={(v) => onUpdate(index, { rangeMin: String(v) })}
             placeholder="min"
-            w={70}
+            w={60}
             allowDecimal
           />
           <NumberInput
@@ -524,7 +570,7 @@ function SearchSpaceValueInputs({
             value={entry.rangeMax ? Number(entry.rangeMax) : ""}
             onChange={(v) => onUpdate(index, { rangeMax: String(v) })}
             placeholder="max"
-            w={70}
+            w={60}
             allowDecimal
           />
           <NumberInput
@@ -532,8 +578,20 @@ function SearchSpaceValueInputs({
             value={entry.rangeStep ? Number(entry.rangeStep) : ""}
             onChange={(v) => onUpdate(index, { rangeStep: String(v) })}
             placeholder="step"
-            w={70}
+            w={60}
             allowDecimal
+          />
+          <Select
+            size="xs"
+            data={[
+              { value: "uniform", label: "Uniform" },
+              { value: "log-uniform", label: "Log" },
+            ]}
+            value={entry.distribution}
+            onChange={(v) =>
+              onUpdate(index, { distribution: (v as "uniform" | "log-uniform") ?? "uniform" })
+            }
+            w={75}
           />
         </Group>
       );
@@ -567,7 +625,8 @@ function CalibrationSection({
   config: Record<string, unknown>;
   onUpdate: (config: Record<string, unknown>) => void;
 }) {
-  const task = (config as Record<string, unknown>).task;
+  const dataSection = (config as Record<string, unknown>)?.data as Record<string, unknown> | undefined;
+  const task = dataSection?.task;
   const calibration = config.calibration as
     | { method?: string }
     | null
@@ -628,59 +687,36 @@ function CalibrationSection({
 
 function RawConfigToggle({
   config,
-  onSave,
 }: {
   config: Record<string, unknown>;
-  onSave: (config: Record<string, unknown>) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const [raw, setRaw] = useState("");
-
-  useEffect(() => {
-    setRaw(JSON.stringify(config, null, 2));
-  }, [config]);
-
-  if (!open) {
-    return (
-      <Button size="xs" variant="subtle" onClick={() => setOpen(true)}>
-        Raw Config
-      </Button>
-    );
-  }
+  const [opened, { open, close }] = useDisclosure(false);
 
   return (
-    <Stack gap="xs" mt="sm" style={{ width: "100%" }}>
-      <JsonInput
-        value={raw}
-        onChange={setRaw}
-        autosize
-        minRows={6}
-        maxRows={20}
-        formatOnBlur
-        validationError="Invalid JSON"
-      />
-      <Group gap="xs">
-        <Button
-          size="xs"
-          onClick={() => {
-            try {
-              onSave(JSON.parse(raw));
-              setOpen(false);
-            } catch {
-              notifications.show({
-                title: "Invalid JSON",
-                message: "Could not parse config",
-                color: "red",
-              });
-            }
-          }}
-        >
-          Apply
-        </Button>
-        <Button size="xs" variant="subtle" onClick={() => setOpen(false)}>
-          Close
-        </Button>
-      </Group>
-    </Stack>
+    <>
+      <Button size="xs" variant="subtle" onClick={open}>
+        Raw Config
+      </Button>
+      <Modal opened={opened} onClose={close} title="Raw Config" size="lg">
+        <Code block style={{ maxHeight: 500, overflow: "auto" }}>
+          {toYaml(config)}
+        </Code>
+      </Modal>
+    </>
   );
+}
+
+/**
+ * Check if tuning config has at least one Range or Choice parameter.
+ */
+function hasRangeOrChoice(config: Record<string, unknown>): boolean {
+  const tuning = config.tuning as Record<string, unknown> | undefined;
+  if (!tuning) return false;
+  const space = tuning.search_space as Record<string, unknown> | undefined;
+  if (!space) return false;
+  return Object.values(space).some((v) => {
+    if (Array.isArray(v)) return true; // Choice
+    if (v && typeof v === "object" && "low" in v && "high" in v) return true; // Range
+    return false;
+  });
 }

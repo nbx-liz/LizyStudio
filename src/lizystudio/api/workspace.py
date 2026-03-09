@@ -6,7 +6,6 @@ Covers: status, reset, data, config, fit, tune.
 from __future__ import annotations
 
 import tempfile
-import threading
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -18,6 +17,7 @@ from fastapi.responses import Response
 from lizystudio.api.errors import (
     FileInvalidError,
     PathNotFoundError,
+    ValidationError,
     WorkspaceNoConfigError,
     WorkspaceNoDataError,
 )
@@ -29,8 +29,15 @@ from lizystudio.services.data import (
     make_data_ref,
 )
 from lizystudio.services.jobs import JobStore, get_job_store
-from lizystudio.services.training import run_fit, run_tune
-from lizystudio.services.workspace import WorkspaceState, get_workspace
+from lizystudio.services.training import start_fit_async, start_tune_async
+from lizystudio.services.workspace import (
+    WorkspaceState,
+    get_backend_name,
+    get_config_schema,
+    get_workspace,
+    load_config_from_file,
+    validate_config,
+)
 from lizystudio.ws.progress import ProgressBroadcaster
 
 router = APIRouter()
@@ -40,8 +47,22 @@ router = APIRouter()
 
 
 @router.get("/status")
-def workspace_status(ws: WorkspaceState = Depends(get_workspace)) -> dict[str, Any]:
-    """Return current workspace state summary."""
+def workspace_status(
+    ws: WorkspaceState = Depends(get_workspace),
+    job_store: JobStore = Depends(get_job_store),
+) -> dict[str, Any]:
+    """Return current workspace state summary.
+
+    If current_job_id is set, attempt to restore results from JobStore
+    so the frontend can recover state after a page refresh.
+    """
+    # Restore results from JobStore if volatile state was lost
+    if ws.current_job_id and ws.workspace_fit_result is None:
+        job = job_store.get(ws.current_job_id)
+        if job is not None and job.status == "completed":
+            ws.workspace_fit_result = job.fit_result
+            ws.workspace_tune_result = job.tune_result
+
     return {
         "has_data": ws.dataframe is not None,
         "has_config": bool(ws.config),
@@ -152,8 +173,7 @@ def config_schema(
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, Any]:
     """Return the backend's config JSON Schema."""
-    schema = ws.backend.get_config_schema()
-    return schema.json_schema
+    return get_config_schema(ws)
 
 
 @router.get("/config")
@@ -170,7 +190,7 @@ def config_update(
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, Any]:
     """Update config with validation."""
-    errors = ws.backend.validate_config(body)
+    errors = validate_config(ws, body)
     ws.set_config(body)
     return {"config": body, "errors": errors}
 
@@ -181,7 +201,7 @@ def config_validate(
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, Any]:
     """Validate config without saving."""
-    errors = ws.backend.validate_config(body)
+    errors = validate_config(ws, body)
     return {"valid": len(errors) == 0, "errors": errors}
 
 
@@ -194,10 +214,10 @@ async def config_upload(
     content = await file.read()
     filename = file.filename or "config.yaml"
     try:
-        config = ws.backend.load_config_from_file(content, filename)
+        config = load_config_from_file(ws, content, filename)
     except Exception as exc:
         raise FileInvalidError(str(exc)) from exc
-    errors = ws.backend.validate_config(config)
+    errors = validate_config(ws, config)
     ws.set_config(config)
     return {"config": config, "errors": errors}
 
@@ -224,72 +244,6 @@ def _get_broadcaster(request: Request) -> ProgressBroadcaster:
     return request.app.state.broadcaster  # type: ignore[no-any-return]
 
 
-def _run_fit_background(
-    ws: WorkspaceState,
-    job_store: JobStore,
-    broadcaster: ProgressBroadcaster,
-    job_id: str,
-    config: dict[str, Any],
-    dataframe: Any,
-) -> None:
-    """Run fit in background thread with progress broadcasting."""
-    job = job_store.get(job_id)
-    if job is None:
-        return
-    cb = broadcaster.make_callback(job_id)
-    try:
-        job = run_fit(
-            job=job,
-            job_store=job_store,
-            backend=ws.backend,
-            config=config,
-            dataframe=dataframe,
-            on_progress=cb,
-        )
-        ws.workspace_fit_result = job.fit_result
-        ws.workspace_tune_result = None
-        ws.current_job_id = job.job_id
-        if job.status == "completed":
-            broadcaster.send_completed(job_id)
-        else:
-            broadcaster.send_error(job_id, job.error or "Unknown error")
-    except Exception as exc:
-        broadcaster.send_error(job_id, str(exc))
-
-
-def _run_tune_background(
-    ws: WorkspaceState,
-    job_store: JobStore,
-    broadcaster: ProgressBroadcaster,
-    job_id: str,
-    config: dict[str, Any],
-    dataframe: Any,
-) -> None:
-    """Run tune in background thread with progress broadcasting."""
-    job = job_store.get(job_id)
-    if job is None:
-        return
-    cb = broadcaster.make_callback(job_id)
-    try:
-        job = run_tune(
-            job=job,
-            job_store=job_store,
-            backend=ws.backend,
-            config=config,
-            dataframe=dataframe,
-            on_progress=cb,
-        )
-        ws.workspace_fit_result = job.fit_result
-        ws.workspace_tune_result = job.tune_result
-        ws.current_job_id = job.job_id
-        if job.status == "completed":
-            broadcaster.send_completed(job_id)
-        else:
-            broadcaster.send_error(job_id, job.error or "Unknown error")
-    except Exception as exc:
-        broadcaster.send_error(job_id, str(exc))
-
-
 # --- Fit / Tune endpoints (BLUEPRINT §5.2 Fit/Tune) ---
 
 
@@ -299,25 +253,29 @@ def workspace_fit(
     ws: WorkspaceState = Depends(get_workspace),
     job_store: JobStore = Depends(get_job_store),
 ) -> dict[str, Any]:
-    """Create a fit job and run it in a background thread."""
+    """Create a fit job (thread managed by Service layer)."""
     if not ws.config:
         raise WorkspaceNoConfigError()
     if ws.dataframe is None or ws.data_ref is None:
         raise WorkspaceNoDataError()
+    errors = validate_config(ws, ws.config)
+    if errors:
+        raise ValidationError(errors)
     job = job_store.create(
-        backend_name=ws.backend.info.name,
+        backend_name=get_backend_name(ws),
         config=ws.config,
         data_ref=ws.data_ref,
         job_type="fit",
     )
-    broadcaster = _get_broadcaster(request)
-    t = threading.Thread(
-        target=_run_fit_background,
-        args=(ws, job_store, broadcaster, job.job_id, ws.config, ws.dataframe),
-        daemon=True,
+    job_id = start_fit_async(
+        ws=ws,
+        job_store=job_store,
+        broadcaster=_get_broadcaster(request),
+        config=ws.config,
+        dataframe=ws.dataframe,
+        job=job,
     )
-    t.start()
-    return {"job_id": job.job_id}
+    return {"job_id": job_id}
 
 
 @router.post("/tune")
@@ -326,22 +284,26 @@ def workspace_tune(
     ws: WorkspaceState = Depends(get_workspace),
     job_store: JobStore = Depends(get_job_store),
 ) -> dict[str, Any]:
-    """Create a tune job and run it in a background thread."""
+    """Create a tune job (thread managed by Service layer)."""
     if not ws.config:
         raise WorkspaceNoConfigError()
     if ws.dataframe is None or ws.data_ref is None:
         raise WorkspaceNoDataError()
+    errors = validate_config(ws, ws.config)
+    if errors:
+        raise ValidationError(errors)
     job = job_store.create(
-        backend_name=ws.backend.info.name,
+        backend_name=get_backend_name(ws),
         config=ws.config,
         data_ref=ws.data_ref,
         job_type="tune",
     )
-    broadcaster = _get_broadcaster(request)
-    t = threading.Thread(
-        target=_run_tune_background,
-        args=(ws, job_store, broadcaster, job.job_id, ws.config, ws.dataframe),
-        daemon=True,
+    job_id = start_tune_async(
+        ws=ws,
+        job_store=job_store,
+        broadcaster=_get_broadcaster(request),
+        config=ws.config,
+        dataframe=ws.dataframe,
+        job=job,
     )
-    t.start()
-    return {"job_id": job.job_id}
+    return {"job_id": job_id}

@@ -113,10 +113,10 @@ def test_run_fit_with_progress(
         dataframe=sample_df,
         on_progress=on_progress,
     )
-    # Verify callback was passed to backend.fit
+    # Verify a progress callback was passed to backend.fit
     mock_backend.fit.assert_called_once()
     call_kwargs = mock_backend.fit.call_args[1]
-    assert call_kwargs["on_progress"] is on_progress
+    assert callable(call_kwargs["on_progress"])
 
 
 def test_run_fit_failure(

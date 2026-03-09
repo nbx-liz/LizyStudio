@@ -91,4 +91,5 @@ class ColumnsResponse:
     """Response for GET /api/workspace/data/columns."""
 
     target: str | None
+    suggested_task: Literal["binary", "multiclass", "regression"] | None = None
     columns: list[ColumnInfo] = field(default_factory=list)

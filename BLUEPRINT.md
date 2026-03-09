@@ -109,6 +109,8 @@ class TuningSummary:
     best_params: dict[str, Any]
     best_score: float
     trials: list[dict[str, Any]]       # trial history (行のリスト)
+    metric_name: str                   # 最適化対象メトリクス名 (H-0013)
+    direction: str                     # "minimize" | "maximize" (H-0013)
 
 @dataclass
 class PredictionSummary:
@@ -140,9 +142,9 @@ class BackendAdapter(Protocol):
 
     # --- Model lifecycle ---
     def create_model(self, config: dict, dataframe: pd.DataFrame) -> Any: ...  # 内部モデルオブジェクト
-    def fit(self, model: Any, on_progress: Callable | None = None) -> FitSummary: ...
-    def tune(self, model: Any, on_progress: Callable | None = None) -> TuningSummary: ...
-    def predict(self, model: Any, data: pd.DataFrame) -> PredictionSummary: ...
+    def fit(self, model: Any, *, params: dict | None = None, on_progress: Callable | None = None) -> FitSummary: ...  # params: H-0012
+    def tune(self, model: Any, *, on_progress: Callable | None = None) -> TuningSummary: ...
+    def predict(self, model: Any, data: pd.DataFrame, *, return_shap: bool = False) -> PredictionSummary: ...  # return_shap: H-0012
 
     # --- Evaluation ---
     def evaluate_table(self, model: Any) -> list[dict]: ...
@@ -1642,6 +1644,8 @@ Workspace の `workspace_result` は完了時に自動更新される。
 | GET | `/api/jobs/{job_id}/plot/{plot_type}` | Plotly 図 JSON |
 | GET | `/api/jobs/{job_id}/plots` | 利用可能なプロットタイプ一覧 |
 | POST | `/api/jobs/{job_id}/export` | モデル/レポートを指定パスにExport |
+| GET | `/api/jobs/{job_id}/log` | 実行ログ取得（H-0006） |
+| POST | `/api/jobs/{job_id}/cancel` | Running ジョブのキャンセル（H-0011） |
 | DELETE | `/api/jobs/{job_id}` | ジョブを削除 |
 
 **POST /api/jobs/{job_id}/export リクエスト:**
@@ -1733,8 +1737,8 @@ Workspace の `workspace_result` は完了時に自動更新される。
 {
   "type": "progress",
   "job_id": "job_042",
-  "fold": 2,
-  "total_folds": 5,
+  "current": 2,
+  "total": 5,
   "message": "Fold 2/5 training..."
 }
 ```
@@ -1754,6 +1758,23 @@ Workspace の `workspace_result` は完了時に自動更新される。
   "message": "CONFIG_INVALID: ...",
   "code": "CONFIG_INVALID"
 }
+```
+
+### 5.6 Backend API
+
+| メソッド | パス | 説明 |
+|----------|------|------|
+| GET | `/api/backends` | 利用可能なバックエンド一覧 |
+
+**レスポンス:**
+
+```json
+[
+  {
+    "name": "lizyml",
+    "version": "1.2.3"
+  }
+]
 ```
 
 ---

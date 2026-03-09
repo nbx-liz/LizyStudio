@@ -203,3 +203,126 @@
 - **Alternatives:** なし
 - **Acceptance Criteria:** `InferenceNotFoundError` が `api/errors.py` に定義されている
 - **Decision:** 2026-03-09 accepted — 提案通り
+
+---
+
+### H-0009: POST /api/inference/run リクエストボディ形式変更 + evaluate 追加
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §5.4、§4.4.1
+- **Context:** BLUEPRINT §5.4 は `POST /run` のリクエストボディを `{ "job_id": "...", "data": { "source_type": "path", "path": "..." }, "return_shap": false }` と定義しているが、現在の実装は `{ "job_id": "...", "data_path": "...", "return_shap": false }` のフラット形式。また §4.4.1 の Evaluate チェックボックスに対応する `evaluate` パラメータが未実装。
+- **Proposal:**
+  1. `RunRequest` を BLUEPRINT 準拠のネスト構造に変更: `data: { source_type, path }`
+  2. `evaluate: bool = True` パラメータを追加。False の場合、GT 列が存在してもメトリクス計算をスキップ
+- **Impact:** api/inference.py、services/inference.py、frontend/src/api/inference.ts、frontend/src/pages/InferencePage.tsx
+- **Compatibility:** 破壊的（プレリリースのため許容）
+- **Alternatives:** なし
+- **Acceptance Criteria:** `POST /run` が BLUEPRINT 形式で 200 を返し、`evaluate: false` でメトリクスなし
+- **Decision:** 2026-03-09 accepted — BLUEPRINT §5.4 準拠
+
+---
+
+### H-0010: GET /api/inference/history の job_id optional 化
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §5.4
+- **Context:** BLUEPRINT §5.4 は「推論履歴一覧（query: `job_id`、省略時は全件）」と定義しているが、現在の実装では `job_id` は必須パラメータ。
+- **Proposal:** `job_id` を optional 化。省略時は全ジョブの推論履歴を返却。
+- **Impact:** api/inference.py、services/inference.py、frontend/src/api/inference.ts
+- **Compatibility:** 非破壊的（既存リクエストはそのまま動作）
+- **Alternatives:** なし
+- **Acceptance Criteria:** `GET /api/inference/history` が `job_id` 省略で全件返却
+- **Decision:** 2026-03-09 accepted — BLUEPRINT §5.4 準拠
+
+---
+
+### H-0011: POST /api/jobs/{job_id}/cancel エンドポイント追加
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §4.3.2、§5.3
+- **Context:** BLUEPRINT §4.3.2 は Running ジョブに Cancel ボタンを定義し、§5.3 は Cancel アクションを記載している。しかし現在の実装にはキャンセルエンドポイントが存在せず、フロントエンドの Cancel ボタンは disabled 状態。
+- **Proposal:**
+  1. `POST /api/jobs/{job_id}/cancel` エンドポイント追加。レスポンス: `{ "status": "cancelled" }`
+  2. Job status に `"cancelled"` を追加
+  3. `JobStore` に `request_cancel()` / `is_cancel_requested()` メソッド追加
+  4. training.py の progress callback 内でキャンセルフラグを確認し、検出時に `CancelledError` を送出
+- **Impact:** api/jobs.py、services/jobs.py、services/training.py、frontend (ResultsPanel.tsx, jobs.ts)
+- **Compatibility:** 非破壊的（新規エンドポイント + 新ステータス追加）
+- **Alternatives:** なし
+- **Acceptance Criteria:** `POST /api/jobs/{job_id}/cancel` が running ジョブを cancelled に遷移させる
+- **Decision:** 2026-03-09 accepted — BLUEPRINT §5.3 準拠
+
+---
+
+### H-0012: BLUEPRINT §3.3.2 BackendAdapter Protocol に params / return_shap を追記
+- **Status:** accepted
+- **Scope:** Adapter
+- **Related:** BLUEPRINT.md §3.3.2
+- **Context:** H-0002 で Tune→Fit フローのために `fit(params=...)` が、H-0009 で SHAP のために `predict(return_shap=...)` が実装済みだが、BLUEPRINT §3.3.2 の Protocol 定義が未更新。
+- **Proposal:** §3.3.2 の Protocol 定義を実装と整合させる:
+  - `fit(model, *, params=None, on_progress=None) -> FitSummary`
+  - `predict(model, data, *, return_shap=False) -> PredictionSummary`
+- **Impact:** BLUEPRINT.md §3.3.2 のみ（コード変更なし）
+- **Compatibility:** 非破壊的（文書化のみ）
+- **Alternatives:** なし
+- **Acceptance Criteria:** BLUEPRINT §3.3.2 が実装と一致する
+- **Decision:** 2026-03-09 accepted — spec-update
+
+---
+
+### H-0013: BLUEPRINT §3.3.1 TuningSummary に metric_name / direction を追記
+- **Status:** accepted
+- **Scope:** Adapter
+- **Related:** BLUEPRINT.md §3.3.1
+- **Context:** `TuningSummary` に `metric_name: str` と `direction: str` が実装済みだが、BLUEPRINT §3.3.1 に記載がない。Tune 結果の UI 表示に必要。
+- **Proposal:** §3.3.1 の TuningSummary 定義に以下を追記:
+  - `metric_name: str` — 最適化対象メトリクス名
+  - `direction: str` — `"minimize"` | `"maximize"`
+- **Impact:** BLUEPRINT.md §3.3.1 のみ（コード変更なし）
+- **Compatibility:** 非破壊的（文書化のみ）
+- **Alternatives:** なし
+- **Acceptance Criteria:** BLUEPRINT §3.3.1 が実装と一致する
+- **Decision:** 2026-03-09 accepted — spec-update
+
+---
+
+### H-0014: GET /api/backends エンドポイント追加
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §5（新規セクション）
+- **Context:** フロントエンドが利用可能なバックエンド一覧を取得する手段がない。バックエンド名・バージョンを表示する UI（Model Panel のバッジ等）に必要。
+- **Proposal:** `GET /api/backends` エンドポイントを追加。レスポンス: `[{"name": "lizyml", "version": "1.2.3"}]`
+- **Impact:** BLUEPRINT.md §5（新規セクション追加）、api/backends.py（新規）、server.py
+- **Compatibility:** 非破壊的（新規エンドポイント追加）
+- **Alternatives:** バックエンド情報を `/api/workspace/status` に含める案 → 独立したエンドポイントのほうが RESTful
+- **Acceptance Criteria:** `GET /api/backends` が 200 でバックエンド一覧を返す
+- **Decision:** 2026-03-09 accepted — 提案通り
+
+---
+
+### H-0015: POST /api/inference/upload を upload-only に変更
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §5.4
+- **Context:** BLUEPRINT §5.4 は upload と run を分離している（先に upload でデータ送信、次に run で `source_type: "upload"` を指定）。現在の実装は upload 時に即座に推論を実行しており、BLUEPRINT の設計意図と異なる。
+- **Proposal:** `POST /api/inference/upload` を upload-only に変更。ファイルを一時保存しパス参照を返す。推論実行は `POST /run` で行う。
+  - レスポンス: `{ "upload_path": "/tmp/lizystudio_xxx.csv", "filename": "data.csv" }`
+- **Impact:** api/inference.py、frontend/src/api/inference.ts、frontend/src/pages/InferencePage.tsx
+- **Compatibility:** 破壊的（プレリリースのため許容）
+- **Alternatives:** なし
+- **Acceptance Criteria:** upload が推論を実行せずパスのみ返す
+- **Decision:** 2026-03-09 accepted — BLUEPRINT §5.4 準拠
+
+---
+
+### H-0016: GET /api/inference/{inf_id}/metrics の GT なし時応答を 404 に変更
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §5.4
+- **Context:** BLUEPRINT §5.4 は metrics エンドポイントを「正解あり時」の条件付きとしている。現在の実装は GT なし時に `200 + {"error": "no ground truth available"}` を返しており、正常レスポンスとエラーの区別が困難。
+- **Proposal:** GT なし時は `404 INFERENCE_NOT_FOUND` または新コード `METRICS_NOT_AVAILABLE` を返す。
+- **Impact:** api/inference.py、frontend/src/pages/InferencePage.tsx
+- **Compatibility:** 破壊的（プレリリースのため許容）
+- **Alternatives:** 200 + `{"metrics": null, "has_ground_truth": false}` を返す案 → 404 のほうが REST 慣例に沿う
+- **Acceptance Criteria:** GT なし時に 404 が返る
+- **Decision:** 2026-03-09 accepted — 提案通り
