@@ -1,7 +1,6 @@
 """Workspace API router (BLUEPRINT §5.2).
 
-Covers: status, reset, data endpoints, config endpoints.
-Fit/Tune added in Phase 5.
+Covers: status, reset, data, config, fit, tune.
 """
 
 from __future__ import annotations
@@ -16,6 +15,7 @@ from fastapi import APIRouter, Depends, UploadFile
 from fastapi.responses import Response
 
 from lizystudio.api.errors import (
+    BackendError,
     FileInvalidError,
     PathNotFoundError,
     WorkspaceNoConfigError,
@@ -28,6 +28,8 @@ from lizystudio.services.data import (
     load_dataframe,
     make_data_ref,
 )
+from lizystudio.services.jobs import JobStore, get_job_store
+from lizystudio.services.training import run_fit, run_tune
 from lizystudio.services.workspace import WorkspaceState, get_workspace
 
 router = APIRouter()
@@ -212,3 +214,72 @@ def config_download(
         media_type="application/x-yaml",
         headers={"Content-Disposition": "attachment; filename=config.yaml"},
     )
+
+
+# --- Fit / Tune endpoints (BLUEPRINT §5.2 Fit/Tune) ---
+
+
+@router.post("/fit")
+def workspace_fit(
+    ws: WorkspaceState = Depends(get_workspace),
+    job_store: JobStore = Depends(get_job_store),
+) -> dict[str, Any]:
+    """Create and run a fit job with current config + data."""
+    if not ws.config:
+        raise WorkspaceNoConfigError()
+    if ws.dataframe is None or ws.data_ref is None:
+        raise WorkspaceNoDataError()
+    job = job_store.create(
+        backend_name=ws.backend.info.name,
+        config=ws.config,
+        data_ref=ws.data_ref,
+        job_type="fit",
+    )
+    try:
+        job = run_fit(
+            job=job,
+            job_store=job_store,
+            backend=ws.backend,
+            config=ws.config,
+            dataframe=ws.dataframe,
+        )
+    except Exception as exc:
+        raise BackendError(exc) from exc
+    # Update workspace volatile state
+    ws.workspace_fit_result = job.fit_result
+    ws.workspace_tune_result = None
+    ws.current_job_id = job.job_id
+    return {"job_id": job.job_id}
+
+
+@router.post("/tune")
+def workspace_tune(
+    ws: WorkspaceState = Depends(get_workspace),
+    job_store: JobStore = Depends(get_job_store),
+) -> dict[str, Any]:
+    """Create and run a tune job with current config + data."""
+    if not ws.config:
+        raise WorkspaceNoConfigError()
+    if ws.dataframe is None or ws.data_ref is None:
+        raise WorkspaceNoDataError()
+    job = job_store.create(
+        backend_name=ws.backend.info.name,
+        config=ws.config,
+        data_ref=ws.data_ref,
+        job_type="tune",
+    )
+    try:
+        job = run_tune(
+            job=job,
+            job_store=job_store,
+            backend=ws.backend,
+            config=ws.config,
+            dataframe=ws.dataframe,
+        )
+    except Exception as exc:
+        raise BackendError(exc) from exc
+    # Update workspace volatile state
+    ws.workspace_fit_result = job.fit_result
+    ws.workspace_tune_result = job.tune_result
+    ws.current_job_id = job.job_id
+    return {"job_id": job.job_id}

@@ -1,9 +1,17 @@
-import { Grid, Title, Text, Paper, Stack } from "@mantine/core";
+import { useState, useCallback } from "react";
+import { Grid } from "@mantine/core";
 
 import { DataPanel } from "../components/DataPanel";
 import { ModelPanel } from "../components/ModelPanel";
+import { ResultsPanel } from "../components/ResultsPanel";
 
 export function WorkspacePage() {
+  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
+
+  const onJobCreated = useCallback((jobId: string) => {
+    setCurrentJobId(jobId);
+  }, []);
+
   return (
     <Grid gutter="md">
       {/* Left: Data Panel */}
@@ -16,16 +24,9 @@ export function WorkspacePage() {
         <ModelPanel />
       </Grid.Col>
 
-      {/* Right: Results Panel (stub) */}
+      {/* Right: Results Panel */}
       <Grid.Col span={4}>
-        <Paper p="md" withBorder>
-          <Stack>
-            <Title order={5}>Results</Title>
-            <Text c="dimmed" size="sm">
-              Results will appear here after fitting.
-            </Text>
-          </Stack>
-        </Paper>
+        <ResultsPanel jobId={currentJobId} onJobCreated={onJobCreated} />
       </Grid.Col>
     </Grid>
   );
