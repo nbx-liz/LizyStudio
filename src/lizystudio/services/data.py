@@ -101,7 +101,25 @@ def analyze_columns(
             )
         )
 
-    return ColumnsResponse(target=target, columns=columns)
+    # Auto-detect task from target column (BLUEPRINT §4.2.1)
+    suggested_task: Literal["binary", "multiclass", "regression"] | None = None
+    if target and target in df.columns:
+        target_series = df[target]
+        target_unique = int(target_series.nunique())
+        threshold = max(20, int(n_rows * 0.05))
+        if target_unique == 2:
+            suggested_task = "binary"
+        elif target_series.dtype == "object" or target_series.dtype.name == "category":
+            # Object/category dtype is always multiclass (BLUEPRINT §4.2.1)
+            suggested_task = "multiclass"
+        elif target_unique <= threshold:
+            suggested_task = "multiclass"
+        else:
+            suggested_task = "regression"
+
+    return ColumnsResponse(
+        target=target, suggested_task=suggested_task, columns=columns
+    )
 
 
 def get_describe(df: pd.DataFrame) -> list[dict[str, Any]]:

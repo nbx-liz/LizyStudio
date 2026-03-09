@@ -49,3 +49,28 @@ class WorkspaceState:
 def get_workspace(request: Request) -> WorkspaceState:
     """FastAPI dependency — retrieve workspace from app.state."""
     return request.app.state.workspace  # type: ignore[no-any-return]
+
+
+# --- Service-layer helpers for config operations (Phase 20) ---
+
+
+def get_config_schema(ws: WorkspaceState) -> dict[str, Any]:
+    """Return the backend's config JSON Schema."""
+    return ws.backend.get_config_schema().json_schema
+
+
+def validate_config(ws: WorkspaceState, config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Validate a config dict against the backend."""
+    return ws.backend.validate_config(config)
+
+
+def load_config_from_file(
+    ws: WorkspaceState, content: bytes, filename: str
+) -> dict[str, Any]:
+    """Parse an uploaded config file via the backend."""
+    return ws.backend.load_config_from_file(content, filename)
+
+
+def get_backend_name(ws: WorkspaceState) -> str:
+    """Return the backend adapter name."""
+    return ws.backend.info.name

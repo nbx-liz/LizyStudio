@@ -33,6 +33,7 @@ export interface ColumnInfo {
 
 export interface ColumnsResponse {
   target: string | null;
+  suggested_task: "binary" | "multiclass" | "regression" | null;
   columns: ColumnInfo[];
 }
 

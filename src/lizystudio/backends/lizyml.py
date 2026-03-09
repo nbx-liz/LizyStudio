@@ -79,7 +79,11 @@ class LizyMLAdapter:
         params: dict[str, Any] | None = None,
         on_progress: ProgressCallback | None = None,
     ) -> FitSummary:
+        if on_progress is not None:
+            on_progress(current=0, total=1, message="Fitting model...")
         fit_result = model.fit(params=params)
+        if on_progress is not None:
+            on_progress(current=1, total=1, message="Fit complete.")
         return self._convert_fit_result(model, fit_result)
 
     def tune(
@@ -88,7 +92,11 @@ class LizyMLAdapter:
         *,
         on_progress: ProgressCallback | None = None,
     ) -> TuningSummary:
+        if on_progress is not None:
+            on_progress(current=0, total=1, message="Tuning hyperparameters...")
         tune_result = model.tune()
+        if on_progress is not None:
+            on_progress(current=1, total=1, message="Tuning complete.")
         return TuningSummary(
             best_params=dict(tune_result.best_params),
             best_score=float(tune_result.best_score),

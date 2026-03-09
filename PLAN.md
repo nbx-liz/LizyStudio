@@ -18,11 +18,21 @@
 | 13 | P1: Jobs 仕様準拠 | 11 | ✅ |
 | 14 | P1: Inference 仕様準拠 | 11, 13 | ✅ |
 | 15 | 監査クローズ（回帰テスト/E2E） | 12〜14 | ✅ |
-| 16 | 再監査P0: Workspace 実行不能差分修正 | 15 | ⏳ |
-| 17 | 再監査P0: API契約再整合（Jobs/Inference） | 16 | ⏳ |
-| 18 | 再監査P1: 画面導線・状態遷移修正 | 17 | ⏳ |
-| 19 | 再監査P1: WebSocket進捗・Cancel整備 | 17, 18 | ⏳ |
-| 20 | 再監査クローズ（責務分離・回帰監査） | 19 | ⏳ |
+| 16 | 再監査P0: Workspace 実行不能差分修正 | 15 | ✅ |
+| 17 | 再監査P0: API契約再整合（Jobs/Inference） | 16 | ✅ |
+| 18 | 再監査P1: 画面導線・状態遷移修正 | 17 | ✅ |
+| 19 | 再監査P1: WebSocket進捗・Cancel整備 | 17, 18 | ✅ |
+| 20 | 再監査クローズ（責務分離・回帰監査） | 19 | ✅ |
+| 21 | HISTORY Proposals + BLUEPRINT Spec Sync | 20 | ✅ |
+| 22 | P0: Progress Callback + Backends Endpoint | 21 | ✅ |
+| 23 | Workspace: DataPanel 仕様準拠 | 22 | ✅ |
+| 24 | Workspace: ModelPanel 仕様準拠 | 23 | ✅ |
+| 25 | Workspace: ResultsPanel 仕様準拠 | 24 | ✅ |
+| 26 | Jobs ページ仕様準拠 | 25 | ✅ |
+| 27 | Inference ページ仕様準拠 | 26 | ✅ |
+| 28 | API 契約修正 | 27 | ✅ |
+| 29 | レイヤー責務最終整理 | 28 | ✅ |
+| 30 | 最終監査 + PLAN 更新 + 残存乖離修正 | 29 | ✅ |
 
 ---
 
@@ -629,7 +639,7 @@ BLUEPRINT を正として、実装を追従させる。
 
 ---
 
-## Phase 16: 再監査P0: Workspace 実行不能差分修正
+## Phase 16: 再監査P0: Workspace 実行不能差分修正 ✅
 
 **依存:** Phase 15
 
@@ -656,7 +666,7 @@ BLUEPRINT を正として、実装を追従させる。
 
 ---
 
-## Phase 17: 再監査P0: API契約再整合（Jobs/Inference）
+## Phase 17: 再監査P0: API契約再整合（Jobs/Inference） ✅
 
 **依存:** Phase 16
 
@@ -686,7 +696,7 @@ BLUEPRINT を正として、実装を追従させる。
 
 ---
 
-## Phase 18: 再監査P1: 画面導線・状態遷移修正
+## Phase 18: 再監査P1: 画面導線・状態遷移修正 ✅
 
 **依存:** Phase 17
 
@@ -712,7 +722,7 @@ BLUEPRINT を正として、実装を追従させる。
 
 ---
 
-## Phase 19: 再監査P1: WebSocket進捗・Cancel整備
+## Phase 19: 再監査P1: WebSocket進捗・Cancel整備 ✅
 
 **依存:** Phase 17, Phase 18
 
@@ -737,7 +747,7 @@ BLUEPRINT を正として、実装を追従させる。
 
 ---
 
-## Phase 20: 再監査クローズ（責務分離・回帰監査）
+## Phase 20: 再監査クローズ（責務分離・回帰監査） ✅
 
 **依存:** Phase 19
 
@@ -759,3 +769,166 @@ BLUEPRINT を正として、実装を追従させる。
 - [ ] 回帰テスト一式（pytest/lint/mypy/frontend build）が通過
 - [ ] 再監査で P0/P1 差分が 0 件
 - [ ] 必要なドキュメント（BLUEPRINT/HISTORY/PLAN）が相互整合する
+
+---
+
+## BLUEPRINT 完全準拠計画（Phase 21–30） ✅
+
+Phase 20 完了後の `/requirements-audit` で検出された約 50 件の BLUEPRINT 乖離を解消。
+
+---
+
+## Phase 21: HISTORY Proposals + BLUEPRINT Spec Sync ✅
+
+**成果物:**
+- HISTORY.md に H-0012〜H-0016 を起票・accepted
+- BLUEPRINT §3.3.1/§3.3.2/§5.3/§5.5/§5.6 を実装に合わせて更新
+
+---
+
+## Phase 22: P0 — Progress Callback + Backends Endpoint ✅
+
+**成果物:**
+- LizyML Adapter の fit/tune で on_progress を境界呼び出し（LizyML がコールバック非対応のため）
+- `GET /api/backends` エンドポイント新設（H-0014）
+- `src/lizystudio/api/backends.py` 新規作成
+
+---
+
+## Phase 23: Workspace — DataPanel 仕様準拠 ✅
+
+**成果物:**
+- Task 自動判定ロジックを Service 層（`services/data.py`）に移設、`suggested_task` をAPIレスポンスに追加
+- Task 手動変更が config に同期
+- data.path が config に反映
+- ConfigForm: array 型 → TagsInput、config_version 非表示
+- Calibration 表示条件を `data.task` で判定
+
+---
+
+## Phase 24: Workspace — ModelPanel 仕様準拠 ✅
+
+**成果物:**
+- Sticky ヘッダー + タブ連動 Fit/Tune ボタン
+- Tune scoring: TextInput → Select
+- Search Space: 型別モード制限 + Distribution Select + Chip Choice
+- Tune 実行条件: Range/Choice が1つ以上必須
+- Raw Config: 読み取り専用（`<pre>` ブロック）
+- Fit/Tune ボタンを ModelPanel ヘッダーに移動、WorkspacePage でイベント配線
+
+---
+
+## Phase 25: Workspace — ResultsPanel 仕様準拠 ✅
+
+**成果物:**
+- ヘッダー書式: model_name + primary_metric Badge
+- LearningCurveSection（fetchJobPlot learning-curve）
+- FeatureImportanceSection（fetchJobImportance → テーブル top 20）
+- FoldDetailsSection（fetchJobSplitSummary → 動的テーブル）
+- OptimizationHistorySection（fetchJobPlot tuning）
+- TuneResultSection に "Apply to Fit" ボタン追加
+
+---
+
+## Phase 26: Jobs ページ仕様準拠 ✅
+
+**成果物:**
+- #N 形式表示（逆順インデックス）
+- 相対時刻 + ホバー絶対時刻（共通ユーティリティ `formatRelativeTime` を使用）
+- Pulse アニメーション（CSS @keyframes）
+- RunningView に Cancel ボタン + Elapsed 表示
+- Feature Importance / Fold Details セクションを Jobs 詳細に追加
+- アクション条件: Inference/Export=Completed, Re-fit=Completed/Failed, Delete=非Running, Cancel=Running
+
+---
+
+## Phase 27: Inference ページ仕様準拠 ✅
+
+**成果物:**
+- Run Inference ボタン文言
+- GT 検出表示（実行前: "will be checked"、実行後: 結果表示）
+- GT あり: Prediction Distribution（Plotly histogram）+ SHAP Summary セクション
+- GT なし: Plotly histogram + Summary stats テーブル
+- GT なし: Distribution Comparison オーバーレイプロット（current=blue, other=gray）
+- History 時刻: 相対時刻 + ホバー絶対時刻
+
+---
+
+## Phase 28: API 契約修正 ✅
+
+**成果物:**
+- `POST /inference/upload` を upload-only に変更（H-0015）
+- Frontend: 2ステップフロー（upload → run）
+- `GET /inference/{inf_id}/metrics` が GT なし時に 404（H-0016）
+- export の mkdir は既に対応済み
+
+---
+
+## Phase 29: レイヤー責務最終整理 ✅
+
+**成果物:**
+- Thread 起動を Router から Service に移管（`start_fit_async` / `start_tune_async`）
+- Workspace 結果更新を Service 内の thread callback で処理
+- `/status` で JobStore から結果復元
+- Router に threading import なし
+
+---
+
+## Phase 30: 最終監査 + PLAN 更新 + 残存乖離修正 ✅
+
+**成果物（監査済み ✅）:**
+- 全品質ゲート通過: ruff check ✓ / ruff format ✓ / mypy ✓ / pytest (99 tests) ✓ / pnpm build ✓
+
+**残存乖離修正（追加タスク）:**
+
+再監査で検出された 8 件の BLUEPRINT 乖離を修正する。変更ゲート対象（API/型/依存追加）は含まないため HISTORY.md 起票不要。
+
+| # | 乖離内容 | 対象ファイル | BLUEPRINT 参照 |
+|---|---------|-------------|---------------|
+| 1 | Results/Jobs ヘッダーが job_id 表示（モデル名+#N 形式でない） | ResultsPanel.tsx:201, JobsPage.tsx:396 | §4.2.3 L922, §4.3 L1060 |
+| 2 | Inference GT 検出が履歴依存（入力データ読込時の即時検出でない） | InferencePage.tsx:121, 273 | §4.4 L1301 |
+| 3 | No-GT 結果に SHAP Summary セクションがない | InferencePage.tsx:578 | §4.4 L1527 |
+| 4 | Task 自動判定で object/category → multiclass ルールが欠落 | data.py:105 | §4.2.1 L435 |
+| 5 | Raw Config がインライン JSON（YAML 読取専用モーダルでない） | ModelPanel.tsx:684 | §4.2.2 L677 |
+| 6 | Cancel に確認ダイアログがない | ResultsPanel.tsx:367 | §4.2.3 L1130 |
+| 7 | Inference ヘッダー/履歴が Inf #N 形式でない | InferencePage.tsx:383, 423 | §4.4 L1348, L1389 |
+| 8 | Setup Panel に Job 情報（種別・モデル名・スコア）がない | InferencePage.tsx:217 | §4.4 L1285 |
+
+**タスク:**
+
+**A. 共通ユーティリティ + 番号/モデル名フォーマット (#1, #7, #8)**
+1. `frontend/src/utils/formatJob.ts` 新規作成 — `getModelName`, `getJobNumber`, `getInfNumber`, `formatJobLabel`, `formatInfLabel`
+2. `frontend/src/utils/toYaml.ts` 新規作成 — 簡易 YAML シリアライザ（外部依存不要）
+3. ResultsPanel ヘッダー: `getModelName` で config.model.name を抽出（#1）
+4. JobsPage ヘッダー: `Fit #N — {modelName}` 形式（#1）
+5. InferencePage 履歴行/結果ヘッダー: `Inf #N`, `Job #M {modelName}` 形式（#7）
+6. InferencePage Setup Select: `#N {type} {modelName}` + Job 情報テキスト（#8）
+
+**B. Backend ロジック修正 (#4)**
+7. `services/data.py`: object/category dtype → 常に multiclass 判定ルール追加
+
+**C. UI 挙動修正 (#2, #3, #5, #6)**
+8. ResultsPanel Cancel: `Modal` + `useDisclosure` で確認ダイアログ追加（#6）
+9. ModelPanel Raw Config: インライン `<pre>` → YAML 読取専用 `Modal`（#5）
+10. InferencePage GT 即時検出: Upload 時に CSV ヘッダーをクライアント解析（#2）
+11. InferencePage No-GT: SHAP Summary アコーディオン追加（#3）
+
+**変更ファイル:**
+- `frontend/src/utils/formatJob.ts`（新規）
+- `frontend/src/utils/toYaml.ts`（新規）
+- `frontend/src/components/ResultsPanel.tsx`（修正: #1, #6）
+- `frontend/src/pages/JobsPage.tsx`（修正: #1）
+- `frontend/src/pages/InferencePage.tsx`（修正: #2, #3, #7, #8）
+- `frontend/src/components/ModelPanel.tsx`（修正: #5）
+- `src/lizystudio/services/data.py`（修正: #4）
+
+**DoD:**
+- [x] Results/Jobs ヘッダーがモデル名表示（#1）
+- [x] Inference GT がデータ読込時に即時検出（#2）
+- [x] No-GT 結果に SHAP Summary セクション表示（#3）
+- [x] object/category target が multiclass 判定（#4）
+- [x] Raw Config が YAML 読取専用モーダル（#5）
+- [x] Cancel に確認ダイアログ（#6）
+- [x] Inference ヘッダー/履歴が Inf #N 形式（#7）
+- [x] Setup Panel に Job 情報表示（#8）
+- [x] 全品質ゲート通過: ruff ✓ / mypy ✓ / pytest (99 tests) ✓ / pnpm build ✓

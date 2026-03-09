@@ -65,6 +65,8 @@ def test_data_columns_auto_detection(client: TestClient, tmp_path: Path) -> None
     assert cols["id"]["exclude_reason"] == "id"
     # 'gender' has 2 unique values, should be categorical
     assert cols["gender"]["suggested_type"] == "categorical"
+    # suggested_task for binary target (2 unique values)
+    assert body["suggested_task"] == "binary"
 
 
 def test_data_describe(client: TestClient, tmp_path: Path) -> None:

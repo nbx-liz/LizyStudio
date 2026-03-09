@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +13,7 @@ from uuid import uuid4
 
 from fastapi import Request
 
+from lizystudio.backends.base import BackendAdapter
 from lizystudio.backends.types import DataRef, FitSummary, TuningSummary
 
 
@@ -20,7 +22,7 @@ class Job:
     """Persistent job metadata."""
 
     job_id: str
-    status: Literal["pending", "running", "completed", "failed"]
+    status: Literal["pending", "running", "completed", "failed", "cancelled"]
     backend_name: str
     config: dict[str, Any]
     data_ref: DataRef
@@ -47,6 +49,8 @@ class JobStore:
     def __init__(self, jobs_dir: Path) -> None:
         self.jobs_dir = jobs_dir
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
+        self._cancel_requested: set[str] = set()
+        self._cancel_lock = threading.Lock()
 
     # --- CRUD ---
 
@@ -119,6 +123,21 @@ class JobStore:
             shutil.rmtree(job_dir)
             return True
         return False
+
+    def request_cancel(self, job_id: str) -> None:
+        """Mark a job for cancellation (H-0011)."""
+        with self._cancel_lock:
+            self._cancel_requested.add(job_id)
+
+    def is_cancel_requested(self, job_id: str) -> bool:
+        """Check whether cancellation was requested for a job."""
+        with self._cancel_lock:
+            return job_id in self._cancel_requested
+
+    def clear_cancel(self, job_id: str) -> None:
+        """Clear cancellation flag after processing."""
+        with self._cancel_lock:
+            self._cancel_requested.discard(job_id)
 
     def get_log(self, job_id: str) -> str:
         """Read execution log for a job. Returns empty string if not found."""
@@ -193,3 +212,46 @@ class JobStore:
 def get_job_store(request: Request) -> JobStore:
     """FastAPI dependency — retrieve job store from app.state."""
     return request.app.state.job_store  # type: ignore[no-any-return]
+
+
+# --- Service-layer helpers for job results (Phase 20) ---
+
+
+def load_job_model(job: Job, backend: BackendAdapter) -> Any:
+    """Load a trained model from a completed job."""
+    if job.model_path is None:
+        msg = f"Job {job.job_id} has no saved model"
+        raise ValueError(msg)
+    return backend.load_model(job.model_path)
+
+
+def get_metrics_table(job: Job, backend: BackendAdapter) -> list[dict[str, Any]]:
+    """Get the metrics evaluation table for a completed job."""
+    model = load_job_model(job, backend)
+    return backend.evaluate_table(model)
+
+
+def get_split_summary(job: Job, backend: BackendAdapter) -> list[dict[str, Any]]:
+    """Get fold/split summary for a completed job."""
+    model = load_job_model(job, backend)
+    return backend.split_summary(model)
+
+
+def get_importance(
+    job: Job, backend: BackendAdapter, kind: str = "split"
+) -> dict[str, float]:
+    """Get feature importance for a completed job."""
+    model = load_job_model(job, backend)
+    return backend.importance(model, kind=kind)
+
+
+def get_job_plot(job: Job, backend: BackendAdapter, plot_type: str) -> Any:
+    """Get a plot for a completed job. Returns PlotData."""
+    model = load_job_model(job, backend)
+    return backend.plot(model, plot_type)
+
+
+def get_available_plots(job: Job, backend: BackendAdapter) -> list[str]:
+    """Get list of available plot types for a completed job."""
+    model = load_job_model(job, backend)
+    return backend.available_plots(model)

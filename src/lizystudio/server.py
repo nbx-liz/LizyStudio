@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from lizystudio.api import inference, jobs, workspace
+from lizystudio.api import backends, inference, jobs, workspace
 from lizystudio.api.errors import (
     StudioError,
     studio_error_handler,
@@ -76,6 +76,9 @@ def create_app() -> FastAPI:
     application.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
     application.include_router(
         inference.router, prefix="/api/inference", tags=["inference"]
+    )
+    application.include_router(
+        backends.router, prefix="/api/backends", tags=["backends"]
     )
 
     # WebSocket route for job progress (BLUEPRINT §5.5)

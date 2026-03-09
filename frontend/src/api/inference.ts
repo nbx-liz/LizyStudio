@@ -30,26 +30,24 @@ export function runInference(
   jobId: string,
   dataPath: string,
   returnShap: boolean = false,
+  evaluate: boolean = true,
 ): Promise<{ inf_id: string; job_id: string }> {
   return apiFetch("/inference/run", {
     method: "POST",
     body: JSON.stringify({
       job_id: jobId,
-      data_path: dataPath,
+      data: { source_type: "path", path: dataPath },
       return_shap: returnShap,
+      evaluate,
     }),
   });
 }
 
-export async function uploadAndRunInference(
+export async function uploadInferenceData(
   file: File,
-  jobId: string,
-  returnShap: boolean = false,
-): Promise<{ inf_id: string; job_id: string }> {
+): Promise<{ upload_path: string; filename: string }> {
   const form = new FormData();
   form.append("file", file);
-  form.append("job_id", jobId);
-  form.append("return_shap", String(returnShap));
   const res = await fetch("/api/inference/upload", {
     method: "POST",
     body: form,
@@ -62,9 +60,10 @@ export async function uploadAndRunInference(
 }
 
 export function fetchInferenceHistory(
-  jobId: string,
+  jobId?: string,
 ): Promise<InferenceRecord[]> {
-  return apiFetch(`/inference/history?job_id=${jobId}`);
+  const params = jobId ? `?job_id=${jobId}` : "";
+  return apiFetch(`/inference/history${params}`);
 }
 
 export function fetchInference(

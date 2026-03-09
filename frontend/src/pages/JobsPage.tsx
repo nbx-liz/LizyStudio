@@ -43,12 +43,25 @@ import {
 import { updateConfig } from "../api/config";
 import {
   MetricsTable,
+  RunningView,
   TuneResultSection,
   PlotViewer,
   ParamsTable,
   TrialsTable,
+  FoldDetailsSection,
+  FeatureImportanceSection,
 } from "../components/ResultsPanel";
 import { ExportDialog } from "../components/ExportDialog";
+import { formatRelativeTime } from "../utils/formatRelativeTime";
+
+// --- Pulse animation for running badge ---
+const pulseKeyframes = `
+@keyframes pulse-badge {
+  0%   { opacity: 1; }
+  50%  { opacity: 0.5; }
+  100% { opacity: 1; }
+}
+`;
 
 export function JobsPage() {
   const queryClient = useQueryClient();
@@ -119,6 +132,9 @@ export function JobsPage() {
 
   return (
     <Box style={{ display: "flex", gap: 16, height: "calc(100vh - 80px)" }}>
+      {/* Pulse animation styles */}
+      <style dangerouslySetInnerHTML={{ __html: pulseKeyframes }} />
+
       {/* Left Panel — Job List */}
       <Paper
         withBorder
@@ -161,6 +177,7 @@ export function JobsPage() {
               <JobRow
                 key={job.job_id}
                 job={job}
+                allJobs={jobsQuery.data ?? []}
                 selected={job.job_id === effectiveJobId}
                 onClick={() => setSelectedJobId(job.job_id)}
               />
@@ -178,10 +195,15 @@ export function JobsPage() {
         {effectiveJobId ? (
           <JobDetailPanel
             jobId={effectiveJobId}
+            allJobs={jobsQuery.data ?? []}
             onDelete={onDeleteRequest}
             onExport={openExport}
             onNavigateWorkspace={() => navigate("/")}
-            onNavigateInference={() => navigate("/inference")}
+            onNavigateInference={() =>
+              navigate("/inference", {
+                state: { jobId: effectiveJobId },
+              })
+            }
           />
         ) : (
           <Stack align="center" justify="center" h="100%">
@@ -227,10 +249,12 @@ export function JobsPage() {
 
 function JobRow({
   job,
+  allJobs,
   selected,
   onClick,
 }: {
   job: JobSummary;
+  allJobs: JobSummary[];
   selected: boolean;
   onClick: () => void;
 }) {
@@ -243,10 +267,16 @@ function JobRow({
       <IconX size={14} color="var(--mantine-color-red-6)" />
     );
 
-  const timeStr = job.completed_at ?? job.created_at;
+  // #N label: reverse order index (latest = highest N)
+  const jobIndex = allJobs.length - allJobs.findIndex((j) => j.job_id === job.job_id);
+  const jobLabel = `#${jobIndex}`;
+
+  const time = formatRelativeTime(job.created_at);
+  const relTime = time.relative;
+  const absTime = time.absolute;
 
   return (
-    <Tooltip label={timeStr} position="right" withArrow>
+    <Tooltip label={absTime} position="right" withArrow>
       <UnstyledButton
         onClick={onClick}
         p="xs"
@@ -263,7 +293,7 @@ function JobRow({
         <Group gap="xs" wrap="nowrap">
           {statusIcon}
           <Text size="xs" fw={500} truncate style={{ flex: 1 }}>
-            {job.job_id}
+            {jobLabel}
           </Text>
           <Badge size="xs" variant="light">
             {job.job_type}
@@ -273,6 +303,9 @@ function JobRow({
               {job.model_name}
             </Text>
           )}
+          <Text size="xs" c="dimmed" title={absTime}>
+            {relTime}
+          </Text>
           <Text size="xs" c="dimmed" style={{ minWidth: 52, textAlign: "right" }}>
             {job.status === "completed" && job.primary_score != null
               ? job.primary_score.toFixed(4)
@@ -290,17 +323,21 @@ function JobRow({
 
 function JobDetailPanel({
   jobId,
+  allJobs,
   onDelete,
   onExport,
   onNavigateWorkspace,
   onNavigateInference,
 }: {
   jobId: string;
+  allJobs: JobSummary[];
   onDelete: (jobId: string) => void;
   onExport: () => void;
   onNavigateWorkspace: () => void;
   onNavigateInference: () => void;
 }) {
+  const queryClient = useQueryClient();
+
   const jobQuery = useQuery({
     queryKey: ["job", jobId],
     queryFn: () => fetchJob(jobId),
@@ -354,29 +391,37 @@ function JobDetailPanel({
   const job = jobQuery.data;
   const config = configQuery.data;
 
-  // Header
+  // Header: #N format + model name
+  const jobNumber = (() => {
+    const idx = allJobs.findIndex((j) => j.job_id === job.job_id);
+    return idx >= 0 ? allJobs.length - idx : 0;
+  })();
+  const modelName = job.model_name || "Unknown";
   const header = (
     <Group justify="space-between" mb="md">
       <Group gap="xs">
         <Title order={4}>
-          {job.job_type === "fit" ? "Fit" : "Tune"} — {job.job_id}
+          {job.job_type === "fit" ? "Fit" : "Tune"} #{jobNumber} — {modelName}
         </Title>
         <StatusBadge status={job.status} />
       </Group>
     </Group>
   );
 
-  // Running state
+  // Running state — show RunningView with Cancel
   if (job.status === "running" || job.status === "pending") {
     return (
       <Stack>
         {header}
-        <Stack align="center" gap="md" py="xl">
-          <Loader />
-          <Text size="sm" c="dimmed">
-            Processing...
-          </Text>
-        </Stack>
+        <RunningView
+          jobId={job.job_id}
+          jobType={job.job_type}
+          modelName={modelName}
+          onDone={() => {
+            queryClient.invalidateQueries({ queryKey: ["job", jobId] });
+            queryClient.invalidateQueries({ queryKey: ["jobs"] });
+          }}
+        />
         {config && <ConfigAccordion config={config} />}
       </Stack>
     );
@@ -431,13 +476,20 @@ function JobDetailPanel({
 
       {/* Accordion details */}
       <Accordion>
+        {/* Feature Importance */}
+        <Accordion.Item value="feature-importance">
+          <Accordion.Control>Feature Importance</Accordion.Control>
+          <Accordion.Panel>
+            <FeatureImportanceSection jobId={job.job_id} />
+          </Accordion.Panel>
+        </Accordion.Item>
+
+        {/* Fold Details (CV) */}
         {job.fit_result && job.fit_result.fold_count > 1 && (
           <Accordion.Item value="fold-details">
             <Accordion.Control>Fold Details</Accordion.Control>
             <Accordion.Panel>
-              <Text size="sm" c="dimmed">
-                {job.fit_result.fold_count} folds
-              </Text>
+              <FoldDetailsSection jobId={job.job_id} />
             </Accordion.Panel>
           </Accordion.Item>
         )}
@@ -543,7 +595,14 @@ function StatusBadge({ status }: { status: string }) {
       </Badge>
     );
   if (status === "running" || status === "pending")
-    return <Badge color="blue">Running</Badge>;
+    return (
+      <Badge
+        color="blue"
+        style={{ animation: "pulse-badge 1.5s ease-in-out infinite" }}
+      >
+        Running
+      </Badge>
+    );
   return (
     <Badge color="red" leftSection={<IconX size={12} />}>
       Failed
