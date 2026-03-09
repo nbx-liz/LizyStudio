@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import os
+from pathlib import Path
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -26,7 +28,22 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Enable auto-reload for development",
     )
+    parser.add_argument(
+        "--backend",
+        default="lizyml",
+        help="Backend adapter name (default: lizyml)",
+    )
+    parser.add_argument(
+        "--jobs-dir",
+        type=Path,
+        default=Path(".lizystudio/jobs"),
+        help="Job storage directory (default: .lizystudio/jobs)",
+    )
     args = parser.parse_args(argv)
+
+    # Pass settings via env vars so they survive --reload restarts
+    os.environ["LIZYSTUDIO_BACKEND"] = args.backend
+    os.environ["LIZYSTUDIO_JOBS_DIR"] = str(args.jobs_dir)
 
     import uvicorn
 
