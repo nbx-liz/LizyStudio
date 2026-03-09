@@ -103,11 +103,13 @@ def _build_report_html(
     # Plotly divs
     plot_divs = ""
     for i, pj in enumerate(plot_jsons):
+        parsed = json.loads(pj)
+        data_js = json.dumps(parsed.get("data", []))
+        layout_js = json.dumps(parsed.get("layout", {}))
         plot_divs += f"""
         <div id="plot-{i}" style="width:100%;height:500px;margin-bottom:20px;"></div>
         <script>
-            Plotly.newPlot('plot-{i}', {json.dumps(json.loads(pj).get("data", []))},
-                           {json.dumps(json.loads(pj).get("layout", {{}}))});
+            Plotly.newPlot('plot-{i}', {data_js}, {layout_js});
         </script>
         """
 
