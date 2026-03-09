@@ -63,7 +63,9 @@ def export_report(
     if out.is_dir() or not out.suffix:
         out = out / f"report_{job.job_id}.html"
 
-    html = _build_report_html(job=job, info=info, metrics=metrics, plot_jsons=plot_jsons)
+    html = _build_report_html(
+        job=job, info=info, metrics=metrics, plot_jsons=plot_jsons
+    )
     out.write_text(html, encoding="utf-8")
     return str(out)
 
@@ -94,7 +96,9 @@ def _build_report_html(
                 f"<td>{html.escape(str(row.get(c, '')))}</td>" for c in cols
             )
             rows_html += f"<tr>{cells}</tr>"
-        metric_rows = f"<table border='1' cellpadding='4'><tr>{header}</tr>{rows_html}</table>"
+        metric_rows = (
+            f"<table border='1' cellpadding='4'><tr>{header}</tr>{rows_html}</table>"
+        )
 
     # Plotly divs
     plot_divs = ""
@@ -102,8 +106,8 @@ def _build_report_html(
         plot_divs += f"""
         <div id="plot-{i}" style="width:100%;height:500px;margin-bottom:20px;"></div>
         <script>
-            Plotly.newPlot('plot-{i}', {json.dumps(json.loads(pj).get('data', []))},
-                           {json.dumps(json.loads(pj).get('layout', {{}}))});
+            Plotly.newPlot('plot-{i}', {json.dumps(json.loads(pj).get("data", []))},
+                           {json.dumps(json.loads(pj).get("layout", {{}}))});
         </script>
         """
 
@@ -114,7 +118,9 @@ def _build_report_html(
     <title>{title}</title>
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <style>
-        body {{ font-family: system-ui, sans-serif; max-width: 1000px; margin: 0 auto; padding: 20px; }}
+        body {{ font-family: system-ui, sans-serif;
+               max-width: 1000px; margin: 0 auto;
+               padding: 20px; }}
         table {{ border-collapse: collapse; margin: 10px 0; }}
         th {{ background: #f0f0f0; }}
         td, th {{ padding: 6px 12px; text-align: left; }}
