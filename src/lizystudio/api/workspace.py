@@ -6,16 +6,16 @@ Covers: status, reset, data, config, fit, tune.
 from __future__ import annotations
 
 import tempfile
+import threading
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 import yaml
-from fastapi import APIRouter, Depends, UploadFile
+from fastapi import APIRouter, Depends, Request, UploadFile
 from fastapi.responses import Response
 
 from lizystudio.api.errors import (
-    BackendError,
     FileInvalidError,
     PathNotFoundError,
     WorkspaceNoConfigError,
@@ -31,6 +31,7 @@ from lizystudio.services.data import (
 from lizystudio.services.jobs import JobStore, get_job_store
 from lizystudio.services.training import run_fit, run_tune
 from lizystudio.services.workspace import WorkspaceState, get_workspace
+from lizystudio.ws.progress import ProgressBroadcaster
 
 router = APIRouter()
 
@@ -216,15 +217,89 @@ def config_download(
     )
 
 
+# --- Helpers ---
+
+
+def _get_broadcaster(request: Request) -> ProgressBroadcaster:
+    return request.app.state.broadcaster  # type: ignore[no-any-return]
+
+
+def _run_fit_background(
+    ws: WorkspaceState,
+    job_store: JobStore,
+    broadcaster: ProgressBroadcaster,
+    job_id: str,
+    config: dict[str, Any],
+    dataframe: Any,
+) -> None:
+    """Run fit in background thread with progress broadcasting."""
+    job = job_store.get(job_id)
+    if job is None:
+        return
+    cb = broadcaster.make_callback(job_id)
+    try:
+        job = run_fit(
+            job=job,
+            job_store=job_store,
+            backend=ws.backend,
+            config=config,
+            dataframe=dataframe,
+            on_progress=cb,
+        )
+        ws.workspace_fit_result = job.fit_result
+        ws.workspace_tune_result = None
+        ws.current_job_id = job.job_id
+        if job.status == "completed":
+            broadcaster.send_completed(job_id)
+        else:
+            broadcaster.send_error(job_id, job.error or "Unknown error")
+    except Exception as exc:
+        broadcaster.send_error(job_id, str(exc))
+
+
+def _run_tune_background(
+    ws: WorkspaceState,
+    job_store: JobStore,
+    broadcaster: ProgressBroadcaster,
+    job_id: str,
+    config: dict[str, Any],
+    dataframe: Any,
+) -> None:
+    """Run tune in background thread with progress broadcasting."""
+    job = job_store.get(job_id)
+    if job is None:
+        return
+    cb = broadcaster.make_callback(job_id)
+    try:
+        job = run_tune(
+            job=job,
+            job_store=job_store,
+            backend=ws.backend,
+            config=config,
+            dataframe=dataframe,
+            on_progress=cb,
+        )
+        ws.workspace_fit_result = job.fit_result
+        ws.workspace_tune_result = job.tune_result
+        ws.current_job_id = job.job_id
+        if job.status == "completed":
+            broadcaster.send_completed(job_id)
+        else:
+            broadcaster.send_error(job_id, job.error or "Unknown error")
+    except Exception as exc:
+        broadcaster.send_error(job_id, str(exc))
+
+
 # --- Fit / Tune endpoints (BLUEPRINT §5.2 Fit/Tune) ---
 
 
 @router.post("/fit")
 def workspace_fit(
+    request: Request,
     ws: WorkspaceState = Depends(get_workspace),
     job_store: JobStore = Depends(get_job_store),
 ) -> dict[str, Any]:
-    """Create and run a fit job with current config + data."""
+    """Create a fit job and run it in a background thread."""
     if not ws.config:
         raise WorkspaceNoConfigError()
     if ws.dataframe is None or ws.data_ref is None:
@@ -235,29 +310,23 @@ def workspace_fit(
         data_ref=ws.data_ref,
         job_type="fit",
     )
-    try:
-        job = run_fit(
-            job=job,
-            job_store=job_store,
-            backend=ws.backend,
-            config=ws.config,
-            dataframe=ws.dataframe,
-        )
-    except Exception as exc:
-        raise BackendError(exc) from exc
-    # Update workspace volatile state
-    ws.workspace_fit_result = job.fit_result
-    ws.workspace_tune_result = None
-    ws.current_job_id = job.job_id
+    broadcaster = _get_broadcaster(request)
+    t = threading.Thread(
+        target=_run_fit_background,
+        args=(ws, job_store, broadcaster, job.job_id, ws.config, ws.dataframe),
+        daemon=True,
+    )
+    t.start()
     return {"job_id": job.job_id}
 
 
 @router.post("/tune")
 def workspace_tune(
+    request: Request,
     ws: WorkspaceState = Depends(get_workspace),
     job_store: JobStore = Depends(get_job_store),
 ) -> dict[str, Any]:
-    """Create and run a tune job with current config + data."""
+    """Create a tune job and run it in a background thread."""
     if not ws.config:
         raise WorkspaceNoConfigError()
     if ws.dataframe is None or ws.data_ref is None:
@@ -268,18 +337,11 @@ def workspace_tune(
         data_ref=ws.data_ref,
         job_type="tune",
     )
-    try:
-        job = run_tune(
-            job=job,
-            job_store=job_store,
-            backend=ws.backend,
-            config=ws.config,
-            dataframe=ws.dataframe,
-        )
-    except Exception as exc:
-        raise BackendError(exc) from exc
-    # Update workspace volatile state
-    ws.workspace_fit_result = job.fit_result
-    ws.workspace_tune_result = job.tune_result
-    ws.current_job_id = job.job_id
+    broadcaster = _get_broadcaster(request)
+    t = threading.Thread(
+        target=_run_tune_background,
+        args=(ws, job_store, broadcaster, job.job_id, ws.config, ws.dataframe),
+        daemon=True,
+    )
+    t.start()
     return {"job_id": job.job_id}

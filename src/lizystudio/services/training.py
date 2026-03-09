@@ -6,7 +6,7 @@ import traceback
 from datetime import datetime, timezone
 from typing import Any
 
-from lizystudio.backends.base import BackendAdapter
+from lizystudio.backends.base import BackendAdapter, ProgressCallback
 from lizystudio.backends.types import FitSummary, TuningSummary
 from lizystudio.services.jobs import Job, JobStore
 
@@ -19,13 +19,16 @@ def run_fit(
     config: dict[str, Any],
     dataframe: Any,
     params: dict[str, Any] | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> Job:
     """Execute a fit job synchronously. Updates job in-place and on disk."""
     job.status = "running"
     job_store.update(job)
     try:
         model = backend.create_model(config, dataframe)
-        fit_result: FitSummary = backend.fit(model, params=params)
+        fit_result: FitSummary = backend.fit(
+            model, params=params, on_progress=on_progress
+        )
         # Export model
         model_dir = str(job_store.jobs_dir / job.job_id / "model")
         backend.export_model(model, model_dir)
@@ -50,13 +53,14 @@ def run_tune(
     backend: BackendAdapter,
     config: dict[str, Any],
     dataframe: Any,
+    on_progress: ProgressCallback | None = None,
 ) -> Job:
-    """Execute a tune job: tune → auto-fit with best params (H-0002 Case B)."""
+    """Execute a tune job: tune -> auto-fit with best params (H-0002 B)."""
     job.status = "running"
     job_store.update(job)
     try:
         model = backend.create_model(config, dataframe)
-        tune_result: TuningSummary = backend.tune(model)
+        tune_result: TuningSummary = backend.tune(model, on_progress=on_progress)
         job.tune_result = tune_result
         # Auto-fit with best params
         model2 = backend.create_model(config, dataframe)
