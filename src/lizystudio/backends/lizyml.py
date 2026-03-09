@@ -166,8 +166,9 @@ class LizyMLAdapter:
         return PlotData(plotly_json=fig.to_json())
 
     def available_plots(self, model: Any) -> list[str]:
-        task: str = model._config.task  # noqa: SLF001
-        calibration_enabled = model._config.calibration is not None  # noqa: SLF001
+        cfg = model.fit_result.run_meta.config_normalized
+        task: str = str(cfg["task"])
+        calibration_enabled = cfg.get("calibration") is not None
         plots = ["learning-curve", "oof-distribution", "importance"]
         if task == "regression":
             plots.append("residuals")
@@ -176,7 +177,7 @@ class LizyMLAdapter:
             plots.append("probability-histogram")
             if calibration_enabled:
                 plots.append("calibration")
-        if hasattr(model, "_tune_result") and model._tune_result is not None:  # noqa: SLF001
+        if hasattr(model, "_tuning_result") and model._tuning_result is not None:  # noqa: SLF001
             plots.append("tuning")
         return plots
 
@@ -192,13 +193,16 @@ class LizyMLAdapter:
         return Model.load(path)
 
     def model_info(self, model: Any) -> dict[str, Any]:
-        cfg = model._config  # noqa: SLF001
+        cfg = model.fit_result.run_meta.config_normalized
+        model_cfg = cfg.get("model", {})
+        data_cfg = cfg.get("data", {})
         return {
-            "task": cfg.task,
-            "model_name": cfg.model.name,
-            "feature_count": len(model.fit_result.feature_names)
-            if hasattr(model, "fit_result")
-            else None,
+            "task": str(cfg["task"]),
+            "model_name": (
+                model_cfg.get("name", "") if isinstance(model_cfg, dict) else ""
+            ),
+            "target": data_cfg.get("target") if isinstance(data_cfg, dict) else None,
+            "feature_count": len(model.fit_result.feature_names),
         }
 
     # -- Internal helpers --

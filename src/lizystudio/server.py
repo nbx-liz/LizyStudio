@@ -8,13 +8,18 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from lizystudio.api import inference, jobs, workspace
-from lizystudio.api.errors import StudioError, studio_error_handler
+from lizystudio.api.errors import (
+    StudioError,
+    studio_error_handler,
+    validation_error_handler,
+)
 from lizystudio.backends.registry import get_adapter
 from lizystudio.services.jobs import JobStore
 from lizystudio.services.workspace import WorkspaceState
@@ -60,8 +65,9 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Exception handler
+    # Exception handlers
     application.add_exception_handler(StudioError, studio_error_handler)  # type: ignore[arg-type]
+    application.add_exception_handler(RequestValidationError, validation_error_handler)
 
     # API routers (BLUEPRINT §5.2–§5.4)
     application.include_router(
@@ -86,7 +92,9 @@ def create_app() -> FastAPI:
 
         @application.get("/{full_path:path}")
         async def serve_spa(full_path: str) -> FileResponse:
-            """Serve the SPA — all non-API routes return index.html."""
+            """Serve the SPA — all non-API/WS routes return index.html."""
+            if full_path.startswith(("api/", "ws/")):
+                raise HTTPException(status_code=404, detail="Not found")
             file_path = STATIC_DIR / full_path
             if file_path.is_file():
                 return FileResponse(file_path)

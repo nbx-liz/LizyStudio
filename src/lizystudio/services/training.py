@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+import logging
 import traceback
 from datetime import datetime, timezone
 from typing import Any
@@ -24,6 +26,14 @@ def run_fit(
     """Execute a fit job synchronously. Updates job in-place and on disk."""
     job.status = "running"
     job_store.update(job)
+
+    # Capture execution logs from backend
+    log_buffer = io.StringIO()
+    handler = logging.StreamHandler(log_buffer)
+    handler.setLevel(logging.DEBUG)
+    root_logger = logging.getLogger()
+    root_logger.addHandler(handler)
+
     try:
         model = backend.create_model(config, dataframe)
         fit_result: FitSummary = backend.fit(
@@ -43,6 +53,13 @@ def run_fit(
         job.error = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
         job.completed_at = datetime.now(timezone.utc).isoformat()
         job_store.update(job)
+    finally:
+        root_logger.removeHandler(handler)
+        handler.close()
+        log_path = job_store.jobs_dir / job.job_id / "execution.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(log_buffer.getvalue(), encoding="utf-8")
+
     return job
 
 
@@ -58,6 +75,14 @@ def run_tune(
     """Execute a tune job: tune -> auto-fit with best params (H-0002 B)."""
     job.status = "running"
     job_store.update(job)
+
+    # Capture execution logs from backend
+    log_buffer = io.StringIO()
+    handler = logging.StreamHandler(log_buffer)
+    handler.setLevel(logging.DEBUG)
+    root_logger = logging.getLogger()
+    root_logger.addHandler(handler)
+
     try:
         model = backend.create_model(config, dataframe)
         tune_result: TuningSummary = backend.tune(model, on_progress=on_progress)
@@ -78,4 +103,11 @@ def run_tune(
         job.error = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
         job.completed_at = datetime.now(timezone.utc).isoformat()
         job_store.update(job)
+    finally:
+        root_logger.removeHandler(handler)
+        handler.close()
+        log_path = job_store.jobs_dir / job.job_id / "execution.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(log_buffer.getvalue(), encoding="utf-8")
+
     return job

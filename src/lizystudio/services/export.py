@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 from lizystudio.backends.base import BackendAdapter
 from lizystudio.services.jobs import Job
+
+_log = logging.getLogger(__name__)
 
 
 def export_model(
@@ -55,7 +58,7 @@ def export_report(
             pd = backend.plot(model, pt)
             plot_jsons.append(pd.plotly_json)
         except Exception:  # noqa: BLE001
-            pass
+            _log.warning("Failed to generate plot %r for report", pt, exc_info=True)
 
     # Build HTML
     out = Path(output_path)

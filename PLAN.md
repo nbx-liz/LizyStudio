@@ -12,6 +12,17 @@
 | 7 | Inference 画面 | 6 | ✅ |
 | 8 | WebSocket プログレス | 5 | ✅ |
 | 9 | ビルド・テスト・リリース準備 | 6〜8 | ✅ |
+| 10 | 監査差分ゲート整理 | 9 | ✅ |
+| 11 | P0: API契約・Adapter致命不具合修正 | 10 | ✅ |
+| 12 | P1: Workspace 仕様準拠 | 11 | ✅ |
+| 13 | P1: Jobs 仕様準拠 | 11 | ✅ |
+| 14 | P1: Inference 仕様準拠 | 11, 13 | ✅ |
+| 15 | 監査クローズ（回帰テスト/E2E） | 12〜14 | ✅ |
+| 16 | 再監査P0: Workspace 実行不能差分修正 | 15 | ⏳ |
+| 17 | 再監査P0: API契約再整合（Jobs/Inference） | 16 | ⏳ |
+| 18 | 再監査P1: 画面導線・状態遷移修正 | 17 | ⏳ |
+| 19 | 再監査P1: WebSocket進捗・Cancel整備 | 17, 18 | ⏳ |
+| 20 | 再監査クローズ（責務分離・回帰監査） | 19 | ⏳ |
 
 ---
 
@@ -368,3 +379,383 @@
 - [ ] CI で lint / typecheck / test / build が通る
 - [ ] `pip install` → `lizystudio` で起動 → ブラウザ操作が完結する
 - [ ] PyPI テストアップロードが成功する
+
+---
+
+## 監査差分修正計画（2026-03-09 版）
+
+本セクションは Requirements Audit（2026-03-09）で検出した乖離の是正計画。
+BLUEPRINT を正として、実装を追従させる。
+
+優先度方針:
+- **P0:** 実行不能・API契約逸脱（500エラー、契約不一致）
+- **P1:** 画面仕様・データフロー乖離
+- **P2:** 監査自動化・回帰防止
+
+前提:
+- API / Adapter / 共通型 / 画面間データフロー変更は **HISTORY Proposal を先行**（AGENTS §2 準拠）
+- `pnpm dev` は Node.js `20.19+` で実行する（現環境は Node 18 のため更新が必要）
+
+---
+
+## Phase 10: 監査差分ゲート整理
+
+**依存:** Phase 9
+
+**成果物:**
+- 監査差分の正式トラッキング（P0/P1/P2）
+- ゲート対象変更の Proposal 起票（HISTORY.md）
+- 実装順序とロールバック方針の確定
+
+**SKILL:** `spec-update`, `history-proposals`
+
+**タスク:**
+1. 監査差分を以下カテゴリで棚卸し
+   - API 契約差分（`/api/jobs`, `/api/inference/*`）
+   - Adapter 実行時不具合（`_config` 依存）
+   - 画面仕様差分（Workspace / Jobs / Inference）
+   - レイヤー責務差分（Router に業務ロジック混在）
+2. HISTORY.md に Proposal を追加（例）
+   - H-0006: Inference API 契約を BLUEPRINT §5.4 に合わせる
+   - H-0007: Router→Service 責務再分離
+   - H-0008: Job Cancel / Execution Log の API 契約補完
+3. 各 Proposal の受け入れ基準を PLAN の DoD とリンク
+
+**DoD:**
+- [ ] ゲート対象変更が全て HISTORY に起票済み
+- [ ] Proposal の Status が accepted になってから実装フェーズへ進む
+- [ ] PLAN / BLUEPRINT / HISTORY 間で参照不整合がない
+
+---
+
+## Phase 11: P0 API契約・Adapter致命不具合修正
+
+**依存:** Phase 10
+
+**成果物:**
+- `GET /api/jobs/{job_id}/plots` が 500 にならない
+- `POST /api/jobs/{job_id}/export`（report）が成功
+- `POST /api/inference/run` が成功
+- `/api/jobs`（末尾スラッシュなし）で JSON を返す
+- バリデーションエラーも共通エラー形式で返す
+
+**SKILL:** `backend-adapter`, `api-design`, `services`, `testing`
+
+**タスク — バックエンド:**
+1. `src/lizystudio/backends/lizyml.py`
+   - `available_plots()` / `model_info()` の private 属性依存（`_config`）を除去
+   - `load_model()` 後でも参照可能な公開情報のみで動作させる
+2. `src/lizystudio/services/inference.py`
+   - Target 参照を `job.config["data"]["target"]` 起点に修正
+   - 推論時のエラーメッセージを `BACKEND_ERROR` に正規化
+3. `src/lizystudio/services/export.py`
+   - report export 時のモデル情報取得経路を修正
+4. `src/lizystudio/server.py`
+   - `/api/jobs` と `/api/jobs/` の挙動を統一（常に JSON）
+5. `src/lizystudio/api/errors.py`
+   - `RequestValidationError` ハンドラを追加し、`{"error": ...}` 形式に統一
+
+**タスク — テスト:**
+1. `tests/test_jobs_api.py` に `GET /api/jobs`（末尾スラッシュなし）ケースを追加
+2. `tests/test_inference_api.py` に run 正常系を追加
+3. `tests/test_export_service.py` に report export 正常系を追加
+4. `tests/test_backends_lizyml.py` に load_model 後の `available_plots/model_info` を追加
+
+**DoD:**
+- [ ] `GET /api/jobs` / `GET /api/jobs/` の両方が JSON を返す
+- [ ] `GET /api/jobs/{job_id}/plots` が 200 を返す
+- [ ] `POST /api/jobs/{job_id}/export`（model/report）が 200 を返す
+- [ ] `POST /api/inference/run` が 200 を返す
+- [ ] 422 系の入力エラーが共通エラー形式で返る
+
+---
+
+## Phase 12: P1 Workspace 仕様準拠
+
+**依存:** Phase 11
+
+**成果物:**
+- Workspace が BLUEPRINT §4.2 に準拠
+- Data Panel 設定が Config に自動反映
+- Model Panel Tune タブが実装され、Fit/Tune ワークフローを分離
+- Results Panel が IS/OOS/OOS Std + 詳細セクションを表示
+
+**SKILL:** `frontend-pages`, `frontend-components`, `state-management`, `services`, `testing`
+
+**タスク — フロントエンド:**
+1. `frontend/src/components/DataPanel.tsx`
+   - Column Settings の編集状態を永続化（`default*` 依存を廃止）
+   - `GroupKFold` 選択時の Group column 入力を追加
+   - Task 自動判定をフロント独自実装から除去し、API結果を使用
+2. `frontend/src/components/ModelPanel.tsx`
+   - sticky ヘッダー（タブ + アクション）
+   - Tune タブ（Settings / Search Space / Mode: Fixed/Range/Choice）を本実装
+3. `frontend/src/components/ResultsPanel.tsx`
+   - Running（Fit/Tune別進捗）/ Completed / Failed を仕様通りに整理
+   - Score 表を `IS / OOS / OOS Std(CV時)` で表示
+   - `View Full Log` / `Cancel` を追加
+
+**タスク — バックエンド:**
+1. `src/lizystudio/services/data.py`
+   - Task 自動判定閾値を BLUEPRINT ルールで一元化
+2. `src/lizystudio/api/workspace.py`
+   - Data Panel から Config へ反映する更新フローを追加（必要なら Proposal 後）
+
+**DoD:**
+- [ ] Data Panel 編集内容が Config `data/features/split` に反映される
+- [ ] Tune タブで探索空間を GUI 操作で定義できる
+- [ ] Results Panel が仕様の 4状態（初期/実行中/完了/エラー）を満たす
+- [ ] CV あり/なしで Score 列表示が切り替わる
+
+---
+
+## Phase 13: P1 Jobs 仕様準拠
+
+**依存:** Phase 11
+
+**成果物:**
+- Jobs 画面が BLUEPRINT §4.3 に準拠
+- Running/Failed/Completed の詳細表示が仕様通り
+- Re-fit / Delete / Cancel / Export の挙動を仕様に統一
+
+**SKILL:** `frontend-pages`, `services`, `api-design`, `testing`
+
+**タスク — フロントエンド:**
+1. `frontend/src/pages/JobsPage.tsx`
+   - 左リスト行に `ID / Type / Model / Score` を表示
+   - Running 行の pulse と詳細進捗表示を追加
+   - Failed 表示を「要約 + Full Log」に変更
+2. `frontend/src/components/ExportDialog.tsx`
+   - 仕様文言・初期パス・説明文を BLUEPRINT に合わせる
+3. 確認ダイアログ
+   - Delete / Cancel を Mantine Modal で統一
+
+**タスク — バックエンド:**
+1. `src/lizystudio/services/jobs.py`
+   - 実行ログ永続化（`execution.log`）を追加
+2. `src/lizystudio/api/jobs.py`
+   - `GET /api/jobs/{job_id}/log`（必要なら Proposal 後）を追加
+3. Re-fit 用に Job Config の Workspace 反映 API を整備（必要なら Proposal 後）
+
+**DoD:**
+- [ ] Jobs の詳細表示が状態別（Running/Completed/Failed）で仕様通り
+- [ ] `Execution Log` が Accordion で閲覧できる
+- [ ] Re-fit で Config を Workspace にロードして遷移する
+- [ ] Delete/Cancel が確認ダイアログ経由で実行される
+
+---
+
+## Phase 14: P1 Inference 仕様準拠
+
+**依存:** Phase 11, Phase 13
+
+**成果物:**
+- Inference 画面/API が BLUEPRINT §4.4 / §5.4 に準拠
+- 正解あり/なしの表示分岐を実装
+- 履歴・比較・CSVダウンロードの契約を統一
+
+**SKILL:** `api-design`, `services`, `frontend-pages`, `testing`
+
+**タスク — バックエンド:**
+1. `src/lizystudio/api/inference.py`
+   - `POST /run` の request body を BLUEPRINT 形式へ統一
+   - `GET /history` の `job_id` を optional 化（省略時全件）
+   - `GET /{inf_id}` 系から `job_id` query 依存を解消（ID解決方式を統一）
+2. `src/lizystudio/services/inference.py`
+   - 正解あり時の `IS/OOS/Inf` 3列メトリクス生成
+   - 比較統計（Mean/Std/Positive% など）を task 別に整備
+   - 評価プロットを inference 文脈で生成
+
+**タスク — フロントエンド:**
+1. `frontend/src/pages/InferencePage.tsx`
+   - Setup: Path/Upload SegmentedControl、GT 検出表示、Evaluate トグル
+   - Results: GT あり（Score 3列 + Plots + Accordion）/ GT なし（Predictions + Distribution + Comparison）
+2. `frontend/src/api/inference.ts`
+   - 新契約へ合わせてクライアント更新
+
+**DoD:**
+- [ ] `POST /api/inference/run` が BLUEPRINT request 形式で動作する
+- [ ] `GET /api/inference/history` は `job_id` 省略で全件を返す
+- [ ] GT ありで `IS/OOS/Inf` の 3列スコアが表示される
+- [ ] GT なしで Comparison（セレクタ + 統計比較）が表示される
+- [ ] Download CSV のファイル名/カラムが仕様通り
+
+---
+
+## Phase 15: 監査クローズ（回帰テスト/E2E）
+
+**依存:** Phase 12〜14
+
+**成果物:**
+- BLUEPRINT 準拠の回帰テスト群
+- 画面/API/責務の再監査レポート（乖離ゼロまたは残課題明示）
+
+**SKILL:** `testing`, `requirements-audit`, `dev-environment`
+
+**タスク:**
+1. API 契約テストの追加
+   - Workspace / Jobs / Inference の正常系・異常系
+2. E2E テストの追加
+   - Workspace: Data→Fit→Result
+   - Jobs: 一覧→詳細→Export→Re-fit
+   - Inference: GTあり/なしの2フロー
+3. レイヤー責務監査テスト（静的チェック）
+   - Router から backend 呼び出しを禁止
+   - Frontend から ML ライブラリ直接参照を禁止
+4. 再監査実施
+   - `requirements-audit` を再実行し PLAN 完了条件を確認
+
+**DoD:**
+- [ ] `uv run pytest` が全通過
+- [ ] `uv run ruff check .` / `uv run mypy src/lizystudio/` が通過
+- [ ] `cd frontend && pnpm lint && pnpm build` が通過
+- [ ] Requirements Audit で重大乖離（P0/P1）が 0 件
+
+---
+
+## 再監査差分修正計画（2026-03-09）
+
+本計画は 2026-03-09 実施の Requirements Audit で確認した差分に対する是正フェーズ。
+BLUEPRINT を正として、実装を追従させる。
+
+優先度方針:
+- **P0:** 実行不能、契約不一致、500 エラー
+- **P1:** 画面仕様・導線・状態遷移の差分
+- **P2:** レイヤー責務・再発防止
+
+変更ゲート方針（AGENTS §2）:
+- API 追加/変更、共通型変更、画面間データフロー変更は **実装前に HISTORY.md Proposal を先行**
+- 本 PLAN 更新自体はゲート不要（ドキュメント更新）
+
+---
+
+## Phase 16: 再監査P0: Workspace 実行不能差分修正
+
+**依存:** Phase 15
+
+**成果物:**
+- Data Panel 設定が BLUEPRINT §4.2.1 の `data/features/split` へ正しく反映
+- Workspace からの Fit が `CONFIG_INVALID` にならず実行可能
+- Target 選択時の Task 自動判定・CV デフォルトが仕様通り
+
+**SKILL:** `spec-update`, `frontend-pages`, `state-management`, `testing`
+
+**タスク:**
+1. `frontend/src/components/DataPanel.tsx` を仕様マッピングへ修正
+   - `data.target`, `task`, `features.categorical`, `features.exclude`, `split.*`
+   - 既存の top-level `target/task/cv` パッチを廃止
+2. Target 自動判定ロジックを API レスポンス起点で再実装
+3. Workspace Fit 実行フローを E2E 相当で再検証
+4. `tests/` に Data→Fit 成功ケースを追加
+
+**DoD:**
+- [ ] Data Panel の操作後に `POST /api/workspace/fit` が 200 を返す
+- [ ] Target 選択時に Task が期待値で自動設定される
+- [ ] CV デフォルト（binary/multiclass: StratifiedKFold, regression: KFold）が適用される
+- [ ] 既存の Data Panel 関連テストが全通過する
+
+---
+
+## Phase 17: 再監査P0: API契約再整合（Jobs/Inference）
+
+**依存:** Phase 16
+
+**成果物:**
+- Inference API 契約が BLUEPRINT §5.4 と整合
+- Jobs Export（report）が 500 にならず成功
+- エラー応答が共通フォーマットで一貫
+
+**SKILL:** `spec-update`, `api-design`, `services`, `testing`, `history-proposals`
+
+**タスク:**
+1. **HISTORY Proposal 起票（ゲート対象）**
+   - Inference API request/response 契約差分
+   - 必要なら upload endpoint の責務分離
+2. `src/lizystudio/api/inference.py` の契約再整合
+   - `POST /run` body 形式（`data.source_type/path`）
+   - `GET /history` の `job_id` optional 化
+   - `GET /{inf_id}` 系の識別方式統一
+3. `src/lizystudio/services/export.py` の report 出力先処理を修正
+4. API テストを契約ベースで更新（正常系/異常系）
+
+**DoD:**
+- [ ] `POST /api/inference/run` が BLUEPRINT 形式で 200
+- [ ] `GET /api/inference/history` が `job_id` 省略で全件返却
+- [ ] `POST /api/jobs/{job_id}/export`（report）が 200
+- [ ] 共通エラー形式 `{"error":{code,message,details}}` が維持される
+
+---
+
+## Phase 18: 再監査P1: 画面導線・状態遷移修正
+
+**依存:** Phase 17
+
+**成果物:**
+- Jobs → Inference 導線で選択 Job が自動反映
+- Inference Setup の Evaluate/GT 検出が仕様通り動作
+- Jobs/Inference の表示文言・表示条件が BLUEPRINT §4.3/§4.4 と整合
+
+**SKILL:** `frontend-pages`, `frontend-components`, `testing`
+
+**タスク:**
+1. Jobs `Inference ▸` から `job_id` を遷移状態へ渡す
+2. Inference Page 初期化時に遷移元 `job_id` を自動選択
+3. Evaluate トグルを run payload に反映
+4. GT 検出表示を「現在入力データ」に対して表示
+5. No-GT Comparison に重ね合わせ可視化（分布比較）を追加
+
+**DoD:**
+- [ ] Jobs から遷移した直後に対象 Job が選択済み
+- [ ] Evaluate ON/OFF が実行結果（metrics 有無）に反映
+- [ ] GT あり/なしで右パネル表示が仕様通り分岐
+- [ ] No-GT で比較対象選択時に統計と分布比較が表示される
+
+---
+
+## Phase 19: 再監査P1: WebSocket進捗・Cancel整備
+
+**依存:** Phase 17, Phase 18
+
+**成果物:**
+- `/ws/jobs/{job_id}/progress` で progress/completed/error が配信される
+- Running UI が実データで更新される
+- Cancel 操作の契約と挙動が明確化される
+
+**SKILL:** `services`, `api-design`, `frontend-pages`, `history-proposals`, `testing`
+
+**タスク:**
+1. Progress 送信タイミングを training 実行経路で保証
+2. WS keepalive 時でも completed/error を確実に受信できるようハンドリング改善
+3. Cancel 仕様を確定（必要なら HISTORY Proposal 起票後に API 追加）
+4. Workspace/Jobs の Running 表示を WS 主体 + polling fallback で再検証
+
+**DoD:**
+- [ ] 実行中ジョブで progress メッセージを受信できる
+- [ ] ジョブ完了時に completed を受信し UI が遷移する
+- [ ] エラー時に error メッセージで UI が失敗状態へ遷移する
+- [ ] Cancel の有効条件と API 契約がドキュメントと一致する
+
+---
+
+## Phase 20: 再監査クローズ（責務分離・回帰監査）
+
+**依存:** Phase 19
+
+**成果物:**
+- Router/Service/Adapter の責務分離を AGENTS §4/§8 に合わせて是正
+- 再発防止テスト（静的 + API/E2E）
+- 再監査レポート（P0/P1 差分 0 件）
+
+**SKILL:** `services`, `requirements-audit`, `testing`, `spec-update`
+
+**タスク:**
+1. Router から backend 直接呼び出しを排除し Service 層へ移管
+2. 責務違反検知テスト（Router import / 呼び出し規約）を追加
+3. API 回帰 + 画面回帰（Workspace/Jobs/Inference）を実行
+4. `requirements-audit` を再実施し PLAN ステータス更新
+
+**DoD:**
+- [ ] Router が backend を直接呼び出さない
+- [ ] 回帰テスト一式（pytest/lint/mypy/frontend build）が通過
+- [ ] 再監査で P0/P1 差分が 0 件
+- [ ] 必要なドキュメント（BLUEPRINT/HISTORY/PLAN）が相互整合する

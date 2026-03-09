@@ -46,7 +46,7 @@ def _load_model(job: Job, ws: WorkspaceState) -> Any:
 
 
 def _job_summary(job: Job) -> dict[str, Any]:
-    return {
+    summary: dict[str, Any] = {
         "job_id": job.job_id,
         "status": job.status,
         "backend_name": job.backend_name,
@@ -56,11 +56,32 @@ def _job_summary(job: Job) -> dict[str, Any]:
         "error": job.error,
     }
 
+    # Model name from config
+    model_name = ""
+    if job.config:
+        model_name = job.config.get("model", {}).get("name", "")
+    summary["model_name"] = model_name
+
+    # Primary score: first OOS metric value from fit_result
+    primary_score: float | None = None
+    if job.status == "completed" and job.fit_result is not None:
+        raw = job.fit_result.metrics.get("raw", {})
+        if isinstance(raw, dict):
+            oof = raw.get("oof", {})
+            if isinstance(oof, dict) and oof:
+                first_value = next(iter(oof.values()))
+                if isinstance(first_value, (int, float)):
+                    primary_score = float(first_value)
+    summary["primary_score"] = primary_score
+
+    return summary
+
 
 # --- CRUD ---
 
 
 @router.get("/")
+@router.get("", include_in_schema=False)
 def list_jobs(
     status: str | None = None,
     sort: str = "created_at",
@@ -84,6 +105,16 @@ def get_job(
     if job.tune_result is not None:
         result["tune_result"] = asdict(job.tune_result)
     return result
+
+
+@router.get("/{job_id}/log")
+def get_job_log(
+    job_id: str,
+    job_store: JobStore = Depends(get_job_store),
+) -> dict[str, str]:
+    """Get the execution log for a job (H-0006)."""
+    _get_job_or_404(job_id, job_store)
+    return {"log": job_store.get_log(job_id)}
 
 
 @router.get("/{job_id}/config")

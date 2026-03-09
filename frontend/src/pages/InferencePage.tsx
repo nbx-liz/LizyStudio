@@ -1,7 +1,6 @@
 import { useState, useCallback, useMemo } from "react";
 import {
   Accordion,
-  Alert,
   Badge,
   Box,
   Button,
@@ -11,6 +10,7 @@ import {
   Pagination,
   Paper,
   ScrollArea,
+  SegmentedControl,
   Select,
   Stack,
   Table,
@@ -48,8 +48,10 @@ export function InferencePage() {
 
   // Setup state
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
+  const [sourceType, setSourceType] = useState<string>("path");
   const [dataPath, setDataPath] = useState("");
   const [returnShap, setReturnShap] = useState(false);
+  const [evaluate, setEvaluate] = useState(true);
   const [running, setRunning] = useState(false);
 
   // Selected inference result
@@ -82,6 +84,12 @@ export function InferencePage() {
     }
     return history.length > 0 ? history[0].inf_id : null;
   }, [selectedInfId, history]);
+
+  // Derive the selected record for GT detection display
+  const selectedRecord = useMemo(
+    () => history.find((h) => h.inf_id === effectiveInfId) ?? null,
+    [history, effectiveInfId],
+  );
 
   // Run inference from path
   const onRunPath = useCallback(async () => {
@@ -172,33 +180,61 @@ export function InferencePage() {
             searchable
           />
 
-          {/* Data source — path */}
-          <TextInput
-            label="Data Path"
-            placeholder="/path/to/data.csv"
-            value={dataPath}
-            onChange={(e) => setDataPath(e.currentTarget.value)}
+          {/* Data source selector */}
+          <SegmentedControl
             size="xs"
+            data={[
+              { value: "path", label: "Path" },
+              { value: "upload", label: "Upload" },
+            ]}
+            value={sourceType}
+            onChange={setSourceType}
           />
 
+          {/* Data source — path */}
+          {sourceType === "path" && (
+            <TextInput
+              label="Data Path"
+              placeholder="/path/to/data.csv"
+              value={dataPath}
+              onChange={(e) => setDataPath(e.currentTarget.value)}
+              size="xs"
+            />
+          )}
+
           {/* Data source — upload */}
-          <Dropzone
-            onDrop={onDropFiles}
-            accept={{
-              "text/csv": [".csv"],
-              "application/octet-stream": [".parquet"],
-            }}
-            maxSize={100 * 1024 * 1024}
-            disabled={!selectedJobId || running}
-            p="xs"
-          >
-            <Group justify="center" gap="xs">
-              <IconUpload size={16} />
-              <Text size="xs" c="dimmed">
-                Drop CSV/Parquet or click
+          {sourceType === "upload" && (
+            <Dropzone
+              onDrop={onDropFiles}
+              accept={{
+                "text/csv": [".csv"],
+                "application/octet-stream": [".parquet"],
+              }}
+              maxSize={100 * 1024 * 1024}
+              disabled={!selectedJobId || running}
+              p="xs"
+            >
+              <Group justify="center" gap="xs">
+                <IconUpload size={16} />
+                <Text size="xs" c="dimmed">
+                  Drop CSV/Parquet or click
+                </Text>
+              </Group>
+            </Dropzone>
+          )}
+
+          {/* GT detection message */}
+          {effectiveInfId && selectedRecord && (
+            selectedRecord.has_ground_truth ? (
+              <Text size="xs" c="green">
+                Target detected
               </Text>
-            </Group>
-          </Dropzone>
+            ) : (
+              <Text size="xs" c="dimmed">
+                Target column not found in data
+              </Text>
+            )
+          )}
 
           {/* Options */}
           <Checkbox
@@ -207,13 +243,22 @@ export function InferencePage() {
             onChange={(e) => setReturnShap(e.currentTarget.checked)}
             size="xs"
           />
+          <Checkbox
+            label="Evaluate"
+            checked={evaluate}
+            onChange={(e) => setEvaluate(e.currentTarget.checked)}
+            size="xs"
+          />
 
           {/* Run button */}
           <Button
             leftSection={<IconPlayerPlay size={14} />}
             onClick={onRunPath}
             loading={running}
-            disabled={!selectedJobId || !dataPath}
+            disabled={
+              !selectedJobId ||
+              (sourceType === "path" && !dataPath)
+            }
             fullWidth
           >
             Run
@@ -334,46 +379,21 @@ function InferenceResults({
         )}
       </Group>
 
-      {/* Warnings */}
-      {record && record.warnings.length > 0 && (
-        <Alert color="yellow" title="Warnings">
-          {record.warnings.map((w, i) => (
-            <Text key={i} size="xs">
-              {w}
-            </Text>
-          ))}
-        </Alert>
+      {/* GT-based display branching */}
+      {hasGT ? (
+        <GTResultsView
+          infId={infId}
+          jobId={jobId}
+          record={record}
+        />
+      ) : (
+        <NoGTResultsView
+          infId={infId}
+          jobId={jobId}
+          record={record}
+          history={history}
+        />
       )}
-
-      {/* Metrics (ground truth only) */}
-      {hasGT && <InferenceMetricsSection infId={infId} jobId={jobId} />}
-
-      {/* Plots */}
-      <InferencePlotSection infId={infId} jobId={jobId} />
-
-      {/* Predictions table */}
-      <Accordion defaultValue="predictions">
-        <Accordion.Item value="predictions">
-          <Accordion.Control>Predictions</Accordion.Control>
-          <Accordion.Panel>
-            <PredictionsTable infId={infId} jobId={jobId} />
-          </Accordion.Panel>
-        </Accordion.Item>
-
-        {/* Comparison (no GT only) */}
-        {!hasGT && history.length > 1 && (
-          <Accordion.Item value="comparison">
-            <Accordion.Control>Comparison</Accordion.Control>
-            <Accordion.Panel>
-              <ComparisonSection
-                infId={infId}
-                jobId={jobId}
-                history={history}
-              />
-            </Accordion.Panel>
-          </Accordion.Item>
-        )}
-      </Accordion>
 
       {/* Download */}
       <Button
@@ -386,6 +406,165 @@ function InferenceResults({
       >
         Download CSV
       </Button>
+    </Stack>
+  );
+}
+
+// --- GT present: score table + plots + accordion (predictions, warnings) ---
+
+function GTResultsView({
+  infId,
+  jobId,
+  record,
+}: {
+  infId: string;
+  jobId: string;
+  record: InferenceRecord | undefined;
+}) {
+  return (
+    <>
+      {/* Score table (IS / OOS / Inf) */}
+      <InferenceMetricsSection infId={infId} jobId={jobId} />
+
+      {/* Evaluation plots */}
+      <InferencePlotSection infId={infId} jobId={jobId} />
+
+      {/* Accordion: Predictions + Warnings */}
+      <Accordion defaultValue="predictions">
+        <Accordion.Item value="predictions">
+          <Accordion.Control>Predictions</Accordion.Control>
+          <Accordion.Panel>
+            <PredictionsTable infId={infId} jobId={jobId} />
+          </Accordion.Panel>
+        </Accordion.Item>
+
+        {record && record.warnings.length > 0 && (
+          <Accordion.Item value="warnings">
+            <Accordion.Control>
+              Warnings ({record.warnings.length})
+            </Accordion.Control>
+            <Accordion.Panel>
+              <Stack gap={4}>
+                {record.warnings.map((w, i) => (
+                  <Text key={i} size="xs" c="yellow">
+                    {w}
+                  </Text>
+                ))}
+              </Stack>
+            </Accordion.Panel>
+          </Accordion.Item>
+        )}
+      </Accordion>
+    </>
+  );
+}
+
+// --- No GT: predictions table + distribution + comparison + accordion (warnings) ---
+
+function NoGTResultsView({
+  infId,
+  jobId,
+  record,
+  history,
+}: {
+  infId: string;
+  jobId: string;
+  record: InferenceRecord | undefined;
+  history: InferenceRecord[];
+}) {
+  return (
+    <>
+      {/* Predictions table at top level */}
+      <Stack gap="xs">
+        <Text fw={600} size="sm">
+          Predictions
+        </Text>
+        <PredictionsTable infId={infId} jobId={jobId} />
+      </Stack>
+
+      {/* Prediction distribution summary */}
+      <PredictionDistribution infId={infId} jobId={jobId} />
+
+      {/* Comparison section (prominent, not in accordion) */}
+      {history.length > 1 && (
+        <Stack gap="xs">
+          <Text fw={600} size="sm">
+            Comparison
+          </Text>
+          <ComparisonSection
+            infId={infId}
+            jobId={jobId}
+            history={history}
+          />
+        </Stack>
+      )}
+
+      {/* Accordion: Warnings only */}
+      {record && record.warnings.length > 0 && (
+        <Accordion>
+          <Accordion.Item value="warnings">
+            <Accordion.Control>
+              Warnings ({record.warnings.length})
+            </Accordion.Control>
+            <Accordion.Panel>
+              <Stack gap={4}>
+                {record.warnings.map((w, i) => (
+                  <Text key={i} size="xs" c="yellow">
+                    {w}
+                  </Text>
+                ))}
+              </Stack>
+            </Accordion.Panel>
+          </Accordion.Item>
+        </Accordion>
+      )}
+    </>
+  );
+}
+
+// --- Prediction Distribution (no-GT summary stats) ---
+
+function PredictionDistribution({
+  infId,
+  jobId,
+}: {
+  infId: string;
+  jobId: string;
+}) {
+  const predQuery = useQuery({
+    queryKey: ["inference-predictions", infId, jobId, 1],
+    queryFn: () => fetchInferencePredictions(infId, jobId, 50, 0),
+  });
+
+  if (!predQuery.data) return null;
+
+  const { data, total_rows, columns } = predQuery.data;
+
+  // Find prediction column (commonly "prediction" or last column)
+  const predCol =
+    columns.find((c) => c.toLowerCase().includes("prediction")) ??
+    columns[columns.length - 1];
+  if (!predCol) return null;
+
+  const numericVals = data
+    .map((row) => row[predCol])
+    .filter((v): v is number => typeof v === "number");
+
+  if (numericVals.length === 0) return null;
+
+  const mean = numericVals.reduce((a, b) => a + b, 0) / numericVals.length;
+  const variance =
+    numericVals.reduce((a, b) => a + (b - mean) ** 2, 0) / numericVals.length;
+  const std = Math.sqrt(variance);
+
+  return (
+    <Stack gap="xs">
+      <Text fw={600} size="sm">
+        Prediction Distribution
+      </Text>
+      <Text size="xs" c="dimmed">
+        {total_rows} rows, mean={mean.toFixed(4)}, std={std.toFixed(4)}
+      </Text>
     </Stack>
   );
 }
@@ -407,6 +586,57 @@ function InferenceMetricsSection({
   const metrics = metricsQuery.data;
   if (!metrics || "error" in metrics) return null;
 
+  // Check if metrics have the split format: { inf: {...}, is: {...}, oos: {...} }
+  const hasSplitFormat =
+    metrics.inf &&
+    typeof metrics.inf === "object" &&
+    !Array.isArray(metrics.inf);
+
+  if (hasSplitFormat) {
+    const infMetrics = metrics.inf as Record<string, number>;
+    const isMetrics = (metrics.is ?? {}) as Record<string, number>;
+    const oosMetrics = (metrics.oos ?? {}) as Record<string, number>;
+
+    // Collect all metric names across all splits
+    const allKeys = [
+      ...new Set([
+        ...Object.keys(infMetrics),
+        ...Object.keys(isMetrics),
+        ...Object.keys(oosMetrics),
+      ]),
+    ];
+    if (allKeys.length === 0) return null;
+
+    return (
+      <Stack gap="xs">
+        <Text fw={600} size="sm">
+          Score Table
+        </Text>
+        <Table fz="xs" withTableBorder striped>
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>Metric</Table.Th>
+              <Table.Th>IS</Table.Th>
+              <Table.Th>OOS</Table.Th>
+              <Table.Th>Inf</Table.Th>
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {allKeys.map((key) => (
+              <Table.Tr key={key}>
+                <Table.Td>{key}</Table.Td>
+                <Table.Td>{formatMetricValue(isMetrics[key])}</Table.Td>
+                <Table.Td>{formatMetricValue(oosMetrics[key])}</Table.Td>
+                <Table.Td>{formatMetricValue(infMetrics[key])}</Table.Td>
+              </Table.Tr>
+            ))}
+          </Table.Tbody>
+        </Table>
+      </Stack>
+    );
+  }
+
+  // Fallback: flat metrics (legacy format)
   const entries = Object.entries(metrics);
   if (entries.length === 0) return null;
 
@@ -561,7 +791,11 @@ function ComparisonSection({
   });
 
   if (others.length === 0)
-    return <Text size="sm" c="dimmed">No other inferences to compare.</Text>;
+    return (
+      <Text size="sm" c="dimmed">
+        No other inferences to compare.
+      </Text>
+    );
 
   const compData = compQuery.data as
     | {
@@ -581,10 +815,11 @@ function ComparisonSection({
         }))}
         value={otherInfId}
         onChange={setOtherInfId}
-        w={250}
+        w={280}
       />
+      {compQuery.isLoading && <Loader size="sm" />}
       {compData?.current && compData?.other && (
-        <Table fz="xs" withTableBorder>
+        <Table fz="xs" withTableBorder striped>
           <Table.Thead>
             <Table.Tr>
               <Table.Th>Stat</Table.Th>
@@ -596,8 +831,12 @@ function ComparisonSection({
             {Object.keys(compData.current).map((key) => (
               <Table.Tr key={key}>
                 <Table.Td>{key}</Table.Td>
-                <Table.Td>{compData.current![key].toFixed(4)}</Table.Td>
-                <Table.Td>{compData.other![key].toFixed(4)}</Table.Td>
+                <Table.Td>
+                  {formatCompStat(key, compData.current![key])}
+                </Table.Td>
+                <Table.Td>
+                  {formatCompStat(key, compData.other![key])}
+                </Table.Td>
               </Table.Tr>
             ))}
           </Table.Tbody>
@@ -609,6 +848,26 @@ function ComparisonSection({
 
 function formatCell(val: unknown): string {
   if (val === null || val === undefined || val === "") return "";
-  if (typeof val === "number") return Number.isInteger(val) ? String(val) : val.toFixed(4);
+  if (typeof val === "number")
+    return Number.isInteger(val) ? String(val) : val.toFixed(4);
   return String(val);
+}
+
+/** Format a metric value for the score table */
+function formatMetricValue(val: unknown): string {
+  if (val === null || val === undefined) return "-";
+  if (typeof val === "number") return val.toFixed(4);
+  return String(val);
+}
+
+// Keys that represent percentages in comparison stats
+const PERCENTAGE_KEYS = new Set(["positive_pct", "negative_pct", "pct"]);
+
+/** Format comparison stat values — percentages with 1 decimal, others with 4 */
+function formatCompStat(key: string, val: number): string {
+  if (val === null || val === undefined) return "-";
+  if (PERCENTAGE_KEYS.has(key) || key.endsWith("_pct")) {
+    return `${val.toFixed(1)}%`;
+  }
+  return val.toFixed(4);
 }

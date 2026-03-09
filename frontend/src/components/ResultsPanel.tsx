@@ -4,6 +4,7 @@ import {
   Alert,
   Button,
   Group,
+  Modal,
   Paper,
   Progress,
   Select,
@@ -12,10 +13,12 @@ import {
   Text,
   Title,
   Badge,
+  Tooltip,
 } from "@mantine/core";
+import { useDisclosure } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { IconCheck, IconX, IconInfoCircle } from "@tabler/icons-react";
+import { IconCheck, IconX, IconInfoCircle, IconPlayerStop } from "@tabler/icons-react";
 
 import {
   type FitResult,
@@ -118,24 +121,11 @@ export function ResultsPanel({ jobId, onJobCreated }: ResultsPanelProps) {
   if (job.status === "failed") {
     return (
       <Paper p="md" withBorder>
-        <Stack gap="md">
-          <Group>
-            <Title order={5}>
-              {job.job_type === "fit" ? "Fit" : "Tune"} — {job.job_id}
-            </Title>
-            <Badge color="red" leftSection={<IconX size={12} />}>
-              Failed
-            </Badge>
-          </Group>
-          <Alert color="red" icon={<IconX size={16} />}>
-            {job.error ?? "Unknown error"}
-          </Alert>
-          <Group>
-            <Button onClick={onFit} loading={running}>
-              Retry Fit
-            </Button>
-          </Group>
-        </Stack>
+        <FailedView
+          job={job}
+          running={running}
+          onFit={onFit}
+        />
       </Paper>
     );
   }
@@ -280,15 +270,71 @@ export function RunningView({
       <Text size="xs" c="dimmed">
         Elapsed: {mins}m {secs.toString().padStart(2, "0")}s
       </Text>
+      <Tooltip label="Cancel not yet available">
+        <Button
+          variant="light"
+          color="red"
+          size="xs"
+          disabled
+          leftSection={<IconPlayerStop size={14} />}
+        >
+          Cancel
+        </Button>
+      </Tooltip>
     </Stack>
   );
 }
 
 // --- Sub-components (exported for reuse in JobDetail) ---
 
+// --- IS / OOS / OOS Std metrics table ---
+
+interface StructuredMetrics {
+  raw?: {
+    oof?: Record<string, number>;
+    if_mean?: Record<string, number>;
+    if_per_fold?: Array<Record<string, number>>;
+  };
+}
+
+/**
+ * Compute standard deviation across fold values for a given metric.
+ */
+function computeStd(values: number[]): number {
+  if (values.length <= 1) return 0;
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const sqSum = values.reduce((s, v) => s + (v - mean) ** 2, 0);
+  return Math.sqrt(sqSum / (values.length - 1));
+}
+
+function hasStructuredMetrics(
+  metrics: Record<string, unknown>,
+): boolean {
+  if (!metrics.raw || typeof metrics.raw !== "object") return false;
+  const raw = metrics.raw as Record<string, unknown>;
+  return (
+    typeof raw.oof === "object" ||
+    typeof raw.if_mean === "object" ||
+    Array.isArray(raw.if_per_fold)
+  );
+}
+
+function toStructuredMetrics(
+  metrics: Record<string, unknown>,
+): StructuredMetrics {
+  return metrics as unknown as StructuredMetrics;
+}
+
 export function MetricsTable({ fitResult }: { fitResult: FitResult }) {
   const metrics = fitResult.metrics;
   if (!metrics || typeof metrics !== "object") return null;
+
+  // Try structured IS/OOS format
+  if (hasStructuredMetrics(metrics)) {
+    return <StructuredMetricsTable metrics={toStructuredMetrics(metrics)} />;
+  }
+
+  // Fallback: flat key-value pairs
   const rows = Object.entries(metrics);
   if (rows.length === 0) return null;
 
@@ -313,6 +359,112 @@ export function MetricsTable({ fitResult }: { fitResult: FitResult }) {
           ))}
         </Table.Tbody>
       </Table>
+    </Stack>
+  );
+}
+
+function StructuredMetricsTable({ metrics }: { metrics: StructuredMetrics }) {
+  const raw = metrics.raw;
+  if (!raw) return null;
+
+  const isMean = raw.if_mean ?? {};
+  const oof = raw.oof ?? {};
+  const perFold = raw.if_per_fold ?? [];
+
+  // Collect all metric names from any source
+  const metricNames = Array.from(
+    new Set([...Object.keys(isMean), ...Object.keys(oof)]),
+  );
+  if (metricNames.length === 0) return null;
+
+  return (
+    <Stack gap="xs">
+      <Text fw={600} size="sm">
+        Score
+      </Text>
+      <Table fz="xs" withTableBorder striped>
+        <Table.Thead>
+          <Table.Tr>
+            <Table.Th>Metric</Table.Th>
+            <Table.Th>IS</Table.Th>
+            <Table.Th>OOS</Table.Th>
+            <Table.Th>OOS Std</Table.Th>
+          </Table.Tr>
+        </Table.Thead>
+        <Table.Tbody>
+          {metricNames.map((name) => {
+            const isVal = isMean[name];
+            const oosVal = oof[name];
+            const foldValues = perFold
+              .map((f) => f[name])
+              .filter((v): v is number => typeof v === "number");
+            const oosStd =
+              foldValues.length > 1 ? computeStd(foldValues) : undefined;
+
+            return (
+              <Table.Tr key={name}>
+                <Table.Td>{name}</Table.Td>
+                <Table.Td>
+                  {isVal != null ? isVal.toFixed(4) : "—"}
+                </Table.Td>
+                <Table.Td>
+                  {oosVal != null ? oosVal.toFixed(4) : "—"}
+                </Table.Td>
+                <Table.Td>
+                  {oosStd != null ? oosStd.toFixed(4) : "—"}
+                </Table.Td>
+              </Table.Tr>
+            );
+          })}
+        </Table.Tbody>
+      </Table>
+    </Stack>
+  );
+}
+
+// --- Failed view with error log modal ---
+
+function FailedView({
+  job,
+  running,
+  onFit,
+}: {
+  job: { job_id: string; job_type: string; error: string | null };
+  running: boolean;
+  onFit: () => void;
+}) {
+  const [opened, { open, close }] = useDisclosure(false);
+  const errorText = job.error ?? "Unknown error";
+
+  return (
+    <Stack gap="md">
+      <Group>
+        <Title order={5}>
+          {job.job_type === "fit" ? "Fit" : "Tune"} — {job.job_id}
+        </Title>
+        <Badge color="red" leftSection={<IconX size={12} />}>
+          Failed
+        </Badge>
+      </Group>
+      <Alert color="red" icon={<IconX size={16} />}>
+        {errorText.length > 200 ? errorText.slice(0, 200) + "..." : errorText}
+      </Alert>
+      <Group>
+        <Button onClick={onFit} loading={running}>
+          Retry Fit
+        </Button>
+        <Button variant="light" onClick={open}>
+          View Full Log
+        </Button>
+      </Group>
+      <Modal opened={opened} onClose={close} title="Error Log" size="lg">
+        <Text
+          size="xs"
+          style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+        >
+          {errorText}
+        </Text>
+      </Modal>
     </Stack>
   );
 }
