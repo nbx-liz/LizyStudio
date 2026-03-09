@@ -1,6 +1,7 @@
 import { Grid, Title, Text, Paper, Stack } from "@mantine/core";
 
 import { DataPanel } from "../components/DataPanel";
+import { ModelPanel } from "../components/ModelPanel";
 
 export function WorkspacePage() {
   return (
@@ -10,16 +11,9 @@ export function WorkspacePage() {
         <DataPanel />
       </Grid.Col>
 
-      {/* Center: Model Panel (stub) */}
+      {/* Center: Model Panel */}
       <Grid.Col span={4}>
-        <Paper p="md" withBorder>
-          <Stack>
-            <Title order={5}>Model</Title>
-            <Text c="dimmed" size="sm">
-              Configure model settings and run fit/tune.
-            </Text>
-          </Stack>
-        </Paper>
+        <ModelPanel />
       </Grid.Col>
 
       {/* Right: Results Panel (stub) */}

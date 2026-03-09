@@ -1,6 +1,7 @@
 """Workspace API router (BLUEPRINT §5.2).
 
-Covers: status, reset, data endpoints. Config/Fit/Tune added in later phases.
+Covers: status, reset, data endpoints, config endpoints.
+Fit/Tune added in Phase 5.
 """
 
 from __future__ import annotations
@@ -10,11 +11,14 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+import yaml
 from fastapi import APIRouter, Depends, UploadFile
+from fastapi.responses import Response
 
 from lizystudio.api.errors import (
     FileInvalidError,
     PathNotFoundError,
+    WorkspaceNoConfigError,
     WorkspaceNoDataError,
 )
 from lizystudio.services.data import (
@@ -135,3 +139,76 @@ def data_describe(
     if ws.dataframe is None:
         raise WorkspaceNoDataError()
     return get_describe(ws.dataframe)
+
+
+# --- Config endpoints (BLUEPRINT §5.2 Config) ---
+
+
+@router.get("/config/schema")
+def config_schema(
+    ws: WorkspaceState = Depends(get_workspace),
+) -> dict[str, Any]:
+    """Return the backend's config JSON Schema."""
+    schema = ws.backend.get_config_schema()
+    return schema.json_schema
+
+
+@router.get("/config")
+def config_get(
+    ws: WorkspaceState = Depends(get_workspace),
+) -> dict[str, Any]:
+    """Return the current workspace config."""
+    return ws.config
+
+
+@router.put("/config")
+def config_update(
+    body: dict[str, Any],
+    ws: WorkspaceState = Depends(get_workspace),
+) -> dict[str, Any]:
+    """Update config with validation."""
+    errors = ws.backend.validate_config(body)
+    ws.set_config(body)
+    return {"config": body, "errors": errors}
+
+
+@router.post("/config/validate")
+def config_validate(
+    body: dict[str, Any],
+    ws: WorkspaceState = Depends(get_workspace),
+) -> dict[str, Any]:
+    """Validate config without saving."""
+    errors = ws.backend.validate_config(body)
+    return {"valid": len(errors) == 0, "errors": errors}
+
+
+@router.post("/config/upload")
+async def config_upload(
+    file: UploadFile,
+    ws: WorkspaceState = Depends(get_workspace),
+) -> dict[str, Any]:
+    """Load config from an uploaded YAML/JSON file."""
+    content = await file.read()
+    filename = file.filename or "config.yaml"
+    try:
+        config = ws.backend.load_config_from_file(content, filename)
+    except Exception as exc:
+        raise FileInvalidError(str(exc)) from exc
+    errors = ws.backend.validate_config(config)
+    ws.set_config(config)
+    return {"config": config, "errors": errors}
+
+
+@router.get("/config/download")
+def config_download(
+    ws: WorkspaceState = Depends(get_workspace),
+) -> Response:
+    """Download the current config as YAML."""
+    if not ws.config:
+        raise WorkspaceNoConfigError()
+    content = yaml.dump(ws.config, default_flow_style=False, allow_unicode=True)
+    return Response(
+        content=content,
+        media_type="application/x-yaml",
+        headers={"Content-Disposition": "attachment; filename=config.yaml"},
+    )
