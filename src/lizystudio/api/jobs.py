@@ -1,7 +1,7 @@
 """Jobs API router (BLUEPRINT §5.3).
 
-Covers: list, get, config, metrics, split-summary, importance, plot, plots, delete.
-Export endpoint added in Phase 6.
+Covers: list, get, config, metrics, split-summary, importance, plot, plots,
+export, delete.
 """
 
 from __future__ import annotations
@@ -10,12 +10,14 @@ from dataclasses import asdict
 from typing import Any
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 
 from lizystudio.api.errors import (
     BackendError,
     JobNotCompletedError,
     JobNotFoundError,
 )
+from lizystudio.services.export import export_model, export_report
 from lizystudio.services.jobs import Job, JobStore, get_job_store
 from lizystudio.services.workspace import WorkspaceState, get_workspace
 
@@ -187,5 +189,37 @@ def get_job_available_plots(
     try:
         model = _load_model(job, ws)
         return ws.backend.available_plots(model)
+    except Exception as exc:
+        raise BackendError(exc) from exc
+
+
+# --- Export ---
+
+
+class ExportRequest(BaseModel):
+    export_type: str  # "model" or "report"
+    output_path: str
+
+
+@router.post("/{job_id}/export")
+def export_job(
+    job_id: str,
+    body: ExportRequest,
+    job_store: JobStore = Depends(get_job_store),
+    ws: WorkspaceState = Depends(get_workspace),
+) -> dict[str, str]:
+    """Export model or report to the given path (H-0005)."""
+    job = _get_job_or_404(job_id, job_store)
+    _require_completed(job)
+    try:
+        if body.export_type == "report":
+            path = export_report(
+                job=job, backend=ws.backend, output_path=body.output_path
+            )
+        else:
+            path = export_model(
+                job=job, backend=ws.backend, output_path=body.output_path
+            )
+        return {"exported_path": path, "export_type": body.export_type}
     except Exception as exc:
         raise BackendError(exc) from exc
