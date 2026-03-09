@@ -22,8 +22,10 @@ import { IconCheck, IconX, IconInfoCircle, IconPlayerStop } from "@tabler/icons-
 import {
   type FitResult,
   type TuneResult,
+  type JobSummary,
   cancelJob,
   fetchJob,
+  fetchJobs,
   fetchJobConfig,
   fetchJobImportance,
   fetchJobPlot,
@@ -35,6 +37,7 @@ import {
   type ProgressMessage,
   connectJobProgress,
 } from "../api/websocket";
+import { getJobNumber } from "../utils/formatJob";
 import { PlotlyChart } from "./PlotlyChart";
 
 interface ResultsPanelProps {
@@ -55,6 +58,13 @@ export function ResultsPanel({ jobId, onJobCreated }: ResultsPanelProps) {
     },
   });
 
+  const jobsQuery = useQuery({
+    queryKey: ["jobs"],
+    queryFn: () => fetchJobs(),
+    enabled: !!jobId,
+  });
+  const allJobs: JobSummary[] = jobsQuery.data ?? [];
+
   // No job yet — show guide
   if (!jobId || !jobQuery.data) {
     return (
@@ -73,11 +83,13 @@ export function ResultsPanel({ jobId, onJobCreated }: ResultsPanelProps) {
 
   const job = jobQuery.data;
 
+  const jobNumber = getJobNumber(job.job_id, allJobs);
+
   // Running
   if (job.status === "running" || job.status === "pending") {
     return (
       <Paper p="md" withBorder>
-        <RunningView jobId={job.job_id} jobType={job.job_type} modelName={getModelName(job)} onDone={() => {
+        <RunningView jobId={job.job_id} jobType={job.job_type} jobNumber={jobNumber} modelName={getModelName(job)} onDone={() => {
           queryClient.invalidateQueries({ queryKey: ["job", jobId] });
         }} />
       </Paper>
@@ -88,7 +100,7 @@ export function ResultsPanel({ jobId, onJobCreated }: ResultsPanelProps) {
   if (job.status === "failed") {
     return (
       <Paper p="md" withBorder>
-        <FailedView job={job} />
+        <FailedView job={job} jobNumber={jobNumber} />
       </Paper>
     );
   }
@@ -104,7 +116,7 @@ export function ResultsPanel({ jobId, onJobCreated }: ResultsPanelProps) {
         {/* Header: Fit #N — Model — Status — Score */}
         <Group>
           <Title order={5}>
-            {job.job_type === "fit" ? "Fit" : "Tune"} — {modelName}
+            {job.job_type === "fit" ? "Fit" : "Tune"} #{jobNumber} — {modelName}
           </Title>
           <Badge color="green" leftSection={<IconCheck size={12} />}>
             Completed
@@ -306,11 +318,13 @@ function OptimizationHistorySection({ jobId }: { jobId: string }) {
 export function RunningView({
   jobId,
   jobType,
+  jobNumber,
   modelName,
   onDone,
 }: {
   jobId: string;
   jobType: string;
+  jobNumber?: number;
   modelName?: string;
   onDone: () => void;
 }) {
@@ -351,7 +365,7 @@ export function RunningView({
     <Stack align="center" gap="md" py="xl">
       <Group>
         <Title order={5}>
-          {jobType === "fit" ? "Fit" : "Tune"} — {modelName || jobId}
+          {jobType === "fit" ? "Fit" : "Tune"}{jobNumber ? ` #${jobNumber}` : ""} — {modelName || jobId}
         </Title>
         <Badge color="blue">Running</Badge>
       </Group>
@@ -567,25 +581,35 @@ function StructuredMetricsTable({
 
 function FailedView({
   job,
+  jobNumber,
 }: {
   job: { job_id: string; job_type: string; error: string | null; config?: Record<string, unknown>; model_name?: string };
+  jobNumber?: number;
 }) {
   const [opened, { open, close }] = useDisclosure(false);
   const errorText = job.error ?? "Unknown error";
   const modelName = getModelName(job);
 
+  // Separate error code from message (e.g., "BACKEND_ERROR: some message")
+  const colonIdx = errorText.indexOf(": ");
+  const errorCode = colonIdx > 0 ? errorText.slice(0, colonIdx) : null;
+  const errorMessage = colonIdx > 0 ? errorText.slice(colonIdx + 2) : errorText;
+
   return (
     <Stack gap="md">
       <Group>
         <Title order={5}>
-          {job.job_type === "fit" ? "Fit" : "Tune"} — {modelName}
+          {job.job_type === "fit" ? "Fit" : "Tune"}{jobNumber ? ` #${jobNumber}` : ""} — {modelName}
         </Title>
         <Badge color="red" leftSection={<IconX size={12} />}>
           Failed
         </Badge>
       </Group>
       <Alert color="red" icon={<IconX size={16} />}>
-        {errorText.length > 200 ? errorText.slice(0, 200) + "..." : errorText}
+        {errorCode && <Text fw={700} size="sm">{errorCode}</Text>}
+        <Text size="sm">
+          {errorMessage.length > 200 ? errorMessage.slice(0, 200) + "..." : errorMessage}
+        </Text>
       </Alert>
       <Button variant="light" onClick={open}>
         View Full Log
@@ -679,13 +703,16 @@ export function PlotViewer({ jobId }: { jobId: string }) {
     queryFn: () => fetchJobPlots(jobId),
   });
 
-  const plotQuery = useQuery({
-    queryKey: ["job-plot", jobId, plotType],
-    queryFn: () => fetchJobPlot(jobId, plotType!),
-    enabled: !!plotType,
-  });
-
   const availablePlots = plotsQuery.data ?? [];
+
+  // Auto-select first available plot when none is selected
+  const effectivePlotType = plotType ?? (availablePlots.length > 0 ? availablePlots[0] : null);
+
+  const plotQuery = useQuery({
+    queryKey: ["job-plot", jobId, effectivePlotType],
+    queryFn: () => fetchJobPlot(jobId, effectivePlotType!),
+    enabled: !!effectivePlotType,
+  });
 
   return (
     <Stack gap="xs">
@@ -696,7 +723,7 @@ export function PlotViewer({ jobId }: { jobId: string }) {
         <Select
           size="xs"
           data={availablePlots}
-          value={plotType}
+          value={effectivePlotType}
           onChange={setPlotType}
           placeholder="Select plot"
           w={200}

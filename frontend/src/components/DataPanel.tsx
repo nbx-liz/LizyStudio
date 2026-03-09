@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import {
   Accordion,
   Badge,
@@ -7,6 +7,7 @@ import {
   NumberInput,
   Paper,
   Radio,
+  ScrollArea,
   Select,
   Stack,
   Table,
@@ -30,7 +31,7 @@ import {
   loadDataFromPath,
   uploadData,
 } from "../api/workspace";
-import { updateConfig as updateConfigApi } from "../api/config";
+import { fetchConfig, updateConfig as updateConfigApi } from "../api/config";
 
 // Override state for a single column
 interface ColumnOverride {
@@ -62,6 +63,28 @@ export function DataPanel() {
   const [columnOverrides, setColumnOverrides] = useState<
     Record<string, ColumnOverride>
   >({});
+
+  // Config sync: when config is changed externally (e.g., Import YAML from ModelPanel),
+  // re-sync DataPanel local state from the cached config.
+  const configQuery = useQuery({
+    queryKey: ["config"],
+    queryFn: fetchConfig,
+  });
+  const configSyncRef = useRef<string>("");
+  useEffect(() => {
+    const cfg = configQuery.data;
+    if (!cfg) return;
+    const fp = JSON.stringify([cfg.data, cfg.split, cfg.features]);
+    if (fp === configSyncRef.current) return;
+    configSyncRef.current = fp;
+    const data = cfg.data as Record<string, unknown> | undefined;
+    if (data?.target && typeof data.target === "string") setTarget(data.target);
+    if (data?.task && typeof data.task === "string") setTask(data.task);
+    const split = cfg.split as Record<string, unknown> | undefined;
+    if (split?.strategy && typeof split.strategy === "string") setCvStrategy(split.strategy);
+    if (split?.n_splits && typeof split.n_splits === "number") setCvFolds(split.n_splits);
+    if (split?.group_column && typeof split.group_column === "string") setGroupCol(split.group_column);
+  }, [configQuery.data]);
 
   // Queries (only enabled when data is loaded)
   const previewQuery = useQuery({
@@ -343,6 +366,35 @@ export function DataPanel() {
             </Stack>
           </Accordion.Panel>
         </Accordion.Item>
+
+        {/* --- Data Preview --- */}
+        {previewQuery.data && previewQuery.data.data.length > 0 && (
+          <Accordion.Item value="data-preview">
+            <Accordion.Control>Data Preview</Accordion.Control>
+            <Accordion.Panel>
+              <ScrollArea>
+                <Table fz="xs" withTableBorder striped>
+                  <Table.Thead>
+                    <Table.Tr>
+                      {previewQuery.data.columns.map((col) => (
+                        <Table.Th key={col}>{col}</Table.Th>
+                      ))}
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {previewQuery.data.data.map((row, i) => (
+                      <Table.Tr key={i}>
+                        {previewQuery.data!.columns.map((col) => (
+                          <Table.Td key={col}>{String(row[col] ?? "")}</Table.Td>
+                        ))}
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </ScrollArea>
+            </Accordion.Panel>
+          </Accordion.Item>
+        )}
 
         {/* --- Target / Task --- */}
         <Accordion.Item value="target-task">

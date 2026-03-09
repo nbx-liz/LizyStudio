@@ -32,6 +32,7 @@ import {
   validateConfig,
   downloadConfigUrl,
 } from "../api/config";
+import { fetchBackends } from "../api/backends";
 import { ConfigForm } from "./ConfigForm";
 
 // --- Types for search space editing ---
@@ -53,9 +54,10 @@ interface ModelPanelProps {
   onFit?: () => void;
   onTune?: () => void;
   running?: boolean;
+  hasData?: boolean;
 }
 
-export function ModelPanel({ onFit, onTune, running }: ModelPanelProps) {
+export function ModelPanel({ onFit, onTune, running, hasData }: ModelPanelProps) {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<string | null>("fit");
   const [errors, setErrors] = useState<Array<Record<string, unknown>>>([]);
@@ -168,11 +170,31 @@ export function ModelPanel({ onFit, onTune, running }: ModelPanelProps) {
     return () => clearTimeout(debounceRef.current);
   }, []);
 
+  const backendsQuery = useQuery({
+    queryKey: ["backends"],
+    queryFn: fetchBackends,
+    staleTime: Infinity,
+  });
+
   const schema = schemaQuery.data;
   const config = configQuery.data ?? {};
 
   // Check if search space has any Range/Choice entries for Tune enable condition
   const hasTunableParams = hasRangeOrChoice(config);
+
+  // Fit enable condition: data loaded + model selected (BLUEPRINT §4.2.2)
+  const hasModel = !!(
+    config.model &&
+    typeof config.model === "object" &&
+    (config.model as Record<string, unknown>).name
+  );
+  const fitEnabled = hasData !== false && hasModel;
+
+  // Backend label from API
+  const backendInfo = backendsQuery.data?.[0];
+  const backendLabel = backendInfo
+    ? `${backendInfo.name} v${backendInfo.version}`
+    : "lizyml";
 
   return (
     <Paper p="md" withBorder>
@@ -186,11 +208,11 @@ export function ModelPanel({ onFit, onTune, running }: ModelPanelProps) {
         <Group gap="xs">
           <Title order={5}>Model</Title>
           <Badge size="sm" variant="light">
-            lizyml
+            {backendLabel}
           </Badge>
         </Group>
         {activeTab === "fit" ? (
-          <Button size="xs" onClick={onFit} loading={running}>
+          <Button size="xs" onClick={onFit} loading={running} disabled={!fitEnabled}>
             Fit
           </Button>
         ) : (
