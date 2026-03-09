@@ -8,6 +8,7 @@ import {
   Code,
   Group,
   Loader,
+  Modal,
   Paper,
   ScrollArea,
   SegmentedControl,
@@ -20,7 +21,7 @@ import {
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   IconCheck,
   IconX,
@@ -36,8 +37,10 @@ import {
   fetchJobs,
   fetchJob,
   fetchJobConfig,
+  fetchJobLog,
   deleteJob,
 } from "../api/jobs";
+import { updateConfig } from "../api/config";
 import {
   MetricsTable,
   TuneResultSection,
@@ -62,6 +65,10 @@ export function JobsPage() {
   const [exportOpened, { open: openExport, close: closeExport }] =
     useDisclosure(false);
 
+  // Delete confirmation modal
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+
   // Fetch jobs list
   const jobsQuery = useQuery({
     queryKey: ["jobs", statusFilter],
@@ -83,28 +90,32 @@ export function JobsPage() {
     return filteredJobs.length > 0 ? filteredJobs[0].job_id : null;
   }, [selectedJobId, filteredJobs]);
 
-  const onDelete = useCallback(
-    async (jobId: string) => {
-      if (!confirm(`Delete job ${jobId}? This cannot be undone.`)) return;
-      try {
-        await deleteJob(jobId);
-        queryClient.invalidateQueries({ queryKey: ["jobs"] });
-        if (effectiveJobId === jobId) setSelectedJobId(null);
-        notifications.show({
-          title: "Job deleted",
-          message: jobId,
-          color: "green",
-        });
-      } catch (e) {
-        notifications.show({
-          title: "Delete failed",
-          message: String(e),
-          color: "red",
-        });
-      }
-    },
-    [queryClient, effectiveJobId],
-  );
+  const onDeleteRequest = useCallback((jobId: string) => {
+    setDeleteTargetId(jobId);
+    setDeleteModalOpen(true);
+  }, []);
+
+  const onDeleteConfirm = useCallback(async () => {
+    if (!deleteTargetId) return;
+    setDeleteModalOpen(false);
+    try {
+      await deleteJob(deleteTargetId);
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      if (effectiveJobId === deleteTargetId) setSelectedJobId(null);
+      notifications.show({
+        title: "Job deleted",
+        message: deleteTargetId,
+        color: "green",
+      });
+    } catch (e) {
+      notifications.show({
+        title: "Delete failed",
+        message: String(e),
+        color: "red",
+      });
+    }
+    setDeleteTargetId(null);
+  }, [queryClient, effectiveJobId, deleteTargetId]);
 
   return (
     <Box style={{ display: "flex", gap: 16, height: "calc(100vh - 80px)" }}>
@@ -167,7 +178,7 @@ export function JobsPage() {
         {effectiveJobId ? (
           <JobDetailPanel
             jobId={effectiveJobId}
-            onDelete={onDelete}
+            onDelete={onDeleteRequest}
             onExport={openExport}
             onNavigateWorkspace={() => navigate("/")}
             onNavigateInference={() => navigate("/inference")}
@@ -187,6 +198,27 @@ export function JobsPage() {
           jobId={effectiveJobId}
         />
       )}
+
+      {/* Delete Confirmation Modal */}
+      <Modal
+        opened={deleteModalOpen}
+        onClose={() => setDeleteModalOpen(false)}
+        title="Delete Job"
+        centered
+      >
+        <Text size="sm">
+          Are you sure you want to delete job {deleteTargetId}? This action
+          cannot be undone.
+        </Text>
+        <Group justify="flex-end" mt="md">
+          <Button variant="default" onClick={() => setDeleteModalOpen(false)}>
+            Cancel
+          </Button>
+          <Button color="red" onClick={onDeleteConfirm}>
+            Delete
+          </Button>
+        </Group>
+      </Modal>
     </Box>
   );
 }
@@ -236,6 +268,18 @@ function JobRow({
           <Badge size="xs" variant="light">
             {job.job_type}
           </Badge>
+          {job.model_name && (
+            <Text size="xs" c="dimmed" truncate style={{ maxWidth: 80 }}>
+              {job.model_name}
+            </Text>
+          )}
+          <Text size="xs" c="dimmed" style={{ minWidth: 52, textAlign: "right" }}>
+            {job.status === "completed" && job.primary_score != null
+              ? job.primary_score.toFixed(4)
+              : job.status === "running" || job.status === "pending"
+                ? "..."
+                : "\u2014"}
+          </Text>
         </Group>
       </UnstyledButton>
     </Tooltip>
@@ -269,6 +313,28 @@ function JobDetailPanel({
   const configQuery = useQuery({
     queryKey: ["job-config", jobId],
     queryFn: () => fetchJobConfig(jobId),
+  });
+
+  const logQuery = useQuery({
+    queryKey: ["job-log", jobId],
+    queryFn: () => fetchJobLog(jobId),
+  });
+
+  const refitMutation = useMutation({
+    mutationFn: async () => {
+      const cfg = await fetchJobConfig(jobId);
+      await updateConfig(cfg);
+    },
+    onSuccess: () => {
+      onNavigateWorkspace();
+    },
+    onError: (e) => {
+      notifications.show({
+        title: "Re-fit config load failed",
+        message: String(e),
+        color: "red",
+      });
+    },
   });
 
   if (jobQuery.isLoading) {
@@ -330,7 +396,8 @@ function JobDetailPanel({
             size="xs"
             variant="light"
             leftSection={<IconArrowRight size={14} />}
-            onClick={onNavigateWorkspace}
+            loading={refitMutation.isPending}
+            onClick={() => refitMutation.mutate()}
           >
             Re-fit
           </Button>
@@ -401,6 +468,29 @@ function JobDetailPanel({
             </Accordion.Panel>
           </Accordion.Item>
         )}
+        <Accordion.Item value="execution-log">
+          <Accordion.Control>Execution Log</Accordion.Control>
+          <Accordion.Panel>
+            {logQuery.isLoading ? (
+              <Loader size="sm" />
+            ) : logQuery.data?.log ? (
+              <Code
+                block
+                style={{
+                  whiteSpace: "pre-wrap",
+                  maxHeight: 400,
+                  overflow: "auto",
+                }}
+              >
+                {logQuery.data.log}
+              </Code>
+            ) : (
+              <Text size="sm" c="dimmed">
+                No execution log available
+              </Text>
+            )}
+          </Accordion.Panel>
+        </Accordion.Item>
       </Accordion>
 
       {/* Action buttons */}
@@ -424,7 +514,8 @@ function JobDetailPanel({
           size="xs"
           variant="light"
           leftSection={<IconArrowRight size={14} />}
-          onClick={onNavigateWorkspace}
+          loading={refitMutation.isPending}
+          onClick={() => refitMutation.mutate()}
         >
           Re-fit
         </Button>

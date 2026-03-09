@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any
+from unittest.mock import MagicMock
+
 from lizystudio.backends.lizyml import LizyMLAdapter
 from lizystudio.backends.registry import get_adapter
 from lizystudio.backends.types import BackendInfo, ConfigSchema
@@ -53,3 +57,86 @@ def test_registry_unknown_backend() -> None:
 
     with pytest.raises(ValueError, match="Unknown backend"):
         get_adapter("nonexistent")
+
+
+# --- available_plots / model_info using public config_normalized path ---
+
+
+@dataclass
+class _FakeRunMeta:
+    config_normalized: dict[str, Any]
+
+
+@dataclass
+class _FakeFitResult:
+    run_meta: _FakeRunMeta
+    feature_names: list[str]
+
+
+def _make_mock_model(
+    task: str = "binary",
+    calibration: dict[str, Any] | None = None,
+    tuning_result: Any = None,
+    model_name: str = "lightgbm",
+    target: str = "y",
+) -> MagicMock:
+    """Build a mock model with fit_result.run_meta.config_normalized."""
+    config_normalized: dict[str, Any] = {
+        "task": task,
+        "model": {"name": model_name},
+        "data": {"target": target},
+    }
+    if calibration is not None:
+        config_normalized["calibration"] = calibration
+
+    model = MagicMock()
+    model.fit_result = _FakeFitResult(
+        run_meta=_FakeRunMeta(config_normalized=config_normalized),
+        feature_names=["f1", "f2", "f3"],
+    )
+    model._tuning_result = tuning_result  # noqa: SLF001
+    return model
+
+
+def test_available_plots_binary() -> None:
+    adapter = LizyMLAdapter()
+    model = _make_mock_model(task="binary")
+    plots = adapter.available_plots(model)
+    assert "learning-curve" in plots
+    assert "roc-curve" in plots
+    assert "probability-histogram" in plots
+    assert "calibration" not in plots
+    assert "residuals" not in plots
+    assert "tuning" not in plots
+
+
+def test_available_plots_binary_with_calibration() -> None:
+    adapter = LizyMLAdapter()
+    model = _make_mock_model(task="binary", calibration={"method": "isotonic"})
+    plots = adapter.available_plots(model)
+    assert "calibration" in plots
+
+
+def test_available_plots_regression() -> None:
+    adapter = LizyMLAdapter()
+    model = _make_mock_model(task="regression")
+    plots = adapter.available_plots(model)
+    assert "residuals" in plots
+    assert "roc-curve" not in plots
+
+
+def test_available_plots_with_tuning() -> None:
+    adapter = LizyMLAdapter()
+    model = _make_mock_model(task="binary", tuning_result={"some": "data"})
+    plots = adapter.available_plots(model)
+    assert "tuning" in plots
+
+
+def test_model_info_returns_target() -> None:
+    adapter = LizyMLAdapter()
+    model = _make_mock_model(task="binary", target="price")
+    info = adapter.model_info(model)
+    assert info["task"] == "binary"
+    assert info["model_name"] == "lightgbm"
+    assert info["target"] == "price"
+    assert info["feature_count"] == 3

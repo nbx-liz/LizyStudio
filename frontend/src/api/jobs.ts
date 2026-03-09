@@ -12,6 +12,8 @@ export interface JobSummary {
   created_at: string;
   completed_at: string | null;
   error: string | null;
+  model_name?: string;
+  primary_score?: number;
 }
 
 export interface FitResult {
@@ -80,6 +82,10 @@ export function fetchJobConfig(
   jobId: string,
 ): Promise<Record<string, unknown>> {
   return apiFetch(`/jobs/${jobId}/config`);
+}
+
+export function fetchJobLog(jobId: string): Promise<{ log: string }> {
+  return apiFetch(`/jobs/${jobId}/log`);
 }
 
 export function exportJob(

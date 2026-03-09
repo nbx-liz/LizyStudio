@@ -78,7 +78,12 @@ class BackendError(StudioError):
         )
 
 
-# --- FastAPI exception handler ---
+class InferenceNotFoundError(StudioError):
+    def __init__(self, inf_id: str) -> None:
+        super().__init__("INFERENCE_NOT_FOUND", f"Inference not found: {inf_id}", 404)
+
+
+# --- FastAPI exception handlers ---
 
 
 async def studio_error_handler(_request: Request, exc: StudioError) -> JSONResponse:
@@ -90,6 +95,25 @@ async def studio_error_handler(_request: Request, exc: StudioError) -> JSONRespo
                 "code": exc.code,
                 "message": exc.message,
                 "details": exc.details,
+            }
+        },
+    )
+
+
+async def validation_error_handler(_request: Request, exc: Exception) -> JSONResponse:
+    """Convert FastAPI RequestValidationError to the standard JSON envelope (H-0007)."""
+    from fastapi.exceptions import RequestValidationError
+
+    errors: list[Any] = []
+    if isinstance(exc, RequestValidationError):
+        errors = exc.errors()  # type: ignore[assignment]
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "Request validation failed",
+                "details": {"errors": errors},
             }
         },
     )

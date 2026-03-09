@@ -120,6 +120,13 @@ class JobStore:
             return True
         return False
 
+    def get_log(self, job_id: str) -> str:
+        """Read execution log for a job. Returns empty string if not found."""
+        log_path = self.jobs_dir / job_id / "execution.log"
+        if not log_path.exists():
+            return ""
+        return log_path.read_text(encoding="utf-8")
+
     # --- Internal helpers ---
 
     def _save_meta(self, job: Job) -> None:

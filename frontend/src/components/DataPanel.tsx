@@ -18,7 +18,7 @@ import {
 } from "@mantine/core";
 import { Dropzone, MIME_TYPES } from "@mantine/dropzone";
 import { notifications } from "@mantine/notifications";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { IconUpload, IconFile, IconX, IconInfoCircle } from "@tabler/icons-react";
 
 import {
@@ -30,6 +30,13 @@ import {
   loadDataFromPath,
   uploadData,
 } from "../api/workspace";
+import { updateConfig as updateConfigApi } from "../api/config";
+
+// Override state for a single column
+interface ColumnOverride {
+  excluded?: boolean;
+  type?: string;
+}
 
 type SourceType = "path" | "upload";
 
@@ -46,6 +53,16 @@ export function DataPanel() {
   const [target, setTarget] = useState<string | null>(null);
   const [task, setTask] = useState<string | null>(null);
 
+  // CV state (controlled)
+  const [cvStrategy, setCvStrategy] = useState<string>("StratifiedKFold");
+  const [cvFolds, setCvFolds] = useState<number>(5);
+  const [groupCol, setGroupCol] = useState<string | null>(null);
+
+  // Column overrides (controlled state for column settings)
+  const [columnOverrides, setColumnOverrides] = useState<
+    Record<string, ColumnOverride>
+  >({});
+
   // Queries (only enabled when data is loaded)
   const previewQuery = useQuery({
     queryKey: ["data-preview", dataRef?.fingerprint],
@@ -59,6 +76,75 @@ export function DataPanel() {
     enabled: !!dataRef,
   });
 
+  // Mutation for updating backend config
+  const updateConfigMutation = useMutation({
+    mutationFn: updateConfigApi,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["config"] });
+    },
+    onError: (e) => {
+      notifications.show({
+        title: "Config sync failed",
+        message: String(e),
+        color: "red",
+      });
+    },
+  });
+
+  // Build and push config update helper
+  const syncConfigFromState = useCallback(
+    (overrides?: {
+      targetOverride?: string | null;
+      taskOverride?: string | null;
+      cvStrategyOverride?: string;
+      cvFoldsOverride?: number;
+      groupColOverride?: string | null;
+      columnOverridesMap?: Record<string, ColumnOverride>;
+    }) => {
+      const t = overrides?.targetOverride !== undefined ? overrides.targetOverride : target;
+      const tk = overrides?.taskOverride !== undefined ? overrides.taskOverride : task;
+      const strat = overrides?.cvStrategyOverride ?? cvStrategy;
+      const folds = overrides?.cvFoldsOverride ?? cvFolds;
+      const gc = overrides?.groupColOverride !== undefined ? overrides.groupColOverride : groupCol;
+      const colOvr = overrides?.columnOverridesMap ?? columnOverrides;
+
+      const configPatch: Record<string, unknown> = {};
+      if (t) configPatch.target = t;
+      if (tk) configPatch.task = tk;
+
+      // CV config
+      const cvConfig: Record<string, unknown> = {
+        strategy: strat,
+        n_splits: folds,
+      };
+      if (strat === "GroupKFold" && gc) {
+        cvConfig.group_col = gc;
+      }
+      configPatch.cv = cvConfig;
+
+      // Column exclusions and type overrides
+      const excludedCols: string[] = [];
+      const featureTypes: Record<string, string> = {};
+      for (const [colName, ovr] of Object.entries(colOvr)) {
+        if (ovr.excluded) {
+          excludedCols.push(colName);
+        }
+        if (ovr.type) {
+          featureTypes[colName] = ovr.type;
+        }
+      }
+      if (excludedCols.length > 0) {
+        configPatch.exclude_columns = excludedCols;
+      }
+      if (Object.keys(featureTypes).length > 0) {
+        configPatch.feature_types = featureTypes;
+      }
+
+      updateConfigMutation.mutate(configPatch);
+    },
+    [target, task, cvStrategy, cvFolds, groupCol, columnOverrides, updateConfigMutation],
+  );
+
   // Handlers
   const onLoadPath = useCallback(async () => {
     if (!pathInput.trim()) return;
@@ -68,6 +154,7 @@ export function DataPanel() {
       setDataRef(res.data_ref);
       setTarget(null);
       setTask(null);
+      setColumnOverrides({});
       queryClient.invalidateQueries({ queryKey: ["data-preview"] });
       queryClient.invalidateQueries({ queryKey: ["data-columns"] });
     } catch (e) {
@@ -91,6 +178,7 @@ export function DataPanel() {
         setDataRef(res.data_ref);
         setTarget(null);
         setTask(null);
+        setColumnOverrides({});
         queryClient.invalidateQueries({ queryKey: ["data-preview"] });
         queryClient.invalidateQueries({ queryKey: ["data-columns"] });
       } catch (e) {
@@ -109,18 +197,82 @@ export function DataPanel() {
   const onTargetChange = useCallback(
     (value: string | null) => {
       setTarget(value);
-      if (value && previewQuery.data) {
-        setTask(autoDetectTask(value, previewQuery.data.data));
-      }
+      // Use API-detected task from columns response when available
+      const detectedTask =
+        value && columnsQuery.data
+          ? guessTaskFromColumns(columnsQuery.data)
+          : null;
+      setTask(detectedTask);
+      // Default CV strategy based on task
+      const defaultStrategy =
+        detectedTask === "regression" ? "KFold" : "StratifiedKFold";
+      setCvStrategy(defaultStrategy);
+      syncConfigFromState({
+        targetOverride: value,
+        taskOverride: detectedTask,
+        cvStrategyOverride: defaultStrategy,
+      });
     },
-    [previewQuery.data],
+    [columnsQuery.data, syncConfigFromState],
+  );
+
+  const onColumnOverrideChange = useCallback(
+    (colName: string, patch: Partial<ColumnOverride>) => {
+      setColumnOverrides((prev) => {
+        const next = { ...prev, [colName]: { ...prev[colName], ...patch } };
+        // Sync to backend
+        syncConfigFromState({ columnOverridesMap: next });
+        return next;
+      });
+    },
+    [syncConfigFromState],
+  );
+
+  const onCvStrategyChange = useCallback(
+    (value: string | null) => {
+      const v = value ?? "StratifiedKFold";
+      setCvStrategy(v);
+      if (v !== "GroupKFold") setGroupCol(null);
+      syncConfigFromState({
+        cvStrategyOverride: v,
+        groupColOverride: v !== "GroupKFold" ? null : groupCol,
+      });
+    },
+    [groupCol, syncConfigFromState],
+  );
+
+  const onCvFoldsChange = useCallback(
+    (value: number | string) => {
+      const n = typeof value === "number" ? value : 5;
+      setCvFolds(n);
+      syncConfigFromState({ cvFoldsOverride: n });
+    },
+    [syncConfigFromState],
+  );
+
+  const onGroupColChange = useCallback(
+    (value: string | null) => {
+      setGroupCol(value);
+      syncConfigFromState({ groupColOverride: value });
+    },
+    [syncConfigFromState],
   );
 
   // Column names for target dropdown
   const allColumns = previewQuery.data?.columns ?? [];
 
+  // Non-excluded columns for GroupKFold group column selector
+  const availableGroupColumns =
+    columnsQuery.data?.columns
+      .filter((c) => {
+        const ovr = columnOverrides[c.name];
+        const excluded = ovr?.excluded ?? c.suggested_excluded;
+        return !excluded;
+      })
+      .map((c) => c.name) ?? [];
+
   // Feature summary computation
-  const featureSummary = computeFeatureSummary(columnsQuery.data ?? null);
+  const featureSummary = computeFeatureSummary(columnsQuery.data ?? null, columnOverrides);
 
   return (
     <Paper p="md" withBorder>
@@ -223,7 +375,11 @@ export function DataPanel() {
           <Accordion.Control>Column Settings</Accordion.Control>
           <Accordion.Panel>
             {columnsQuery.data ? (
-              <ColumnSettingsTable columns={columnsQuery.data.columns} />
+              <ColumnSettingsTable
+                columns={columnsQuery.data.columns}
+                overrides={columnOverrides}
+                onOverrideChange={onColumnOverrideChange}
+              />
             ) : (
               <Text size="sm" c="dimmed">
                 Load data and select a target to see column settings.
@@ -240,10 +396,29 @@ export function DataPanel() {
               <Select
                 label="Strategy"
                 data={["KFold", "StratifiedKFold", "GroupKFold", "TimeSeriesSplit"]}
-                defaultValue={task === "regression" ? "KFold" : "StratifiedKFold"}
+                value={cvStrategy}
+                onChange={onCvStrategyChange}
                 disabled={!target}
               />
-              <NumberInput label="Folds" defaultValue={5} min={2} max={20} disabled={!target} />
+              <NumberInput
+                label="Folds"
+                value={cvFolds}
+                onChange={onCvFoldsChange}
+                min={2}
+                max={20}
+                disabled={!target}
+              />
+              {cvStrategy === "GroupKFold" && (
+                <Select
+                  label="Group column"
+                  placeholder="Select group column"
+                  data={availableGroupColumns}
+                  value={groupCol}
+                  onChange={onGroupColChange}
+                  disabled={!target}
+                  searchable
+                />
+              )}
             </Stack>
           </Accordion.Panel>
         </Accordion.Item>
@@ -277,7 +452,15 @@ export function DataPanel() {
 
 // --- Sub-components ---
 
-function ColumnSettingsTable({ columns }: { columns: ColumnInfo[] }) {
+function ColumnSettingsTable({
+  columns,
+  overrides,
+  onOverrideChange,
+}: {
+  columns: ColumnInfo[];
+  overrides: Record<string, ColumnOverride>;
+  onOverrideChange: (colName: string, patch: Partial<ColumnOverride>) => void;
+}) {
   return (
     <Table striped highlightOnHover withTableBorder fz="xs">
       <Table.Thead>
@@ -289,43 +472,61 @@ function ColumnSettingsTable({ columns }: { columns: ColumnInfo[] }) {
         </Table.Tr>
       </Table.Thead>
       <Table.Tbody>
-        {columns.map((col) => (
-          <Table.Tr key={col.name}>
-            <Table.Td>
-              <Group gap={4}>
-                <Text size="xs">{col.name}</Text>
-                {col.exclude_reason === "id" && (
-                  <Badge size="xs" color="orange">
-                    ID
-                  </Badge>
-                )}
-                {col.exclude_reason === "constant" && (
-                  <Badge size="xs" color="gray">
-                    Const
-                  </Badge>
-                )}
-              </Group>
-            </Table.Td>
-            <Table.Td>{col.unique_count}</Table.Td>
-            <Table.Td>
-              <Checkbox size="xs" defaultChecked={col.suggested_excluded} />
-            </Table.Td>
-            <Table.Td>
-              {col.suggested_excluded ? (
-                <Text size="xs" c="dimmed">
-                  —
-                </Text>
-              ) : (
-                <Select
+        {columns.map((col) => {
+          const ovr = overrides[col.name];
+          const excluded = ovr?.excluded ?? col.suggested_excluded;
+          const colType = ovr?.type ?? col.suggested_type;
+          return (
+            <Table.Tr key={col.name}>
+              <Table.Td>
+                <Group gap={4}>
+                  <Text size="xs">{col.name}</Text>
+                  {col.exclude_reason === "id" && (
+                    <Badge size="xs" color="orange">
+                      ID
+                    </Badge>
+                  )}
+                  {col.exclude_reason === "constant" && (
+                    <Badge size="xs" color="gray">
+                      Const
+                    </Badge>
+                  )}
+                </Group>
+              </Table.Td>
+              <Table.Td>{col.unique_count}</Table.Td>
+              <Table.Td>
+                <Checkbox
                   size="xs"
-                  data={["numeric", "categorical"]}
-                  defaultValue={col.suggested_type}
-                  w={100}
+                  checked={excluded}
+                  onChange={(e) =>
+                    onOverrideChange(col.name, {
+                      excluded: e.currentTarget.checked,
+                    })
+                  }
                 />
-              )}
-            </Table.Td>
-          </Table.Tr>
-        ))}
+              </Table.Td>
+              <Table.Td>
+                {excluded ? (
+                  <Text size="xs" c="dimmed">
+                    —
+                  </Text>
+                ) : (
+                  <Select
+                    size="xs"
+                    data={["numeric", "categorical"]}
+                    value={colType}
+                    onChange={(v) =>
+                      onOverrideChange(col.name, {
+                        type: v ?? col.suggested_type,
+                      })
+                    }
+                    w={100}
+                  />
+                )}
+              </Table.Td>
+            </Table.Tr>
+          );
+        })}
       </Table.Tbody>
     </Table>
   );
@@ -333,31 +534,51 @@ function ColumnSettingsTable({ columns }: { columns: ColumnInfo[] }) {
 
 // --- Helpers ---
 
-function autoDetectTask(
-  targetCol: string,
-  data: Record<string, unknown>[],
-): string {
-  const values = data.map((row) => row[targetCol]);
-  const unique = new Set(values);
-  if (unique.size === 2) return "binary";
-  const allNumeric = values.every((v) => typeof v === "number");
-  if (!allNumeric) return "multiclass";
-  if (unique.size <= 20) return "multiclass";
+/**
+ * Guess task type from the columns response.
+ * Uses target column metadata from the API rather than raw data.
+ */
+function guessTaskFromColumns(response: ColumnsResponse): string | null {
+  if (!response.target) return null;
+  const targetCol = response.columns.find((c) => c.name === response.target);
+  if (!targetCol) return null;
+  if (targetCol.unique_count === 2) return "binary";
+  if (targetCol.suggested_type === "categorical" || targetCol.unique_count <= 20)
+    return "multiclass";
   return "regression";
 }
 
-function computeFeatureSummary(response: ColumnsResponse | null) {
+function computeFeatureSummary(
+  response: ColumnsResponse | null,
+  overrides: Record<string, ColumnOverride> = {},
+) {
   if (!response) return null;
   const cols = response.columns;
-  const excluded = cols.filter((c) => c.suggested_excluded);
-  const included = cols.filter((c) => !c.suggested_excluded);
+  const excluded = cols.filter((c) => {
+    const ovr = overrides[c.name];
+    return ovr?.excluded ?? c.suggested_excluded;
+  });
+  const included = cols.filter((c) => {
+    const ovr = overrides[c.name];
+    return !(ovr?.excluded ?? c.suggested_excluded);
+  });
   return {
     total: included.length,
-    numeric: included.filter((c) => c.suggested_type === "numeric").length,
-    categorical: included.filter((c) => c.suggested_type === "categorical").length,
+    numeric: included.filter((c) => {
+      const ovr = overrides[c.name];
+      return (ovr?.type ?? c.suggested_type) === "numeric";
+    }).length,
+    categorical: included.filter((c) => {
+      const ovr = overrides[c.name];
+      return (ovr?.type ?? c.suggested_type) === "categorical";
+    }).length,
     excluded: excluded.length,
     idCount: excluded.filter((c) => c.exclude_reason === "id").length,
     constCount: excluded.filter((c) => c.exclude_reason === "constant").length,
-    manualCount: excluded.filter((c) => c.exclude_reason === null).length,
+    manualCount: excluded.filter((c) => {
+      const ovr = overrides[c.name];
+      // Manually excluded = override says excluded but API didn't suggest it
+      return (ovr?.excluded && !c.suggested_excluded) || c.exclude_reason === null;
+    }).length,
   };
 }

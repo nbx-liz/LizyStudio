@@ -17,9 +17,9 @@ from pydantic import BaseModel
 
 from lizystudio.api.errors import (
     BackendError,
+    InferenceNotFoundError,
     JobNotCompletedError,
     JobNotFoundError,
-    StudioError,
 )
 from lizystudio.services.inference import (
     InferenceStore,
@@ -33,11 +33,6 @@ router = APIRouter()
 
 
 # --- Helpers ---
-
-
-class InferenceNotFoundError(StudioError):
-    def __init__(self, inf_id: str) -> None:
-        super().__init__("INFERENCE_NOT_FOUND", f"Inference not found: {inf_id}", 404)
 
 
 def _get_inf_store(job_store: JobStore) -> InferenceStore:
@@ -236,4 +231,13 @@ def inference_comparison(
 ) -> dict[str, Any]:
     """Compare two inference runs."""
     store = _get_inf_store(job_store)
-    return get_comparison_stats(store, job_id, inf_id, other_inf_id)
+
+    # Resolve task type from the job's config
+    task = "regression"
+    record = store.get(job_id, inf_id)
+    if record is not None:
+        job = job_store.get(record.job_id)
+        if job is not None:
+            task = job.config.get("model", {}).get("task", "regression")
+
+    return get_comparison_stats(store, job_id, inf_id, other_inf_id, task=task)

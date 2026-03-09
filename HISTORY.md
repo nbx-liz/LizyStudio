@@ -158,3 +158,48 @@
 - **Alternatives:** なし
 - **Acceptance Criteria:** BLUEPRINT §5.3 にリクエスト・レスポンスの JSON スキーマが定義されている
 - **Decision:** 2026-03-09 accepted — 提案通り
+
+---
+
+### H-0006: GET /api/jobs/{job_id}/log エンドポイント追加
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §4.3.2、§5.3
+- **Context:** §4.3.2 の Jobs 詳細画面に「Execution Log」Accordion が定義されているが、実行ログを提供する API エンドポイントが §5.3 に存在しない。また `services/training.py` は fit/tune 時のログをディスクに永続化していない。
+- **Proposal:**
+  1. `GET /api/jobs/{job_id}/log` エンドポイントを §5.3 に追加。レスポンス: `{ "log": "...text..." }`。ログが未保存の場合は空文字列を返す。
+  2. `services/training.py` で fit/tune 実行時の stdout/stderr を `{job_dir}/execution.log` に書き込む。
+  3. `services/jobs.py` に `get_log(job_id) -> str` メソッドを追加。
+- **Impact:** BLUEPRINT.md §5.3、api/jobs.py、services/jobs.py、services/training.py
+- **Compatibility:** 非破壊的（新規エンドポイント追加）
+- **Alternatives:** なし
+- **Acceptance Criteria:** `GET /api/jobs/{job_id}/log` がログテキストを返す
+- **Decision:** 2026-03-09 accepted — 提案通り
+
+---
+
+### H-0007: RequestValidationError ハンドラ追加（共通エラー形式統一）
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §6.1
+- **Context:** §6.1 で全エラーレスポンスは `{ "error": { "code", "message", "details" } }` 形式と定義されている。しかし FastAPI のデフォルト `RequestValidationError` ハンドラは Pydantic 形式で 422 を返しており、共通形式に従っていない。
+- **Proposal:** `fastapi.exceptions.RequestValidationError` 用のカスタムハンドラを `api/errors.py` に追加し、`server.py` に登録する。レスポンスは `{ "error": { "code": "VALIDATION_ERROR", "message": "Request validation failed", "details": { "errors": [...] } } }` 形式。
+- **Impact:** api/errors.py、server.py
+- **Compatibility:** 非破壊的（レスポンス形式の統一、既存クライアントはステータスコード 422 で判別可能）
+- **Alternatives:** なし
+- **Acceptance Criteria:** 422 エラーが共通エラー形式で返る
+- **Decision:** 2026-03-09 accepted — 提案通り
+
+---
+
+### H-0008: InferenceNotFoundError を api/errors.py に統合
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §6.1
+- **Context:** 全 `StudioError` サブクラスは `api/errors.py` に集約されているが、`InferenceNotFoundError` のみ `api/inference.py` にローカル定義されている。エラー体系の一元管理に反する。
+- **Proposal:** `InferenceNotFoundError` を `api/errors.py` に移動し、`api/inference.py` からは import で参照する。
+- **Impact:** api/errors.py、api/inference.py
+- **Compatibility:** 非破壊的（内部リファクタリング）
+- **Alternatives:** なし
+- **Acceptance Criteria:** `InferenceNotFoundError` が `api/errors.py` に定義されている
+- **Decision:** 2026-03-09 accepted — 提案通り
