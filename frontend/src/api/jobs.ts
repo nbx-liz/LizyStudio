@@ -76,6 +76,23 @@ export function deleteJob(jobId: string): Promise<{ status: string }> {
   return apiFetch(`/jobs/${jobId}`, { method: "DELETE" });
 }
 
+export function fetchJobConfig(
+  jobId: string,
+): Promise<Record<string, unknown>> {
+  return apiFetch(`/jobs/${jobId}/config`);
+}
+
+export function exportJob(
+  jobId: string,
+  exportType: "model" | "report",
+  outputPath: string,
+): Promise<{ exported_path: string; export_type: string }> {
+  return apiFetch(`/jobs/${jobId}/export`, {
+    method: "POST",
+    body: JSON.stringify({ export_type: exportType, output_path: outputPath }),
+  });
+}
+
 export function runFit(): Promise<{ job_id: string }> {
   return apiFetch("/workspace/fit", { method: "POST" });
 }

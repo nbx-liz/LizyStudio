@@ -213,9 +213,9 @@ export function ResultsPanel({ jobId, onJobCreated }: ResultsPanelProps) {
   );
 }
 
-// --- Sub-components ---
+// --- Sub-components (exported for reuse in JobDetail) ---
 
-function MetricsTable({ fitResult }: { fitResult: FitResult }) {
+export function MetricsTable({ fitResult }: { fitResult: FitResult }) {
   const metrics = fitResult.metrics;
   if (!metrics || typeof metrics !== "object") return null;
   const rows = Object.entries(metrics);
@@ -246,7 +246,7 @@ function MetricsTable({ fitResult }: { fitResult: FitResult }) {
   );
 }
 
-function TuneResultSection({ tuneResult }: { tuneResult: TuneResult }) {
+export function TuneResultSection({ tuneResult }: { tuneResult: TuneResult }) {
   return (
     <Stack gap="xs">
       <Alert icon={<IconInfoCircle size={16} />} variant="light" color="blue">
@@ -275,7 +275,7 @@ function TuneResultSection({ tuneResult }: { tuneResult: TuneResult }) {
   );
 }
 
-function PlotViewer({ jobId }: { jobId: string }) {
+export function PlotViewer({ jobId }: { jobId: string }) {
   const [plotType, setPlotType] = useState<string | null>(null);
 
   const plotsQuery = useQuery({
@@ -311,7 +311,7 @@ function PlotViewer({ jobId }: { jobId: string }) {
   );
 }
 
-function ParamsTable({ params }: { params: Array<Record<string, unknown>> }) {
+export function ParamsTable({ params }: { params: Array<Record<string, unknown>> }) {
   if (params.length === 0) return <Text size="sm" c="dimmed">No parameters</Text>;
   const keys = Object.keys(params[0]);
   return (
@@ -336,7 +336,7 @@ function ParamsTable({ params }: { params: Array<Record<string, unknown>> }) {
   );
 }
 
-function TrialsTable({
+export function TrialsTable({
   trials,
   bestScore,
 }: {
