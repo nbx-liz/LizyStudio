@@ -76,9 +76,7 @@ def test_list_with_filter(job_store: JobStore, sample_data_ref: DataRef) -> None
     assert completed[0].job_id == job.job_id
 
 
-def test_update_with_results(
-    job_store: JobStore, sample_data_ref: DataRef
-) -> None:
+def test_update_with_results(job_store: JobStore, sample_data_ref: DataRef) -> None:
     job = job_store.create(
         backend_name="lizyml",
         config={},
