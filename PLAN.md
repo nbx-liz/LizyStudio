@@ -3,15 +3,15 @@
 | Phase | 名前 | 依存 | 状態 |
 |-------|------|------|------|
 | 0 | 開発環境 | — | ✅ |
-| 1 | ドキュメント整備 | 0 | 🔧 |
-| 2 | バックエンド基盤 | 0 | |
-| 3 | Data API + Workspace Data Panel | 2 | |
-| 4 | Config API + Workspace Model Panel | 2 | |
-| 5 | Fit/Tune 実行 + Workspace Results Panel | 3, 4 | |
-| 6 | Jobs 画面 | 5 | |
-| 7 | Inference 画面 | 6 | |
-| 8 | WebSocket プログレス | 5 | |
-| 9 | ビルド・テスト・リリース準備 | 6〜8 | |
+| 1 | ドキュメント整備 | 0 | ✅ |
+| 2 | バックエンド基盤 | 0 | ✅ |
+| 3 | Data API + Workspace Data Panel | 2 | ✅ |
+| 4 | Config API + Workspace Model Panel | 2 | ✅ |
+| 5 | Fit/Tune 実行 + Workspace Results Panel | 3, 4 | ✅ |
+| 6 | Jobs 画面 | 5 | ✅ |
+| 7 | Inference 画面 | 6 | ✅ |
+| 8 | WebSocket プログレス | 5 | ✅ |
+| 9 | ビルド・テスト・リリース準備 | 6〜8 | ✅ |
 
 ---
 

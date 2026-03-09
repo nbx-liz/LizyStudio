@@ -236,7 +236,10 @@ def _compute_inference_metrics(
         metrics["accuracy"] = float((pred_labels == actual).mean())
         if "proba" in pred_df.columns:
             try:
-                from sklearn.metrics import log_loss, roc_auc_score  # type: ignore[import-untyped]
+                from sklearn.metrics import (  # type: ignore[import-untyped]
+                    log_loss,
+                    roc_auc_score,
+                )
 
                 proba = pred_df["proba"]
                 metrics["auc"] = float(roc_auc_score(actual, proba))
@@ -259,7 +262,7 @@ def get_comparison_stats(
     if df1 is None or df2 is None:
         return {"error": "predictions not found"}
 
-    def _stats(s: "pd.Series[Any]") -> dict[str, float]:
+    def _stats(s: pd.Series[Any]) -> dict[str, float]:
         return {
             "mean": float(s.mean()),
             "std": float(s.std()),
