@@ -326,3 +326,170 @@
 - **Alternatives:** 200 + `{"metrics": null, "has_ground_truth": false}` を返す案 → 404 のほうが REST 慣例に沿う
 - **Acceptance Criteria:** GT なし時に 404 が返る
 - **Decision:** 2026-03-09 accepted — 提案通り
+
+---
+
+## v2 テックスタック移行（2026-03-10）
+
+v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテックスタックとビルド基盤を刷新する。
+
+---
+
+### H-0017: フロントエンド UI ライブラリを Mantine v8 から Tailwind CSS + shadcn/ui に変更
+- **Status:** accepted
+- **Scope:** Frontend
+- **Related:** BLUEPRINT.md §3.1、§4 全体、CLAUDE.md §3
+- **Context:** v2 再開発にあたり、UIコンポーネントの設計方針を見直す。Mantine はフル UI フレームワークだが、カスタマイズ性と AI による継続的修正への耐性に課題がある。Tailwind CSS（ユーティリティファースト CSS）+ shadcn/ui（リポジトリ内に持つ直接編集可能なコンポーネント集）に移行し、コンポーネントの透明性と保守性を向上させる。
+- **Proposal:**
+  1. 以下のパッケージを削除: `@mantine/core`, `@mantine/hooks`, `@mantine/form`, `@mantine/notifications`, `@mantine/dropzone`, `@tabler/icons-react`
+  2. 以下を導入: `tailwindcss`, `@tailwindcss/vite`, `shadcn/ui`（CLI でコンポーネントを生成しリポジトリ内に保持）, `lucide-react`（アイコン）
+  3. BLUEPRINT の画面仕様で使用する UI コンポーネント名を shadcn/ui ベースの汎用名に置換
+  4. フォーム管理は `react-hook-form` + `zod`（shadcn/ui の標準構成）に移行
+- **Impact:** BLUEPRINT.md §3.1/§4 全体、CLAUDE.md §3、AGENTS.md §3、frontend/ 全コンポーネント、skills/frontend-pages、skills/frontend-components
+- **Compatibility:** 破壊的（v2 再開発ブランチのため許容）
+- **Alternatives:** Mantine v8 を継続する案 → AI による修正耐性と直接編集可能性の要件を満たさないため不採用
+- **Acceptance Criteria:** BLUEPRINT/CLAUDE.md/AGENTS.md から Mantine 参照が除去され、Tailwind + shadcn/ui がテックスタックとして定義されている
+- **Decision:** 2026-03-10 accepted — v2 再開発方針として採用
+
+---
+
+### H-0018: フロントエンド Lint/Format ツールを ESLint から Biome に変更
+- **Status:** accepted
+- **Scope:** Build
+- **Related:** CLAUDE.md §5、§6
+- **Context:** v2 再開発にあたり、フロントエンドの lint/format ツールを統一する。ESLint + Prettier の組み合わせは設定が複雑で、Biome は lint と format を単一ツールで高速に実行できる。
+- **Proposal:**
+  1. ESLint 関連パッケージを全て削除
+  2. `@biomejs/biome` を devDependencies に追加
+  3. `biome.json` を `frontend/` に配置
+  4. `pnpm lint` → `biome check` に変更
+  5. `pnpm format` → `biome format` に変更
+- **Impact:** CLAUDE.md §5/§6、AGENTS.md §5/§6、frontend/package.json、frontend/.eslintrc（削除）、frontend/biome.json（新規）
+- **Compatibility:** 破壊的（v2 再開発ブランチのため許容）
+- **Alternatives:** ESLint v9 flat config への移行 → Biome のほうが高速かつ設定が簡素なため不採用
+- **Acceptance Criteria:** `pnpm lint` が Biome で実行され、ESLint 関連ファイルが存在しない
+- **Decision:** 2026-03-10 accepted — v2 再開発方針として採用
+
+---
+
+### H-0019: フロントエンドテスト基盤の導入（Vitest + Playwright + Storybook + MSW）
+- **Status:** accepted
+- **Scope:** Build
+- **Related:** CLAUDE.md §5、§6、PLAN.md
+- **Context:** 既存プロジェクトにはフロントエンドテスト戦略が存在しない。v2 ではユニットテスト（Vitest）、E2E テスト（Playwright）、コンポーネント開発環境（Storybook）、API モック（MSW）を標準基盤として導入する。
+- **Proposal:**
+  1. `vitest` + `@testing-library/react` を devDependencies に追加
+  2. `@playwright/test` を devDependencies に追加
+  3. `storybook` + 関連パッケージを devDependencies に追加
+  4. `msw` を devDependencies に追加
+  5. 開発コマンドを追加: `pnpm test`（Vitest）、`pnpm test:e2e`（Playwright）、`pnpm storybook`
+- **Impact:** CLAUDE.md §5/§6、AGENTS.md §5/§6、frontend/package.json、frontend/vitest.config.ts（新規）、frontend/playwright.config.ts（新規）、frontend/.storybook/（新規）
+- **Compatibility:** 非破壊的（新規追加）
+- **Alternatives:** Jest を使用する案 → Vite との統合が良い Vitest を採用
+- **Acceptance Criteria:** `pnpm test` / `pnpm test:e2e` / `pnpm storybook` が実行可能
+- **Decision:** 2026-03-10 accepted — v2 再開発方針として採用
+
+---
+
+### H-0020: API 型生成パイプラインの導入（openapi-typescript）
+- **Status:** accepted
+- **Scope:** Build
+- **Related:** BLUEPRINT.md §2（設計原則 #3 型安全）、CLAUDE.md §3
+- **Context:** BLUEPRINT §2 で「Pydantic Schema → OpenAPI → TypeScript 型の自動連携チェーンを維持する」と原則を定めているが、具体的な生成ツールと手順が未定義。フロントエンドで API 型を手書きする運用は型安全の原則に反する。
+- **Proposal:**
+  1. `openapi-typescript` を devDependencies に追加
+  2. `pnpm generate:api` コマンドを追加: FastAPI の `/openapi.json` から TypeScript 型を自動生成
+  3. 生成先: `frontend/src/api/generated/` に配置
+  4. フロントエンドの API クライアントは生成型を使用し、手書き型を禁止
+- **Impact:** CLAUDE.md §5、frontend/package.json、frontend/src/api/（手書き型の廃止）、skills/frontend-pages
+- **Compatibility:** 非破壊的（新規追加、既存手書き型は段階的に置換）
+- **Alternatives:** openapi-fetch（クライアント自動生成）も候補だが、まず型生成のみで開始
+- **Acceptance Criteria:** `pnpm generate:api` で TypeScript 型が生成され、API クライアントが生成型を参照している
+- **Decision:** 2026-03-10 accepted — BLUEPRINT 設計原則の実現として採用
+
+---
+
+### H-0021: pre-commit フックの導入
+- **Status:** accepted
+- **Scope:** Build
+- **Related:** CLAUDE.md §6
+- **Context:** 品質ゲート（lint / format / typecheck）は PR 前に手動実行する運用だが、コミット時に自動チェックすることで品質違反の混入を防止できる。
+- **Proposal:**
+  1. `pre-commit` を Python dev dependencies に追加
+  2. `.pre-commit-config.yaml` をリポジトリルートに配置
+  3. フック内容: Ruff（lint/format）、mypy、Biome（lint/format）
+  4. `uv run pre-commit install` でローカル環境にフックを登録
+- **Impact:** pyproject.toml、.pre-commit-config.yaml（新規）、CLAUDE.md §6
+- **Compatibility:** 非破壊的（新規追加）
+- **Alternatives:** husky（Node.js 側のフック）→ Python 側も含めた統一管理のため pre-commit を採用
+- **Acceptance Criteria:** `git commit` 時に Ruff + Biome が自動実行される
+- **Decision:** 2026-03-10 accepted — 品質ゲート強化として採用
+
+---
+
+### H-0022: PyPI 配布ツールを twine から gh-action-pypi-publish に変更
+- **Status:** accepted
+- **Scope:** Build
+- **Related:** CLAUDE.md §3、skills/build-and-deploy
+- **Context:** 現在の配布手順は `twine` による手動アップロードだが、GitHub Actions の Trusted Publisher（OIDC）を使った `pypa/gh-action-pypi-publish` に移行することで、API トークン管理が不要になり CI/CD パイプラインに統合できる。
+- **Proposal:**
+  1. `twine` を依存から削除
+  2. `.github/workflows/publish.yml` に `pypa/gh-action-pypi-publish` を使用した自動配布ワークフローを定義
+  3. PyPI Trusted Publisher を設定（リポジトリ + ワークフロー名で認証）
+- **Impact:** pyproject.toml、.github/workflows/publish.yml（新規）、skills/build-and-deploy
+- **Compatibility:** 非破壊的（配布方法の変更、パッケージ自体は同一）
+- **Alternatives:** twine を GitHub Actions 内で使用する案 → Trusted Publisher のほうがセキュア
+- **Acceptance Criteria:** GitHub tag push で PyPI に自動配布される
+- **Decision:** 2026-03-10 accepted — CI/CD 統合として採用
+
+---
+
+### H-0023: `react-resizable-panels` フロントエンド依存追加
+- **Status:** accepted
+- **Scope:** Frontend
+- **Related:** CLAUDE.md §3、BLUEPRINT §4 Workspace 画面
+- **Context:** Workspace 画面の 3 カラムレイアウト（DataPanel / ModelPanel / ResultsPanel）のサイズをユーザーがドラッグで変更できるようにする。`react-resizable-panels` は shadcn/ui が公式に採用しているリサイズパネルライブラリで、Node 18 / React 19 対応済み。
+- **Proposal:**
+  1. `pnpm add react-resizable-panels` でフロントエンド依存に追加
+  2. shadcn/ui resizable コンポーネント（`components/ui/resizable.tsx`）を追加
+  3. WorkspacePage の CSS grid を `ResizablePanelGroup` に置換
+- **Impact:** frontend/package.json、WorkspacePage.tsx、新規 resizable.tsx
+- **Compatibility:** 非破壊的（内部 UI 変更のみ）
+- **Alternatives:** CSS resize プロパティ → 操作性が劣る。カスタム実装 → 工数大
+- **Acceptance Criteria:** パネル間のドラッグリサイズが動作し、サイズが localStorage に永続化される
+- **Decision:** 2026-03-10 accepted — UX 改善として採用
+
+---
+
+### H-0024: `GET /api/files` ディレクトリ一覧エンドポイント追加
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT §3.1 API エンドポイント一覧
+- **Context:** データソース選択時にファイルパスを手入力する代わりに、サーバーサイドのディレクトリをブラウズして CSV/Parquet ファイルを選択できるようにする。シングルユーザーのローカルアプリケーションであり、セキュリティリスクは限定的。
+- **Proposal:**
+  1. `GET /api/files?path=<dir>` エンドポイントを追加
+  2. レスポンス: `{path, parent, entries: [{name, type, size, extension}]}`
+  3. デフォルトはホームディレクトリ、.csv/.parquet ファイルのみ表示
+  4. フロントエンドに Dialog ベースのファイルブラウザコンポーネントを追加
+- **Impact:** 新規 `api/files.py` ルーター、新規 `services/files.py`、フロントエンド FileBrowser コンポーネント
+- **Compatibility:** 非破壊的（新規エンドポイント追加）
+- **Alternatives:** `<input type="file">` のみ → サーバーサイドのパス指定が必要なケースに対応できない
+- **Acceptance Criteria:** ファイルブラウザでディレクトリを遷移し、ファイル選択→データロードが動作する
+- **Decision:** 2026-03-10 accepted — UX 改善として採用
+
+---
+
+### H-0025: `get_default_config` on BackendAdapter + `GET /workspace/config/defaults` エンドポイント追加
+- **Status:** accepted
+- **Scope:** API, Adapter
+- **Related:** BLUEPRINT.md §3.3.2、§5.2
+- **Context:** データ読み込み + ターゲット選択後、Config が空のため Fit/Tune を即座に実行できない。LizyML が必須とする `config_version`、`task`（トップレベル）、`model` が欠落しており validation エラーになる。ユーザーがデフォルト値で即座に Fit/Tune を実行できるようにするため、バックエンドから完全なデフォルト Config を取得する手段が必要。
+- **Proposal:**
+  1. `BackendAdapter` Protocol に `get_default_config(task: str, target: str) -> dict[str, Any]` メソッドを追加
+  2. `GET /api/workspace/config/defaults?task={task}&target={target}` エンドポイントを追加。バックエンドの Pydantic モデルから完全なデフォルト Config を生成して返す
+  3. フロントエンドはターゲット選択時にこのエンドポイントを呼び、デフォルト Config をベースに DataPanel の設定をマージする
+- **Impact:** backends/base.py、backends/lizyml.py、services/workspace.py、api/workspace.py、frontend API client、DataPanel.tsx
+- **Compatibility:** 非破壊的（新規メソッド + 新規エンドポイント追加）
+- **Alternatives:** フロントエンドで JSON Schema から defaults を抽出する案 → discriminated union（model, split）の解決が困難。また「バックエンドの仕様が正」原則に反するため不採用
+- **Acceptance Criteria:** ターゲット選択後に完全なデフォルト Config が設定され、追加設定なしで Fit/Tune が実行可能
+- **Decision:** 2026-03-10 accepted — 提案通り
