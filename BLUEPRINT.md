@@ -47,7 +47,7 @@ ML分析ワークフロー（Config編集→学習→評価→推論→管理）
 ┌──────────────┐     HTTP/WS      ┌──────────────────────────────┐
 │   Browser    │ ◄──────────────► │       FastAPI Server          │
 │  React SPA   │   localhost:8501  │                              │
-│  (Mantine)   │                  │  api/      ← Router           │
+│ (shadcn/ui)  │                  │  api/      ← Router           │
 │              │                  │  services/ ← Session & 調整    │
 │              │                  │  backends/ ← Adapter 層        │
 │              │                  │  ws/       ← Progress          │
@@ -137,6 +137,7 @@ class BackendAdapter(Protocol):
 
     # --- Config ---
     def get_config_schema(self) -> ConfigSchema: ...
+    def get_default_config(self, task: str, target: str) -> dict: ...  # 完全なデフォルト Config (H-0025)
     def validate_config(self, config: dict) -> list[dict]: ...  # エラー一覧 (空=valid)
     def load_config_from_file(self, content: bytes, filename: str) -> dict: ...
 
@@ -1574,6 +1575,7 @@ Workspace の揮発状態を管理する。
 | メソッド | パス | 説明 |
 |---------|------|------|
 | GET | `/api/workspace/config/schema` | Config の JSON Schema を返す |
+| GET | `/api/workspace/config/defaults` | 完全なデフォルト Config を返す（query: `task`, `target`）(H-0025) |
 | GET | `/api/workspace/config` | 現在の Config を返す |
 | PUT | `/api/workspace/config` | Config を更新（バリデーション付き） |
 | POST | `/api/workspace/config/validate` | Config dict をバリデーションのみ行う |
@@ -1801,7 +1803,7 @@ Workspace の `workspace_result` は完了時に自動更新される。
 
 ### 6.3 フロントエンドのエラー表示
 
-- API エラーは Mantine の `Notification` で画面上部に表示
+- API エラーは Toast（sonner）で画面上部に表示
 - バリデーションエラーはフォームフィールドにインラインで表示
 - WebSocket の error メッセージは Training 画面のログに表示
 
