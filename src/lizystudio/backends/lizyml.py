@@ -33,6 +33,14 @@ class LizyMLAdapter:
 
     # -- Config --
 
+    def get_ui_schema(self) -> dict[str, Any]:
+        from lizystudio.backends.lizyml_ui_schema import (
+            build_ui_schema,
+            get_eval_metrics_by_task,
+        )
+
+        return build_ui_schema(get_eval_metrics_by_task())
+
     def get_config_schema(self) -> ConfigSchema:
         from lizyml.config.schema import LizyMLConfig
 

@@ -1,0 +1,365 @@
+"""UI schema for the LizyML backend (H-0026).
+
+Ported from LizyML-Widget's adapter_contract.py.
+Contains only static data structures — no ML logic.
+"""
+
+from __future__ import annotations
+
+import threading
+from typing import Any
+
+# --- Eval metrics registry lookup (cached) ---
+
+_eval_metrics_cache: dict[str, list[str]] | None = None
+_eval_metrics_lock: threading.Lock = threading.Lock()
+
+
+def get_eval_metrics_by_task() -> dict[str, list[str]]:
+    """Query LizyML's metric registry for available evaluation metrics per task."""
+    global _eval_metrics_cache  # noqa: PLW0603
+
+    if _eval_metrics_cache is not None:
+        return _eval_metrics_cache
+    with _eval_metrics_lock:
+        if _eval_metrics_cache is not None:
+            return _eval_metrics_cache
+        metrics: dict[str, list[str]]
+        try:
+            from lizyml.metrics.registry import _TASK_METRICS
+
+            metrics = {task: sorted(ms) for task, ms in _TASK_METRICS.items()}
+        except (ImportError, AttributeError, TypeError):
+            # Fallback for older LizyML versions
+            metrics = {
+                "regression": sorted(
+                    ["mae", "mape", "rmse", "huber", "r2", "rmsle"]
+                ),
+                "binary": sorted(
+                    [
+                        "auc",
+                        "logloss",
+                        "auc_pr",
+                        "f1",
+                        "accuracy",
+                        "binary_logloss",
+                        "brier",
+                    ]
+                ),
+                "multiclass": sorted(
+                    ["multi_logloss", "auc_mu", "multi_error"]
+                ),
+            }
+        _eval_metrics_cache = metrics
+        return metrics
+
+
+# --- Metric direction lookup (cached) ---
+
+_metric_direction_cache: dict[str, dict[str, str]] | None = None
+_metric_direction_lock: threading.Lock = threading.Lock()
+
+
+def get_metric_directions() -> dict[str, dict[str, str]]:
+    """Return {task: {metric: 'minimize'|'maximize'}} from LizyML registry."""
+    global _metric_direction_cache  # noqa: PLW0603
+
+    if _metric_direction_cache is not None:
+        return _metric_direction_cache
+    with _metric_direction_lock:
+        if _metric_direction_cache is not None:
+            return _metric_direction_cache
+        result: dict[str, dict[str, str]] = {}
+        metrics_by_task = get_eval_metrics_by_task()
+        try:
+            from lizyml.metrics.registry import get_metric
+
+            for task, metric_names in metrics_by_task.items():
+                task_dirs: dict[str, str] = {}
+                for name in metric_names:
+                    try:
+                        m = get_metric(name)
+                        task_dirs[name] = (
+                            "maximize" if m.greater_is_better else "minimize"
+                        )
+                    except Exception:  # noqa: BLE001
+                        task_dirs[name] = "minimize"
+                result[task] = task_dirs
+        except (ImportError, AttributeError):
+            # Fallback
+            maximize = {"auc", "auc_pr", "r2", "accuracy", "f1", "auc_mu"}
+            for task, metric_names in metrics_by_task.items():
+                result[task] = {
+                    m: "maximize" if m in maximize else "minimize"
+                    for m in metric_names
+                }
+        _metric_direction_cache = result
+        return result
+
+
+# --- UI schema builder ---
+
+
+def build_ui_schema(
+    all_metrics_by_task: dict[str, list[str]],
+) -> dict[str, Any]:
+    """Build the full UI schema for the LizyML backend contract."""
+    metric_directions = get_metric_directions()
+    return {
+        "sections": [
+            {"key": "model", "title": "Model"},
+            {"key": "training", "title": "Training"},
+            {"key": "calibration", "title": "Calibration"},
+            {"key": "evaluation", "title": "Evaluation"},
+        ],
+        "option_sets": {
+            "objective": {
+                "regression": [
+                    "huber",
+                    "mse",
+                    "mae",
+                    "quantile",
+                    "mape",
+                    "cross_entropy",
+                ],
+                "binary": [
+                    "binary",
+                    "cross_entropy",
+                    "cross_entropy_lambda",
+                ],
+                "multiclass": [
+                    "multiclass",
+                    "softmax",
+                    "multiclassova",
+                ],
+            },
+            "metric": dict(all_metrics_by_task),
+            "model_metric": {
+                "regression": [
+                    "huber",
+                    "mae",
+                    "mape",
+                    "rmse",
+                    "r2",
+                    "rmsle",
+                ],
+                "binary": [
+                    "auc",
+                    "binary_logloss",
+                    "logloss",
+                    "auc_pr",
+                    "f1",
+                    "accuracy",
+                    "brier",
+                ],
+                "multiclass": [
+                    "multi_logloss",
+                    "auc_mu",
+                    "multi_error",
+                ],
+            },
+            "metric_direction": metric_directions,
+        },
+        "n_trials_presets": [10, 50, 100, 200, 500],
+        "parameter_hints": [
+            {
+                "key": "objective",
+                "label": "Objective",
+                "kind": "objective",
+            },
+            {
+                "key": "metric",
+                "label": "Metric",
+                "kind": "model_metric",
+            },
+            {
+                "key": "n_estimators",
+                "label": "N Estimators",
+                "kind": "integer",
+                "step": 100,
+            },
+            {
+                "key": "learning_rate",
+                "label": "Learning Rate",
+                "kind": "number",
+                "step": 0.001,
+            },
+            {
+                "key": "max_depth",
+                "label": "Max Depth",
+                "kind": "integer",
+                "step": 1,
+            },
+            {
+                "key": "max_bin",
+                "label": "Max Bin",
+                "kind": "integer",
+                "step": 1,
+            },
+            {
+                "key": "feature_fraction",
+                "label": "Feature Fraction",
+                "kind": "number",
+                "step": 0.05,
+            },
+            {
+                "key": "bagging_fraction",
+                "label": "Bagging Fraction",
+                "kind": "number",
+                "step": 0.05,
+            },
+            {
+                "key": "bagging_freq",
+                "label": "Bagging Freq",
+                "kind": "integer",
+                "step": 1,
+            },
+            {
+                "key": "lambda_l1",
+                "label": "Lambda L1",
+                "kind": "number",
+                "step": 0.0001,
+            },
+            {
+                "key": "lambda_l2",
+                "label": "Lambda L2",
+                "kind": "number",
+                "step": 0.0001,
+            },
+            {
+                "key": "first_metric_only",
+                "label": "First Metric Only",
+                "kind": "boolean",
+            },
+        ],
+        "search_space_catalog": [
+            {
+                "key": "objective",
+                "title": "Objective",
+                "paramType": "string",
+                "modes": ["fixed", "choice"],
+            },
+            {
+                "key": "metric",
+                "title": "Metric",
+                "paramType": "string",
+                "modes": ["fixed", "choice"],
+            },
+            {
+                "key": "n_estimators",
+                "title": "N Estimators",
+                "paramType": "integer",
+                "modes": ["fixed", "range"],
+            },
+            {
+                "key": "learning_rate",
+                "title": "Learning Rate",
+                "paramType": "number",
+                "modes": ["fixed", "range"],
+            },
+            {
+                "key": "max_depth",
+                "title": "Max Depth",
+                "paramType": "integer",
+                "modes": ["fixed", "range"],
+            },
+            {
+                "key": "max_bin",
+                "title": "Max Bin",
+                "paramType": "integer",
+                "modes": ["fixed", "range"],
+            },
+            {
+                "key": "feature_fraction",
+                "title": "Feature Fraction",
+                "paramType": "number",
+                "modes": ["fixed", "range"],
+            },
+            {
+                "key": "bagging_fraction",
+                "title": "Bagging Fraction",
+                "paramType": "number",
+                "modes": ["fixed", "range"],
+            },
+            {
+                "key": "bagging_freq",
+                "title": "Bagging Freq",
+                "paramType": "integer",
+                "modes": ["fixed", "range"],
+            },
+            {
+                "key": "lambda_l1",
+                "title": "Lambda L1",
+                "paramType": "number",
+                "modes": ["fixed", "range"],
+            },
+            {
+                "key": "lambda_l2",
+                "title": "Lambda L2",
+                "paramType": "number",
+                "modes": ["fixed", "range"],
+            },
+            {
+                "key": "first_metric_only",
+                "title": "First Metric Only",
+                "paramType": "boolean",
+                "modes": ["fixed", "choice"],
+            },
+            {
+                "key": "auto_num_leaves",
+                "title": "Auto Num Leaves",
+                "paramType": "boolean",
+                "modes": ["fixed", "choice"],
+            },
+            {
+                "key": "num_leaves_ratio",
+                "title": "Num Leaves Ratio",
+                "paramType": "number",
+                "modes": ["fixed", "range"],
+            },
+            {
+                "key": "min_data_in_leaf_ratio",
+                "title": "Min Data in Leaf Ratio",
+                "paramType": "number",
+                "modes": ["fixed", "range"],
+            },
+            {
+                "key": "min_data_in_bin_ratio",
+                "title": "Min Data in Bin Ratio",
+                "paramType": "number",
+                "modes": ["fixed", "range"],
+            },
+        ],
+        "step_map": {
+            "n_estimators": 100,
+            "learning_rate": 0.001,
+            "max_depth": 1,
+            "max_bin": 1,
+            "feature_fraction": 0.05,
+            "bagging_fraction": 0.05,
+            "bagging_freq": 1,
+            "lambda_l1": 0.0001,
+            "lambda_l2": 0.0001,
+            "num_leaves_ratio": 0.05,
+            "num_leaves": 1,
+            "min_data_in_leaf_ratio": 0.001,
+            "min_data_in_bin_ratio": 0.001,
+        },
+        "conditional_visibility": {
+            "calibration": {"task": ["binary"]},
+            "num_leaves_ratio": {"auto_num_leaves": True},
+            "num_leaves": {"auto_num_leaves": False},
+        },
+        "defaults": {
+            "calibration": {
+                "method": "platt",
+                "n_splits": 5,
+                "params": {},
+            },
+        },
+        "inner_valid_options": [
+            "holdout",
+            "group_holdout",
+            "time_holdout",
+        ],
+    }

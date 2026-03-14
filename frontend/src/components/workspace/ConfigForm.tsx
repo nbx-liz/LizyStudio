@@ -1,4 +1,3 @@
-import { Minus, Plus } from "lucide-react";
 import { useCallback, useMemo } from "react";
 import {
   Accordion,
@@ -6,9 +5,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -16,8 +13,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
+import { CalibrationSection } from "./CalibrationSection";
+import { FormField } from "./FormField";
+import { KeyValueEditor } from "./KeyValueEditor";
+import { MetricsChips } from "./MetricsChips";
+import { NumberInput } from "./NumberInput";
+
+// --- Schema types ---
 
 interface SchemaProperty {
   type?: string;
@@ -35,6 +40,7 @@ interface SchemaProperty {
   oneOf?: SchemaProperty[];
   discriminator?: { propertyName?: string };
   additionalProperties?: boolean | SchemaProperty;
+  nullable?: boolean;
 }
 
 type Defs = Record<string, SchemaProperty>;
@@ -45,22 +51,25 @@ interface ConfigFormProps {
   onChange: (config: Record<string, unknown>) => void;
   hiddenFields?: string[];
   task?: string | null;
+  uiSchema?: import("@/api/types").UiSchema;
 }
 
-/** Resolve $ref, anyOf, oneOf into a concrete SchemaProperty. */
+// --- Schema resolution ---
+
 function resolveSchema(
   prop: SchemaProperty,
   defs: Defs,
   currentValue?: unknown,
+  _visited: Set<string> = new Set(),
 ): SchemaProperty {
-  // Resolve $ref
   if (prop.$ref) {
+    if (_visited.has(prop.$ref)) return prop; // cycle guard
+    const nextVisited = new Set(_visited).add(prop.$ref);
     const refName = prop.$ref.replace("#/$defs/", "");
     const resolved = defs[refName];
     if (resolved) {
-      // Merge title/default/description from the referencing property
       return {
-        ...resolveSchema(resolved, defs, currentValue),
+        ...resolveSchema(resolved, defs, currentValue, nextVisited),
         ...(prop.title ? { title: prop.title } : {}),
         ...(prop.default !== undefined ? { default: prop.default } : {}),
         ...(prop.description ? { description: prop.description } : {}),
@@ -68,25 +77,30 @@ function resolveSchema(
     }
   }
 
-  // Resolve anyOf — pick the non-null variant
   if (prop.anyOf) {
+    const hasNull = prop.anyOf.some((v) => v.type === "null");
     const nonNull = prop.anyOf.filter(
       (v) =>
         v.type !== "null" &&
         (v.type !== undefined || v.$ref || v.oneOf || v.anyOf),
     );
-    // Use currentValue if available, fall back to prop.default
     const effectiveValue = currentValue ?? prop.default;
+
     if (nonNull.length === 1) {
-      const resolved = resolveSchema(nonNull[0], defs, effectiveValue);
+      const resolved = resolveSchema(
+        nonNull[0],
+        defs,
+        effectiveValue,
+        _visited,
+      );
       return {
         ...resolved,
         ...(prop.title ? { title: prop.title } : {}),
         ...(prop.default !== undefined ? { default: prop.default } : {}),
         ...(prop.description ? { description: prop.description } : {}),
+        ...(hasNull ? { nullable: true } : {}),
       };
     }
-    // Multiple non-null variants — check for oneOf inside
     const withOneOf = nonNull.find((v) => v.oneOf || v.$ref);
     if (withOneOf) {
       return resolveSchema(
@@ -94,21 +108,23 @@ function resolveSchema(
           ...withOneOf,
           ...(prop.title ? { title: prop.title } : {}),
           ...(prop.default !== undefined ? { default: prop.default } : {}),
+          ...(hasNull ? { nullable: true } : {}),
         },
         defs,
         effectiveValue,
+        _visited,
       );
     }
-    // Fallback: try first non-null
     if (nonNull.length > 0) {
-      return resolveSchema(nonNull[0], defs, effectiveValue);
+      return {
+        ...resolveSchema(nonNull[0], defs, effectiveValue, _visited),
+        ...(hasNull ? { nullable: true } : {}),
+      };
     }
   }
 
-  // Resolve oneOf with discriminator — pick variant matching current value
   if (prop.oneOf && prop.discriminator?.propertyName) {
     const discKey = prop.discriminator.propertyName;
-    // Use currentValue if available, fall back to prop.default for matching
     const effectiveValue = currentValue ?? prop.default;
     const currentObj =
       effectiveValue != null && typeof effectiveValue === "object"
@@ -117,28 +133,25 @@ function resolveSchema(
     const discValue = currentObj?.[discKey];
 
     for (const variant of prop.oneOf) {
-      const resolved = resolveSchema(variant, defs, currentValue);
+      const resolved = resolveSchema(variant, defs, currentValue, _visited);
       const constVal = resolved.properties?.[discKey]?.const;
       if (constVal !== undefined && String(constVal) === String(discValue)) {
-        return {
-          ...resolved,
-          ...(prop.title ? { title: prop.title } : {}),
-        };
+        return { ...resolved, ...(prop.title ? { title: prop.title } : {}) };
       }
     }
-    // No match — use first variant
     if (prop.oneOf.length > 0) {
-      const resolved = resolveSchema(prop.oneOf[0], defs, currentValue);
-      return {
-        ...resolved,
-        ...(prop.title ? { title: prop.title } : {}),
-      };
+      const resolved = resolveSchema(
+        prop.oneOf[0],
+        defs,
+        currentValue,
+        _visited,
+      );
+      return { ...resolved, ...(prop.title ? { title: prop.title } : {}) };
     }
   }
 
-  // Resolve oneOf without discriminator — use first variant
   if (prop.oneOf && !prop.discriminator && prop.oneOf.length > 0) {
-    const resolved = resolveSchema(prop.oneOf[0], defs, currentValue);
+    const resolved = resolveSchema(prop.oneOf[0], defs, currentValue, _visited);
     return {
       ...resolved,
       ...(prop.title ? { title: prop.title } : {}),
@@ -149,7 +162,6 @@ function resolveSchema(
   return prop;
 }
 
-/** Pre-resolve all properties in a schema recursively. */
 function resolveProperties(
   props: Record<string, SchemaProperty>,
   defs: Defs,
@@ -161,6 +173,8 @@ function resolveProperties(
   }
   return result;
 }
+
+// --- Value helpers ---
 
 function getNestedValue(obj: Record<string, unknown>, path: string[]): unknown {
   let current: unknown = obj;
@@ -190,6 +204,8 @@ function setNestedValue(
   return result;
 }
 
+// --- Field renderer ---
+
 function renderField(
   rawProp: SchemaProperty,
   name: string,
@@ -201,12 +217,9 @@ function renderField(
   const prop = resolveSchema(rawProp, defs, value);
   const label = prop.title ?? name;
 
-  // Skip const fields (e.g., discriminator "name": "lgbm")
-  if (prop.const !== undefined) {
-    return null;
-  }
+  if (prop.const !== undefined) return null;
 
-  // Skip free-form dicts (additionalProperties with no named properties)
+  // Skip free-form dicts (rendered by KeyValueEditor separately)
   if (
     prop.type === "object" &&
     !prop.properties &&
@@ -217,7 +230,6 @@ function renderField(
 
   // Nested object — render as indented sub-group
   if (prop.type === "object" && prop.properties) {
-    // Skip objects with only const properties (no editable fields)
     const namedProps = Object.entries(prop.properties).filter(
       ([, p]) => resolveSchema(p, defs).const === undefined,
     );
@@ -229,7 +241,9 @@ function renderField(
         : ((prop.default as Record<string, unknown>) ?? {});
     return (
       <div key={name} className="space-y-2">
-        <Label className="text-xs font-semibold">{label}</Label>
+        <FormField label={label} description={prop.description}>
+          <span />
+        </FormField>
         <div className="space-y-2 border-l pl-3">
           {namedProps.map(([childName, childProp]) =>
             renderField(
@@ -246,12 +260,30 @@ function renderField(
     );
   }
 
+  // Nullable Auto chip support
+  const isNullable = prop.nullable === true;
+  const isAuto = isNullable && value === null;
+  const autoValue = isNullable
+    ? {
+        isAuto,
+        onToggle: () => {
+          if (isAuto) {
+            onChange(path, prop.default ?? 0);
+          } else {
+            onChange(path, null);
+          }
+        },
+      }
+    : undefined;
+
   if (prop.enum && prop.enum.length > 0) {
     return (
-      <div key={name} className="space-y-1">
-        <Label className="text-xs" title={prop.description}>
-          {label}
-        </Label>
+      <FormField
+        key={name}
+        label={label}
+        description={prop.description}
+        autoValue={autoValue}
+      >
         <Select
           value={String(value ?? prop.default ?? "")}
           onValueChange={(v) => onChange(path, v)}
@@ -267,23 +299,25 @@ function renderField(
             ))}
           </SelectContent>
         </Select>
-      </div>
+      </FormField>
     );
   }
 
   if (prop.type === "boolean") {
     return (
-      <div key={name} className="flex items-center justify-between">
-        <Label className="text-xs" title={prop.description}>
-          {label}
-        </Label>
+      <FormField
+        key={name}
+        label={label}
+        description={prop.description}
+        autoValue={autoValue}
+      >
         <Switch
           checked={
             value === true || (value === undefined && prop.default === true)
           }
           onCheckedChange={(checked) => onChange(path, checked)}
         />
-      </div>
+      </FormField>
     );
   }
 
@@ -303,14 +337,11 @@ function renderField(
         prop.type === "integer" ? 1 : Math.max((max - min) / 100, 0.01);
       return (
         <div key={name} className="space-y-1">
-          <div className="flex items-center justify-between">
-            <Label className="text-xs" title={prop.description}>
-              {label}
-            </Label>
+          <FormField label={label} description={prop.description}>
             <span className="text-xs tabular-nums text-muted-foreground">
               {prop.type === "integer" ? numValue : numValue.toFixed(2)}
             </span>
-          </div>
+          </FormField>
           <Slider
             min={min}
             max={max}
@@ -322,47 +353,21 @@ function renderField(
       );
     }
 
-    // Stepper for numbers without min/max
     const step = prop.type === "integer" ? 1 : 0.1;
     return (
-      <div key={name} className="space-y-1">
-        <Label className="text-xs" title={prop.description}>
-          {label}
-        </Label>
-        <div className="flex items-center gap-1">
-          <Button
-            variant="outline"
-            size="icon-xs"
-            onClick={() => onChange(path, numValue - step)}
-          >
-            <Minus />
-          </Button>
-          <Input
-            type="number"
-            className="h-6 text-center text-xs"
-            value={String(value ?? prop.default ?? "")}
-            step={step}
-            onChange={(e) => {
-              const v = e.target.value;
-              onChange(
-                path,
-                v === ""
-                  ? undefined
-                  : prop.type === "integer"
-                    ? Number.parseInt(v, 10)
-                    : Number.parseFloat(v),
-              );
-            }}
-          />
-          <Button
-            variant="outline"
-            size="icon-xs"
-            onClick={() => onChange(path, numValue + step)}
-          >
-            <Plus />
-          </Button>
-        </div>
-      </div>
+      <FormField
+        key={name}
+        label={label}
+        description={prop.description}
+        autoValue={autoValue}
+      >
+        <NumberInput
+          value={value != null ? Number(value) : undefined}
+          onChange={(v) => onChange(path, v)}
+          step={step}
+          placeholder={prop.default != null ? String(prop.default) : undefined}
+        />
+      </FormField>
     );
   }
 
@@ -371,10 +376,7 @@ function renderField(
       ? value
       : ((prop.default as unknown[]) ?? []);
     return (
-      <div key={name} className="space-y-1">
-        <Label className="text-xs" title={prop.description}>
-          {label}
-        </Label>
+      <FormField key={name} label={label} description={prop.description}>
         <Input
           className="h-8 text-xs"
           placeholder="comma-separated values"
@@ -387,31 +389,38 @@ function renderField(
             onChange(path, parts);
           }}
         />
-      </div>
+      </FormField>
     );
   }
 
-  // string
   return (
-    <div key={name} className="space-y-1">
-      <Label className="text-xs" title={prop.description}>
-        {label}
-      </Label>
+    <FormField
+      key={name}
+      label={label}
+      description={prop.description}
+      autoValue={autoValue}
+    >
       <Input
-        className="h-8 text-xs"
+        className="h-8 w-32 text-xs"
         value={String(value ?? prop.default ?? "")}
         onChange={(e) => onChange(path, e.target.value)}
       />
-    </div>
+    </FormField>
   );
 }
+
+// --- Main component ---
+
+const HIDDEN = ["config_version", "tuning"];
+const DATA_PANEL_FIELDS = ["data", "features", "split"];
 
 export function ConfigForm({
   schema,
   config,
   onChange,
-  hiddenFields = ["config_version"],
+  hiddenFields = HIDDEN,
   task,
+  uiSchema,
 }: ConfigFormProps) {
   const handleFieldChange = useCallback(
     (path: string[], value: unknown) => {
@@ -421,7 +430,10 @@ export function ConfigForm({
     [config, onChange],
   );
 
-  const defs = ((schema as { $defs?: Defs }).$defs ?? {}) as Defs;
+  const defs = useMemo(
+    () => ((schema as { $defs?: Defs }).$defs ?? {}) as Defs,
+    [schema],
+  );
   const rawProperties = (
     schema as { properties?: Record<string, SchemaProperty> }
   ).properties;
@@ -433,15 +445,14 @@ export function ConfigForm({
 
   if (!rawProperties) return null;
 
-  // Group into sections (objects) and top-level fields
+  // Separate sections
   const sections: [string, SchemaProperty][] = [];
   const fields: [string, SchemaProperty][] = [];
 
   for (const [name, prop] of Object.entries(properties)) {
     if (hiddenFields.includes(name)) continue;
-    // Skip data/features/split — managed by DataPanel
-    if (["data", "features", "split"].includes(name)) continue;
-    if (name === "calibration" && task && task !== "binary") continue;
+    if (DATA_PANEL_FIELDS.includes(name)) continue;
+    if (name === "calibration") continue; // Handled by CalibrationSection
     if (prop.type === "object" && prop.properties) {
       sections.push([name, prop]);
     } else {
@@ -449,10 +460,27 @@ export function ConfigForm({
     }
   }
 
+  // Model params from config
+  const modelConfig = (config.model as Record<string, unknown>) ?? {};
+  const modelName = (modelConfig.name as string) ?? "lgbm";
+  const modelParams = (modelConfig.params as Record<string, unknown>) ?? {};
+
+  // Evaluation metrics from config
+  const evalConfig = (config.evaluation as Record<string, unknown>) ?? {};
+  const selectedMetrics = Array.isArray(evalConfig.metrics)
+    ? (evalConfig.metrics as string[])
+    : [];
+
+  // Calibration from config
+  const calibration =
+    config.calibration !== undefined
+      ? (config.calibration as Record<string, unknown> | null)
+      : null;
+
   return (
     <div className="space-y-4">
       {fields.length > 0 && (
-        <div className="space-y-2">
+        <div className="space-y-3">
           {fields.map(([name, prop]) =>
             renderField(
               prop,
@@ -465,43 +493,110 @@ export function ConfigForm({
           )}
         </div>
       )}
-      {sections.length > 0 && (
-        <Accordion type="multiple" defaultValue={sections.map(([n]) => n)}>
-          {sections.map(([sectionName, sectionProp]) => {
-            const sectionValue =
-              (config[sectionName] as Record<string, unknown>) ??
-              (sectionProp.default as Record<string, unknown>) ??
-              {};
-            return (
-              <AccordionItem key={sectionName} value={sectionName}>
-                <AccordionTrigger className="text-sm">
-                  {sectionProp.title ?? sectionName}
-                </AccordionTrigger>
-                <AccordionContent>
-                  <div className="space-y-2">
-                    {sectionProp.properties &&
-                      Object.entries(sectionProp.properties)
-                        .filter(([n]) => !hiddenFields.includes(n))
-                        .filter(
-                          ([, p]) => resolveSchema(p, defs).const === undefined,
-                        )
-                        .map(([fieldName, fieldProp]) =>
-                          renderField(
-                            fieldProp,
-                            fieldName,
-                            [sectionName, fieldName],
-                            sectionValue[fieldName],
-                            handleFieldChange,
-                            defs,
-                          ),
-                        )}
-                  </div>
-                </AccordionContent>
-              </AccordionItem>
-            );
-          })}
-        </Accordion>
-      )}
+      <Accordion
+        type="multiple"
+        defaultValue={["model", "training", "evaluation"]}
+      >
+        {sections.map(([sectionName, sectionProp]) => {
+          const sectionValue =
+            (config[sectionName] as Record<string, unknown>) ??
+            (sectionProp.default as Record<string, unknown>) ??
+            {};
+          return (
+            <AccordionItem key={sectionName} value={sectionName}>
+              <AccordionTrigger className="text-sm font-medium">
+                {sectionProp.title ?? sectionName}
+              </AccordionTrigger>
+              <AccordionContent>
+                <div className="space-y-3 pt-2">
+                  {sectionProp.properties &&
+                    Object.entries(sectionProp.properties)
+                      .filter(([n]) => !hiddenFields.includes(n))
+                      .filter(
+                        ([, p]) => resolveSchema(p, defs).const === undefined,
+                      )
+                      .map(([fieldName, fieldProp]) =>
+                        renderField(
+                          fieldProp,
+                          fieldName,
+                          [sectionName, fieldName],
+                          sectionValue[fieldName],
+                          handleFieldChange,
+                          defs,
+                        ),
+                      )}
+
+                  {/* model.params Key-Value editor */}
+                  {sectionName === "model" && (
+                    <>
+                      <Separator className="my-3" />
+                      <KeyValueEditor
+                        params={modelParams}
+                        parameterHints={uiSchema?.parameter_hints}
+                        onChange={(newParams) => {
+                          const updated = setNestedValue(
+                            config,
+                            ["model", "params"],
+                            newParams,
+                          );
+                          onChange(updated);
+                        }}
+                        modelName={modelName}
+                      />
+                    </>
+                  )}
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+          );
+        })}
+
+        {/* Evaluation section with MetricsChips */}
+        {task && (
+          <AccordionItem value="evaluation">
+            <AccordionTrigger className="text-sm font-medium">
+              Evaluation
+            </AccordionTrigger>
+            <AccordionContent>
+              <div className="pt-2">
+                <MetricsChips
+                  task={task}
+                  selectedMetrics={selectedMetrics}
+                  metricsByTask={uiSchema?.option_sets?.metric}
+                  onChange={(metrics) => {
+                    const updated = setNestedValue(
+                      config,
+                      ["evaluation", "metrics"],
+                      metrics,
+                    );
+                    onChange(updated);
+                  }}
+                />
+              </div>
+            </AccordionContent>
+          </AccordionItem>
+        )}
+
+        {/* Calibration section with ON/OFF toggle */}
+        {(() => {
+          const calVis = uiSchema?.conditional_visibility?.calibration;
+          const showCal = calVis
+            ? Array.isArray(calVis.task) &&
+              task != null &&
+              (calVis.task as string[]).includes(task)
+            : task === "binary";
+          return showCal;
+        })() && (
+          <CalibrationSection
+            calibration={calibration}
+            calibrationDefaults={uiSchema?.defaults?.calibration}
+            onChange={(cal) => {
+              const updated = { ...config, calibration: cal };
+              onChange(updated);
+            }}
+          />
+        )}
+      </Accordion>
     </div>
   );
 }

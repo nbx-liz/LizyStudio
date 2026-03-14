@@ -59,6 +59,7 @@ export function ResultsPanel({
 }: ResultsPanelProps) {
   const queryClient = useQueryClient();
   const [progress, setProgress] = useState<ProgressMessage | null>(null);
+  const [foldLog, setFoldLog] = useState<string[]>([]);
   const [selectedPlot, setSelectedPlot] = useState<string>("");
   const [logOpen, setLogOpen] = useState(false);
   const [cancelConfirm, setCancelConfirm] = useState(false);
@@ -94,15 +95,26 @@ export function ResultsPanel({
     if (!jobId || job?.status !== "running") return;
 
     const disconnect = connectJobProgress(jobId, {
-      onProgress: (msg) => setProgress(msg),
+      onProgress: (msg) => {
+        setProgress(msg);
+        if (msg.message) {
+          setFoldLog((prev) => {
+            const last = prev[prev.length - 1];
+            if (last === msg.message) return prev;
+            return [...prev, msg.message as string];
+          });
+        }
+      },
       onCompleted: () => {
         setProgress(null);
+        setFoldLog([]);
         refetchJob();
         queryClient.invalidateQueries({ queryKey: ["jobs"] });
         onJobDone?.();
       },
       onError: (msg) => {
         setProgress(null);
+        setFoldLog([]);
         toast.error(msg.message);
         refetchJob();
         onJobDone?.();
@@ -184,6 +196,20 @@ export function ResultsPanel({
           <p className="text-xs text-muted-foreground">
             Elapsed: {Math.round(progress.elapsed)}s
           </p>
+        )}
+
+        {/* Fold / Trial log */}
+        {foldLog.length > 0 && (
+          <div className="mt-3 max-h-32 overflow-auto rounded border bg-muted/30 p-2">
+            {foldLog.map((msg, i) => (
+              <p
+                key={`log-${i}`}
+                className="text-xs font-mono text-muted-foreground"
+              >
+                {msg}
+              </p>
+            ))}
+          </div>
         )}
 
         <div className="mt-4">
@@ -298,6 +324,12 @@ function CompletedView({
   const { data: importance } = useQuery({
     queryKey: ["job-importance", job.job_id],
     queryFn: () => fetchJobImportance(job.job_id),
+  });
+
+  const { data: importancePlot } = useQuery({
+    queryKey: ["job-plot", job.job_id, "importance"],
+    queryFn: () => fetchJobPlot(job.job_id, "importance"),
+    enabled: plots?.includes("importance") ?? false,
   });
 
   const { data: splitSummary } = useQuery({
@@ -465,31 +497,35 @@ function CompletedView({
       {/* Accordion sections */}
       <Accordion type="multiple">
         {/* Feature Importance */}
-        {importance && (
+        {(importancePlot || importance) && (
           <AccordionItem value="importance">
             <AccordionTrigger>Feature Importance</AccordionTrigger>
             <AccordionContent>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Feature</TableHead>
-                    <TableHead className="text-right">Importance</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {Object.entries(importance)
-                    .sort(([, a], [, b]) => b - a)
-                    .slice(0, 20)
-                    .map(([name, val]) => (
-                      <TableRow key={name}>
-                        <TableCell className="text-xs">{name}</TableCell>
-                        <TableCell className="text-right text-xs">
-                          {val.toFixed(4)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                </TableBody>
-              </Table>
+              {importancePlot ? (
+                <PlotlyChart plotlyJson={importancePlot.plotly_json} />
+              ) : importance ? (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Feature</TableHead>
+                      <TableHead className="text-right">Importance</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {Object.entries(importance)
+                      .sort(([, a], [, b]) => b - a)
+                      .slice(0, 20)
+                      .map(([name, val]) => (
+                        <TableRow key={name}>
+                          <TableCell className="text-xs">{name}</TableCell>
+                          <TableCell className="text-right text-xs">
+                            {val.toFixed(4)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                  </TableBody>
+                </Table>
+              ) : null}
             </AccordionContent>
           </AccordionItem>
         )}
@@ -542,21 +578,36 @@ function CompletedView({
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {tuneResult.trials.map((trial, i) => {
-                      const isBest = trial.score === tuneResult.best_score;
-                      return (
-                        <TableRow
-                          key={`trial-${i}`}
-                          className={isBest ? "bg-green-50" : ""}
-                        >
-                          {Object.values(trial).map((v, j) => (
-                            <TableCell key={`cell-${j}`} className="text-xs">
-                              {typeof v === "number" ? formatNum(v) : String(v)}
-                            </TableCell>
-                          ))}
-                        </TableRow>
-                      );
-                    })}
+                    {[...tuneResult.trials]
+                      .sort((a, b) => {
+                        const sa = (a as Record<string, unknown>)
+                          .score as number;
+                        const sb = (b as Record<string, unknown>)
+                          .score as number;
+                        return tuneResult.direction === "maximize"
+                          ? sb - sa
+                          : sa - sb;
+                      })
+                      .map((trial, i) => {
+                        const trialScore = (trial as Record<string, unknown>)
+                          .score as number;
+                        const isBest =
+                          Math.abs(trialScore - tuneResult.best_score) < 1e-10;
+                        return (
+                          <TableRow
+                            key={`trial-${i}`}
+                            className={isBest ? "bg-green-50" : ""}
+                          >
+                            {Object.values(trial).map((v, j) => (
+                              <TableCell key={`cell-${j}`} className="text-xs">
+                                {typeof v === "number"
+                                  ? formatNum(v)
+                                  : String(v)}
+                              </TableCell>
+                            ))}
+                          </TableRow>
+                        );
+                      })}
                   </TableBody>
                 </Table>
               </div>
