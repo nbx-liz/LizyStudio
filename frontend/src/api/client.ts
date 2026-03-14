@@ -17,7 +17,12 @@ export async function apiFetch<T>(
   const url = `${BASE_URL}${path}`;
   const headers: Record<string, string> = {};
 
-  if (options?.body && typeof options.body === "string" && !options.headers) {
+  const existingHeaders = (options?.headers as Record<string, string>) ?? {};
+  if (
+    options?.body &&
+    typeof options.body === "string" &&
+    !existingHeaders["Content-Type"]
+  ) {
     headers["Content-Type"] = "application/json";
   }
 

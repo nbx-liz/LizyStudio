@@ -200,8 +200,11 @@ class LizyMLAdapter:
             plots.append("probability-histogram")
             if calibration_enabled:
                 plots.append("calibration")
-        if hasattr(model, "_tuning_result") and model._tuning_result is not None:  # noqa: SLF001
+        try:
+            model.tuning_plot()
             plots.append("tuning")
+        except Exception:  # noqa: BLE001
+            pass
         return plots
 
     # -- Persistence --

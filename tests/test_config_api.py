@@ -5,6 +5,13 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 
+def _get_valid_config(client: TestClient) -> dict:
+    """Fetch a valid default config from the API."""
+    res = client.get("/api/workspace/config/defaults?task=binary&target=y")
+    assert res.status_code == 200
+    return res.json()
+
+
 def test_config_schema(client: TestClient) -> None:
     res = client.get("/api/workspace/config/schema")
     assert res.status_code == 200
@@ -18,22 +25,37 @@ def test_config_get_empty(client: TestClient) -> None:
     assert res.json() == {}
 
 
-def test_config_put(client: TestClient) -> None:
+def test_config_put_invalid_not_saved(client: TestClient) -> None:
+    """Partial config with validation errors should NOT be saved."""
     config = {"task": "binary", "model": {"name": "lightgbm"}}
     res = client.put("/api/workspace/config", json=config)
     assert res.status_code == 200
     body = res.json()
     assert body["config"]["task"] == "binary"
-    # Partial config will have validation errors
     assert isinstance(body["errors"], list)
+    assert len(body["errors"]) > 0
+    assert body["saved"] is False
+    # Config should still be empty
+    res2 = client.get("/api/workspace/config")
+    assert res2.json() == {}
+
+
+def test_config_put_valid_saved(client: TestClient) -> None:
+    """Valid config should be saved successfully."""
+    config = _get_valid_config(client)
+    res = client.put("/api/workspace/config", json=config)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["saved"] is True
+    assert body["errors"] == []
 
 
 def test_config_get_after_put(client: TestClient) -> None:
-    config = {"task": "regression"}
+    config = _get_valid_config(client)
     client.put("/api/workspace/config", json=config)
     res = client.get("/api/workspace/config")
     assert res.status_code == 200
-    assert res.json()["task"] == "regression"
+    assert res.json()["task"] == "binary"
 
 
 def test_config_validate_invalid(client: TestClient) -> None:
@@ -56,7 +78,8 @@ def test_config_upload_yaml(client: TestClient) -> None:
 
 
 def test_config_download(client: TestClient) -> None:
-    client.put("/api/workspace/config", json={"task": "binary"})
+    config = _get_valid_config(client)
+    client.put("/api/workspace/config", json=config)
     res = client.get("/api/workspace/config/download")
     assert res.status_code == 200
     assert "task: binary" in res.text

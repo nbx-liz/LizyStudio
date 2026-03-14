@@ -5,6 +5,7 @@ Covers: status, reset, data, config, fit, tune.
 
 from __future__ import annotations
 
+import copy
 import tempfile
 from dataclasses import asdict
 from pathlib import Path
@@ -14,6 +15,7 @@ import yaml
 from fastapi import APIRouter, Depends, Request, UploadFile
 from fastapi.responses import Response
 
+import lizystudio.security as security
 from lizystudio.api.errors import (
     FileInvalidError,
     PathNotFoundError,
@@ -21,6 +23,7 @@ from lizystudio.api.errors import (
     WorkspaceNoConfigError,
     WorkspaceNoDataError,
 )
+from lizystudio.security import read_upload_checked, validate_path_within
 from lizystudio.services.data import (
     analyze_columns,
     get_describe,
@@ -95,6 +98,10 @@ def data_load_path(
 ) -> dict[str, Any]:
     """Load data from a local file path."""
     path = body.get("path", "")
+    try:
+        validate_path_within(Path(path), security.ALLOWED_FILES_ROOT)
+    except ValueError as exc:
+        raise PathNotFoundError(str(exc)) from exc
     if not Path(path).exists():
         raise PathNotFoundError(path)
     try:
@@ -118,7 +125,10 @@ async def data_upload(
     suffix = Path(filename).suffix
     if suffix not in (".csv", ".parquet"):
         raise FileInvalidError(f"Unsupported file type: {suffix}. Use .csv or .parquet")
-    content = await file.read()
+    try:
+        content = await read_upload_checked(file)
+    except ValueError as exc:
+        raise FileInvalidError(str(exc)) from exc
     with tempfile.NamedTemporaryFile(
         delete=False, suffix=suffix, prefix="lizystudio_"
     ) as tmp:
@@ -127,9 +137,11 @@ async def data_upload(
     try:
         df = load_dataframe(tmp_name)
     except Exception as exc:
+        Path(tmp_name).unlink(missing_ok=True)
         raise FileInvalidError(str(exc)) from exc
     data_ref = make_data_ref(df, source_type="upload", path=tmp_name, filename=filename)
     ws.set_data(df, data_ref)
+    ws.track_temp_file(tmp_name)
     return {"data_ref": asdict(data_ref)}
 
 
@@ -202,8 +214,9 @@ def config_update(
 ) -> dict[str, Any]:
     """Update config with validation."""
     errors = validate_config(ws, body)
-    ws.set_config(body)
-    return {"config": body, "errors": errors}
+    if not errors:
+        ws.set_config(body)
+    return {"config": body, "errors": errors, "saved": len(errors) == 0}
 
 
 @router.post("/config/validate")
@@ -222,15 +235,19 @@ async def config_upload(
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, Any]:
     """Load config from an uploaded YAML/JSON file."""
-    content = await file.read()
+    try:
+        content = await read_upload_checked(file)
+    except ValueError as exc:
+        raise FileInvalidError(str(exc)) from exc
     filename = file.filename or "config.yaml"
     try:
         config = load_config_from_file(ws, content, filename)
     except Exception as exc:
         raise FileInvalidError(str(exc)) from exc
     errors = validate_config(ws, config)
-    ws.set_config(config)
-    return {"config": config, "errors": errors}
+    if not errors:
+        ws.set_config(config)
+    return {"config": config, "errors": errors, "saved": len(errors) == 0}
 
 
 @router.get("/config/download")
@@ -300,14 +317,16 @@ def workspace_tune(
         raise WorkspaceNoConfigError()
     if ws.dataframe is None or ws.data_ref is None:
         raise WorkspaceNoDataError()
-    # Inject default tuning config if not set (H-0025)
+    # Inject default tuning config if not set (H-0025) — immutable copy
     if ws.config.get("tuning") is None:
-        ws.config["tuning"] = {
+        config_with_tuning = copy.deepcopy(ws.config)
+        config_with_tuning["tuning"] = {
             "optuna": {
                 "params": {"n_trials": 50, "direction": "minimize", "timeout": None},
                 "space": {},
             }
         }
+        ws.set_config(config_with_tuning)
     errors = validate_config(ws, ws.config)
     if errors:
         raise ValidationError(errors)

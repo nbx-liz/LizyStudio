@@ -214,5 +214,5 @@ def test_comparison_stats(
 
 
 def test_comparison_stats_not_found(inf_store: InferenceStore) -> None:
-    result = get_comparison_stats(inf_store, "job_x", "inf_a", "inf_b")
-    assert "error" in result
+    with pytest.raises(ValueError, match="Predictions not found"):
+        get_comparison_stats(inf_store, "job_x", "inf_a", "inf_b")

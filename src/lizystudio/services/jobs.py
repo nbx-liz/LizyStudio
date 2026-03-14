@@ -98,8 +98,16 @@ class JobStore:
                 job = self._load_job(d.name)
                 if status is None or job.status == status:
                     jobs.append(job)
+        _SORTABLE_FIELDS = {
+            "created_at",
+            "completed_at",
+            "status",
+            "job_type",
+            "backend_name",
+        }
+        safe_sort = sort if sort in _SORTABLE_FIELDS else "created_at"
         reverse = True  # newest first
-        jobs.sort(key=lambda j: getattr(j, sort, j.created_at), reverse=reverse)
+        jobs.sort(key=lambda j: getattr(j, safe_sort) or "", reverse=reverse)
         return jobs
 
     def update(self, job: Job) -> None:

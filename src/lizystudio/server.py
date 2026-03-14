@@ -99,9 +99,11 @@ def create_app() -> FastAPI:
             """Serve the SPA — all non-API/WS routes return index.html."""
             if full_path.startswith(("api/", "ws/")):
                 raise HTTPException(status_code=404, detail="Not found")
-            file_path = STATIC_DIR / full_path
-            if file_path.is_file():
-                return FileResponse(file_path)
+            from lizystudio.security import validate_static_path
+
+            safe = validate_static_path(STATIC_DIR / full_path, STATIC_DIR)
+            if safe is not None:
+                return FileResponse(safe)
             return FileResponse(STATIC_DIR / "index.html")
 
     return application

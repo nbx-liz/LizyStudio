@@ -7,6 +7,8 @@ from pathlib import Path
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
+import lizystudio.security as security
+
 router = APIRouter()
 
 SUPPORTED_EXTENSIONS = {".csv", ".parquet", ".tsv"}
@@ -30,8 +32,14 @@ def list_directory(
     path: str = Query(default="", description="Directory path to list"),
 ) -> DirectoryListing:
     """List directory contents, filtered to supported data file types."""
-    dir_path = Path(path) if path else Path.home()
+    dir_path = Path(path) if path else security.ALLOWED_FILES_ROOT
     dir_path = dir_path.resolve()
+
+    # Restrict to allowed root
+    try:
+        security.validate_path_within(dir_path, security.ALLOWED_FILES_ROOT)
+    except ValueError:
+        return DirectoryListing(path=str(dir_path), parent=None, entries=[])
 
     if not dir_path.is_dir():
         return DirectoryListing(
@@ -42,6 +50,7 @@ def list_directory(
 
     entries: list[FileEntry] = []
     try:
+
         def sort_key(p: Path) -> tuple[bool, str]:
             return (p.is_file(), p.name.lower())
 

@@ -62,7 +62,6 @@ export function ResultsPanel({
   const [selectedPlot, setSelectedPlot] = useState<string>("");
   const [logOpen, setLogOpen] = useState(false);
   const [cancelConfirm, setCancelConfirm] = useState(false);
-  const disconnectRef = useRef<(() => void) | null>(null);
 
   const { data: job, refetch: refetchJob } = useQuery({
     queryKey: ["job", jobId],
@@ -90,13 +89,9 @@ export function ResultsPanel({
     | string
     | undefined;
 
-  // WebSocket progress
+  // WebSocket progress — simplified cleanup (no disconnectRef)
   useEffect(() => {
-    if (!jobId || job?.status !== "running") {
-      disconnectRef.current?.();
-      disconnectRef.current = null;
-      return;
-    }
+    if (!jobId || job?.status !== "running") return;
 
     const disconnect = connectJobProgress(jobId, {
       onProgress: (msg) => setProgress(msg),
@@ -113,10 +108,27 @@ export function ResultsPanel({
         onJobDone?.();
       },
     });
-    disconnectRef.current = disconnect;
 
     return () => disconnect();
   }, [jobId, job?.status, refetchJob, queryClient, onJobDone]);
+
+  // Polling fallback: detect job completion even if WebSocket fails.
+  // Only fires when progress is still set (WebSocket did not already handle it).
+  const prevStatusRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = job?.status;
+    if (
+      prev === "running" &&
+      job?.status &&
+      job.status !== "running" &&
+      job.status !== "pending" &&
+      progress !== null
+    ) {
+      setProgress(null);
+      onJobDone?.();
+    }
+  }, [job?.status, onJobDone, progress]);
 
   const handleCancel = useCallback(async () => {
     if (!jobId) return;
@@ -280,6 +292,7 @@ function CompletedView({
   const { data: learningCurve } = useQuery({
     queryKey: ["job-plot", job.job_id, "learning-curve"],
     queryFn: () => fetchJobPlot(job.job_id, "learning-curve"),
+    enabled: plots?.includes("learning-curve") ?? false,
   });
 
   const { data: importance } = useQuery({

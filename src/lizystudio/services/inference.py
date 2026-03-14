@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import builtins
 import json
+import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -297,7 +298,9 @@ def _compute_inf_metrics(
                 metrics["auc"] = float(roc_auc_score(actual, proba))
                 metrics["logloss"] = float(log_loss(actual, proba))
             except Exception:  # noqa: BLE001
-                pass
+                logging.getLogger("lizystudio.inference").warning(
+                    "Failed to compute AUC/logloss", exc_info=True
+                )
 
     return metrics
 
@@ -319,7 +322,9 @@ def get_comparison_stats(
     df1 = inf_store.get_predictions_df(job_id, inf_id)
     df2 = inf_store.get_predictions_df(job_id, other_inf_id)
     if df1 is None or df2 is None:
-        return {"error": "predictions not found"}
+        missing = inf_id if df1 is None else other_inf_id
+        msg = f"Predictions not found for inference {missing}"
+        raise ValueError(msg)
 
     def _stats(s: pd.Series[Any]) -> dict[str, float]:
         base: dict[str, float] = {

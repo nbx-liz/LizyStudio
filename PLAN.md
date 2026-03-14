@@ -22,6 +22,12 @@ Phase 0〜30 は v1 で完了済み。バックエンド（Python / FastAPI / Ad
 | v2-9 | Jobs 画面再実装 | v2-6 | 🔧 |
 | v2-10 | Inference 画面再実装 | v2-9 | 🔧 |
 | v2-11 | E2E テスト（Playwright）+ 最終監査 | v2-10, v2-7, v2-8 | 🔧 |
+| v2-12 | Workspace 仕様差分是正（requirements-audit 2026-03-11） | v2-6 | 🆕 |
+| v2-13 | API 契約整合（Workspace / Jobs / Inference） | v2-12 | 🆕 |
+| v2-14 | Jobs 画面実装（§4.3 フル準拠） | v2-13, v2-9 | 🆕 |
+| v2-15 | Inference 画面実装（§4.4 フル準拠） | v2-14, v2-10 | 🆕 |
+| v2-16 | API 型生成・テスト基盤の実運用化 | v2-15, v2-7 | 🆕 |
+| v2-17 | 最終統合監査（requirements-audit 再実施） | v2-16, v2-11 | 🆕 |
 
 ---
 
@@ -319,3 +325,159 @@ Phase 0〜30 は v1 で完了済み。バックエンド（Python / FastAPI / Ad
 - [ ] `pnpm test` / `pnpm build` / `pnpm check` 成功
 - [ ] `uv run pytest` / `uv run ruff check .` / `uv run mypy src/lizystudio/` 成功
 - [ ] requirements-audit で P0/P1 差分 0 件
+
+---
+
+## Phase v2-12: Workspace 仕様差分是正（requirements-audit 2026-03-11）
+
+**依存:** v2-6
+
+**監査で確認した主な不足:**
+- Data Panel の Path 入力が `TextInput + Browse` 仕様でなく `Browse` のみ
+- Task が編集可能な Select ではなく Badge 表示のみ
+- CV Folds が NumberInput ではなく Slider
+- Model Panel ヘッダーに Backend 名/Version バッジがない
+- Tune タブがプレースホルダー（Search Space UI 未実装）
+- Raw Config が YAML ではなく JSON 表示
+- Results Running 表示に Fold/Trial ログが不足
+- `cancelled` 状態の表示分岐がない（Running 表示のまま残るケースあり）
+
+**成果物:**
+- BLUEPRINT §4.2.1 / §4.2.2 / §4.2.3 準拠の Workspace UI
+
+**タスク:**
+1. `frontend/src/components/workspace/DataPanel.tsx` を仕様準拠に修正
+   - Path: `TextInput + Browse` の両方を提供
+   - Task: `Select` で手動変更可能にする
+   - CV Folds: `NumberInput` に置換
+2. `frontend/src/components/workspace/ModelPanel.tsx` を仕様準拠に修正
+   - Sticky Header に Backend badge（`lizyml vX.Y.Z`）を追加
+   - Tune タブ Search Space Editor（Mode=Fixed/Range/Choice）を実装
+   - Raw Config を YAML 表示に変更
+3. `frontend/src/components/workspace/ResultsPanel.tsx` を仕様準拠に修正
+   - Running: Fold/Trial の進捗ログ表示
+   - `cancelled` 状態の明示表示（Running から遷移）
+4. `frontend/src/pages/WorkspacePage.tsx` に Workspace 状態復元方針を実装
+   - `workspace/status` を使った表示初期化（仕様に合わせて復元または空表示を統一）
+
+**DoD:**
+- [ ] Data Panel が §4.2.1 の入力仕様（Path/Task/Folds）を満たす
+- [ ] Model Panel が §4.2.2 の Tune UI と Backend badge を満たす
+- [ ] Results Panel が Running/Cancelled 表示要件を満たす
+- [ ] Raw Config が YAML 表示で確認できる
+
+---
+
+## Phase v2-13: API 契約整合（Workspace / Jobs / Inference）
+
+**依存:** v2-12
+
+**注意（変更ゲート）:**
+- API 変更を含むため、実装前に `HISTORY.md` へ Proposal を追加する
+
+**監査で確認した主な不足:**
+- Inference API が `job_id` query 必須（BLUEPRINT §5.4 は `{inf_id}` 単独参照）
+- `DELETE /api/jobs/{job_id}` が Running でも実行可能
+- `POST /api/jobs/{job_id}/export` の `report` が出力先未作成で 500 になる
+- Cancel リクエスト後に `running` が長時間継続するケースあり
+- `frontend/src/api/jobs.ts` が `split_summary`（underscore）を呼び 404
+- `GET /api/workspace/data/describe` が `include=\"all\"` で非数値列も返す
+
+**成果物:**
+- BLUEPRINT §5.2 / §5.3 / §5.4 に準拠した API 契約
+
+**タスク:**
+1. Inference 参照系 API を `{inf_id}` 単独で解決可能にする（`job_id` query を不要化）
+2. Running Job の Delete を 400 で拒否
+3. Export report で出力ディレクトリを自動作成し 200 応答を保証
+4. Cancel 実行後の状態遷移を保証（`running` -> `cancelled`）
+5. `frontend/src/api/jobs.ts` の `split-summary` パス修正
+6. `data/describe` を数値カラム統計に限定
+
+**DoD:**
+- [ ] Inference API が BLUEPRINT §5.4 のパス定義で動作する
+- [ ] Running Job の Delete が拒否される
+- [ ] Model / Report Export がどちらも成功する
+- [ ] Cancel 後に Job が `cancelled` へ遷移する
+- [ ] Jobs 画面側で Fold Details API が 404 にならない
+
+---
+
+## Phase v2-14: Jobs 画面実装（§4.3 フル準拠）
+
+**依存:** v2-13, v2-9
+
+**成果物:**
+- `frontend/src/pages/JobsPage.tsx` を BLUEPRINT §4.3 準拠で実装
+
+**タスク:**
+1. 左パネル（360px 固定）: ステータス/タイプフィルタ + ジョブリスト
+2. 右パネル: Workspace Results 相当 + Jobs 固有 Accordion（Config / Execution Log）
+3. アクションバー: Inference / Export / Re-fit / Delete / Cancel の条件分岐
+4. Export ダイアログ（Model/Report + Output Path）
+5. 初回アクセス時の最新 Job 自動選択と未選択プレースホルダー
+
+**DoD:**
+- [ ] §4.3.1〜§4.3.4 の画面要素が実装される
+- [ ] Running/Completed/Failed ごとの表示・操作条件が仕様通り
+- [ ] Re-fit で Workspace に Config を引き継げる
+
+---
+
+## Phase v2-15: Inference 画面実装（§4.4 フル準拠）
+
+**依存:** v2-14, v2-10
+
+**成果物:**
+- `frontend/src/pages/InferencePage.tsx` を BLUEPRINT §4.4 準拠で実装
+
+**タスク:**
+1. Setup Panel: Job Select / Data Source(Path+Upload) / Evaluation / SHAP / Run / History
+2. Results Panel（GT あり）: Score(IS/OOS/Inf) / Plots / Predictions / SHAP / Warnings
+3. Results Panel（GT なし）: Predictions / Distribution / Comparison / Download
+4. History クリックで結果切替、Jobs 画面からの遷移パラメータ反映
+
+**DoD:**
+- [ ] GT あり/なしの2モードが仕様通り表示切替される
+- [ ] Comparison と Download CSV が動作する
+- [ ] History の表示条件（0件時は非表示）を満たす
+
+---
+
+## Phase v2-16: API 型生成・テスト基盤の実運用化
+
+**依存:** v2-15, v2-7
+
+**監査で確認した主な不足:**
+- `frontend/src/api/types.ts` の手書き型を利用しており生成型を未使用
+- `pnpm test` / `pnpm storybook` がプレースホルダー
+- `vitest` / `storybook` / `msw` が `package.json` に未導入
+
+**成果物:**
+- 生成型ベース API クライアント + 実運用テスト基盤
+
+**タスク:**
+1. `frontend/src/api/generated/schema.d.ts` を参照する API 型へ移行
+2. 手書き型（`frontend/src/api/types.ts`）を段階的に廃止
+3. Vitest + MSW + Storybook の依存・設定・実行スクリプトを実装
+4. API 契約テスト（Inference/job_id query 不要化、split-summary など）を追加
+
+**DoD:**
+- [ ] API クライアントが生成型を参照してビルド成功する
+- [ ] `pnpm test` が Vitest で実行される
+- [ ] `pnpm storybook` が実際に起動する
+- [ ] API 契約テストで主要エンドポイントを検証できる
+
+---
+
+## Phase v2-17: 最終統合監査（requirements-audit 再実施）
+
+**依存:** v2-16, v2-11
+
+**成果物:**
+- BLUEPRINT / HISTORY / AGENTS 準拠の監査完了レポート
+
+**DoD:**
+- [ ] requirements-audit で **未実装 0 / 重大乖離 0**
+- [ ] Playwright 目視検証（Workspace / Jobs / Inference）を再実施
+- [ ] API 実動検証（正常系/エラー系）ログを残す

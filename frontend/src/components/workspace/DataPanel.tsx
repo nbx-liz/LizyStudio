@@ -85,11 +85,15 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
   const [groupCol, setGroupCol] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const configSyncRef = useRef(false);
+  // AbortController-based sync to prevent race conditions
+  const abortRef = useRef<AbortController | null>(null);
 
   const syncConfig = useCallback(async () => {
-    if (configSyncRef.current) return;
-    configSyncRef.current = true;
+    // Cancel any in-flight sync
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
       const categorical = Object.entries(overrides)
         .filter(([, v]) => !v.excluded && v.type === "categorical")
@@ -99,7 +103,8 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
         .map(([k]) => k);
 
       // Merge on top of current config to preserve model/training/etc.
-      const base = await fetchConfig();
+      const base = await fetchConfig({ signal: controller.signal });
+      if (controller.signal.aborted) return;
       const merged: Record<string, unknown> = {
         ...base,
         task: task || (base as Record<string, unknown>).task,
@@ -121,12 +126,11 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
             : {}),
         },
       };
-      await updateConfig(merged);
+      await updateConfig(merged, { signal: controller.signal });
+      if (controller.signal.aborted) return;
       onDataChanged();
     } catch {
       // silent — config sync errors are non-fatal
-    } finally {
-      configSyncRef.current = false;
     }
   }, [
     dataPath,
@@ -210,41 +214,41 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
     }
   };
 
-  const handleTargetChange = async (value: string) => {
-    setTarget(value);
-    try {
-      const cols = await fetchColumns(value);
-      setColumns(cols.columns);
+  const handleTargetChange = useCallback(
+    async (value: string) => {
+      setTarget(value);
+      try {
+        const cols = await fetchColumns(value);
+        setColumns(cols.columns);
 
-      let detectedTask: TaskType | null = task;
-      let detectedCvStrategy: CvStrategy = cvStrategy;
-      if (cols.suggested_task) {
-        const t = cols.suggested_task as TaskType;
-        detectedTask = t;
-        setTask(t);
-        onTaskChanged?.(t);
-        // Set default CV strategy
-        if (t === "binary" || t === "multiclass") {
-          detectedCvStrategy = "StratifiedKFold";
-        } else {
-          detectedCvStrategy = "KFold";
+        let detectedTask: TaskType | null = task;
+        let detectedCvStrategy: CvStrategy = cvStrategy;
+        if (cols.suggested_task) {
+          const t = cols.suggested_task as TaskType;
+          detectedTask = t;
+          setTask(t);
+          onTaskChanged?.(t);
+          // Set default CV strategy
+          if (t === "binary" || t === "multiclass") {
+            detectedCvStrategy = "StratifiedKFold";
+          } else {
+            detectedCvStrategy = "KFold";
+          }
+          setCvStrategy(detectedCvStrategy);
         }
-        setCvStrategy(detectedCvStrategy);
-      }
 
-      // Apply auto-settings to overrides
-      const newOverrides: Record<string, ColumnOverride> = {};
-      for (const col of cols.columns) {
-        newOverrides[col.name] = {
-          excluded: col.suggested_excluded,
-          type: col.suggested_type,
-        };
-      }
-      setOverrides(newOverrides);
+        // Apply auto-settings to overrides
+        const newOverrides: Record<string, ColumnOverride> = {};
+        for (const col of cols.columns) {
+          newOverrides[col.name] = {
+            excluded: col.suggested_excluded,
+            type: col.suggested_type,
+          };
+        }
+        setOverrides(newOverrides);
 
-      // Fetch default config from backend and merge with DataPanel settings
-      if (detectedTask) {
-        try {
+        // Fetch default config from backend and merge with DataPanel settings
+        if (detectedTask) {
           const defaults = await fetchConfigDefaults(detectedTask, value);
           const categorical = Object.entries(newOverrides)
             .filter(([, v]) => !v.excluded && v.type === "categorical")
@@ -272,16 +276,15 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
           };
           await updateConfig(merged);
           onDataChanged();
-        } catch {
-          // Fallback: syncConfig will handle it on next effect cycle
         }
+      } catch (err) {
+        toast.error(
+          `Column detection failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
-    } catch (err) {
-      toast.error(
-        `Column detection failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  };
+    },
+    [task, cvStrategy, cvFolds, dataPath, onDataChanged, onTaskChanged],
+  );
 
   const handleExcludeToggle = (colName: string, checked: boolean) => {
     setOverrides((prev) => ({
@@ -310,7 +313,7 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
   const summary = useMemo(() => {
     const nonTarget = columns.filter((c) => c.name !== target);
     const total = nonTarget.length;
-    const excluded = nonTarget.filter((c) => overrides[c.name]?.excluded);
+    const excludedCols = nonTarget.filter((c) => overrides[c.name]?.excluded);
     const included = nonTarget.filter((c) => !overrides[c.name]?.excluded);
     const numeric = included.filter(
       (c) => (overrides[c.name]?.type ?? c.suggested_type) === "numeric",
@@ -318,19 +321,19 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
     const categorical = included.filter(
       (c) => (overrides[c.name]?.type ?? c.suggested_type) === "categorical",
     );
-    const idCount = excluded.filter(
+    const idCount = excludedCols.filter(
       (c) => columns.find((cc) => cc.name === c.name)?.exclude_reason === "id",
     ).length;
-    const constCount = excluded.filter(
+    const constCount = excludedCols.filter(
       (c) =>
         columns.find((cc) => cc.name === c.name)?.exclude_reason === "constant",
     ).length;
-    const manualCount = excluded.length - idCount - constCount;
+    const manualCount = excludedCols.length - idCount - constCount;
     return {
       total,
       numeric: numeric.length,
       categorical: categorical.length,
-      excluded: excluded.length,
+      excluded: excludedCols.length,
       idCount,
       constCount,
       manualCount,

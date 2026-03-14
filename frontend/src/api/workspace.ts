@@ -59,16 +59,20 @@ export function fetchConfigDefaults(
   );
 }
 
-export function fetchConfig(): Promise<Record<string, unknown>> {
-  return apiFetch("/workspace/config");
+export function fetchConfig(opts?: {
+  signal?: AbortSignal;
+}): Promise<Record<string, unknown>> {
+  return apiFetch("/workspace/config", { signal: opts?.signal });
 }
 
 export function updateConfig(
   config: Record<string, unknown>,
+  opts?: { signal?: AbortSignal },
 ): Promise<ConfigUpdateResponse> {
   return apiFetch("/workspace/config", {
     method: "PUT",
     body: JSON.stringify(config),
+    signal: opts?.signal,
   });
 }
 

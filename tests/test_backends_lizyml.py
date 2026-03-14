@@ -94,7 +94,11 @@ def _make_mock_model(
         run_meta=_FakeRunMeta(config_normalized=config_normalized),
         feature_names=["f1", "f2", "f3"],
     )
-    model._tuning_result = tuning_result  # noqa: SLF001
+    # Configure tuning_plot() to raise when no tuning result
+    if tuning_result is not None:
+        model.tuning_plot.return_value = MagicMock()
+    else:
+        model.tuning_plot.side_effect = ValueError("No tuning result")
     return model
 
 
