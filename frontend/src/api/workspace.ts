@@ -5,6 +5,7 @@ import type {
   ConfigError,
   ConfigUpdateResponse,
   PreviewResponse,
+  UiSchema,
   WorkspaceStatus,
 } from "./types";
 
@@ -109,4 +110,8 @@ export function runTune(): Promise<{ job_id: string }> {
 
 export function fetchBackends(): Promise<BackendInfo[]> {
   return apiFetch("/backends");
+}
+
+export function fetchUiSchema(): Promise<UiSchema> {
+  return apiFetch("/backends/ui-schema");
 }

@@ -116,3 +116,30 @@ export type ErrorMessage = {
 };
 
 export type WsMessage = ProgressMessage | CompletedMessage | ErrorMessage;
+
+// --- UI Schema (H-0026) ---
+
+export interface ParameterHint {
+  key: string;
+  label: string;
+  kind: string;
+  step?: number;
+}
+
+export interface SearchSpaceCatalogEntry {
+  key: string;
+  title: string;
+  paramType: string;
+  modes: string[];
+}
+
+export interface UiSchema {
+  sections: { key: string; title: string }[];
+  option_sets: Record<string, Record<string, string[]>>;
+  parameter_hints: ParameterHint[];
+  search_space_catalog: SearchSpaceCatalogEntry[];
+  step_map: Record<string, number>;
+  conditional_visibility: Record<string, Record<string, unknown>>;
+  defaults: Record<string, Record<string, unknown>>;
+  inner_valid_options: string[];
+}

@@ -4,23 +4,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { ConfigError } from "@/api/types";
 import {
+  fetchBackends,
   fetchConfig,
   fetchConfigSchema,
+  fetchUiSchema,
   getConfigDownloadUrl,
   updateConfig,
   uploadConfig,
   validateConfig,
 } from "@/api/workspace";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ConfigForm } from "./ConfigForm";
+import { RawConfigDialog } from "./RawConfigDialog";
+import { TuneTab } from "./TuneTab";
 
 interface ModelPanelProps {
   hasData: boolean;
@@ -53,15 +51,30 @@ export function ModelPanel({
     queryFn: fetchConfig,
   });
 
+  const { data: backends } = useQuery({
+    queryKey: ["backends"],
+    queryFn: fetchBackends,
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+
+  const backend = backends?.[0];
+
+  const { data: uiSchema } = useQuery({
+    queryKey: ["ui-schema"],
+    queryFn: fetchUiSchema,
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+
   // Debounced validation
   const validateTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
   const handleConfigChange = useCallback(
     async (newConfig: Record<string, unknown>) => {
+      if (running) return;
       try {
         await updateConfig(newConfig);
-        queryClient.invalidateQueries({ queryKey: ["config"] });
+        queryClient.setQueryData(["config"], newConfig);
       } catch {
         toast.error("Failed to update config");
         return;
@@ -77,7 +90,7 @@ export function ModelPanel({
         }
       }, 500);
     },
-    [queryClient],
+    [queryClient, running],
   );
 
   useEffect(() => {
@@ -104,14 +117,34 @@ export function ModelPanel({
     window.open(getConfigDownloadUrl(), "_blank");
   };
 
-  const fitEnabled = hasData && !!config && !running;
-  const tuneEnabled = fitEnabled; // simplified — full check would verify search space
+  const fitEnabled = hasData && !!config && !running && errors.length === 0;
+  // Tune enabled when at least 1 search space entry exists
+  const tuningSpace =
+    ((
+      (config?.tuning as Record<string, unknown> | undefined)?.optuna as
+        | Record<string, unknown>
+        | undefined
+    )?.space as Record<string, unknown> | undefined) ?? {};
+  const tuneEnabled = fitEnabled && Object.keys(tuningSpace).length > 0;
 
   return (
     <div className="flex h-full flex-col">
       {/* Sticky Header */}
       <div className="sticky top-0 z-10 border-b bg-background p-3">
-        <div className="mb-2 flex items-center justify-end">
+        <div className="flex items-center justify-between gap-2">
+          <Tabs
+            value={activeTab}
+            onValueChange={(v) => setActiveTab(v as "fit" | "tune")}
+          >
+            <TabsList className="w-auto">
+              <TabsTrigger value="fit" className="px-6">
+                Fit
+              </TabsTrigger>
+              <TabsTrigger value="tune" className="px-6">
+                Tune
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
           <Button
             size="sm"
             onClick={activeTab === "fit" ? onFit : onTune}
@@ -120,19 +153,11 @@ export function ModelPanel({
             {activeTab === "fit" ? "Fit" : "Tune"}
           </Button>
         </div>
-        <Tabs
-          value={activeTab}
-          onValueChange={(v) => setActiveTab(v as "fit" | "tune")}
-        >
-          <TabsList className="w-full">
-            <TabsTrigger value="fit" className="flex-1">
-              Fit
-            </TabsTrigger>
-            <TabsTrigger value="tune" className="flex-1">
-              Tune
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
+        {backend && (
+          <Badge variant="secondary" className="mt-1.5 text-xs">
+            {backend.name} v{backend.version}
+          </Badge>
+        )}
       </div>
 
       {/* Scrollable Content */}
@@ -154,17 +179,20 @@ export function ModelPanel({
               config={config}
               onChange={handleConfigChange}
               task={task}
+              uiSchema={uiSchema}
             />
           ) : (
             <p className="text-sm text-muted-foreground">Loading config...</p>
           )
+        ) : config ? (
+          <TuneTab
+            config={config}
+            onChange={handleConfigChange}
+            task={task}
+            uiSchema={uiSchema}
+          />
         ) : (
-          <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              Tune tab — search space editor will be implemented in a future
-              phase. Use Import YAML to set tuning config.
-            </p>
-          </div>
+          <p className="text-sm text-muted-foreground">Loading config...</p>
         )}
 
         {/* Config Actions */}
@@ -188,22 +216,15 @@ export function ModelPanel({
             <Download className="mr-1 h-3 w-3" />
             Export YAML
           </Button>
-          <Dialog>
-            <DialogTrigger asChild>
+          <RawConfigDialog
+            config={config}
+            trigger={
               <Button variant="outline" size="sm">
                 <FileText className="mr-1 h-3 w-3" />
                 Raw Config
               </Button>
-            </DialogTrigger>
-            <DialogContent className="max-h-[80vh] max-w-2xl overflow-auto">
-              <DialogHeader>
-                <DialogTitle>Raw Config (read-only)</DialogTitle>
-              </DialogHeader>
-              <pre className="max-h-[60vh] overflow-auto rounded bg-muted p-4 text-xs">
-                {config ? JSON.stringify(config, null, 2) : "No config"}
-              </pre>
-            </DialogContent>
-          </Dialog>
+            }
+          />
         </div>
       </div>
     </div>

@@ -39,6 +39,10 @@ class BackendAdapter(Protocol):
 
     def get_config_schema(self) -> ConfigSchema: ...
 
+    def get_ui_schema(self) -> dict[str, Any]:
+        """Return UI metadata (parameter hints, option sets, etc.)."""
+        ...
+
     def validate_config(self, config: dict[str, Any]) -> list[dict[str, Any]]:
         """Return a list of validation errors (empty == valid)."""
         ...

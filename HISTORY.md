@@ -493,3 +493,80 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
 - **Alternatives:** フロントエンドで JSON Schema から defaults を抽出する案 → discriminated union（model, split）の解決が困難。また「バックエンドの仕様が正」原則に反するため不採用
 - **Acceptance Criteria:** ターゲット選択後に完全なデフォルト Config が設定され、追加設定なしで Fit/Tune が実行可能
 - **Decision:** 2026-03-10 accepted — 提案通り
+
+### H-0026: BackendAdapter に `get_ui_schema()` メソッドを追加（Backend Contract パターン）
+- **Status:** proposed
+- **Scope:** Adapter, API, Frontend
+- **Related:** BLUEPRINT.md §3.3.2, §4.2.2, §5.2
+
+- **Context:**
+  現在の Model Panel は LightGBM のパラメータ名・メトリクス選択肢・探索範囲デフォルトをフロントエンドの `constants.ts` にハードコードしている。この設計には以下の問題がある:
+  1. バックエンドにモデル（例: XGBoost）を追加するたびにフロントエンドも変更が必要
+  2. LizyML のパラメータ名（`feature_fraction` 等）とフロントエンドのプリセット（`colsample_bytree` 等）が不一致になるリスク
+  3. Task ごとの objective/metric 選択肢がバックエンド知識であるにもかかわらずフロントエンドに記述されている
+  4. `model.params` が `additionalProperties: true` の自由辞書のため JSON Schema だけでは適切なフォームを生成できない
+
+  LizyML-Widget は「Backend Contract」パターンでこの問題を解決済み: Adapter が `config_schema`（JSON Schema）に加えて `ui_schema`（パラメータヒント、選択肢、探索範囲カタログ、条件付き表示ルール）を返し、フロントエンドはバックエンド固有の知識を一切持たない。
+
+- **Proposal:**
+
+  **1. BackendAdapter Protocol に `get_ui_schema()` を追加:**
+  ```python
+  def get_ui_schema(self) -> dict[str, Any]:
+      """Return UI metadata that supplements config_schema.
+
+      The returned dict contains:
+      - sections: List of config section definitions (display order)
+      - parameter_hints: Typed parameter metadata for model.params
+      - option_sets: Task-specific valid values (objective, metric, model_metric)
+      - search_space_catalog: Tunable parameters with mode/range info
+      - step_map: Stepper increment hints per parameter
+      - conditional_visibility: Field visibility rules based on task/toggles
+      - defaults: Section-specific default structures (e.g., calibration)
+      """
+      ...
+  ```
+
+  **2. `GET /api/backends/ui-schema` エンドポイントを追加:**
+  現在のバックエンドの `ui_schema` を返す。フロントエンドは初回ロード時に1回取得してキャッシュする。
+
+  **3. LizyMLAdapter に実装を追加:**
+  LizyML-Widget の `adapter_contract.py` から移植。`parameter_hints`、`option_sets`、`search_space_catalog`、`step_map`、`conditional_visibility`、`defaults` を返す。
+
+  **4. フロントエンドから `constants.ts` のハードコードを削除:**
+  `KNOWN_PARAMS`、`METRICS_BY_TASK`、`RANGE_DEFAULTS`、`CALIBRATION_DEFAULTS` を API レスポンスから取得する。`constants.ts` はフォールバック値のみ保持（API 未取得時のスケルトン表示用）。
+
+  **5. Model Panel の各コンポーネントを ui_schema 駆動に変更:**
+  - `KeyValueEditor` → `parameter_hints` からパラメータ一覧を生成
+  - `MetricsChips` → `option_sets.metric[task]` から選択肢を取得
+  - `SearchSpaceTable` → `search_space_catalog` から行を生成
+  - `ConfigForm` → `conditional_visibility` で表示/非表示を制御
+  - `NumberInput` → `step_map` からステップ値を取得
+
+- **Impact:**
+  - `backends/base.py` — Protocol にメソッド追加
+  - `backends/lizyml.py` — `get_ui_schema()` 実装追加
+  - `api/backends.py` — 新規エンドポイント追加
+  - `frontend/src/components/workspace/constants.ts` — ハードコード削除、フォールバック化
+  - `frontend/src/components/workspace/ModelPanel.tsx` — ui_schema 取得 + 配布
+  - `frontend/src/components/workspace/*.tsx` — 各コンポーネントが ui_schema を props で受け取る
+
+- **Compatibility:** 非破壊的
+  - 新規メソッド + 新規エンドポイントの追加のみ
+  - 既存の `get_config_schema()` / `get_default_config()` は変更なし
+  - フロントエンドは `constants.ts` をフォールバックとして保持するため、API が利用不可でも動作する
+
+- **Alternatives:**
+  1. **フロントエンドにハードコードを維持する案** — 現状維持。バックエンド追加時にフロントエンドも毎回変更が必要。スケールしないため不採用
+  2. **JSON Schema の `x-ui-*` 拡張で UI メタデータを埋め込む案** — Pydantic の `model_json_schema()` が返すスキーマを拡張する。スキーマ汚染になり、バリデーションと UI 関心が混在するため不採用
+  3. **`get_backend_contract()` で config_schema と ui_schema を一括返す案** — LizyML-Widget のアプローチ。LizyStudio では既に `get_config_schema()` が分離されているため、`get_ui_schema()` を別メソッドにする方が既存設計と一貫する
+
+- **Acceptance Criteria:**
+  1. `GET /api/backends/ui-schema` が `parameter_hints`, `option_sets`, `search_space_catalog`, `step_map`, `conditional_visibility`, `defaults` を含む JSON を返す
+  2. フロントエンドの `constants.ts` からバックエンド固有のハードコード（パラメータ名、メトリクス選択肢、探索範囲）が削除されている
+  3. Model Panel の全コンポーネントが API レスポンスから UI を生成する
+  4. Task 変更時に `option_sets` に基づいて選択肢が動的に切り替わる
+  5. `pnpm build` + `pnpm check` + `uv run pytest` + `uv run mypy` が通る
+
+- **Migration:** なし（非破壊的追加）
+- **Decision:** 2026-03-15 accepted — LizyML-Widget の実績あるパターンを採用
