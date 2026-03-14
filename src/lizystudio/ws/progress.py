@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import threading
 from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -28,6 +29,7 @@ class ProgressBroadcaster:
     def __init__(self) -> None:
         self._queues: dict[str, list[asyncio.Queue[dict[str, Any]]]] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._lock = threading.Lock()
 
     def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Store the event loop reference for thread-safe enqueuing."""
@@ -36,20 +38,23 @@ class ProgressBroadcaster:
     def subscribe(self, job_id: str) -> asyncio.Queue[dict[str, Any]]:
         """Create a new subscription queue for a job. Called from async."""
         q: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-        self._queues.setdefault(job_id, []).append(q)
+        with self._lock:
+            self._queues.setdefault(job_id, []).append(q)
         return q
 
     def unsubscribe(self, job_id: str, q: asyncio.Queue[dict[str, Any]]) -> None:
         """Remove a subscription."""
-        qs = self._queues.get(job_id, [])
-        if q in qs:
-            qs.remove(q)
-        if not qs:
-            self._queues.pop(job_id, None)
+        with self._lock:
+            qs = self._queues.get(job_id, [])
+            if q in qs:
+                qs.remove(q)
+            if not qs:
+                self._queues.pop(job_id, None)
 
     def send(self, job_id: str, message: dict[str, Any]) -> None:
         """Enqueue a message for all subscribers (thread-safe)."""
-        qs = self._queues.get(job_id, [])
+        with self._lock:
+            qs = list(self._queues.get(job_id, []))
         if not qs or self._loop is None:
             return
         for q in qs:
@@ -110,14 +115,18 @@ async def websocket_progress(
     queue = broadcaster.subscribe(job_id)
     try:
         while True:
-            msg = await asyncio.wait_for(queue.get(), timeout=30.0)
+            try:
+                msg = await asyncio.wait_for(queue.get(), timeout=30.0)
+            except asyncio.TimeoutError:
+                # Send keepalive ping and continue the loop
+                with contextlib.suppress(Exception):
+                    await websocket.send_text(
+                        json.dumps({"type": "ping", "job_id": job_id})
+                    )
+                continue
             await websocket.send_text(json.dumps(msg))
             if msg.get("type") in ("completed", "error"):
                 break
-    except asyncio.TimeoutError:
-        # Send keepalive ping on timeout
-        with contextlib.suppress(Exception):
-            await websocket.send_text(json.dumps({"type": "ping", "job_id": job_id}))
     except WebSocketDisconnect:
         pass
     finally:

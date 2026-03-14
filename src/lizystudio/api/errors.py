@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
+
+_backend_logger = logging.getLogger("lizystudio.errors")
 
 
 class StudioError(Exception):
@@ -70,11 +73,12 @@ class PathNotFoundError(StudioError):
 
 class BackendError(StudioError):
     def __init__(self, original: Exception) -> None:
+        _backend_logger.exception("Backend error", exc_info=original)
         super().__init__(
             "BACKEND_ERROR",
-            f"Backend error: {original}",
+            f"Backend processing failed: {type(original).__name__}",
             500,
-            details={"type": type(original).__name__, "message": str(original)},
+            details={"type": type(original).__name__},
         )
 
 

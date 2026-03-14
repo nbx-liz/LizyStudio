@@ -9,7 +9,7 @@ import type {
 
 export function fetchJobs(status?: string): Promise<JobSummary[]> {
   const params = status ? `?status=${status}` : "";
-  return apiFetch(`/jobs/${params}`);
+  return apiFetch(`/jobs${params}`);
 }
 
 export function fetchJob(jobId: string): Promise<JobDetail> {

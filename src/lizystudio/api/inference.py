@@ -9,18 +9,23 @@ from __future__ import annotations
 import tempfile
 from dataclasses import asdict
 from io import StringIO
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+import lizystudio.security as security
 from lizystudio.api.errors import (
     BackendError,
+    FileInvalidError,
     InferenceNotFoundError,
     JobNotCompletedError,
     JobNotFoundError,
+    PathNotFoundError,
 )
+from lizystudio.security import read_upload_checked, validate_path_within
 from lizystudio.services.inference import (
     InferenceStore,
     get_comparison_stats,
@@ -73,6 +78,11 @@ def inference_run(
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, str]:
     """Run inference with a path to data (H-0009)."""
+    # Validate data path is within allowed root
+    try:
+        validate_path_within(Path(body.data.path), security.ALLOWED_FILES_ROOT)
+    except ValueError as exc:
+        raise PathNotFoundError(str(exc)) from exc
     job = _get_job_or_404(body.job_id, job_store)
     try:
         record = run_inference(
@@ -96,7 +106,10 @@ async def inference_upload(
     suffix = ".csv"
     if file.filename and file.filename.endswith(".parquet"):
         suffix = ".parquet"
-    content = await file.read()
+    try:
+        content = await read_upload_checked(file)
+    except ValueError as exc:
+        raise FileInvalidError(str(exc)) from exc
     with tempfile.NamedTemporaryFile(
         suffix=suffix, delete=False, prefix="lizystudio_"
     ) as tmp:
@@ -233,4 +246,7 @@ def inference_comparison(
         if job is not None:
             task = job.config.get("model", {}).get("task", "regression")
 
-    return get_comparison_stats(store, job_id, inf_id, other_inf_id, task=task)
+    try:
+        return get_comparison_stats(store, job_id, inf_id, other_inf_id, task=task)
+    except ValueError as exc:
+        raise InferenceNotFoundError(str(exc)) from exc

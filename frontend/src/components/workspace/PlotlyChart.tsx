@@ -9,11 +9,18 @@ interface PlotlyChartProps {
 export function PlotlyChart({ plotlyJson, className }: PlotlyChartProps) {
   const { data, layout } = useMemo(() => {
     try {
-      const parsed = JSON.parse(plotlyJson);
+      const parsed: unknown = JSON.parse(plotlyJson);
+      if (typeof parsed !== "object" || parsed === null) {
+        return { data: [], layout: { autosize: true } };
+      }
+      const obj = parsed as Record<string, unknown>;
+      const rawData = Array.isArray(obj.data) ? obj.data : [];
+      const rawLayout =
+        typeof obj.layout === "object" && obj.layout !== null ? obj.layout : {};
       return {
-        data: parsed.data ?? [],
+        data: rawData,
         layout: {
-          ...(parsed.layout ?? {}),
+          ...(rawLayout as object),
           autosize: true,
           margin: { l: 50, r: 20, t: 30, b: 50 },
         },

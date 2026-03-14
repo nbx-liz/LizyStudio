@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -25,16 +27,29 @@ class WorkspaceState:
     workspace_fit_result: FitSummary | None = None
     workspace_tune_result: TuningSummary | None = None
     current_job_id: str | None = None
+    # Thread safety for background thread writes
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    # Temp files to clean up on reset
+    _temp_files: list[str] = field(default_factory=list, repr=False)
 
     def reset(self) -> None:
         """Clear everything except the backend adapter."""
-        self.config = {}
-        self.data_ref = None
-        self.dataframe = None
-        self.model = None
-        self.workspace_fit_result = None
-        self.workspace_tune_result = None
-        self.current_job_id = None
+        with self._lock:
+            self.config = {}
+            self.data_ref = None
+            self.dataframe = None
+            self.model = None
+            self.workspace_fit_result = None
+            self.workspace_tune_result = None
+            self.current_job_id = None
+            # Clean up tracked temp files
+            for tmp in self._temp_files:
+                Path(tmp).unlink(missing_ok=True)
+            self._temp_files.clear()
+
+    def track_temp_file(self, path: str) -> None:
+        """Register a temp file for cleanup on reset."""
+        self._temp_files.append(path)
 
     def set_data(self, dataframe: pd.DataFrame, data_ref: DataRef) -> None:
         """Load data into the workspace."""
