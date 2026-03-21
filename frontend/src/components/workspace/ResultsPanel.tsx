@@ -451,17 +451,20 @@ function CompletedView({
               className="mt-2"
               onClick={() => {
                 // Restore full config snapshot with best_params applied
-                const tuneConfig = {
-                  ...(job.config as Record<string, unknown>),
+                const baseConfig =
+                  (job.config as Record<string, unknown>) ?? {};
+                const baseModel =
+                  (baseConfig.model as Record<string, unknown>) ?? {};
+                const tuneConfig: Record<string, unknown> = {
+                  ...baseConfig,
+                  model: {
+                    ...baseModel,
+                    params: {
+                      ...((baseModel.params as Record<string, unknown>) ?? {}),
+                      ...tuneResult.best_params,
+                    },
+                  },
                 };
-                const model = {
-                  ...((tuneConfig.model as Record<string, unknown>) ?? {}),
-                };
-                model.params = {
-                  ...((model.params as Record<string, unknown>) ?? {}),
-                  ...tuneResult.best_params,
-                };
-                tuneConfig.model = model;
                 onApplyToFit(tuneConfig);
               }}
             >
