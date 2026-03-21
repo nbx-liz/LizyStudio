@@ -52,6 +52,15 @@ class JobStore:
         self._cancel_requested: set[str] = set()
         self._cancel_lock = threading.Lock()
 
+    def _job_dir(self, job_id: str) -> Path:
+        """Resolve job directory with traversal guard."""
+        candidate = (self.jobs_dir / job_id).resolve()
+        root = self.jobs_dir.resolve()
+        if not str(candidate).startswith(str(root) + "/"):
+            msg = f"job_id escapes jobs_dir: {job_id!r}"
+            raise ValueError(msg)
+        return candidate
+
     # --- CRUD ---
 
     def create(
@@ -78,7 +87,7 @@ class JobStore:
 
     def get(self, job_id: str) -> Job | None:
         """Load a job by ID. Returns ``None`` if not found."""
-        meta_path = self.jobs_dir / job_id / "meta.json"
+        meta_path = self._job_dir(job_id) / "meta.json"
         if not meta_path.exists():
             return None
         return self._load_job(job_id)
@@ -126,7 +135,7 @@ class JobStore:
 
     def delete(self, job_id: str) -> bool:
         """Delete a job directory. Returns True if it existed."""
-        job_dir = self.jobs_dir / job_id
+        job_dir = self._job_dir(job_id)
         if job_dir.exists():
             shutil.rmtree(job_dir)
             return True
@@ -149,7 +158,7 @@ class JobStore:
 
     def get_log(self, job_id: str) -> str:
         """Read execution log for a job. Returns empty string if not found."""
-        log_path = self.jobs_dir / job_id / "execution.log"
+        log_path = self._job_dir(job_id) / "execution.log"
         if not log_path.exists():
             return ""
         return log_path.read_text(encoding="utf-8")

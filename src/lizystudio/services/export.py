@@ -99,8 +99,9 @@ def export_code_as_zip(
         backend.export_code(model, str(code_dir))
         zip_base = Path(tmpdir) / "export"
         shutil.make_archive(str(zip_base), "zip", str(code_dir))
-        # Move to a persistent temp path so it survives TemporaryDirectory cleanup
-        final = Path(tempfile.mktemp(suffix=".zip"))  # noqa: S306
+        # Move to a persistent temp file (survives TemporaryDirectory cleanup)
+        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_file:
+            final = Path(tmp_file.name)
         shutil.move(str(zip_base) + ".zip", str(final))
         return final
 
