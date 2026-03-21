@@ -99,7 +99,7 @@ export function InferencePage() {
     (params: { dataPath: string; evaluate: boolean; returnShap: boolean }) => {
       mutation.mutate(params);
     },
-    [mutation],
+    [mutation.mutate],
   );
 
   // Auto-select latest inference when history loads
