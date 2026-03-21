@@ -62,6 +62,7 @@ export interface JobSummary {
   completed_at: string | null;
   error: string | null;
   error_code: string | null;
+  primary_score: number | null;
 }
 
 export interface JobDetail extends JobSummary {

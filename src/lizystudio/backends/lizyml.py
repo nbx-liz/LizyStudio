@@ -115,10 +115,9 @@ class LizyMLAdapter:
         *,
         on_progress: ProgressCallback | None = None,
     ) -> TuningSummary:
-        from lizyml import TuneProgressCallback, TuneProgressInfo
-
-        lizyml_callback: TuneProgressCallback | None = None
+        lizyml_callback: Any = None
         if on_progress is not None:
+            from lizyml import TuneProgressInfo
 
             def _bridge(info: TuneProgressInfo) -> None:
                 msg = f"Trial {info.current_trial}/{info.total_trials}"
@@ -138,7 +137,8 @@ class LizyMLAdapter:
         tune_result = model.tune(progress_callback=lizyml_callback)
 
         if on_progress is not None:
-            on_progress(current=1, total=1, message="Tuning complete.")
+            total = len(tune_result.trials) or 1
+            on_progress(current=total, total=total, message="Tuning complete.")
         return TuningSummary(
             best_params=dict(tune_result.best_params),
             best_score=float(tune_result.best_score),

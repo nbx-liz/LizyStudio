@@ -184,7 +184,9 @@ def test_tune_invokes_on_progress() -> None:
     assert len(calls) == 2
     assert calls[0]["current"] == 0
     assert calls[0]["message"] == "Starting tuning..."
-    assert calls[1]["current"] == 1
+    # Completion sentinel uses trial count as total
+    n_trials = len(mock_model.tune.return_value.trials)
+    assert calls[1]["current"] == max(n_trials, 1)
     assert calls[1]["message"] == "Tuning complete."
 
 

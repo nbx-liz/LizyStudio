@@ -64,8 +64,7 @@ function shortenModelName(name: string | undefined): string {
 function getJobScore(job: JobSummary): string {
   if (job.status === "running") return "...";
   if (job.status === "failed" || job.status === "cancelled") return "\u2014";
-  // Try to extract primary metric OOS from config or rely on summary
-  // The score is not directly on JobSummary; we show "\u2014" if unavailable
+  if (job.primary_score != null) return job.primary_score.toFixed(3);
   return "\u2014";
 }
 

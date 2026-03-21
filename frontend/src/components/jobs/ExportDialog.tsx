@@ -35,10 +35,20 @@ export function ExportDialog({
     setOutputPath(`./exports/job_${jobNumber}_${type}`);
   };
 
+  const isPathValid =
+    outputPath.trim().length > 0 &&
+    !outputPath.includes("..") &&
+    !outputPath.startsWith("/etc") &&
+    !outputPath.startsWith("/usr");
+
   const handleExport = async () => {
+    if (!isPathValid) {
+      toast.error("Invalid output path");
+      return;
+    }
     setExporting(true);
     try {
-      const result = await exportJob(jobId, exportType, outputPath);
+      const result = await exportJob(jobId, exportType, outputPath.trim());
       toast.success(`Exported to ${result.exported_path}`);
       onOpenChange(false);
     } catch {
@@ -106,7 +116,7 @@ export function ExportDialog({
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button onClick={handleExport} disabled={exporting || !outputPath}>
+            <Button onClick={handleExport} disabled={exporting || !isPathValid}>
               {exporting ? "Exporting..." : "Export"}
             </Button>
           </div>
