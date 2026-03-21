@@ -100,18 +100,12 @@ def test_run_fit_with_progress(
         data_ref=sample_data_ref,
         job_type="fit",
     )
-    progress_calls: list[dict[str, Any]] = []
-
-    def on_progress(*, current: int, total: int, message: str) -> None:
-        progress_calls.append({"current": current, "total": total, "message": message})
-
     run_fit(
         job=job,
         job_store=job_store,
         backend=mock_backend,
         config={},
         dataframe=sample_df,
-        on_progress=on_progress,
     )
     # Verify a progress callback was passed to backend.fit
     mock_backend.fit.assert_called_once()

@@ -120,7 +120,6 @@ def run_fit(
     config: dict[str, Any],
     dataframe: Any,
     params: dict[str, Any] | None = None,
-    on_progress: ProgressCallback | None = None,
     broadcaster: ProgressBroadcaster | None = None,
 ) -> Job:
     """Execute a fit job synchronously. Updates job in-place and on disk."""
@@ -147,7 +146,6 @@ def run_tune(
     backend: BackendAdapter,
     config: dict[str, Any],
     dataframe: Any,
-    on_progress: ProgressCallback | None = None,
     broadcaster: ProgressBroadcaster | None = None,
 ) -> Job:
     """Execute a tune job: tune -> auto-fit with best params (H-0002 B)."""

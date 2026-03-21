@@ -131,6 +131,7 @@ export interface SearchSpaceCatalogEntry {
   title: string;
   paramType: string;
   modes: string[];
+  group?: string;
 }
 
 export interface UiSchema {
@@ -142,4 +143,11 @@ export interface UiSchema {
   conditional_visibility: Record<string, Record<string, unknown>>;
   defaults: Record<string, Record<string, unknown>>;
   inner_valid_options: string[];
+  n_trials_presets?: number[];
+  capabilities?: {
+    cv_strategies: string[];
+    tune: { allow_empty_space: boolean };
+  };
+  calibration_methods?: string[];
+  additional_params?: string[];
 }

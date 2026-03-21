@@ -570,3 +570,126 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
 
 - **Migration:** なし（非破壊的追加）
 - **Decision:** 2026-03-15 accepted — LizyML-Widget の実績あるパターンを採用
+
+---
+
+### H-0027: LizyML v0.4.0 対応 — export_code() API の追加
+- **Status:** proposed
+- **Scope:** API, Adapter, Frontend
+- **Related:** BLUEPRINT.md §5.3（Jobs API）、§3.2（Adapter 層）
+- **Context:** LizyML v0.3.0 で `Model.export_code(path)` が追加された。学習済みモデルから LizyML 非依存の Python スクリプト（`train.py`, `predict.py`, `test_equivalence.py`, `config.json`, `requirements.txt`, `artifacts/`）を生成する機能。LizyStudio ユーザーが GUI から利用できるようにする。
+- **Proposal:**
+  1. `BackendAdapter` Protocol に `export_code(model, path) -> str` メソッドを追加
+  2. `POST /api/jobs/{job_id}/export-code` エンドポイントを追加（ZIP ダウンロード）
+  3. Jobs 画面の Export セクションに「Export Code」ボタンを追加
+- **Impact:**
+  - `src/lizystudio/backends/base.py` — Protocol にメソッド追加
+  - `src/lizystudio/backends/lizyml.py` — `model.export_code(path)` 呼び出し
+  - `src/lizystudio/api/jobs.py` — 新エンドポイント
+  - `src/lizystudio/services/export.py` — export_code サービス関数
+  - Frontend: Jobs 画面の Export UI
+- **Compatibility:** 非破壊的（新規メソッド・エンドポイント追加のみ）
+- **Alternatives:**
+  1. **既存の `export_model` に統合する案** — export_model は LizyML フォーマットの保存、export_code は独立スクリプト生成で目的が異なるため分離が適切
+  2. **CLI 専用にする案** — GUI ユーザーにもコード生成を提供するのが LizyStudio の価値
+- **Acceptance Criteria:**
+  1. `POST /api/jobs/{job_id}/export-code` が ZIP ファイルを返す
+  2. ZIP 内に `train.py`, `predict.py`, `requirements.txt` が含まれる
+  3. 既存テストが壊れない
+  4. `uv run pytest` + `uv run mypy` が通る
+- **Migration:** なし
+
+---
+
+### H-0028: LizyML v0.4.0 対応 — Tune 進捗コールバック統合（TuneProgressInfo）
+- **Status:** proposed
+- **Scope:** Adapter, Backend
+- **Related:** BLUEPRINT.md §3.2（Adapter 層）、§5.2（Workspace API）
+- **Context:** LizyML v0.1.3 で `TuneProgressInfo` / `TuneProgressCallback` が追加された。`Model.tune(progress_callback=fn)` で Trial 単位の進捗（current_trial, total_trials, best_score, latest_score, latest_state）を受け取れる。現在の LizyStudio Adapter は tune 開始/完了の2ポイントしか報告しておらず、長時間の Tune でユーザーに進捗が伝わらない。
+- **Proposal:**
+  1. `LizyMLAdapter.tune()` 内で `model.tune(progress_callback=fn)` を使い、Trial 単位で `on_progress` を呼び出す
+  2. `BackendAdapter` Protocol の `tune()` シグネチャは変更しない（`on_progress: ProgressCallback` はすでに定義済み）
+  3. `ProgressCallback` の `current`/`total` に `current_trial`/`total_trials` をマッピング
+- **Impact:**
+  - `src/lizystudio/backends/lizyml.py` — `tune()` 内部のみ変更
+- **Compatibility:** 非破壊的（内部実装変更のみ。Protocol シグネチャ変更なし）
+- **Alternatives:**
+  1. **WebSocket メッセージに `best_score` 等を追加する案** — ProgressCallback の `message` フィールドに JSON を埋め込む方法。現時点では `message` は人間可読文字列の想定なので、将来の WebSocket 拡張時に検討
+- **Acceptance Criteria:**
+  1. Tune 実行中に Trial 単位で WebSocket 進捗メッセージが送信される
+  2. 既存テストが壊れない
+- **Migration:** なし
+
+---
+
+### H-0029: LizyML-Widget 画面仕様統合 — Data Panel CV 拡張
+- **Status:** accepted
+- **Scope:** Frontend, Config
+- **Related:** BLUEPRINT.md §4.2.1 Cross Validation
+- **Context:** LizyML-Widget では LizyML v0.4.0 の全 8 split method に対応し、strategy ごとの条件付きフィールド（time_col, group_col, purge_gap, embargo, gap, train_size_max, test_size_max, blocks/groups）を動的表示している。現 BLUEPRINT は 4 strategy しか定義しておらず、条件付きフィールドも不足。
+- **Proposal:**
+  1. CV Strategy を 8 種に拡張: kfold, stratified_kfold, group_kfold, stratified_group_kfold, time_series, purged_time_series, group_time_series, blocked_group_kfold
+  2. Strategy ごとの条件付きフィールドを Widget に合わせて定義
+  3. Folds を Slider から NumberInput（stepper）に変更
+  4. CV Strategy の表示を Segment buttons（折返し可）に変更
+  5. Config 自動反映マッピングに `data.time_col`, `split.gap`, `split.purge_gap`, `split.embargo` 等を追加
+- **Impact:** BLUEPRINT.md §4.2.1, frontend DataPanel, lizyml_ui_schema.py
+- **Compatibility:** 非破壊的
+- **Acceptance Criteria:** BLUEPRINT §4.2.1 が Widget の CV 仕様と一致する
+- **Decision:** 2026-03-22 accepted — Widget 踏襲方針
+
+---
+
+### H-0030: LizyML-Widget 画面仕様統合 — Model Panel Fit タブ拡張
+- **Status:** accepted
+- **Scope:** Frontend, Config
+- **Related:** BLUEPRINT.md §4.2.2 Fit タブ
+- **Context:** Widget の Fit タブでは (1) Smart Params / Model Params / Additional Params の3グループ分離、(2) Feature Weights Editor、(3) Inner Validation の Select 表示、(4) Additional Params のカタログ選択、(5) Objective の Segment buttons 表示、が実装されている。
+- **Proposal:**
+  1. Model セクションを3サブグループに視覚分離: Smart Params / Model Params / Additional Params
+  2. Feature Weights Editor を追加: Toggle + column dropdown + weight stepper の Multi-row editor
+  3. Inner Validation を Training セクション内に Select 表示（holdout / group_holdout / time_holdout）
+  4. Additional Params をカタログドロップダウン選択に変更（`ui_schema.additional_params` から）
+  5. Objective を Segment buttons に変更
+  6. Evaluation メトリクスの選択肢を `ui_schema.option_sets.metric` から動的取得に統一
+  7. Calibration methods を `ui_schema.calibration_methods` から動的取得
+- **Impact:** BLUEPRINT.md §4.2.2, frontend ConfigForm, lizyml_ui_schema.py
+- **Compatibility:** 非破壊的
+- **Acceptance Criteria:** Fit タブが Widget と同等のグループ分け・Feature Weights・Inner Valid を持つ
+- **Decision:** 2026-03-22 accepted — Widget 踏襲方針
+
+---
+
+### H-0031: LizyML-Widget 画面仕様統合 — Tune タブ拡張
+- **Status:** accepted
+- **Scope:** Frontend, Config
+- **Related:** BLUEPRINT.md §4.2.2 Tune タブ
+- **Context:** Widget の Tune タブでは (1) Search Space のグループ分け、(2) Tune 専用 Evaluation（Optimization Metric + Additional Metrics）、(3) direction 自動判定、(4) Empty space 許可、(5) Fixed 値の Fit 取り込みが実装されている。
+- **Proposal:**
+  1. Search Space テーブルを `group` フィールドでグループ分け表示
+  2. Tune 専用 Evaluation セクション追加: Optimization Metric（single select）+ Additional Metrics（multi-select）
+  3. direction Select を廃止し、`metric_direction` マップから自動判定
+  4. Tune ボタン有効条件から「探索パラメータあり」を削除（empty space 許可）
+  5. Tune タブ初回遷移時に Fit config の値を Fixed 値として取り込み
+  6. `search_space_catalog` に `group` フィールドを追加
+- **Impact:** BLUEPRINT.md §4.2.2, frontend TuneTab, lizyml_ui_schema.py
+- **Compatibility:** 非破壊的
+- **Acceptance Criteria:** Tune タブが Widget と同等の UX を持つ
+- **Decision:** 2026-03-22 accepted — Widget 踏襲方針
+
+---
+
+### H-0032: Backend Contract capabilities セクション追加
+- **Status:** accepted
+- **Scope:** Adapter, Frontend
+- **Related:** BLUEPRINT.md §3.3
+- **Context:** Widget の backend contract には `capabilities` セクションがあり UI が機能を動的判定する。現 `get_ui_schema()` にはこれがない。
+- **Proposal:**
+  1. `get_ui_schema()` レスポンスに `capabilities` を追加: `cv_strategies`（8種リスト）、`tune.allow_empty_space`（boolean）
+  2. `ui_schema` に `additional_params`, `calibration_methods` リストを追加
+  3. `search_space_catalog` エントリに `group` フィールドを追加
+  4. `conditional_visibility` に `early_stopping.*` 連動条件を追加
+- **Impact:** lizyml_ui_schema.py, frontend
+- **Compatibility:** 非破壊的（新フィールド追加のみ）
+- **Acceptance Criteria:** `GET /api/backends/ui-schema` が capabilities 等を含む
+- **Decision:** 2026-03-22 accepted — Widget 踏襲方針

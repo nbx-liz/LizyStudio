@@ -1,6 +1,5 @@
 import { Info } from "lucide-react";
 import type { ReactNode } from "react";
-import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import {
   Tooltip,
@@ -8,24 +7,13 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-interface AutoValue {
-  isAuto: boolean;
-  onToggle: () => void;
-}
-
 interface FormFieldProps {
   label: string;
   description?: string;
   children: ReactNode;
-  autoValue?: AutoValue;
 }
 
-export function FormField({
-  label,
-  description,
-  children,
-  autoValue,
-}: FormFieldProps) {
+export function FormField({ label, description, children }: FormFieldProps) {
   return (
     <div className="flex items-center justify-between gap-2">
       <div className="flex items-center gap-1 min-w-0">
@@ -42,23 +30,8 @@ export function FormField({
             </TooltipContent>
           </Tooltip>
         )}
-        {autoValue && (
-          <Badge
-            variant={autoValue.isAuto ? "default" : "outline"}
-            className="cursor-pointer text-xs px-2 py-0.5 ml-1 shrink-0"
-            onClick={autoValue.onToggle}
-          >
-            Auto
-          </Badge>
-        )}
       </div>
-      <div
-        className={
-          autoValue?.isAuto ? "opacity-40 pointer-events-none" : undefined
-        }
-      >
-        {children}
-      </div>
+      <div>{children}</div>
     </div>
   );
 }

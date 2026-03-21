@@ -2,6 +2,7 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import type { SearchSpaceCatalogEntry } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -28,19 +29,20 @@ interface SearchSpaceTableProps {
   onChange: (space: Record<string, unknown>) => void;
   catalog?: SearchSpaceCatalogEntry[];
   stepMap?: Record<string, number>;
+  task?: string | null;
+  objectiveOptions?: string[];
+  metricOptions?: string[];
 }
 
 function toSpaceEntry(raw: unknown): SpaceEntry | undefined {
   if (raw == null || typeof raw !== "object") return undefined;
   const obj = raw as Record<string, unknown>;
-  // Handle categorical entries
   if (obj.type === "categorical") {
     return {
       type: "categorical",
       choices: Array.isArray(obj.choices) ? (obj.choices as string[]) : [],
     };
   }
-  // Handle numeric range entries
   if (typeof obj.low !== "number" || typeof obj.high !== "number")
     return undefined;
   return {
@@ -63,10 +65,12 @@ export function SearchSpaceTable({
   onChange,
   catalog,
   stepMap,
+  task: _task,
+  objectiveOptions,
+  metricOptions,
 }: SearchSpaceTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
 
-  // Use backend catalog when available, fall back to KNOWN_PARAMS
   const effectiveCatalog = useMemo(() => {
     if (catalog) {
       return catalog.map((c) => ({
@@ -74,19 +78,47 @@ export function SearchSpaceTable({
         type:
           c.paramType === "integer"
             ? ("integer" as const)
-            : c.paramType === "number"
-              ? ("float" as const)
+            : c.paramType === "boolean"
+              ? ("boolean" as const)
               : ("float" as const),
         default: 0,
         description: c.title,
         modes: c.modes,
+        paramType: c.paramType,
+        group: c.group ?? "model_params",
       }));
     }
     return KNOWN_PARAMS.map((kp) => ({
       ...kp,
       modes: ["fixed", "range"],
+      paramType: kp.type === "integer" ? "integer" : "number",
+      group: "model_params",
     }));
   }, [catalog]);
+
+  const GROUP_LABELS: Record<string, string> = {
+    model_params: "Model Params",
+    smart_params: "Smart Params",
+  };
+
+  const groupedCatalog = useMemo(() => {
+    const groups: Array<{
+      group: string;
+      items: typeof effectiveCatalog;
+    }> = [];
+    const seen = new Set<string>();
+    for (const item of effectiveCatalog) {
+      const g = item.group;
+      if (!seen.has(g)) {
+        seen.add(g);
+        groups.push({
+          group: g,
+          items: effectiveCatalog.filter((i) => i.group === g),
+        });
+      }
+    }
+    return groups;
+  }, [effectiveCatalog]);
 
   const toggleExpand = (key: string) => {
     setExpandedRows((prev) => {
@@ -107,28 +139,15 @@ export function SearchSpaceTable({
     return "range";
   };
 
-  // Get available options for Choice mode from model params or known values
   const getChoiceOptions = useCallback(
     (key: string): string[] => {
-      // For boolean params
-      const param = effectiveCatalog.find((p) => p.key === key);
-      if (param?.type === "integer" || param?.type === "float") return [];
-      // Known categorical options
-      const knownOptions: Record<string, string[]> = {
-        objective: [
-          "binary",
-          "cross_entropy",
-          "huber",
-          "mse",
-          "mae",
-          "multiclass",
-        ],
-        metric: ["auc", "logloss", "rmse", "mae", "accuracy"],
-        first_metric_only: ["true", "false"],
-      };
-      return knownOptions[key] ?? [];
+      if (key === "objective") return objectiveOptions ?? [];
+      if (key === "metric") return metricOptions ?? [];
+      if (key === "first_metric_only" || key === "auto_num_leaves")
+        return ["true", "false"];
+      return [];
     },
-    [effectiveCatalog],
+    [objectiveOptions, metricOptions],
   );
 
   const handleModeChange = (key: string, mode: string) => {
@@ -150,7 +169,6 @@ export function SearchSpaceTable({
       };
       onChange({ ...space, [key]: entry });
     } else {
-      // Switch to fixed — remove from space
       const { [key]: _, ...rest } = space;
       onChange(rest);
       setExpandedRows((prev) => {
@@ -178,170 +196,237 @@ export function SearchSpaceTable({
       <div className="flex items-center border-b bg-muted/50 px-3 py-1.5 text-xs font-medium text-muted-foreground">
         <span className="w-6" />
         <span className="flex-1">Parameter</span>
-        <span className="w-24 text-center">Mode</span>
+        <span className="w-32 text-center">Mode</span>
         <span className="flex-1 text-right">Summary</span>
       </div>
 
       {/* Rows */}
-      {effectiveCatalog.map((param) => {
-        const mode = getMode(param.key);
-        const entry = toSpaceEntry(space[param.key]);
-        const isExpanded = expandedRows.has(param.key);
-        const isRange = mode === "range";
-        const isChoice = mode === "choice";
-        const isExpandable = isRange || isChoice;
-        const isInteger = param.type === "integer";
-        const availableModes = param.modes ?? ["fixed", "range"];
-
-        return (
-          <div key={param.key} className="border-b last:border-b-0">
-            {/* Summary line */}
-            <button
-              type="button"
-              className="flex w-full items-center px-3 py-2 hover:bg-muted/30 cursor-pointer text-left"
-              onClick={() => isExpandable && toggleExpand(param.key)}
-            >
-              {/* Expand icon */}
-              <span className="w-6 flex-shrink-0">
-                {isExpandable &&
-                  (isExpanded ? (
-                    <ChevronDown className="h-3.5 w-3.5 mr-1.5 transition-transform" />
-                  ) : (
-                    <ChevronRight className="h-3.5 w-3.5 mr-1.5 transition-transform" />
-                  ))}
+      {groupedCatalog.map(({ group, items }) => (
+        <div key={group}>
+          {groupedCatalog.length > 1 && (
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-muted/30 border-b">
+              <span className="text-xs text-muted-foreground font-medium">
+                {GROUP_LABELS[group] ?? group}
               </span>
+              <div className="flex-1 border-t border-muted-foreground/20" />
+            </div>
+          )}
+          {items.map((param) => {
+            const mode = getMode(param.key);
+            const entry = toSpaceEntry(space[param.key]);
+            const isExpanded = expandedRows.has(param.key);
+            const isRange = mode === "range";
+            const isChoice = mode === "choice";
+            const isExpandable = isRange || isChoice;
+            const isInteger = param.type === "integer";
+            const availableModes = param.modes ?? ["fixed", "range"];
 
-              {/* Param name */}
-              <span className="flex-1 text-xs font-mono">{param.key}</span>
-
-              {/* Mode select */}
-              {/* biome-ignore lint/a11y/noStaticElementInteractions: stopPropagation needed */}
-              <div
-                className="w-24"
-                onClick={(e) => e.stopPropagation()}
-                onKeyDown={(e) => e.stopPropagation()}
-              >
-                <Select
-                  value={mode}
-                  onValueChange={(v) => handleModeChange(param.key, v)}
+            return (
+              <div key={param.key} className="border-b last:border-b-0">
+                {/* Summary line */}
+                <button
+                  type="button"
+                  className="flex w-full items-center px-3 py-2 hover:bg-muted/30 cursor-pointer text-left"
+                  onClick={() => isExpandable && toggleExpand(param.key)}
                 >
-                  <SelectTrigger className="h-7 w-24 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableModes.map((m) => (
-                      <SelectItem key={m} value={m}>
-                        {m.charAt(0).toUpperCase() + m.slice(1)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+                  <span className="w-6 flex-shrink-0">
+                    {isExpandable &&
+                      (isExpanded ? (
+                        <ChevronDown className="h-3.5 w-3.5 mr-1.5 transition-transform" />
+                      ) : (
+                        <ChevronRight className="h-3.5 w-3.5 mr-1.5 transition-transform" />
+                      ))}
+                  </span>
 
-              {/* Summary text */}
-              <span className="flex-1 text-right text-xs text-muted-foreground tabular-nums">
-                {isRange && entry
-                  ? formatSummary(entry)
-                  : isChoice && entry?.choices
-                    ? entry.choices.join(", ")
-                    : String(modelParams[param.key] ?? "default")}
-              </span>
-            </button>
+                  <span className="flex-1 text-xs font-mono">{param.key}</span>
 
-            {/* Expanded detail */}
-            {isRange && isExpanded && entry && (
-              <div className="px-6 py-2 bg-muted/20 space-y-2">
-                {/* min */}
-                <div className="flex items-center gap-2">
-                  <Label className="text-xs text-muted-foreground w-20">
-                    Min
-                  </Label>
-                  <NumberInput
-                    value={entry.low}
-                    onChange={(v) => updateEntry(param.key, { low: v ?? 0 })}
-                    step={isInteger ? 1 : 0.001}
-                  />
-                </div>
-
-                {/* max */}
-                <div className="flex items-center gap-2">
-                  <Label className="text-xs text-muted-foreground w-20">
-                    Max
-                  </Label>
-                  <NumberInput
-                    value={entry.high}
-                    onChange={(v) => updateEntry(param.key, { high: v ?? 0 })}
-                    step={isInteger ? 1 : 0.001}
-                  />
-                </div>
-
-                {/* distribution */}
-                <div className="flex items-center gap-2">
-                  <Label className="text-xs text-muted-foreground w-20">
-                    Distribution
-                  </Label>
-                  <Select
-                    value={entry.log ? "log-uniform" : "uniform"}
-                    onValueChange={(v) =>
-                      handleDistributionChange(param.key, v)
-                    }
+                  {/* Mode segment buttons */}
+                  {/* biome-ignore lint/a11y/noStaticElementInteractions: stopPropagation needed */}
+                  <div
+                    className="w-32 flex gap-0.5"
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => e.stopPropagation()}
                   >
-                    <SelectTrigger className="h-7 w-36 text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="uniform">Uniform</SelectItem>
-                      <SelectItem value="log-uniform">Log-uniform</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                    {availableModes.map((m) => (
+                      <Button
+                        key={m}
+                        variant={mode === m ? "default" : "outline"}
+                        size="sm"
+                        className="h-6 text-[10px] px-2 flex-1"
+                        type="button"
+                        onClick={() => handleModeChange(param.key, m)}
+                      >
+                        {m.charAt(0).toUpperCase() + m.slice(1)}
+                      </Button>
+                    ))}
+                  </div>
 
-                {/* step (integer params only) */}
-                {isInteger && (
-                  <div className="flex items-center gap-2">
-                    <Label className="text-xs text-muted-foreground w-20">
-                      Step
-                    </Label>
-                    <NumberInput
-                      value={entry.step}
-                      onChange={(v) => updateEntry(param.key, { step: v })}
-                      min={1}
-                      step={1}
-                    />
+                  <span className="flex-1 text-right text-xs text-muted-foreground tabular-nums">
+                    {isRange && entry
+                      ? formatSummary(entry)
+                      : isChoice && entry?.choices
+                        ? entry.choices.join(", ")
+                        : String(modelParams[param.key] ?? "default")}
+                  </span>
+                </button>
+
+                {/* Range detail */}
+                {isRange && isExpanded && entry && (
+                  <div className="px-6 py-2 bg-muted/20 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Label className="text-xs text-muted-foreground w-20">
+                        Min
+                      </Label>
+                      <NumberInput
+                        value={entry.low}
+                        onChange={(v) =>
+                          updateEntry(param.key, { low: v ?? 0 })
+                        }
+                        step={isInteger ? 1 : (stepMap?.[param.key] ?? 0.001)}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Label className="text-xs text-muted-foreground w-20">
+                        Max
+                      </Label>
+                      <NumberInput
+                        value={entry.high}
+                        onChange={(v) =>
+                          updateEntry(param.key, { high: v ?? 0 })
+                        }
+                        step={isInteger ? 1 : (stepMap?.[param.key] ?? 0.001)}
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Label className="text-xs text-muted-foreground w-20">
+                        Distribution
+                      </Label>
+                      <Select
+                        value={entry.log ? "log-uniform" : "uniform"}
+                        onValueChange={(v) =>
+                          handleDistributionChange(param.key, v)
+                        }
+                      >
+                        <SelectTrigger className="h-7 w-36 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="uniform">Uniform</SelectItem>
+                          <SelectItem value="log-uniform">
+                            Log-uniform
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    {isInteger && (
+                      <div className="flex items-center gap-2">
+                        <Label className="text-xs text-muted-foreground w-20">
+                          Step
+                        </Label>
+                        <NumberInput
+                          value={entry.step}
+                          onChange={(v) => updateEntry(param.key, { step: v })}
+                          min={1}
+                          step={1}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Choice mode — objective uses segment buttons, metric uses chips */}
+                {isChoice && isExpanded && entry && (
+                  <div className="px-6 py-2 bg-muted/20">
+                    {param.key === "objective" ? (
+                      /* Objective: segment buttons */
+                      <div className="flex flex-wrap gap-1">
+                        {getChoiceOptions(param.key).map((opt) => {
+                          const selected =
+                            entry.choices?.includes(opt) ?? false;
+                          return (
+                            <Button
+                              key={opt}
+                              variant={selected ? "default" : "outline"}
+                              size="sm"
+                              className="h-7 text-xs px-3"
+                              type="button"
+                              onClick={() => {
+                                const current = entry.choices ?? [];
+                                const next = selected
+                                  ? current.filter((c) => c !== opt)
+                                  : [...current, opt];
+                                updateEntry(param.key, { choices: next });
+                              }}
+                            >
+                              {opt}
+                            </Button>
+                          );
+                        })}
+                      </div>
+                    ) : param.key === "metric" ? (
+                      /* Metric: chips */
+                      <div className="flex flex-wrap gap-1.5">
+                        {getChoiceOptions(param.key).map((opt) => {
+                          const selected =
+                            entry.choices?.includes(opt) ?? false;
+                          return (
+                            <button
+                              key={opt}
+                              type="button"
+                              onClick={() => {
+                                const current = entry.choices ?? [];
+                                const next = selected
+                                  ? current.filter((c) => c !== opt)
+                                  : [...current, opt];
+                                updateEntry(param.key, { choices: next });
+                              }}
+                            >
+                              <Badge
+                                variant={selected ? "default" : "outline"}
+                                className="cursor-pointer text-xs"
+                              >
+                                {opt}
+                              </Badge>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      /* Other: chips */
+                      <div className="flex flex-wrap gap-1.5">
+                        {getChoiceOptions(param.key).map((opt) => {
+                          const selected =
+                            entry.choices?.includes(opt) ?? false;
+                          return (
+                            <button
+                              key={opt}
+                              type="button"
+                              onClick={() => {
+                                const current = entry.choices ?? [];
+                                const next = selected
+                                  ? current.filter((c) => c !== opt)
+                                  : [...current, opt];
+                                updateEntry(param.key, { choices: next });
+                              }}
+                            >
+                              <Badge
+                                variant={selected ? "default" : "outline"}
+                                className="cursor-pointer text-xs"
+                              >
+                                {opt}
+                              </Badge>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
-            )}
-
-            {/* Choice mode expansion */}
-            {isChoice && isExpanded && entry && (
-              <div className="px-6 py-2 bg-muted/20">
-                <div className="flex flex-wrap gap-1.5">
-                  {getChoiceOptions(param.key).map((opt) => {
-                    const selected = entry.choices?.includes(opt) ?? false;
-                    return (
-                      <Badge
-                        key={opt}
-                        variant={selected ? "default" : "outline"}
-                        className="cursor-pointer text-xs"
-                        onClick={() => {
-                          const current = entry.choices ?? [];
-                          const next = selected
-                            ? current.filter((c) => c !== opt)
-                            : [...current, opt];
-                          updateEntry(param.key, { choices: next });
-                        }}
-                      >
-                        {opt}
-                      </Badge>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
-        );
-      })}
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 }

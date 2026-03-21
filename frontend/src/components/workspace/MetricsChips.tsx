@@ -16,14 +16,20 @@ export function MetricsChips({
   metricsByTask,
 }: MetricsChipsProps) {
   // Merge backend option_sets with fallback constants
+  // Default: ALL metrics enabled for the task
   const effectiveMetrics = useMemo(() => {
     if (metricsByTask?.[task]) {
+      const available = metricsByTask[task];
+      return { available, defaults: [...available] };
+    }
+    const fallback = METRICS_BY_TASK[task];
+    if (fallback) {
       return {
-        available: metricsByTask[task],
-        defaults: metricsByTask[task].slice(0, 2),
+        available: fallback.available,
+        defaults: [...fallback.available],
       };
     }
-    return METRICS_BY_TASK[task] ?? { available: [], defaults: [] };
+    return { available: [], defaults: [] };
   }, [task, metricsByTask]);
 
   const prevTask = useRef(task);
@@ -55,14 +61,18 @@ export function MetricsChips({
       {effectiveMetrics.available.map((metric) => {
         const selected = selectedMetrics.includes(metric);
         return (
-          <Badge
+          <button
             key={metric}
-            variant={selected ? "default" : "outline"}
-            className="cursor-pointer text-xs"
+            type="button"
             onClick={() => toggleMetric(metric)}
           >
-            {metric}
-          </Badge>
+            <Badge
+              variant={selected ? "default" : "outline"}
+              className="cursor-pointer text-xs"
+            >
+              {metric}
+            </Badge>
+          </button>
         );
       })}
     </div>

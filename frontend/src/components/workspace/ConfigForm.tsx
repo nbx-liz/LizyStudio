@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useCallback, useMemo } from "react";
 import {
   Accordion,
@@ -5,6 +6,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -213,7 +215,7 @@ function renderField(
   value: unknown,
   onChange: (path: string[], value: unknown) => void,
   defs: Defs,
-): React.ReactNode {
+): ReactNode {
   const prop = resolveSchema(rawProp, defs, value);
   const label = prop.title ?? name;
 
@@ -260,30 +262,9 @@ function renderField(
     );
   }
 
-  // Nullable Auto chip support
-  const isNullable = prop.nullable === true;
-  const isAuto = isNullable && value === null;
-  const autoValue = isNullable
-    ? {
-        isAuto,
-        onToggle: () => {
-          if (isAuto) {
-            onChange(path, prop.default ?? 0);
-          } else {
-            onChange(path, null);
-          }
-        },
-      }
-    : undefined;
-
   if (prop.enum && prop.enum.length > 0) {
     return (
-      <FormField
-        key={name}
-        label={label}
-        description={prop.description}
-        autoValue={autoValue}
-      >
+      <FormField key={name} label={label} description={prop.description}>
         <Select
           value={String(value ?? prop.default ?? "")}
           onValueChange={(v) => onChange(path, v)}
@@ -305,12 +286,7 @@ function renderField(
 
   if (prop.type === "boolean") {
     return (
-      <FormField
-        key={name}
-        label={label}
-        description={prop.description}
-        autoValue={autoValue}
-      >
+      <FormField key={name} label={label} description={prop.description}>
         <Switch
           checked={
             value === true || (value === undefined && prop.default === true)
@@ -355,12 +331,7 @@ function renderField(
 
     const step = prop.type === "integer" ? 1 : 0.1;
     return (
-      <FormField
-        key={name}
-        label={label}
-        description={prop.description}
-        autoValue={autoValue}
-      >
+      <FormField key={name} label={label} description={prop.description}>
         <NumberInput
           value={value != null ? Number(value) : undefined}
           onChange={(v) => onChange(path, v)}
@@ -394,12 +365,7 @@ function renderField(
   }
 
   return (
-    <FormField
-      key={name}
-      label={label}
-      description={prop.description}
-      autoValue={autoValue}
-    >
+    <FormField key={name} label={label} description={prop.description}>
       <Input
         className="h-8 w-32 text-xs"
         value={String(value ?? prop.default ?? "")}
@@ -413,6 +379,8 @@ function renderField(
 
 const HIDDEN = ["config_version", "tuning"];
 const DATA_PANEL_FIELDS = ["data", "features", "split"];
+// validation_ratio is replaced by training.inner_valid.ratio rendered manually below
+const TRAINING_HIDDEN_FIELDS = ["validation_ratio"];
 
 export function ConfigForm({
   schema,
@@ -443,6 +411,53 @@ export function ConfigForm({
     [rawProperties, defs, config],
   );
 
+  // Model section data
+  const modelConfig = (config.model as Record<string, unknown>) ?? {};
+  const modelName = (modelConfig.name as string) ?? "lgbm";
+  const modelParams = (modelConfig.params as Record<string, unknown>) ?? {};
+  const modelMetric = (modelConfig.metric as string) ?? "";
+
+  // auto_num_leaves conditional visibility
+  const autoNumLeaves = modelParams.auto_num_leaves === true;
+
+  // Evaluation metrics
+  const evalConfig = (config.evaluation as Record<string, unknown>) ?? {};
+  const selectedMetrics = Array.isArray(evalConfig.metrics)
+    ? (evalConfig.metrics as string[])
+    : [];
+
+  // Training section — inner_valid
+  const trainingConfig = (config.training as Record<string, unknown>) ?? {};
+  const innerValid =
+    (trainingConfig.inner_valid as Record<string, unknown>) ?? {};
+  const innerValidRatio = (innerValid.ratio as number) ?? 0.2;
+
+  // Calibration
+  const calibration =
+    config.calibration !== undefined
+      ? (config.calibration as Record<string, unknown> | null)
+      : null;
+
+  // Model metric options from ui_schema
+  const modelMetricOptions = useMemo(() => {
+    if (!task) return [];
+    const opts = uiSchema?.option_sets?.model_metric;
+    if (opts?.[task]) return opts[task];
+    return [];
+  }, [task, uiSchema]);
+
+  // Check which fields should be hidden by conditional_visibility
+  const shouldShowField = useCallback(
+    (key: string) => {
+      const vis = uiSchema?.conditional_visibility?.[key];
+      if (!vis) return true;
+      if (key === "num_leaves_ratio") return autoNumLeaves;
+      if (key === "num_leaves") return !autoNumLeaves;
+      return true;
+    },
+    [uiSchema, autoNumLeaves],
+  );
+
   if (!rawProperties) return null;
 
   // Separate sections
@@ -452,30 +467,13 @@ export function ConfigForm({
   for (const [name, prop] of Object.entries(properties)) {
     if (hiddenFields.includes(name)) continue;
     if (DATA_PANEL_FIELDS.includes(name)) continue;
-    if (name === "calibration") continue; // Handled by CalibrationSection
+    if (name === "calibration") continue;
     if (prop.type === "object" && prop.properties) {
       sections.push([name, prop]);
     } else {
       fields.push([name, prop]);
     }
   }
-
-  // Model params from config
-  const modelConfig = (config.model as Record<string, unknown>) ?? {};
-  const modelName = (modelConfig.name as string) ?? "lgbm";
-  const modelParams = (modelConfig.params as Record<string, unknown>) ?? {};
-
-  // Evaluation metrics from config
-  const evalConfig = (config.evaluation as Record<string, unknown>) ?? {};
-  const selectedMetrics = Array.isArray(evalConfig.metrics)
-    ? (evalConfig.metrics as string[])
-    : [];
-
-  // Calibration from config
-  const calibration =
-    config.calibration !== undefined
-      ? (config.calibration as Record<string, unknown> | null)
-      : null;
 
   return (
     <div className="space-y-4">
@@ -512,6 +510,11 @@ export function ConfigForm({
                   {sectionProp.properties &&
                     Object.entries(sectionProp.properties)
                       .filter(([n]) => !hiddenFields.includes(n))
+                      .filter(([n]) =>
+                        sectionName === "training"
+                          ? !TRAINING_HIDDEN_FIELDS.includes(n)
+                          : true,
+                      )
                       .filter(
                         ([, p]) => resolveSchema(p, defs).const === undefined,
                       )
@@ -526,10 +529,113 @@ export function ConfigForm({
                         ),
                       )}
 
-                  {/* model.params Key-Value editor */}
+                  {/* Model section: 3 sub-groups */}
                   {sectionName === "model" && (
                     <>
+                      {/* Sub-group 1: Smart Params */}
+                      <p className="text-xs text-muted-foreground font-medium mb-2">
+                        Smart Params
+                      </p>
+                      <FormField
+                        label="Auto Num Leaves"
+                        description="Automatically calculate num_leaves from data"
+                      >
+                        <Switch
+                          checked={autoNumLeaves}
+                          onCheckedChange={(checked) => {
+                            const newParams = {
+                              ...modelParams,
+                              auto_num_leaves: checked,
+                            };
+                            const updated = setNestedValue(
+                              config,
+                              ["model", "params"],
+                              newParams,
+                            );
+                            onChange(updated);
+                          }}
+                        />
+                      </FormField>
+
+                      {/* Sub-group 2: Model Params */}
                       <Separator className="my-3" />
+                      <p className="text-xs text-muted-foreground font-medium mb-2">
+                        Model Params
+                      </p>
+
+                      {/* Objective segment buttons */}
+                      {task && uiSchema?.option_sets?.objective?.[task] && (
+                        <FormField
+                          label="Objective"
+                          description="LightGBM objective function"
+                        >
+                          <div className="flex flex-wrap gap-1">
+                            {uiSchema.option_sets.objective[task].map(
+                              (obj: string) => (
+                                <button
+                                  key={obj}
+                                  type="button"
+                                  onClick={() => {
+                                    handleFieldChange(
+                                      ["model", "params", "objective"],
+                                      obj,
+                                    );
+                                  }}
+                                >
+                                  <Badge
+                                    variant={
+                                      modelParams.objective === obj
+                                        ? "default"
+                                        : "outline"
+                                    }
+                                    className="cursor-pointer text-xs"
+                                  >
+                                    {obj}
+                                  </Badge>
+                                </button>
+                              ),
+                            )}
+                          </div>
+                        </FormField>
+                      )}
+
+                      {/* Model metric chips */}
+                      {task && modelMetricOptions.length > 0 && (
+                        <div>
+                          <FormField
+                            label="Metric"
+                            description="LightGBM training metric"
+                          >
+                            <span />
+                          </FormField>
+                          <div className="flex flex-wrap gap-1.5 mt-1">
+                            {modelMetricOptions.map((m) => (
+                              <button
+                                key={m}
+                                type="button"
+                                onClick={() => {
+                                  const updated = setNestedValue(
+                                    config,
+                                    ["model", "metric"],
+                                    m,
+                                  );
+                                  onChange(updated);
+                                }}
+                              >
+                                <Badge
+                                  variant={
+                                    modelMetric === m ? "default" : "outline"
+                                  }
+                                  className="cursor-pointer text-xs"
+                                >
+                                  {m}
+                                </Badge>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       <KeyValueEditor
                         params={modelParams}
                         parameterHints={uiSchema?.parameter_hints}
@@ -542,8 +648,87 @@ export function ConfigForm({
                           onChange(updated);
                         }}
                         modelName={modelName}
+                        autoNumLeaves={autoNumLeaves}
+                        onAutoNumLeavesChange={(checked) => {
+                          const newParams = {
+                            ...modelParams,
+                            auto_num_leaves: checked,
+                          };
+                          const updated = setNestedValue(
+                            config,
+                            ["model", "params"],
+                            newParams,
+                          );
+                          onChange(updated);
+                        }}
+                        shouldShowField={shouldShowField}
                       />
+
+                      {/* Sub-group 3: Additional Params */}
+                      <Separator className="my-3" />
+                      <p className="text-xs text-muted-foreground font-medium mb-2">
+                        Additional Params
+                      </p>
+                      {/* AdditionalParamsEditor will be added here */}
                     </>
+                  )}
+
+                  {/* Training section: inner validation */}
+                  {sectionName === "training" &&
+                    uiSchema?.inner_valid_options && (
+                      <FormField
+                        label="Inner Validation"
+                        description="Inner validation strategy for early stopping"
+                      >
+                        <Select
+                          value={String(
+                            (
+                              trainingConfig.inner_valid as Record<
+                                string,
+                                unknown
+                              >
+                            )?.method ?? "holdout",
+                          )}
+                          onValueChange={(v) =>
+                            handleFieldChange(
+                              ["training", "inner_valid", "method"],
+                              v,
+                            )
+                          }
+                        >
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {uiSchema.inner_valid_options.map((opt: string) => (
+                              <SelectItem key={opt} value={opt}>
+                                {opt}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </FormField>
+                    )}
+                  {sectionName === "training" && (
+                    <FormField
+                      label="Inner Valid Ratio"
+                      description="Ratio for inner validation holdout"
+                    >
+                      <NumberInput
+                        value={innerValidRatio}
+                        onChange={(v) => {
+                          const updated = setNestedValue(
+                            config,
+                            ["training", "inner_valid", "ratio"],
+                            v ?? 0.2,
+                          );
+                          onChange(updated);
+                        }}
+                        step={0.05}
+                        min={0.01}
+                        max={0.5}
+                      />
+                    </FormField>
                   )}
                 </div>
               </AccordionContent>
@@ -590,6 +775,7 @@ export function ConfigForm({
           <CalibrationSection
             calibration={calibration}
             calibrationDefaults={uiSchema?.defaults?.calibration}
+            calibrationMethods={uiSchema?.calibration_methods}
             onChange={(cal) => {
               const updated = { ...config, calibration: cal };
               onChange(updated);
