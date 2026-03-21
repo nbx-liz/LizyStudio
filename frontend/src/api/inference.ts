@@ -70,7 +70,8 @@ export function fetchInferenceRecord(
   infId: string,
   jobId: string,
 ): Promise<InferenceRecord> {
-  return apiFetch(`/inference/${infId}?job_id=${encodeURIComponent(jobId)}`);
+  const eid = encodeURIComponent(infId);
+  return apiFetch(`/inference/${eid}?job_id=${encodeURIComponent(jobId)}`);
 }
 
 export function fetchInferencePredictions(
@@ -79,8 +80,9 @@ export function fetchInferencePredictions(
   rows = 50,
   offset = 0,
 ): Promise<PredictionsResponse> {
+  const eid = encodeURIComponent(infId);
   return apiFetch(
-    `/inference/${infId}/predictions?job_id=${encodeURIComponent(jobId)}&rows=${rows}&offset=${offset}`,
+    `/inference/${eid}/predictions?job_id=${encodeURIComponent(jobId)}&rows=${rows}&offset=${offset}`,
   );
 }
 
@@ -88,8 +90,9 @@ export function fetchInferenceMetrics(
   infId: string,
   jobId: string,
 ): Promise<Record<string, unknown>> {
+  const eid = encodeURIComponent(infId);
   return apiFetch(
-    `/inference/${infId}/metrics?job_id=${encodeURIComponent(jobId)}`,
+    `/inference/${eid}/metrics?job_id=${encodeURIComponent(jobId)}`,
   );
 }
 
@@ -98,13 +101,15 @@ export function fetchInferencePlot(
   jobId: string,
   plotType: string,
 ): Promise<{ plotly_json: string }> {
+  const eid = encodeURIComponent(infId);
   return apiFetch(
-    `/inference/${infId}/plot/${plotType}?job_id=${encodeURIComponent(jobId)}`,
+    `/inference/${eid}/plot/${encodeURIComponent(plotType)}?job_id=${encodeURIComponent(jobId)}`,
   );
 }
 
 export function getInferenceDownloadUrl(infId: string, jobId: string): string {
-  return `/api/inference/${infId}/download?job_id=${encodeURIComponent(jobId)}`;
+  const eid = encodeURIComponent(infId);
+  return `/api/inference/${eid}/download?job_id=${encodeURIComponent(jobId)}`;
 }
 
 export function fetchInferenceComparison(

@@ -47,7 +47,12 @@ class InferenceStore:
         self.jobs_dir = jobs_dir
 
     def _inf_dir(self, job_id: str, inf_id: str) -> Path:
-        return self.jobs_dir / job_id / "inferences" / inf_id
+        candidate = (self.jobs_dir / job_id / "inferences" / inf_id).resolve()
+        root = self.jobs_dir.resolve()
+        if not str(candidate).startswith(str(root) + "/"):
+            msg = f"Path escapes jobs_dir: {candidate}"
+            raise ValueError(msg)
+        return candidate
 
     # --- CRUD ---
 
@@ -259,7 +264,7 @@ def _compute_inference_metrics(
         oos_metrics: dict[str, Any] = dict(raw_nested.get("oof", {}))
     else:
         # Flat metrics fallback — use same values for both IS and OOS
-        is_metrics = {k: v for k, v in raw.items() if isinstance(v, (int, float))}
+        is_metrics = {k: v for k, v in raw.items() if isinstance(v, int | float)}
         oos_metrics = dict(is_metrics)
 
     return {"inf": inf_metrics, "is": is_metrics, "oos": oos_metrics}

@@ -68,7 +68,7 @@ export function PredictionsTable({ infId, jobId }: PredictionsTableProps) {
           </TableHeader>
           <TableBody>
             {data.data.map((row, i) => (
-              <TableRow key={`row-${i}`}>
+              <TableRow key={`row-${page * PAGE_SIZE + i}`}>
                 {data.columns.map((col) => (
                   <TableCell key={col} className="text-xs">
                     {formatCell(row[col])}
