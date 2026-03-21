@@ -240,6 +240,14 @@ class LizyMLAdapter:
         exported: Path = model.export(path)
         return str(exported)
 
+    def export_code(self, model: Any, path: str) -> str:
+        """Generate standalone Python code from *model* into *path*.
+
+        Return the resolved path.
+        """
+        exported: Path = model.export_code(path)
+        return str(exported)
+
     def load_model(self, path: str) -> Any:
         from lizyml import Model
 

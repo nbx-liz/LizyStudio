@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 from fastapi.testclient import TestClient
 
 from lizystudio.backends.lizyml import LizyMLAdapter
@@ -95,7 +97,7 @@ class TestLizyMLAdapterUiSchema:
         step_map = schema["step_map"]
         assert isinstance(step_map, dict)
         assert "learning_rate" in step_map
-        assert isinstance(step_map["learning_rate"], (int, float))
+        assert isinstance(step_map["learning_rate"], int | float)
 
     def test_conditional_visibility_calibration(self) -> None:
         schema = LizyMLAdapter().get_ui_schema()
@@ -217,7 +219,7 @@ class TestLizyMLAdapterUiSchema:
         assert schema["calibration_methods"] == ["platt", "isotonic", "beta"]
 
     def test_additional_params_is_list(self) -> None:
-        """additional_params must be a non-empty list of strings not in parameter_hints keys."""
+        """additional_params is a non-empty str list."""
         schema = LizyMLAdapter().get_ui_schema()
         additional = schema["additional_params"]
         assert isinstance(additional, list)
@@ -228,14 +230,14 @@ class TestLizyMLAdapterUiSchema:
             assert param not in hint_keys
 
     def test_search_space_catalog_has_group(self) -> None:
-        """Every search_space_catalog entry must have a 'group' key in the allowed set."""
+        """Each catalog entry has a valid 'group' key."""
         schema = LizyMLAdapter().get_ui_schema()
         allowed_groups = {"model_params", "smart_params"}
         for entry in schema["search_space_catalog"]:
             assert "group" in entry, f"Missing 'group' on catalog entry: {entry['key']}"
-            assert entry["group"] in allowed_groups, (
-                f"Invalid group '{entry['group']}' on entry '{entry['key']}'"
-            )
+            assert (
+                entry["group"] in allowed_groups
+            ), f"Invalid group '{entry['group']}' on entry '{entry['key']}'"
 
     def test_conditional_visibility_early_stopping(self) -> None:
         """conditional_visibility must include all three early_stopping sub-keys."""
@@ -249,9 +251,6 @@ class TestLizyMLAdapterUiSchema:
             assert key in vis, f"Missing conditional_visibility key: {key}"
 
 
-import sys
-
-
 def _reset_ui_schema_caches() -> None:
     """Reset module-level caches to force re-evaluation."""
     import lizystudio.backends.lizyml_ui_schema as m
@@ -261,7 +260,9 @@ def _reset_ui_schema_caches() -> None:
 
 
 class TestUiSchemaFallbacks:
-    def test_get_eval_metrics_fallback_when_import_fails(self, monkeypatch: object) -> None:
+    def test_get_eval_metrics_fallback_when_import_fails(
+        self, monkeypatch: object
+    ) -> None:
         """Lines 32-34: ImportError fallback in get_eval_metrics_by_task."""
         import lizystudio.backends.lizyml_ui_schema as m
 
@@ -275,7 +276,9 @@ class TestUiSchemaFallbacks:
         finally:
             _reset_ui_schema_caches()
 
-    def test_get_metric_directions_fallback_when_import_fails(self, monkeypatch: object) -> None:
+    def test_get_metric_directions_fallback_when_import_fails(
+        self, monkeypatch: object
+    ) -> None:
         """Lines 88-92: ImportError fallback in get_metric_directions."""
         import lizystudio.backends.lizyml_ui_schema as m
 
@@ -314,17 +317,13 @@ class TestUiSchemaEndpoint:
         data = resp.json()
         assert set(data.keys()) == UI_SCHEMA_KEYS
 
-    def test_get_ui_schema_parameter_hints_non_empty(
-        self, client: TestClient
-    ) -> None:
+    def test_get_ui_schema_parameter_hints_non_empty(self, client: TestClient) -> None:
         resp = client.get("/api/backends/ui-schema")
         hints = resp.json()["parameter_hints"]
         assert isinstance(hints, list)
         assert len(hints) > 0
 
-    def test_get_ui_schema_option_sets_has_tasks(
-        self, client: TestClient
-    ) -> None:
+    def test_get_ui_schema_option_sets_has_tasks(self, client: TestClient) -> None:
         resp = client.get("/api/backends/ui-schema")
         metric = resp.json()["option_sets"]["metric"]
         assert "binary" in metric

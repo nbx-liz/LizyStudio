@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -33,7 +32,7 @@ def _make_file(directory: Path, name: str, content: bytes = b"data") -> Path:
 
 
 def test_default_path_returns_allowed_root(client: TestClient, tmp_path: Path) -> None:
-    """When no path query param is provided the response path equals ALLOWED_FILES_ROOT."""
+    """No path param returns ALLOWED_FILES_ROOT."""
     import lizystudio.security as sec
 
     response = client.get("/api/files")
@@ -70,7 +69,9 @@ def test_default_path_lists_entries_in_root(client: TestClient, tmp_path: Path) 
 # ---------------------------------------------------------------------------
 
 
-def test_valid_subdirectory_returns_its_entries(client: TestClient, tmp_path: Path) -> None:
+def test_valid_subdirectory_returns_its_entries(
+    client: TestClient, tmp_path: Path
+) -> None:
     """Requesting a valid subdirectory returns entries contained within it."""
     import lizystudio.security as sec
 
@@ -134,7 +135,9 @@ def test_path_traversal_parent_is_none(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_nonexistent_directory_returns_empty_entries(client: TestClient, tmp_path: Path) -> None:
+def test_nonexistent_directory_returns_empty_entries(
+    client: TestClient, tmp_path: Path
+) -> None:
     """Requesting a path that does not exist returns an empty entries list."""
     import lizystudio.security as sec
 
@@ -145,8 +148,10 @@ def test_nonexistent_directory_returns_empty_entries(client: TestClient, tmp_pat
     assert body["entries"] == []
 
 
-def test_nonexistent_directory_path_in_response(client: TestClient, tmp_path: Path) -> None:
-    """The path field reflects the requested (resolved) path even when it doesn't exist."""
+def test_nonexistent_directory_path_in_response(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Path field reflects requested path even if missing."""
     import lizystudio.security as sec
 
     missing = sec.ALLOWED_FILES_ROOT / "no_such_dir"
@@ -210,7 +215,9 @@ def test_unsupported_extensions_are_excluded(
     assert filename not in names
 
 
-def test_extension_check_is_case_insensitive(client: TestClient, tmp_path: Path) -> None:
+def test_extension_check_is_case_insensitive(
+    client: TestClient, tmp_path: Path
+) -> None:
     """File extension matching ignores case (e.g., .CSV and .Parquet are valid)."""
     import lizystudio.security as sec
 
@@ -226,7 +233,9 @@ def test_extension_check_is_case_insensitive(client: TestClient, tmp_path: Path)
     assert "mixed.Parquet" in names
 
 
-def test_file_entry_reports_correct_extension(client: TestClient, tmp_path: Path) -> None:
+def test_file_entry_reports_correct_extension(
+    client: TestClient, tmp_path: Path
+) -> None:
     """Each file entry's extension field matches the actual file suffix (lowercased)."""
     import lizystudio.security as sec
 
@@ -297,7 +306,9 @@ def test_hidden_directories_are_excluded(client: TestClient, tmp_path: Path) -> 
 # ---------------------------------------------------------------------------
 
 
-def test_subdirectory_entry_has_type_directory(client: TestClient, tmp_path: Path) -> None:
+def test_subdirectory_entry_has_type_directory(
+    client: TestClient, tmp_path: Path
+) -> None:
     """Subdirectory entries report type='directory'."""
     import lizystudio.security as sec
 
@@ -311,7 +322,9 @@ def test_subdirectory_entry_has_type_directory(client: TestClient, tmp_path: Pat
     assert entries["nested_dir"]["type"] == "directory"
 
 
-def test_directory_entry_has_no_size_or_extension(client: TestClient, tmp_path: Path) -> None:
+def test_directory_entry_has_no_size_or_extension(
+    client: TestClient, tmp_path: Path
+) -> None:
     """Directory entries have size=None and extension=None."""
     import lizystudio.security as sec
 
@@ -372,7 +385,9 @@ def test_directories_listed_before_files(client: TestClient, tmp_path: Path) -> 
 # ---------------------------------------------------------------------------
 
 
-def test_response_schema_has_required_fields(client: TestClient, tmp_path: Path) -> None:
+def test_response_schema_has_required_fields(
+    client: TestClient, tmp_path: Path
+) -> None:
     """Every response contains path, parent, and entries fields."""
     response = client.get("/api/files")
     assert response.status_code == 200
@@ -382,7 +397,9 @@ def test_response_schema_has_required_fields(client: TestClient, tmp_path: Path)
     assert "entries" in body
 
 
-def test_file_entry_schema_has_required_fields(client: TestClient, tmp_path: Path) -> None:
+def test_file_entry_schema_has_required_fields(
+    client: TestClient, tmp_path: Path
+) -> None:
     """Every file entry contains name, type, size, and extension fields."""
     import lizystudio.security as sec
 
@@ -399,7 +416,9 @@ def test_file_entry_schema_has_required_fields(client: TestClient, tmp_path: Pat
     assert "extension" in entry
 
 
-def test_empty_directory_returns_empty_entries_list(client: TestClient, tmp_path: Path) -> None:
+def test_empty_directory_returns_empty_entries_list(
+    client: TestClient, tmp_path: Path
+) -> None:
     """An existing empty directory returns an empty entries list (not null)."""
     import lizystudio.security as sec
 

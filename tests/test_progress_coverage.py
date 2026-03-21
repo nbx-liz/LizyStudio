@@ -14,16 +14,16 @@ import asyncio
 import json
 import threading
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from lizystudio.ws.progress import ProgressBroadcaster, websocket_progress
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_websocket() -> MagicMock:
     """Return a mock WebSocket with async send_text / accept."""
@@ -57,9 +57,7 @@ class TestWebsocketProgressCompleted:
         async def run() -> None:
             broadcaster.set_loop(asyncio.get_event_loop())
             # Pre-populate queue so handler gets message immediately
-            task = asyncio.create_task(
-                websocket_progress(ws, "job-1", broadcaster)
-            )
+            task = asyncio.create_task(websocket_progress(ws, "job-1", broadcaster))
             # Give the handler time to subscribe and block on queue.get()
             await asyncio.sleep(0.01)
 
@@ -85,9 +83,7 @@ class TestWebsocketProgressError:
 
         async def run() -> None:
             broadcaster.set_loop(asyncio.get_event_loop())
-            task = asyncio.create_task(
-                websocket_progress(ws, "job-2", broadcaster)
-            )
+            task = asyncio.create_task(websocket_progress(ws, "job-2", broadcaster))
             await asyncio.sleep(0.01)
 
             broadcaster.send_error("job-2", "Training failed", "TRAIN_ERROR")
@@ -120,9 +116,7 @@ class TestWebsocketProgressKeepalive:
 
             call_count = 0
 
-            async def patched_wait_for(
-                coro: Any, timeout: float
-            ) -> dict[str, Any]:
+            async def patched_wait_for(coro: Any, timeout: float) -> dict[str, Any]:
                 nonlocal call_count
                 call_count += 1
                 if call_count == 1:
@@ -135,9 +129,7 @@ class TestWebsocketProgressKeepalive:
                 "lizystudio.ws.progress.asyncio.wait_for",
                 side_effect=patched_wait_for,
             ):
-                task = asyncio.create_task(
-                    websocket_progress(ws, "job-3", broadcaster)
-                )
+                task = asyncio.create_task(websocket_progress(ws, "job-3", broadcaster))
                 await asyncio.sleep(0.01)
                 broadcaster.send_completed("job-3", "done")
                 await real_wait_for(task, timeout=2.0)
@@ -146,9 +138,9 @@ class TestWebsocketProgressKeepalive:
 
         sent_texts = [c.args[0] for c in ws.send_text.call_args_list]
         payloads = [json.loads(t) for t in sent_texts]
-        assert any(p.get("type") == "ping" for p in payloads), (
-            "Expected at least one keepalive ping message"
-        )
+        assert any(
+            p.get("type") == "ping" for p in payloads
+        ), "Expected at least one keepalive ping message"
 
     def test_keepalive_ping_includes_job_id(self) -> None:
         """Keepalive ping payload must contain the correct job_id."""
@@ -163,9 +155,7 @@ class TestWebsocketProgressKeepalive:
 
             call_count = 0
 
-            async def patched_wait_for(
-                coro: Any, timeout: float
-            ) -> dict[str, Any]:
+            async def patched_wait_for(coro: Any, timeout: float) -> dict[str, Any]:
                 nonlocal call_count
                 call_count += 1
                 if call_count == 1:
@@ -177,9 +167,7 @@ class TestWebsocketProgressKeepalive:
                 "lizystudio.ws.progress.asyncio.wait_for",
                 side_effect=patched_wait_for,
             ):
-                task = asyncio.create_task(
-                    websocket_progress(ws, job_id, broadcaster)
-                )
+                task = asyncio.create_task(websocket_progress(ws, job_id, broadcaster))
                 await asyncio.sleep(0.01)
                 broadcaster.send_completed(job_id, "done")
                 await real_wait_for(task, timeout=2.0)
@@ -188,8 +176,7 @@ class TestWebsocketProgressKeepalive:
 
         sent_texts = [c.args[0] for c in ws.send_text.call_args_list]
         ping_payloads = [
-            json.loads(t) for t in sent_texts
-            if json.loads(t).get("type") == "ping"
+            json.loads(t) for t in sent_texts if json.loads(t).get("type") == "ping"
         ]
         assert len(ping_payloads) >= 1
         assert ping_payloads[0]["job_id"] == job_id
@@ -206,9 +193,7 @@ class TestWebsocketProgressKeepalive:
 
             timeouts_injected = 0
 
-            async def patched_wait_for(
-                coro: Any, timeout: float
-            ) -> dict[str, Any]:
+            async def patched_wait_for(coro: Any, timeout: float) -> dict[str, Any]:
                 nonlocal timeouts_injected
                 # Inject two consecutive timeouts then pass through
                 if timeouts_injected < 2:
@@ -249,16 +234,12 @@ class TestWebsocketProgressDisconnect:
 
         async def run() -> None:
             broadcaster.set_loop(asyncio.get_event_loop())
-            task = asyncio.create_task(
-                websocket_progress(ws, "job-disc", broadcaster)
-            )
+            task = asyncio.create_task(websocket_progress(ws, "job-disc", broadcaster))
             await asyncio.sleep(0.01)
 
             # Make send_text raise WebSocketDisconnect to simulate client drop
             ws.send_text.side_effect = WebSocketDisconnect(code=1001)
-            broadcaster.send_progress(
-                "job-disc", current=1, total=10, message="step"
-            )
+            broadcaster.send_progress("job-disc", current=1, total=10, message="step")
 
             # Handler should exit cleanly without raising
             await asyncio.wait_for(task, timeout=2.0)
@@ -290,15 +271,11 @@ class TestWebsocketProgressDisconnect:
 
         async def run() -> None:
             broadcaster.set_loop(asyncio.get_event_loop())
-            task = asyncio.create_task(
-                websocket_progress(ws, "job-unsub", broadcaster)
-            )
+            task = asyncio.create_task(websocket_progress(ws, "job-unsub", broadcaster))
             await asyncio.sleep(0.01)
 
             ws.send_text.side_effect = WebSocketDisconnect(code=1001)
-            broadcaster.send_progress(
-                "job-unsub", current=1, total=5, message="x"
-            )
+            broadcaster.send_progress("job-unsub", current=1, total=5, message="x")
             await asyncio.wait_for(task, timeout=2.0)
 
         _run(run())
@@ -346,6 +323,7 @@ class TestWebsocketProgressThreadSafety:
             def background_send() -> None:
                 # Small delay to ensure async task is waiting on queue
                 import time
+
                 time.sleep(0.05)
                 broadcaster.send_completed("job-thread", "from thread")
 
@@ -375,13 +353,12 @@ class TestWebsocketProgressThreadSafety:
             loop = asyncio.get_event_loop()
             broadcaster.set_loop(loop)
 
-            task = asyncio.create_task(
-                websocket_progress(ws, "job-multi", broadcaster)
-            )
+            task = asyncio.create_task(websocket_progress(ws, "job-multi", broadcaster))
             await asyncio.sleep(0.01)
 
             def background_send() -> None:
                 import time
+
                 time.sleep(0.02)
                 for i in range(3):
                     broadcaster.send_progress(
@@ -421,16 +398,12 @@ class TestWebsocketProgressThreadSafety:
 
             broadcaster.send_completed("job-concurrent", "done")
 
-            await asyncio.wait_for(
-                asyncio.gather(task1, task2), timeout=2.0
-            )
+            await asyncio.wait_for(asyncio.gather(task1, task2), timeout=2.0)
 
         _run(run())
 
         for ws in (ws1, ws2):
-            payloads = [
-                json.loads(c.args[0]) for c in ws.send_text.call_args_list
-            ]
+            payloads = [json.loads(c.args[0]) for c in ws.send_text.call_args_list]
             assert any(p["type"] == "completed" for p in payloads)
 
     def test_subscribe_from_thread_safe(self) -> None:
@@ -452,8 +425,7 @@ class TestWebsocketProgressThreadSafety:
                 queues.append(q)
 
         threads = [
-            threading.Thread(target=subscribe_in_thread, daemon=True)
-            for _ in range(10)
+            threading.Thread(target=subscribe_in_thread, daemon=True) for _ in range(10)
         ]
         for t in threads:
             t.start()

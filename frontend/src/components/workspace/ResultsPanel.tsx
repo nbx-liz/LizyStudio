@@ -407,7 +407,7 @@ function CompletedView({
             variant="outline"
             size="sm"
             onClick={() => {
-              toast.info("Export Code will be available in H-0027");
+              window.open(`/api/jobs/${job.job_id}/export-code`, "_blank");
             }}
           >
             <Download className="mr-1 h-3 w-3" />

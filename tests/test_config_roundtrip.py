@@ -1,7 +1,7 @@
-"""Test that the config defaults round-trip through PUT /config without validation errors.
+"""Test config defaults round-trip through PUT /config.
 
 Reproduces the E2E failure in workspace-flow.spec.ts where:
-  GET /config/defaults → PUT /config → saved: false (validation errors)
+  GET /config/defaults -> PUT /config -> saved: false
 """
 
 from __future__ import annotations
@@ -31,9 +31,7 @@ class TestConfigRoundTrip:
     ) -> None:
         """Config from GET /defaults should be saveable via PUT /config."""
         # 1. Load data
-        load_res = client.post(
-            "/api/workspace/data/path", json={"path": str(test_csv)}
-        )
+        load_res = client.post("/api/workspace/data/path", json={"path": str(test_csv)})
         assert load_res.status_code == 200
 
         # 2. Get defaults
@@ -60,9 +58,7 @@ class TestConfigRoundTrip:
     ) -> None:
         """Config from GET /defaults merged with data.path should save."""
         # 1. Load data
-        load_res = client.post(
-            "/api/workspace/data/path", json={"path": str(test_csv)}
-        )
+        load_res = client.post("/api/workspace/data/path", json={"path": str(test_csv)})
         assert load_res.status_code == 200
         data_path = load_res.json()["data_ref"]["path"]
 
@@ -87,7 +83,7 @@ class TestConfigRoundTrip:
     def test_workspace_has_config_after_successful_save(
         self, client: TestClient, test_csv: Path
     ) -> None:
-        """After successful PUT /config, workspace status should show has_config=True."""
+        """After PUT /config, status shows has_config=True."""
         client.post("/api/workspace/data/path", json={"path": str(test_csv)})
         defaults = client.get(
             "/api/workspace/config/defaults?task=binary&target=target"
