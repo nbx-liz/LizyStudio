@@ -449,7 +449,21 @@ function CompletedView({
               variant="outline"
               size="sm"
               className="mt-2"
-              onClick={() => onApplyToFit(tuneResult.best_params)}
+              onClick={() => {
+                // Restore full config snapshot with best_params applied
+                const tuneConfig = {
+                  ...(job.config as Record<string, unknown>),
+                };
+                const model = {
+                  ...((tuneConfig.model as Record<string, unknown>) ?? {}),
+                };
+                model.params = {
+                  ...((model.params as Record<string, unknown>) ?? {}),
+                  ...tuneResult.best_params,
+                };
+                tuneConfig.model = model;
+                onApplyToFit(tuneConfig);
+              }}
             >
               Apply to Fit
             </Button>

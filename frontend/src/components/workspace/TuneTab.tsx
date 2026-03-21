@@ -186,6 +186,7 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
             task={task}
             objectiveOptions={objectiveOptions}
             metricOptions={modelMetricOptions}
+            additionalParams={uiSchema?.additional_params}
           />
         </AccordionContent>
       </AccordionItem>

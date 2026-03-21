@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+
+import numpy as np
+import pandas as pd
 
 from lizystudio.backends.lizyml import LizyMLAdapter
 from lizystudio.backends.registry import get_adapter
-from lizystudio.backends.types import BackendInfo, ConfigSchema
+from lizystudio.backends.types import (
+    BackendInfo,
+    ConfigSchema,
+    PlotData,
+    PredictionSummary,
+)
 
 
 def test_adapter_info() -> None:
@@ -296,10 +305,364 @@ def test_export_code_calls_model_export_code() -> None:
 
 def test_export_code_returns_str() -> None:
     """adapter.export_code() must return a str, not a Path object."""
-    from pathlib import Path
-
     adapter = LizyMLAdapter()
     mock_model = MagicMock()
     mock_model.export_code.return_value = Path("/some/path")
     result = adapter.export_code(mock_model, "/some/output")
     assert isinstance(result, str)
+
+
+# --- get_ui_schema ---
+
+
+def test_get_ui_schema_returns_dict() -> None:
+    """get_ui_schema() must return a non-empty dict."""
+    adapter = LizyMLAdapter()
+    schema = adapter.get_ui_schema()
+    assert isinstance(schema, dict)
+    assert len(schema) > 0
+
+
+# --- get_default_config ---
+
+
+def test_get_default_config_binary() -> None:
+    """get_default_config() returns a validated binary config dict."""
+    adapter = LizyMLAdapter()
+    config = adapter.get_default_config(task="binary", target="label")
+    assert config["task"] == "binary"
+    assert config["data"]["target"] == "label"
+    assert config["split"]["method"] == "stratified_kfold"
+
+
+def test_get_default_config_regression() -> None:
+    """get_default_config() uses kfold split for regression tasks."""
+    adapter = LizyMLAdapter()
+    config = adapter.get_default_config(task="regression", target="price")
+    assert config["task"] == "regression"
+    assert config["split"]["method"] == "kfold"
+
+
+def test_get_default_config_multiclass() -> None:
+    """get_default_config() uses stratified_kfold for multiclass."""
+    adapter = LizyMLAdapter()
+    config = adapter.get_default_config(task="multiclass", target="class")
+    assert config["task"] == "multiclass"
+    assert config["split"]["method"] == "stratified_kfold"
+
+
+# --- validate_config success path ---
+
+
+def test_validate_config_valid_returns_empty_list() -> None:
+    """validate_config() returns empty list when config is valid."""
+    adapter = LizyMLAdapter()
+    valid_config = adapter.get_default_config(task="binary", target="y")
+    errors = adapter.validate_config(valid_config)
+    assert errors == []
+
+
+# --- load_config_from_file edge cases ---
+
+
+def test_load_config_unknown_extension_fallback_yaml() -> None:
+    """Unknown file extension falls back to YAML parser."""
+    adapter = LizyMLAdapter()
+    content = b"task: binary\nmodel:\n  name: lightgbm"
+    result = adapter.load_config_from_file(content, "config.txt")
+    assert result["task"] == "binary"
+
+
+def test_load_config_unknown_extension_fallback_json() -> None:
+    """Unknown extension falls back to JSON when YAML fails."""
+    adapter = LizyMLAdapter()
+    # Pure JSON is also valid YAML in most cases, but this tests the branch
+    # where a file with no recognized extension contains JSON.
+    content = b'{"task": "regression", "model": {"name": "lgbm"}}'
+    result = adapter.load_config_from_file(content, "config.cfg")
+    assert result["task"] == "regression"
+
+
+def test_load_config_unknown_extension_yaml_error_falls_back_to_json() -> None:
+    """Unknown extension: when YAML raises YAMLError the parser falls back to JSON."""
+    from unittest.mock import patch as _patch
+
+    import yaml
+
+    adapter = LizyMLAdapter()
+    content = b'{"task": "binary"}'
+    # Force yaml.safe_load to raise so we exercise the except branch
+    with _patch("yaml.safe_load", side_effect=yaml.YAMLError("forced")):
+        result = adapter.load_config_from_file(content, "data.cfg")
+    assert result["task"] == "binary"
+
+
+def test_load_config_non_mapping_raises() -> None:
+    """load_config_from_file raises ValueError when content is not a mapping."""
+    import pytest
+
+    adapter = LizyMLAdapter()
+    content = b"- item1\n- item2"  # YAML list, not a dict
+    with pytest.raises(ValueError, match="Expected a mapping"):
+        adapter.load_config_from_file(content, "config.yaml")
+
+
+# --- create_model ---
+
+
+def test_create_model_calls_lizyml_model() -> None:
+    """create_model() instantiates lizyml.Model with config and dataframe."""
+    adapter = LizyMLAdapter()
+    mock_model_class = MagicMock()
+    mock_df = pd.DataFrame({"x": [1, 2], "y": [0, 1]})
+    config = {"task": "binary"}
+    with patch("lizystudio.backends.lizyml.LizyMLAdapter.create_model") as mock_create:
+        mock_create.return_value = MagicMock()
+        result = (
+            adapter.create_model.__wrapped__(adapter, config, mock_df)
+            if hasattr(adapter.create_model, "__wrapped__")
+            else mock_create(config, mock_df)
+        )
+    # Verify we can at least call into the method without error via a real patch
+    with patch("lizyml.Model", return_value=mock_model_class) as mock_model_cls:
+        result = adapter.create_model(config, mock_df)
+        mock_model_cls.assert_called_once_with(config, data=mock_df)
+        assert result is mock_model_class
+
+
+# --- predict ---
+
+
+def test_predict_returns_prediction_summary() -> None:
+    """predict() returns a PredictionSummary with correct predictions length."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_result = MagicMock()
+    mock_result.pred = np.array([1.0, 2.0, 3.0])
+    mock_result.proba = None
+    mock_result.warnings = ["test warning"]
+    mock_model.predict.return_value = mock_result
+
+    result = adapter.predict(mock_model, pd.DataFrame({"x": [1, 2, 3]}))
+
+    assert isinstance(result, PredictionSummary)
+    assert len(result.predictions) == 3
+    assert result.warnings == ["test warning"]
+
+
+def test_predict_includes_proba_column_when_present() -> None:
+    """predict() adds proba column to predictions DataFrame when proba is not None."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_result = MagicMock()
+    mock_result.pred = np.array([0.0, 1.0])
+    mock_result.proba = np.array([0.2, 0.8])
+    mock_result.warnings = []
+    mock_model.predict.return_value = mock_result
+
+    result = adapter.predict(mock_model, pd.DataFrame({"x": [1, 2]}))
+
+    assert "proba" in result.predictions.columns
+    assert list(result.predictions["proba"]) == [0.2, 0.8]
+
+
+def test_predict_passes_return_shap_flag() -> None:
+    """predict() forwards return_shap kwarg to model.predict()."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_result = MagicMock()
+    mock_result.pred = np.array([1.0])
+    mock_result.proba = None
+    mock_result.warnings = []
+    mock_model.predict.return_value = mock_result
+
+    data = pd.DataFrame({"x": [1]})
+    adapter.predict(mock_model, data, return_shap=True)
+
+    # DataFrame equality is ambiguous in assert_called_once_with; check kwargs directly.
+    mock_model.predict.assert_called_once()
+    _, call_kwargs = mock_model.predict.call_args
+    assert call_kwargs.get("return_shap") is True
+
+
+# --- evaluate_table ---
+
+
+def test_evaluate_table_returns_records() -> None:
+    """evaluate_table() returns a list of dicts from the model's evaluate_table."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.evaluate_table.return_value = pd.DataFrame(
+        {"metric": ["auc"], "value": [0.9]}
+    )
+    result = adapter.evaluate_table(mock_model)
+    assert isinstance(result, list)
+    assert len(result) == 1
+
+
+def test_evaluate_table_empty_dataframe() -> None:
+    """evaluate_table() returns empty list when model returns empty DataFrame."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.evaluate_table.return_value = pd.DataFrame()
+    result = adapter.evaluate_table(mock_model)
+    assert result == []
+
+
+# --- split_summary ---
+
+
+def test_split_summary_returns_fold_sizes() -> None:
+    """split_summary() returns per-fold train/valid sizes."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.fit_result.splits.outer = [
+        (np.array([0, 1, 2]), np.array([3, 4])),
+        (np.array([3, 4]), np.array([0, 1, 2])),
+    ]
+    result = adapter.split_summary(mock_model)
+
+    assert len(result) == 2
+    assert result[0]["fold"] == 0
+    assert result[0]["train_size"] == 3
+    assert result[0]["valid_size"] == 2
+    assert result[1]["fold"] == 1
+    assert result[1]["train_size"] == 2
+    assert result[1]["valid_size"] == 3
+
+
+def test_split_summary_empty_splits() -> None:
+    """split_summary() returns empty list when no splits are present."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.fit_result.splits.outer = []
+    result = adapter.split_summary(mock_model)
+    assert result == []
+
+
+# --- importance ---
+
+
+def test_importance_returns_dict() -> None:
+    """importance() returns the raw dict from model.importance()."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.importance.return_value = {"f1": 0.7, "f2": 0.3}
+
+    result = adapter.importance(mock_model)
+
+    mock_model.importance.assert_called_once_with(kind="split")
+    assert result == {"f1": 0.7, "f2": 0.3}
+
+
+def test_importance_custom_kind() -> None:
+    """importance() forwards kind parameter to model.importance()."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.importance.return_value = {"f1": 100.0}
+
+    adapter.importance(mock_model, kind="gain")
+
+    mock_model.importance.assert_called_once_with(kind="gain")
+
+
+# --- confusion_matrix ---
+
+
+def test_confusion_matrix_returns_dict_with_plain_values() -> None:
+    """confusion_matrix() returns a plain dict (non-DataFrame values passed through)."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.confusion_matrix.return_value = {
+        "accuracy": 0.95,
+        "threshold": 0.5,
+    }
+    result = adapter.confusion_matrix(mock_model)
+
+    mock_model.confusion_matrix.assert_called_once_with(threshold=0.5)
+    assert result["accuracy"] == 0.95
+    assert result["threshold"] == 0.5
+
+
+def test_confusion_matrix_converts_dataframe_values() -> None:
+    """confusion_matrix() converts DataFrame values to dicts."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    inner_df = pd.DataFrame({"TP": [10], "FP": [2], "FN": [3], "TN": [85]})
+    mock_model.confusion_matrix.return_value = {
+        "matrix": inner_df,
+        "accuracy": 0.95,
+    }
+    result = adapter.confusion_matrix(mock_model, threshold=0.3)
+
+    mock_model.confusion_matrix.assert_called_once_with(threshold=0.3)
+    assert isinstance(result["matrix"], dict)
+    assert result["accuracy"] == 0.95
+
+
+# --- plot ---
+
+
+def test_plot_known_type_returns_plot_data() -> None:
+    """plot() dispatches to correct model method and wraps result in PlotData."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_fig = MagicMock()
+    mock_fig.to_json.return_value = '{"data": []}'
+    mock_model.plot_learning_curve.return_value = mock_fig
+
+    result = adapter.plot(mock_model, "learning-curve")
+
+    mock_model.plot_learning_curve.assert_called_once()
+    assert isinstance(result, PlotData)
+    assert result.plotly_json == '{"data": []}'
+
+
+def test_plot_unknown_type_raises_value_error() -> None:
+    """plot() raises ValueError for unrecognised plot type."""
+    import pytest
+
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    with pytest.raises(ValueError, match="Unknown plot type"):
+        adapter.plot(mock_model, "nonexistent-plot")
+
+
+def test_plot_all_dispatch_keys() -> None:
+    """plot() resolves every key in _PLOT_DISPATCH without raising."""
+    adapter = LizyMLAdapter()
+    for plot_type, method_name in LizyMLAdapter._PLOT_DISPATCH.items():
+        mock_model = MagicMock()
+        mock_fig = MagicMock()
+        mock_fig.to_json.return_value = "{}"
+        getattr(mock_model, method_name).return_value = mock_fig
+        result = adapter.plot(mock_model, plot_type)
+        assert isinstance(result, PlotData)
+
+
+# --- export_model ---
+
+
+def test_export_model_calls_model_export() -> None:
+    """export_model() delegates to model.export() and returns str path."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.export.return_value = Path("/tmp/exported_model")
+    result = adapter.export_model(mock_model, "/tmp/output")
+    mock_model.export.assert_called_once_with("/tmp/output")
+    assert result == "/tmp/exported_model"
+    assert isinstance(result, str)
+
+
+# --- load_model ---
+
+
+def test_load_model_calls_lizyml_model_load() -> None:
+    """load_model() calls lizyml.Model.load() with the given path."""
+    adapter = LizyMLAdapter()
+    mock_loaded = MagicMock()
+    with patch("lizyml.Model") as mock_model_cls:
+        mock_model_cls.load.return_value = mock_loaded
+        result = adapter.load_model("/tmp/saved_model")
+        mock_model_cls.load.assert_called_once_with("/tmp/saved_model")
+        assert result is mock_loaded

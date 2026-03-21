@@ -19,35 +19,19 @@ import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { CalibrationSection } from "./CalibrationSection";
-import { getNestedValue, setNestedValue } from "./config-utils";
+import {
+  type Defs,
+  getNestedValue,
+  resolveProperties,
+  resolveSchema,
+  type SchemaProperty,
+  setNestedValue,
+} from "./config-utils";
 import { FeatureWeightsEditor } from "./FeatureWeightsEditor";
 import { FormField } from "./FormField";
 import { KeyValueEditor } from "./KeyValueEditor";
 import { MetricsChips } from "./MetricsChips";
 import { NumberInput } from "./NumberInput";
-
-// --- Schema types ---
-
-interface SchemaProperty {
-  type?: string;
-  title?: string;
-  description?: string;
-  default?: unknown;
-  enum?: unknown[];
-  const?: unknown;
-  properties?: Record<string, SchemaProperty>;
-  items?: SchemaProperty;
-  minimum?: number;
-  maximum?: number;
-  $ref?: string;
-  anyOf?: SchemaProperty[];
-  oneOf?: SchemaProperty[];
-  discriminator?: { propertyName?: string };
-  additionalProperties?: boolean | SchemaProperty;
-  nullable?: boolean;
-}
-
-type Defs = Record<string, SchemaProperty>;
 
 interface ConfigFormProps {
   schema: Record<string, unknown>;
@@ -57,126 +41,6 @@ interface ConfigFormProps {
   task?: string | null;
   uiSchema?: import("@/api/types").UiSchema;
   columns?: string[];
-}
-
-// --- Schema resolution ---
-
-function resolveSchema(
-  prop: SchemaProperty,
-  defs: Defs,
-  currentValue?: unknown,
-  _visited: Set<string> = new Set(),
-): SchemaProperty {
-  if (prop.$ref) {
-    if (_visited.has(prop.$ref)) return prop; // cycle guard
-    const nextVisited = new Set(_visited).add(prop.$ref);
-    const refName = prop.$ref.replace("#/$defs/", "");
-    const resolved = defs[refName];
-    if (resolved) {
-      return {
-        ...resolveSchema(resolved, defs, currentValue, nextVisited),
-        ...(prop.title ? { title: prop.title } : {}),
-        ...(prop.default !== undefined ? { default: prop.default } : {}),
-        ...(prop.description ? { description: prop.description } : {}),
-      };
-    }
-  }
-
-  if (prop.anyOf) {
-    const hasNull = prop.anyOf.some((v) => v.type === "null");
-    const nonNull = prop.anyOf.filter(
-      (v) =>
-        v.type !== "null" &&
-        (v.type !== undefined || v.$ref || v.oneOf || v.anyOf),
-    );
-    const effectiveValue = currentValue ?? prop.default;
-
-    if (nonNull.length === 1) {
-      const resolved = resolveSchema(
-        nonNull[0],
-        defs,
-        effectiveValue,
-        _visited,
-      );
-      return {
-        ...resolved,
-        ...(prop.title ? { title: prop.title } : {}),
-        ...(prop.default !== undefined ? { default: prop.default } : {}),
-        ...(prop.description ? { description: prop.description } : {}),
-        ...(hasNull ? { nullable: true } : {}),
-      };
-    }
-    const withOneOf = nonNull.find((v) => v.oneOf || v.$ref);
-    if (withOneOf) {
-      return resolveSchema(
-        {
-          ...withOneOf,
-          ...(prop.title ? { title: prop.title } : {}),
-          ...(prop.default !== undefined ? { default: prop.default } : {}),
-          ...(hasNull ? { nullable: true } : {}),
-        },
-        defs,
-        effectiveValue,
-        _visited,
-      );
-    }
-    if (nonNull.length > 0) {
-      return {
-        ...resolveSchema(nonNull[0], defs, effectiveValue, _visited),
-        ...(hasNull ? { nullable: true } : {}),
-      };
-    }
-  }
-
-  if (prop.oneOf && prop.discriminator?.propertyName) {
-    const discKey = prop.discriminator.propertyName;
-    const effectiveValue = currentValue ?? prop.default;
-    const currentObj =
-      effectiveValue != null && typeof effectiveValue === "object"
-        ? (effectiveValue as Record<string, unknown>)
-        : null;
-    const discValue = currentObj?.[discKey];
-
-    for (const variant of prop.oneOf) {
-      const resolved = resolveSchema(variant, defs, currentValue, _visited);
-      const constVal = resolved.properties?.[discKey]?.const;
-      if (constVal !== undefined && String(constVal) === String(discValue)) {
-        return { ...resolved, ...(prop.title ? { title: prop.title } : {}) };
-      }
-    }
-    if (prop.oneOf.length > 0) {
-      const resolved = resolveSchema(
-        prop.oneOf[0],
-        defs,
-        currentValue,
-        _visited,
-      );
-      return { ...resolved, ...(prop.title ? { title: prop.title } : {}) };
-    }
-  }
-
-  if (prop.oneOf && !prop.discriminator && prop.oneOf.length > 0) {
-    const resolved = resolveSchema(prop.oneOf[0], defs, currentValue, _visited);
-    return {
-      ...resolved,
-      ...(prop.title ? { title: prop.title } : {}),
-      ...(prop.default !== undefined ? { default: prop.default } : {}),
-    };
-  }
-
-  return prop;
-}
-
-function resolveProperties(
-  props: Record<string, SchemaProperty>,
-  defs: Defs,
-  values: Record<string, unknown>,
-): Record<string, SchemaProperty> {
-  const result: Record<string, SchemaProperty> = {};
-  for (const [name, prop] of Object.entries(props)) {
-    result[name] = resolveSchema(prop, defs, values[name]);
-  }
-  return result;
 }
 
 // --- Field renderer ---
@@ -555,6 +419,45 @@ export function ConfigForm({
                           onChange(updated);
                         }}
                       />
+
+                      {/* Balanced */}
+                      <FormField
+                        label="Balanced"
+                        description="Class weight balancing"
+                      >
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const current = modelConfig.balanced;
+                              handleFieldChange(
+                                ["model", "balanced"],
+                                current == null ? true : null,
+                              );
+                            }}
+                          >
+                            <Badge
+                              variant={
+                                modelConfig.balanced == null
+                                  ? "default"
+                                  : "outline"
+                              }
+                              className="cursor-pointer text-xs"
+                            >
+                              {modelConfig.balanced == null
+                                ? "Auto \u2713"
+                                : "Auto"}
+                            </Badge>
+                          </button>
+                          <Switch
+                            checked={modelConfig.balanced === true}
+                            disabled={modelConfig.balanced == null}
+                            onCheckedChange={(v) =>
+                              handleFieldChange(["model", "balanced"], v)
+                            }
+                          />
+                        </div>
+                      </FormField>
 
                       {/* Sub-group 2: Model Params */}
                       <Separator className="my-3" />

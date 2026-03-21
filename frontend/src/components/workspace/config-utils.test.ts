@@ -3,7 +3,13 @@
  * Covers: resolveSchema, getNestedValue, setNestedValue
  */
 import { describe, expect, it } from "vitest";
-import { getNestedValue, setNestedValue } from "./config-utils";
+import {
+  type Defs,
+  getNestedValue,
+  resolveSchema,
+  type SchemaProperty,
+  setNestedValue,
+} from "./config-utils";
 
 describe("setNestedValue", () => {
   it("sets a top-level key", () => {
@@ -73,76 +79,6 @@ describe("getNestedValue", () => {
 });
 
 // --- resolveSchema ---
-interface SchemaProperty {
-  type?: string;
-  title?: string;
-  description?: string;
-  default?: unknown;
-  enum?: unknown[];
-  const?: unknown;
-  properties?: Record<string, SchemaProperty>;
-  items?: SchemaProperty;
-  minimum?: number;
-  maximum?: number;
-  $ref?: string;
-  anyOf?: SchemaProperty[];
-  oneOf?: SchemaProperty[];
-  discriminator?: { propertyName?: string };
-  additionalProperties?: boolean | SchemaProperty;
-  nullable?: boolean;
-}
-
-type Defs = Record<string, SchemaProperty>;
-
-function resolveSchema(
-  prop: SchemaProperty,
-  defs: Defs,
-  currentValue?: unknown,
-  _visited: Set<string> = new Set(),
-): SchemaProperty {
-  if (prop.$ref) {
-    if (_visited.has(prop.$ref)) return prop;
-    const nextVisited = new Set(_visited).add(prop.$ref);
-    const refName = prop.$ref.replace("#/$defs/", "");
-    const resolved = defs[refName];
-    if (resolved) {
-      return {
-        ...resolveSchema(resolved, defs, currentValue, nextVisited),
-        ...(prop.title ? { title: prop.title } : {}),
-        ...(prop.default !== undefined ? { default: prop.default } : {}),
-        ...(prop.description ? { description: prop.description } : {}),
-      };
-    }
-  }
-
-  if (prop.anyOf) {
-    const hasNull = prop.anyOf.some((v) => v.type === "null");
-    const nonNull = prop.anyOf.filter(
-      (v) =>
-        v.type !== "null" &&
-        (v.type !== undefined || v.$ref || v.oneOf || v.anyOf),
-    );
-    const effectiveValue = currentValue ?? prop.default;
-
-    if (nonNull.length === 1) {
-      const resolved = resolveSchema(
-        nonNull[0],
-        defs,
-        effectiveValue,
-        _visited,
-      );
-      return {
-        ...resolved,
-        ...(prop.title ? { title: prop.title } : {}),
-        ...(prop.default !== undefined ? { default: prop.default } : {}),
-        ...(prop.description ? { description: prop.description } : {}),
-        ...(hasNull ? { nullable: true } : {}),
-      };
-    }
-  }
-
-  return prop;
-}
 
 describe("resolveSchema", () => {
   it("resolves a simple $ref", () => {
