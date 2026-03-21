@@ -16,11 +16,9 @@ function createTestCsv(): string {
   return csvPath;
 }
 
-/** Poll GET /api/jobs/{jobId} until status is completed or failed. */
+/** Poll GET /api/jobs/{jobId} until terminal status. */
 async function pollJobUntilDone(
-  request: ReturnType<typeof test.info>["_"] extends never
-    ? never
-    : { get: (url: string) => Promise<{ json: () => Promise<Record<string, unknown>>; status: () => number }> },
+  request: import("@playwright/test").APIRequestContext,
   jobId: string,
   timeoutMs = 90_000,
   intervalMs = 1_000,
@@ -30,7 +28,11 @@ async function pollJobUntilDone(
     const res = await request.get(`${API}/jobs/${jobId}`);
     expect(res.status()).toBe(200);
     const body = await res.json();
-    if (body.status === "completed" || body.status === "failed") {
+    if (
+      body.status === "completed" ||
+      body.status === "failed" ||
+      body.status === "cancelled"
+    ) {
       return body;
     }
     await new Promise((r) => setTimeout(r, intervalMs));
