@@ -560,7 +560,7 @@ wheels = [
 
 [[package]]
 name = "lizyml"
-version = "0.1.2"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "joblib" },
@@ -574,9 +574,9 @@ dependencies = [
     { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a3/91/eb21115847e7b74bdc740790390db87224d4b07e8f128101e01ba070bb26/lizyml-0.1.2.tar.gz", hash = "sha256:79814dc8370ec406078602ee120737d821222fec9f4eea483981dadcad133f4e", size = 425891, upload-time = "2026-03-09T15:48:53.39Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6b/d4/17e319208f38046e9e0e6d2bbbf86c0116a5936217a574f6d7905c929800/lizyml-0.4.0.tar.gz", hash = "sha256:54cdd9fdafca978cb2dd4b81ac697271457b568732377533eb711179737d9047", size = 539039, upload-time = "2026-03-20T18:14:27.393Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0c/ee/99a55e02cecfbfc9fd12648af82790e9f201cf44579b1ada38beae02c45e/lizyml-0.1.2-py3-none-any.whl", hash = "sha256:b1da68fbf7c93a1602fc2feab3c5ebbafb57b2267f47a93cc8181ef47cb34e25", size = 117942, upload-time = "2026-03-09T15:48:51.993Z" },
+    { url = "https://files.pythonhosted.org/packages/08/50/d0af394946c58179f8d7ad98fbacfd1153eefcec33080865a03b664dcb23/lizyml-0.4.0-py3-none-any.whl", hash = "sha256:ec5ab1e27d395902fb801dce96f94b5f526d13fcd89c68e2a2abd95e81874336", size = 141705, upload-time = "2026-03-20T18:14:25.677Z" },
 ]
 
 [package.optional-dependencies]
@@ -623,7 +623,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
-    { name = "lizyml", extras = ["calibration", "explain", "plots", "tuning"] },
+    { name = "lizyml", extras = ["calibration", "explain", "plots", "tuning"], specifier = ">=0.4.0,<0.5.0" },
     { name = "python-multipart", specifier = ">=0.0.18" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
     { name = "websockets", specifier = ">=14.0" },

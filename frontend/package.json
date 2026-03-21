@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "check": "biome check src/",
     "format": "biome format --write src/",
-    "test": "echo 'No tests yet'",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "test:e2e": "playwright test",
     "storybook": "echo 'No storybook yet'",
     "generate:api": "openapi-typescript openapi.json -o src/api/generated/schema.d.ts"
@@ -39,13 +40,17 @@
   "devDependencies": {
     "@biomejs/biome": "^2.4.6",
     "@playwright/test": "^1.58.2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/js-yaml": "^4.0.9",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@types/react-plotly.js": "^2.6.4",
     "@vitejs/plugin-react": "^5.1.4",
+    "jsdom": "^28.1.0",
     "openapi-typescript": "^7.13.0",
     "typescript": "~5.9.3",
-    "vite": "^6.4.1"
+    "vite": "^6.4.1",
+    "vitest": "^4.1.0"
   }
 }

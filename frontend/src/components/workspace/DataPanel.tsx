@@ -1,7 +1,7 @@
 import { Upload } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import type { ColumnInfo } from "@/api/types";
+import type { ColumnInfo, UiSchema } from "@/api/types";
 import {
   fetchColumns,
   fetchConfig,
@@ -28,7 +28,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Slider } from "@/components/ui/slider";
 import {
   Table,
   TableBody,
@@ -37,22 +36,21 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  applyCvDataFields,
+  buildSplitConfig,
+  CvSection,
+  type CvState,
+  INITIAL_CV_STATE,
+  resetCvState,
+} from "./CvSection";
+import { getDefaultCvStrategy } from "./constants";
 import { FileBrowser } from "./FileBrowser";
 
 type SourceType = "path" | "upload";
 type TaskType = "binary" | "multiclass" | "regression";
-type CvStrategy =
-  | "KFold"
-  | "StratifiedKFold"
-  | "GroupKFold"
-  | "TimeSeriesSplit";
 
-const CV_METHOD_MAP: Record<CvStrategy, string> = {
-  KFold: "kfold",
-  StratifiedKFold: "stratified_kfold",
-  GroupKFold: "group_kfold",
-  TimeSeriesSplit: "time_series",
-};
+const TASK_OPTIONS: TaskType[] = ["binary", "multiclass", "regression"];
 
 interface ColumnOverride {
   excluded: boolean;
@@ -62,9 +60,14 @@ interface ColumnOverride {
 interface DataPanelProps {
   onDataChanged: () => void;
   onTaskChanged?: (task: string | null) => void;
+  uiSchema?: UiSchema;
 }
 
-export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
+export function DataPanel({
+  onDataChanged,
+  onTaskChanged,
+  uiSchema,
+}: DataPanelProps) {
   const [sourceType, setSourceType] = useState<SourceType>("upload");
   const [dataPath, setDataPath] = useState("");
   const [shape, setShape] = useState<[number, number] | null>(null);
@@ -75,21 +78,18 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
 
   const [target, setTarget] = useState<string | null>(null);
   const [task, setTask] = useState<TaskType | null>(null);
+  const [allColumnNames, setAllColumnNames] = useState<string[]>([]);
   const [columns, setColumns] = useState<ColumnInfo[]>([]);
   const [overrides, setOverrides] = useState<Record<string, ColumnOverride>>(
     {},
   );
 
-  const [cvStrategy, setCvStrategy] = useState<CvStrategy>("StratifiedKFold");
-  const [cvFolds, setCvFolds] = useState(5);
-  const [groupCol, setGroupCol] = useState<string | null>(null);
+  const [cv, setCv] = useState<CvState>(INITIAL_CV_STATE);
   const [loading, setLoading] = useState(false);
 
-  // AbortController-based sync to prevent race conditions
   const abortRef = useRef<AbortController | null>(null);
 
   const syncConfig = useCallback(async () => {
-    // Cancel any in-flight sync
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -102,29 +102,30 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
         .filter(([, v]) => v.excluded)
         .map(([k]) => k);
 
-      // Merge on top of current config to preserve model/training/etc.
       const base = await fetchConfig({ signal: controller.signal });
       if (controller.signal.aborted) return;
+
+      const baseData = (base as Record<string, unknown>).data as Record<
+        string,
+        unknown
+      >;
       const merged: Record<string, unknown> = {
         ...base,
         task: task || (base as Record<string, unknown>).task,
-        data: {
-          ...((base as Record<string, unknown>).data as object),
-          path: dataPath || undefined,
-          target: target || undefined,
-        },
+        data: applyCvDataFields(
+          {
+            ...baseData,
+            path: dataPath || undefined,
+            target: target || undefined,
+          },
+          cv,
+        ),
         features: {
           ...((base as Record<string, unknown>).features as object),
           categorical,
           exclude: excluded,
         },
-        split: {
-          method: CV_METHOD_MAP[cvStrategy],
-          n_splits: cvFolds,
-          ...(cvStrategy === "GroupKFold" && groupCol
-            ? { group_column: groupCol }
-            : {}),
-        },
+        split: buildSplitConfig(cv),
       };
       await updateConfig(merged, { signal: controller.signal });
       if (controller.signal.aborted) return;
@@ -132,33 +133,16 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
     } catch {
       // silent — config sync errors are non-fatal
     }
-  }, [
-    dataPath,
-    target,
-    task,
-    overrides,
-    cvStrategy,
-    cvFolds,
-    groupCol,
-    onDataChanged,
-  ]);
+  }, [dataPath, target, task, overrides, cv, onDataChanged]);
 
-  // Auto-sync config when settings change
   const prevSyncKey = useRef("");
   useEffect(() => {
     if (!target) return;
-    const key = JSON.stringify({
-      target,
-      task,
-      overrides,
-      cvStrategy,
-      cvFolds,
-      groupCol,
-    });
+    const key = JSON.stringify({ target, task, overrides, cv });
     if (key === prevSyncKey.current) return;
     prevSyncKey.current = key;
     syncConfig();
-  }, [target, task, overrides, cvStrategy, cvFolds, groupCol, syncConfig]);
+  }, [target, task, overrides, cv, syncConfig]);
 
   const handleLoadPathByValue = async (path: string) => {
     if (!path.trim()) return;
@@ -170,6 +154,7 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
       setPreview(prev);
       const cols = await fetchColumns();
       setColumns(cols.columns);
+      setAllColumnNames(cols.columns.map((c) => c.name));
       setTarget(null);
       setTask(null);
       setOverrides({});
@@ -199,6 +184,7 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
       setPreview(prev);
       const cols = await fetchColumns();
       setColumns(cols.columns);
+      setAllColumnNames(cols.columns.map((c) => c.name));
       setTarget(null);
       setTask(null);
       setOverrides({});
@@ -222,22 +208,16 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
         setColumns(cols.columns);
 
         let detectedTask: TaskType | null = task;
-        let detectedCvStrategy: CvStrategy = cvStrategy;
+        let detectedStrategy = cv.strategy;
         if (cols.suggested_task) {
           const t = cols.suggested_task as TaskType;
           detectedTask = t;
           setTask(t);
           onTaskChanged?.(t);
-          // Set default CV strategy
-          if (t === "binary" || t === "multiclass") {
-            detectedCvStrategy = "StratifiedKFold";
-          } else {
-            detectedCvStrategy = "KFold";
-          }
-          setCvStrategy(detectedCvStrategy);
+          detectedStrategy = getDefaultCvStrategy(t);
+          setCv(resetCvState(detectedStrategy));
         }
 
-        // Apply auto-settings to overrides
         const newOverrides: Record<string, ColumnOverride> = {};
         for (const col of cols.columns) {
           newOverrides[col.name] = {
@@ -247,7 +227,6 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
         }
         setOverrides(newOverrides);
 
-        // Fetch default config from backend and merge with DataPanel settings
         if (detectedTask) {
           const defaults = await fetchConfigDefaults(detectedTask, value);
           const categorical = Object.entries(newOverrides)
@@ -270,8 +249,8 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
               exclude: excluded,
             },
             split: {
-              method: CV_METHOD_MAP[detectedCvStrategy],
-              n_splits: cvFolds,
+              method: detectedStrategy,
+              n_splits: cv.folds,
             },
           };
           await updateConfig(merged);
@@ -283,16 +262,19 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
         );
       }
     },
-    [task, cvStrategy, cvFolds, dataPath, onDataChanged, onTaskChanged],
+    [task, cv, dataPath, onDataChanged, onTaskChanged],
   );
+
+  const handleTaskChange = (newTask: TaskType) => {
+    setTask(newTask);
+    onTaskChanged?.(newTask);
+    setCv(resetCvState(getDefaultCvStrategy(newTask)));
+  };
 
   const handleExcludeToggle = (colName: string, checked: boolean) => {
     setOverrides((prev) => ({
       ...prev,
-      [colName]: {
-        ...prev[colName],
-        excluded: checked,
-      },
+      [colName]: { ...prev[colName], excluded: checked },
     }));
   };
 
@@ -302,14 +284,10 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
   ) => {
     setOverrides((prev) => ({
       ...prev,
-      [colName]: {
-        ...prev[colName],
-        type,
-      },
+      [colName]: { ...prev[colName], type },
     }));
   };
 
-  // Feature summary
   const summary = useMemo(() => {
     const nonTarget = columns.filter((c) => c.name !== target);
     const total = nonTarget.length;
@@ -340,7 +318,6 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
     };
   }, [columns, overrides, target]);
 
-  const columnNames = columns.map((c) => c.name);
   const nonExcludedCols = columns.filter(
     (c) => c.name !== target && !overrides[c.name]?.excluded,
   );
@@ -447,13 +424,13 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
                   <Select
                     value={target ?? ""}
                     onValueChange={handleTargetChange}
-                    disabled={columnNames.length === 0}
+                    disabled={allColumnNames.length === 0}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select target column" />
                     </SelectTrigger>
                     <SelectContent>
-                      {columnNames.map((name) => (
+                      {allColumnNames.map((name) => (
                         <SelectItem key={name} value={name}>
                           {name}
                         </SelectItem>
@@ -463,15 +440,25 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
                 </div>
                 <div>
                   <Label>Task</Label>
-                  <div className="flex items-center gap-2 pt-1">
-                    {task ? (
-                      <Badge variant="secondary">{task}</Badge>
-                    ) : (
-                      <span className="text-sm text-muted-foreground">
-                        Auto-detected after target selection
-                      </span>
-                    )}
+                  <div className="flex gap-1 pt-1">
+                    {TASK_OPTIONS.map((t) => (
+                      <Button
+                        key={t}
+                        variant={task === t ? "default" : "outline"}
+                        size="sm"
+                        className="h-7 text-xs px-3"
+                        onClick={() => handleTaskChange(t)}
+                        disabled={!target}
+                      >
+                        {t}
+                      </Button>
+                    ))}
                   </div>
+                  {!target && (
+                    <span className="text-xs text-muted-foreground">
+                      Auto-detected after target selection
+                    </span>
+                  )}
                 </div>
               </div>
             </AccordionContent>
@@ -489,7 +476,7 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
                         <TableHead className="text-xs">Column</TableHead>
                         <TableHead className="w-16 text-xs">Uniq</TableHead>
                         <TableHead className="w-12 text-xs">Excl</TableHead>
-                        <TableHead className="w-24 text-xs">Type</TableHead>
+                        <TableHead className="w-28 text-xs">Type</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -498,6 +485,7 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
                         .map((col) => {
                           const o = overrides[col.name];
                           const isExcluded = o?.excluded ?? false;
+                          const currentType = o?.type ?? col.suggested_type;
                           return (
                             <TableRow key={col.name}>
                               <TableCell className="text-xs">
@@ -534,26 +522,38 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
                                 />
                               </TableCell>
                               <TableCell>
-                                <Select
-                                  value={o?.type ?? col.suggested_type}
-                                  onValueChange={(v) =>
-                                    handleTypeChange(
-                                      col.name,
-                                      v as "numeric" | "categorical",
-                                    )
-                                  }
-                                  disabled={isExcluded}
-                                >
-                                  <SelectTrigger className="h-7 text-xs">
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="numeric">Num</SelectItem>
-                                    <SelectItem value="categorical">
-                                      Cat
-                                    </SelectItem>
-                                  </SelectContent>
-                                </Select>
+                                <div className="flex gap-0.5">
+                                  <Button
+                                    variant={
+                                      currentType === "numeric"
+                                        ? "default"
+                                        : "outline"
+                                    }
+                                    size="sm"
+                                    className="h-6 text-[10px] px-2"
+                                    disabled={isExcluded}
+                                    onClick={() =>
+                                      handleTypeChange(col.name, "numeric")
+                                    }
+                                  >
+                                    Num
+                                  </Button>
+                                  <Button
+                                    variant={
+                                      currentType === "categorical"
+                                        ? "default"
+                                        : "outline"
+                                    }
+                                    size="sm"
+                                    className="h-6 text-[10px] px-2"
+                                    disabled={isExcluded}
+                                    onClick={() =>
+                                      handleTypeChange(col.name, "categorical")
+                                    }
+                                  >
+                                    Cat
+                                  </Button>
+                                </div>
                               </TableCell>
                             </TableRow>
                           );
@@ -573,61 +573,12 @@ export function DataPanel({ onDataChanged, onTaskChanged }: DataPanelProps) {
           <AccordionItem value="cv">
             <AccordionTrigger>Cross Validation</AccordionTrigger>
             <AccordionContent>
-              <div className="space-y-3">
-                <div>
-                  <Label>Strategy</Label>
-                  <Select
-                    value={cvStrategy}
-                    onValueChange={(v) => setCvStrategy(v as CvStrategy)}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="KFold">KFold</SelectItem>
-                      <SelectItem value="StratifiedKFold">
-                        StratifiedKFold
-                      </SelectItem>
-                      <SelectItem value="GroupKFold">GroupKFold</SelectItem>
-                      <SelectItem value="TimeSeriesSplit">
-                        TimeSeriesSplit
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1">
-                  <div className="flex items-center justify-between">
-                    <Label>Folds</Label>
-                    <span className="text-xs tabular-nums text-muted-foreground">
-                      {cvFolds}
-                    </span>
-                  </div>
-                  <Slider
-                    min={2}
-                    max={20}
-                    step={1}
-                    value={[cvFolds]}
-                    onValueChange={([v]) => setCvFolds(v)}
-                  />
-                </div>
-                {cvStrategy === "GroupKFold" && (
-                  <div>
-                    <Label>Group column</Label>
-                    <Select value={groupCol ?? ""} onValueChange={setGroupCol}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select column" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {nonExcludedCols.map((c) => (
-                          <SelectItem key={c.name} value={c.name}>
-                            {c.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-              </div>
+              <CvSection
+                cv={cv}
+                onChange={setCv}
+                uiSchema={uiSchema}
+                nonExcludedCols={nonExcludedCols}
+              />
             </AccordionContent>
           </AccordionItem>
         </Accordion>

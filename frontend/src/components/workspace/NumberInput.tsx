@@ -65,15 +65,13 @@ export function NumberInput({
         <Minus className="h-3 w-3" />
       </Button>
       <Input
-        type="number"
+        type="text"
+        inputMode="decimal"
         value={value ?? ""}
         onChange={handleChange}
-        step={step}
-        min={min}
-        max={max}
         placeholder={placeholder}
         disabled={disabled}
-        className="h-8 w-20 text-center text-xs tabular-nums"
+        className="h-8 w-20 text-center text-xs tabular-nums [appearance:textfield]"
       />
       <Button
         variant="outline"

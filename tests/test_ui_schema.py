@@ -16,6 +16,9 @@ UI_SCHEMA_KEYS = {
     "defaults",
     "inner_valid_options",
     "n_trials_presets",
+    "capabilities",
+    "calibration_methods",
+    "additional_params",
 }
 
 
@@ -147,6 +150,103 @@ class TestLizyMLAdapterUiSchema:
         s1 = adapter.get_ui_schema()
         s2 = adapter.get_ui_schema()
         assert s1 == s2
+
+    def test_cached_metrics_return_same_result(self) -> None:
+        """get_eval_metrics_by_task returns cached result on repeated calls."""
+        from lizystudio.backends.lizyml_ui_schema import get_eval_metrics_by_task
+
+        r1 = get_eval_metrics_by_task()
+        r2 = get_eval_metrics_by_task()
+        assert r1 is r2  # same object reference (cached)
+
+    def test_cached_metric_directions_return_same_result(self) -> None:
+        """get_metric_directions returns cached result on repeated calls."""
+        from lizystudio.backends.lizyml_ui_schema import get_metric_directions
+
+        r1 = get_metric_directions()
+        r2 = get_metric_directions()
+        assert r1 is r2  # same object reference (cached)
+
+    def test_model_metric_options_structure(self) -> None:
+        """model_metric should have task-keyed lists of metric strings."""
+        schema = LizyMLAdapter().get_ui_schema()
+        model_metric = schema["option_sets"]["model_metric"]
+        for task in ("binary", "regression", "multiclass"):
+            assert task in model_metric
+            assert isinstance(model_metric[task], list)
+            assert len(model_metric[task]) > 0
+            for m in model_metric[task]:
+                assert isinstance(m, str)
+
+    def test_conditional_visibility_num_leaves(self) -> None:
+        """conditional_visibility should have num_leaves/num_leaves_ratio entries."""
+        schema = LizyMLAdapter().get_ui_schema()
+        vis = schema["conditional_visibility"]
+        assert "num_leaves" in vis
+        assert "num_leaves_ratio" in vis
+        assert vis["num_leaves"]["auto_num_leaves"] is False
+        assert vis["num_leaves_ratio"]["auto_num_leaves"] is True
+
+    def test_capabilities_cv_strategies(self) -> None:
+        """capabilities.cv_strategies must list all 8 supported CV strategy names."""
+        schema = LizyMLAdapter().get_ui_schema()
+        assert "capabilities" in schema
+        cv = schema["capabilities"]["cv_strategies"]
+        assert isinstance(cv, list)
+        assert len(cv) == 8
+        expected = {
+            "kfold",
+            "stratified_kfold",
+            "group_kfold",
+            "stratified_group_kfold",
+            "time_series",
+            "purged_time_series",
+            "group_time_series",
+            "blocked_group_kfold",
+        }
+        assert set(cv) == expected
+
+    def test_capabilities_tune_allow_empty_space(self) -> None:
+        """capabilities.tune.allow_empty_space must be True."""
+        schema = LizyMLAdapter().get_ui_schema()
+        assert schema["capabilities"]["tune"]["allow_empty_space"] is True
+
+    def test_calibration_methods(self) -> None:
+        """calibration_methods must be exactly ['platt', 'isotonic', 'beta']."""
+        schema = LizyMLAdapter().get_ui_schema()
+        assert schema["calibration_methods"] == ["platt", "isotonic", "beta"]
+
+    def test_additional_params_is_list(self) -> None:
+        """additional_params must be a non-empty list of strings not in parameter_hints keys."""
+        schema = LizyMLAdapter().get_ui_schema()
+        additional = schema["additional_params"]
+        assert isinstance(additional, list)
+        assert len(additional) > 0
+        hint_keys = {h["key"] for h in schema["parameter_hints"]}
+        for param in additional:
+            assert isinstance(param, str)
+            assert param not in hint_keys
+
+    def test_search_space_catalog_has_group(self) -> None:
+        """Every search_space_catalog entry must have a 'group' key in the allowed set."""
+        schema = LizyMLAdapter().get_ui_schema()
+        allowed_groups = {"model_params", "smart_params"}
+        for entry in schema["search_space_catalog"]:
+            assert "group" in entry, f"Missing 'group' on catalog entry: {entry['key']}"
+            assert entry["group"] in allowed_groups, (
+                f"Invalid group '{entry['group']}' on entry '{entry['key']}'"
+            )
+
+    def test_conditional_visibility_early_stopping(self) -> None:
+        """conditional_visibility must include all three early_stopping sub-keys."""
+        schema = LizyMLAdapter().get_ui_schema()
+        vis = schema["conditional_visibility"]
+        for key in (
+            "early_stopping.rounds",
+            "early_stopping.validation_ratio",
+            "early_stopping.inner_valid",
+        ):
+            assert key in vis, f"Missing conditional_visibility key: {key}"
 
 
 # --- Integration test: API endpoint ---

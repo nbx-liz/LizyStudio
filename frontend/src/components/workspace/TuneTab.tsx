@@ -1,9 +1,13 @@
+import { useCallback, useMemo } from "react";
 import {
   Accordion,
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 import { SearchSpaceTable } from "./SearchSpaceTable";
 import { TuneSettings } from "./TuneSettings";
 
@@ -16,7 +20,7 @@ interface TuneTabProps {
 
 function updateTuningConfig(
   config: Record<string, unknown>,
-  path: "params" | "space",
+  path: "params" | "space" | "evaluation",
   value: unknown,
 ): Record<string, unknown> {
   const tuning = (config.tuning as Record<string, unknown>) ?? {};
@@ -37,15 +41,9 @@ function extractOptunaField<T>(
   return (optuna?.[field] as T) ?? fallback;
 }
 
-export function TuneTab({
-  config,
-  onChange,
-  task: _task,
-  uiSchema,
-}: TuneTabProps) {
+export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
   const tuningParams = extractOptunaField<{
     n_trials?: number;
-    direction?: string;
     timeout?: number | null;
   }>(config, "params", {});
 
@@ -55,8 +53,56 @@ export function TuneTab({
     {},
   );
 
+  const evaluation = extractOptunaField<{
+    metrics?: string[];
+  }>(config, "evaluation", {});
+
   const modelSection = (config.model as Record<string, unknown>) ?? {};
   const modelParams = (modelSection.params as Record<string, unknown>) ?? {};
+
+  // Metric options for the current task (used for optimization + additional metrics)
+  const metricOptions = useMemo(() => {
+    if (!task) return [];
+    const opts = uiSchema?.option_sets?.metric;
+    if (opts?.[task]) return opts[task];
+    return [];
+  }, [task, uiSchema]);
+
+  // metric_direction map for auto direction
+  const metricDirection = useMemo(() => {
+    const md = uiSchema?.option_sets?.metric_direction;
+    if (md) return md as unknown as Record<string, Record<string, string>>;
+    return undefined;
+  }, [uiSchema]);
+
+  // Objective options for task
+  const objectiveOptions = useMemo(() => {
+    if (!task) return [];
+    const opts = uiSchema?.option_sets?.objective;
+    if (opts?.[task]) return opts[task];
+    return [];
+  }, [task, uiSchema]);
+
+  // Model metric options (for search space catalog metric choices)
+  const modelMetricOptions = useMemo(() => {
+    if (!task) return [];
+    const opts = uiSchema?.option_sets?.model_metric;
+    if (opts?.[task]) return opts[task];
+    return [];
+  }, [task, uiSchema]);
+
+  // Current evaluation metrics from config
+  const evalMetrics = evaluation.metrics ?? [];
+  const optimizationMetric = evalMetrics[0] ?? "";
+  const additionalMetrics = evalMetrics.slice(1);
+
+  // Auto-determine direction from metric_direction mapping
+  const autoDirection = useMemo(() => {
+    if (!task || !optimizationMetric || !metricDirection) return "";
+    const taskDirs = metricDirection[task];
+    if (!taskDirs) return "minimize";
+    return taskDirs[optimizationMetric] ?? "minimize";
+  }, [task, optimizationMetric, metricDirection]);
 
   const handleParamsChange = (params: Record<string, unknown>) => {
     onChange(updateTuningConfig(config, "params", params));
@@ -66,9 +112,70 @@ export function TuneTab({
     onChange(updateTuningConfig(config, "space", space));
   };
 
+  const handleOptimizationMetricChange = useCallback(
+    (metric: string) => {
+      // Set as first metric, keep additional metrics that aren't the new optimization metric
+      const filtered = additionalMetrics.filter((m) => m !== metric);
+      const newEval = { ...evaluation, metrics: [metric, ...filtered] };
+      // Also set direction in params
+      const dir = (() => {
+        if (!task || !metricDirection) return "minimize";
+        const taskDirs = metricDirection[task];
+        return taskDirs?.[metric] ?? "minimize";
+      })();
+      const newParams = { ...tuningParams, metric, direction: dir };
+      const tuning = (config.tuning as Record<string, unknown>) ?? {};
+      const optuna = (tuning.optuna as Record<string, unknown>) ?? {};
+      onChange({
+        ...config,
+        tuning: {
+          ...tuning,
+          optuna: { ...optuna, evaluation: newEval, params: newParams },
+        },
+      });
+    },
+    [
+      additionalMetrics,
+      evaluation,
+      config,
+      task,
+      metricDirection,
+      tuningParams,
+      onChange,
+    ],
+  );
+
+  const handleAdditionalMetricsChange = useCallback(
+    (metric: string) => {
+      const isSelected = additionalMetrics.includes(metric);
+      const newAdditional = isSelected
+        ? additionalMetrics.filter((m) => m !== metric)
+        : [...additionalMetrics, metric];
+      const newEval = {
+        ...evaluation,
+        metrics: [optimizationMetric, ...newAdditional].filter(Boolean),
+      };
+      onChange(updateTuningConfig(config, "evaluation", newEval));
+    },
+    [additionalMetrics, evaluation, optimizationMetric, config, onChange],
+  );
+
+  // Available metrics for Additional Metrics (exclude optimization metric)
+  const additionalMetricOptions = useMemo(
+    () => metricOptions.filter((m) => m !== optimizationMetric),
+    [metricOptions, optimizationMetric],
+  );
+
   return (
-    <Accordion type="multiple" defaultValue={["settings", "search-space"]}>
-      <TuneSettings tuningParams={tuningParams} onChange={handleParamsChange} />
+    <Accordion
+      type="multiple"
+      defaultValue={["settings", "search-space", "evaluation"]}
+    >
+      <TuneSettings
+        tuningParams={tuningParams}
+        onChange={handleParamsChange}
+        nTrialsPresets={uiSchema?.n_trials_presets}
+      />
       <AccordionItem value="search-space">
         <AccordionTrigger>Search Space</AccordionTrigger>
         <AccordionContent>
@@ -78,7 +185,86 @@ export function TuneTab({
             onChange={handleSpaceChange}
             catalog={uiSchema?.search_space_catalog}
             stepMap={uiSchema?.step_map}
+            task={task}
+            objectiveOptions={objectiveOptions}
+            metricOptions={modelMetricOptions}
           />
+        </AccordionContent>
+      </AccordionItem>
+      <AccordionItem value="evaluation">
+        <AccordionTrigger>Evaluation</AccordionTrigger>
+        <AccordionContent>
+          <div className="space-y-4 px-1">
+            {/* Optimization Metric */}
+            {task && metricOptions.length > 0 && (
+              <div>
+                <Label className="text-xs text-muted-foreground mb-1.5 block">
+                  Optimization Metric
+                </Label>
+                <div className="flex flex-wrap gap-1">
+                  {metricOptions.map((m) => (
+                    <Button
+                      key={m}
+                      variant={optimizationMetric === m ? "default" : "outline"}
+                      size="sm"
+                      className="h-7 text-xs px-3"
+                      type="button"
+                      onClick={() => handleOptimizationMetricChange(m)}
+                    >
+                      {m}
+                    </Button>
+                  ))}
+                </div>
+                {optimizationMetric && autoDirection && (
+                  <div className="flex items-center gap-1.5 mt-1.5">
+                    <span className="text-xs text-muted-foreground">
+                      Direction:
+                    </span>
+                    <Badge variant="secondary" className="text-xs">
+                      {autoDirection}
+                    </Badge>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Additional Metrics */}
+            {task &&
+              additionalMetricOptions.length > 0 &&
+              optimizationMetric && (
+                <div>
+                  <Label className="text-xs text-muted-foreground mb-1.5 block">
+                    Additional Metrics
+                  </Label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {additionalMetricOptions.map((m) => {
+                      const selected = additionalMetrics.includes(m);
+                      return (
+                        <button
+                          key={m}
+                          type="button"
+                          onClick={() => handleAdditionalMetricsChange(m)}
+                        >
+                          <Badge
+                            variant={selected ? "default" : "outline"}
+                            className="cursor-pointer text-xs"
+                          >
+                            {m}
+                          </Badge>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+            {/* No task selected */}
+            {!task && (
+              <p className="text-xs text-muted-foreground">
+                Select a task to configure evaluation metrics.
+              </p>
+            )}
+          </div>
         </AccordionContent>
       </AccordionItem>
     </Accordion>

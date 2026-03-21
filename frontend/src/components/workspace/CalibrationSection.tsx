@@ -19,14 +19,19 @@ interface CalibrationSectionProps {
   calibration: Record<string, unknown> | null;
   onChange: (calibration: Record<string, unknown> | null) => void;
   calibrationDefaults?: Record<string, unknown>;
+  calibrationMethods?: string[];
 }
+
+const FALLBACK_METHODS = ["platt", "isotonic", "beta"];
 
 export function CalibrationSection({
   calibration,
   onChange,
   calibrationDefaults,
+  calibrationMethods,
 }: CalibrationSectionProps) {
   const defaults = calibrationDefaults ?? CALIBRATION_DEFAULTS;
+  const methods = calibrationMethods ?? FALLBACK_METHODS;
   const isOn = calibration !== null;
   const method = (calibration?.method as string) ?? "platt";
   const nSplits = (calibration?.n_splits as number) ?? 5;
@@ -69,14 +74,23 @@ export function CalibrationSection({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="platt">platt</SelectItem>
-                  <SelectItem value="isotonic">isotonic</SelectItem>
-                  <SelectItem value="beta">beta</SelectItem>
+                  {methods.map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {m}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="flex items-center justify-between gap-2">
-              <Label className="text-xs text-muted-foreground">n_splits</Label>
+              <div>
+                <Label className="text-xs text-muted-foreground">
+                  n_splits
+                </Label>
+                <p className="text-[10px] text-muted-foreground/70">
+                  (deprecated — uses outer CV splits)
+                </p>
+              </div>
               <NumberInput
                 value={nSplits}
                 onChange={handleNSplitsChange}

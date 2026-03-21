@@ -28,6 +28,9 @@ Phase 0〜30 は v1 で完了済み。バックエンド（Python / FastAPI / Ad
 | v2-15 | Inference 画面実装（§4.4 フル準拠） | v2-14, v2-10 | 🆕 |
 | v2-16 | API 型生成・テスト基盤の実運用化 | v2-15, v2-7 | 🆕 |
 | v2-17 | 最終統合監査（requirements-audit 再実施） | v2-16, v2-11 | 🆕 |
+| v2-18 | LizyML v0.4.0 対応 — ゲート不要項目（split method, UI 調整） | v2-5 | 🆕 |
+| v2-19 | LizyML v0.4.0 対応 — export_code API（H-0027） | v2-14 | 🆕 |
+| v2-20 | LizyML v0.4.0 対応 — Tune 進捗コールバック（H-0028） | v2-6 | 🆕 |
 
 ---
 
@@ -481,3 +484,112 @@ Phase 0〜30 は v1 で完了済み。バックエンド（Python / FastAPI / Ad
 - [ ] requirements-audit で **未実装 0 / 重大乖離 0**
 - [ ] Playwright 目視検証（Workspace / Jobs / Inference）を再実施
 - [ ] API 実動検証（正常系/エラー系）ログを残す
+
+---
+
+## Phase v2-18: LizyML-Widget 画面仕様統合 + LizyML v0.4.0 対応（H-0029〜H-0032）
+
+**依存:** v2-5（Model Panel 実装済み）
+**変更ゲート:** H-0029〜H-0032（全 accepted）
+
+**背景:** LizyML v0.4.0 対応 + LizyML-Widget の画面仕様を踏襲して BLUEPRINT を更新済み。
+
+**成果物:**
+- `pyproject.toml` のバージョン制約更新（`>=0.4.0,<0.5.0`）✅ 実施済み
+- BLUEPRINT 更新 ✅ 実施済み（§4.2.1 CV, §4.2.2 Fit/Tune, §5.6 UI Schema）
+- HISTORY Proposal H-0029〜H-0032 ✅ 起票・accepted 済み
+- Backend: `lizyml_ui_schema.py` に capabilities, additional_params, calibration_methods, group 追加
+- Frontend: Widget 準拠の全 UI コンポーネント更新
+
+**タスク（Backend）:**
+1. `lizyml_ui_schema.py` に `capabilities` セクション追加（`cv_strategies` 8種, `tune.allow_empty_space`）
+2. `lizyml_ui_schema.py` に `additional_params`, `calibration_methods` リスト追加
+3. `search_space_catalog` に `group` フィールド追加
+4. `conditional_visibility` に `early_stopping.*` 連動条件追加
+5. `calibration.n_splits` 非推奨の注記対応
+
+**タスク（Frontend — Data Panel）:**
+6. CV Strategy を 8 種 Segment buttons に拡張（`capabilities.cv_strategies` から動的）
+7. Strategy ごとの条件付きフィールド実装（time_col, purge_gap, embargo, blocks/groups 等）
+8. Folds を NumberInput（stepper）に変更
+
+**タスク（Frontend — Fit タブ）:**
+9. Model セクションを Smart Params / Model Params / Additional Params の3グループに分離
+10. Feature Weights Editor 実装（Toggle + Multi-row editor）
+11. Inner Validation の Select 表示（Training セクション内、enabled=ON 時）
+12. Objective を Segment buttons に変更
+13. Additional Params をカタログドロップダウン選択に変更
+14. Evaluation / Calibration を `ui_schema` から動的取得に統一
+
+**タスク（Frontend — Tune タブ）:**
+15. Search Space テーブルのグループ分け表示
+16. Tune 専用 Evaluation セクション追加（Optimization Metric + Additional Metrics）
+17. direction 自動判定（`metric_direction` マップ）
+18. Empty space 許可（Tune ボタン条件変更）
+19. Fixed 値の Fit config 取り込み
+
+**タスク（テスト）:**
+20. Backend: UI schema の新フィールドテスト
+21. Frontend: 新コンポーネントの Vitest テスト
+22. 品質ゲート通過: `uv run pytest` + `uv run mypy` + `pnpm build` + `pnpm check`
+
+**DoD:**
+- [ ] Data Panel の CV が 8 種対応し条件付きフィールドが動的表示される
+- [ ] Fit タブが Widget 準拠の3グループ構成
+- [ ] Feature Weights Editor が動作する
+- [ ] Tune タブが Widget 準拠の Evaluation + グループ分け
+- [ ] `GET /api/backends/ui-schema` が capabilities 等を含む
+- [ ] 全品質ゲート通過
+
+---
+
+## Phase v2-19: LizyML v0.4.0 対応 — export_code API（H-0027）
+
+**依存:** v2-14（Jobs 画面実装後）
+**変更ゲート:** H-0027（accepted 後に実装開始）
+
+**背景:** LizyML v0.3.0 の `Model.export_code(path)` で LizyML 非依存のコードを生成可能になった。Jobs 画面から ZIP ダウンロードとして提供する。
+
+**成果物:**
+- `BackendAdapter` Protocol に `export_code()` メソッド追加
+- `POST /api/jobs/{job_id}/export-code` エンドポイント
+- Jobs 画面 Export セクションに「Export Code」ボタン
+
+**タスク:**
+1. `src/lizystudio/backends/base.py` — `export_code(model, path) -> str` メソッド追加
+2. `src/lizystudio/backends/lizyml.py` — `model.export_code(path)` 呼び出し実装
+3. `src/lizystudio/services/export.py` — `export_code_as_zip()` サービス関数
+4. `src/lizystudio/api/jobs.py` — `POST /api/jobs/{job_id}/export-code` エンドポイント（ZIP レスポンス）
+5. Frontend: Jobs 画面 Export ダイアログに「Export Code」オプション追加
+6. テスト: Adapter / API / Service 各層のテスト
+7. 品質ゲート通過
+
+**DoD:**
+- [ ] `POST /api/jobs/{job_id}/export-code` が ZIP を返す
+- [ ] ZIP に `train.py`, `predict.py`, `requirements.txt` が含まれる
+- [ ] Jobs 画面から Export Code がダウンロードできる
+- [ ] `uv run pytest` + `uv run mypy` + `pnpm build` 通過
+
+---
+
+## Phase v2-20: LizyML v0.4.0 対応 — Tune 進捗コールバック（H-0028）
+
+**依存:** v2-6（Results Panel + WebSocket 実装後）
+**変更ゲート:** H-0028（accepted 後に実装開始）
+
+**背景:** LizyML v0.1.3 の `TuneProgressInfo` を使い、Trial 単位の進捗をリアルタイムで WebSocket に配信する。
+
+**成果物:**
+- `LizyMLAdapter.tune()` が Trial 単位で `on_progress` を呼び出す
+
+**タスク:**
+1. `src/lizystudio/backends/lizyml.py` の `tune()` 内で `model.tune(progress_callback=fn)` を使用
+2. `TuneProgressInfo.current_trial` / `total_trials` を `ProgressCallback` の `current` / `total` にマッピング
+3. `message` に `best_score`, `latest_score`, `latest_state` を含める
+4. テスト: モック `TuneProgressInfo` で `on_progress` 呼び出し回数を検証
+5. 品質ゲート通過
+
+**DoD:**
+- [ ] Tune 実行中に Trial 単位の進捗が WebSocket に送信される
+- [ ] Results Panel のプログレスバーが Trial 単位で更新される
+- [ ] 既存テストが壊れない

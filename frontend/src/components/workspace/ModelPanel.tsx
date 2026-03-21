@@ -118,14 +118,17 @@ export function ModelPanel({
   };
 
   const fitEnabled = hasData && !!config && !running && errors.length === 0;
-  // Tune enabled when at least 1 search space entry exists
+  // Tune enabled: allow empty space if capability flag is set
+  const allowEmptySpace =
+    uiSchema?.capabilities?.tune?.allow_empty_space === true;
   const tuningSpace =
     ((
       (config?.tuning as Record<string, unknown> | undefined)?.optuna as
         | Record<string, unknown>
         | undefined
     )?.space as Record<string, unknown> | undefined) ?? {};
-  const tuneEnabled = fitEnabled && Object.keys(tuningSpace).length > 0;
+  const tuneEnabled =
+    fitEnabled && (allowEmptySpace || Object.keys(tuningSpace).length > 0);
 
   return (
     <div className="flex h-full flex-col">
