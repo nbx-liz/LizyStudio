@@ -9,7 +9,8 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from lizystudio.api.errors import (
@@ -19,7 +20,7 @@ from lizystudio.api.errors import (
     JobRunningError,
     StudioError,
 )
-from lizystudio.services.export import export_model, export_report
+from lizystudio.services.export import export_code_as_zip, export_model, export_report
 from lizystudio.services.jobs import (
     Job,
     JobStore,
@@ -274,3 +275,29 @@ def export_job(
         return {"exported_path": path, "export_type": body.export_type}
     except Exception as exc:
         raise BackendError(exc) from exc
+
+
+@router.post("/{job_id}/export-code")
+def export_code(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    job_store: JobStore = Depends(get_job_store),
+    ws: WorkspaceState = Depends(get_workspace),
+) -> FileResponse:
+    """Generate standalone Python code and return it as a ZIP download (H-0027)."""
+    import os
+
+    job = _get_job_or_404(job_id, job_store)
+    if job.status != "completed" or job.model_path is None:
+        raise JobNotCompletedError(job_id)
+    try:
+        zip_path = export_code_as_zip(job=job, backend=ws.backend)
+    except Exception as exc:
+        raise BackendError(exc) from exc
+    # Schedule cleanup of the temporary ZIP file after the response is sent
+    background_tasks.add_task(os.unlink, str(zip_path))
+    return FileResponse(
+        path=str(zip_path),
+        media_type="application/zip",
+        filename=f"job_{job_id}_code.zip",
+    )

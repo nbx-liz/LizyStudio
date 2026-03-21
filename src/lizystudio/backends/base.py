@@ -106,6 +106,13 @@ class BackendAdapter(Protocol):
         """Save model artifacts to *path*. Return the resolved path."""
         ...
 
+    def export_code(self, model: Any, path: str) -> str:
+        """Generate standalone Python code from *model* into *path*.
+
+        Return the resolved path.
+        """
+        ...
+
     def load_model(self, path: str) -> Any:
         """Restore a model from an export directory."""
         ...

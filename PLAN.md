@@ -26,7 +26,7 @@ Phase 0〜30 は v1 で完了済み。バックエンド（Python / FastAPI / Ad
 | v2-13 | API 契約整合（Workspace / Jobs / Inference） | v2-12 | 🆕 |
 | v2-14 | Jobs 画面実装（§4.3 フル準拠） | v2-13, v2-9 | 🆕 |
 | v2-15 | Inference 画面実装（§4.4 フル準拠） | v2-14, v2-10 | 🆕 |
-| v2-16 | API 型生成・テスト基盤の実運用化 | v2-15, v2-7 | 🆕 |
+| v2-16 | API 型生成・テスト基盤の実運用化 | v2-15, v2-7 | 🔧 |
 | v2-17 | 最終統合監査（requirements-audit 再実施） | v2-16, v2-11 | 🆕 |
 | v2-18 | LizyML v0.4.0 対応 — ゲート不要項目（split method, UI 調整） | v2-5 | 🆕 |
 | v2-19 | LizyML v0.4.0 対応 — export_code API（H-0027） | v2-14 | 🆕 |
@@ -467,9 +467,11 @@ Phase 0〜30 は v1 で完了済み。バックエンド（Python / FastAPI / Ad
 
 **DoD:**
 - [ ] API クライアントが生成型を参照してビルド成功する
-- [ ] `pnpm test` が Vitest で実行される
+- [x] `pnpm test` が Vitest で実行される（89 tests passing）
 - [ ] `pnpm storybook` が実際に起動する
-- [ ] API 契約テストで主要エンドポイントを検証できる
+- [x] API 契約テストで主要エンドポイントを検証できる（api-contract.test.ts）
+- [x] `generate:api` スクリプトが正しい URL を参照する
+- [x] CvSection 純関数テスト（cv-section.test.ts）が通過する
 
 ---
 

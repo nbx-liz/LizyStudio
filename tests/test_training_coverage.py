@@ -10,7 +10,6 @@ Targets:
 
 from __future__ import annotations
 
-import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -32,7 +31,6 @@ from lizystudio.services.training import (
 )
 from lizystudio.services.workspace import WorkspaceState
 from lizystudio.ws.progress import ProgressBroadcaster
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -409,10 +407,6 @@ def test_start_fit_async_updates_workspace_on_completion(
     )
     ws = _make_workspace(mock_backend)
 
-    # Track when the thread writes the result
-    result_written = threading.Event()
-    original_fit = mock_backend.fit.return_value
-
     start_fit_async(
         ws=ws,
         job_store=job_store,
@@ -440,7 +434,7 @@ def test_start_fit_async_job_completed_in_store(
     mock_backend: MagicMock,
     mock_broadcaster: MagicMock,
 ) -> None:
-    """After start_fit_async finishes, the job in the store must have status completed."""
+    """start_fit_async sets job status to completed."""
     job = job_store.create(
         backend_name="lizyml",
         config={},
@@ -544,7 +538,7 @@ def test_start_tune_async_job_completed_in_store(
     mock_backend: MagicMock,
     mock_broadcaster: MagicMock,
 ) -> None:
-    """After start_tune_async finishes, the job in the store must have status completed."""
+    """start_tune_async sets job status to completed."""
     job = job_store.create(
         backend_name="lizyml",
         config={},

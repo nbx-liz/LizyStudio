@@ -138,3 +138,77 @@ def test_export_report_no_model_path(mock_backend: MagicMock) -> None:
     )
     with pytest.raises(ValueError, match="no saved model"):
         export_report(job=job, backend=mock_backend, output_path="/tmp/x")
+
+
+# --- export_code_as_zip ---
+
+
+def test_export_code_as_zip_returns_zip_path(
+    completed_job: Job, mock_backend: MagicMock, tmp_path: Path
+) -> None:
+    """export_code_as_zip() must return a Path pointing to a .zip file."""
+    from lizystudio.services.export import export_code_as_zip
+
+    # Mock backend.export_code to create a directory with a file in it
+    def fake_export_code(model: object, path: str) -> str:
+        code_dir = Path(path)
+        code_dir.mkdir(parents=True, exist_ok=True)
+        (code_dir / "train.py").write_text("# train")
+        (code_dir / "predict.py").write_text("# predict")
+        return str(code_dir)
+
+    mock_backend.export_code.side_effect = fake_export_code
+
+    result = export_code_as_zip(job=completed_job, backend=mock_backend)
+    assert isinstance(result, Path)
+    assert result.suffix == ".zip"
+    assert result.exists()
+
+
+def test_export_code_as_zip_zip_contains_files(
+    completed_job: Job, mock_backend: MagicMock
+) -> None:
+    """The returned ZIP must contain the exported code files."""
+    import zipfile
+
+    from lizystudio.services.export import export_code_as_zip
+
+    def fake_export_code(model: object, path: str) -> str:
+        code_dir = Path(path)
+        code_dir.mkdir(parents=True, exist_ok=True)
+        (code_dir / "train.py").write_text("# train script")
+        (code_dir / "requirements.txt").write_text("scikit-learn\n")
+        return str(code_dir)
+
+    mock_backend.export_code.side_effect = fake_export_code
+
+    zip_path = export_code_as_zip(job=completed_job, backend=mock_backend)
+
+    with zipfile.ZipFile(zip_path) as zf:
+        names = zf.namelist()
+    assert any("train.py" in n for n in names)
+    assert any("requirements.txt" in n for n in names)
+
+
+def test_export_code_as_zip_no_model_path_raises(mock_backend: MagicMock) -> None:
+    """export_code_as_zip() raises ValueError when the job has no model_path."""
+    from lizystudio.services.export import export_code_as_zip
+
+    job_no_model = Job(
+        job_id="job_nomodel",
+        backend_name="lizyml",
+        config={},
+        data_ref=DataRef(
+            source_type="path",
+            path="/data/t.csv",
+            filename="t.csv",
+            fingerprint="fp",
+            shape=(10, 2),
+        ),
+        job_type="fit",
+        status="completed",
+        created_at="2026-01-01T00:00:00",
+    )
+
+    with pytest.raises(ValueError, match="no saved model"):
+        export_code_as_zip(job=job_no_model, backend=mock_backend)

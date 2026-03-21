@@ -32,9 +32,7 @@ def get_eval_metrics_by_task() -> dict[str, list[str]]:
         except (ImportError, AttributeError, TypeError):
             # Fallback for older LizyML versions
             metrics = {
-                "regression": sorted(
-                    ["mae", "mape", "rmse", "huber", "r2", "rmsle"]
-                ),
+                "regression": sorted(["mae", "mape", "rmse", "huber", "r2", "rmsle"]),
                 "binary": sorted(
                     [
                         "auc",
@@ -46,9 +44,7 @@ def get_eval_metrics_by_task() -> dict[str, list[str]]:
                         "brier",
                     ]
                 ),
-                "multiclass": sorted(
-                    ["multi_logloss", "auc_mu", "multi_error"]
-                ),
+                "multiclass": sorted(["multi_logloss", "auc_mu", "multi_error"]),
             }
         _eval_metrics_cache = metrics
         return metrics
@@ -90,8 +86,7 @@ def get_metric_directions() -> dict[str, dict[str, str]]:
             maximize = {"auc", "auc_pr", "r2", "accuracy", "f1", "auc_mu"}
             for task, metric_names in metrics_by_task.items():
                 result[task] = {
-                    m: "maximize" if m in maximize else "minimize"
-                    for m in metric_names
+                    m: "maximize" if m in maximize else "minimize" for m in metric_names
                 }
         _metric_direction_cache = result
         return result

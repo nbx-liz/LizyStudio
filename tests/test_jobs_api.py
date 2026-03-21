@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -250,3 +252,113 @@ def test_job_summary_includes_primary_score(
     matching = [j for j in jobs if j["job_id"] == job.job_id]
     assert len(matching) == 1
     assert matching[0]["primary_score"] == 0.92
+
+
+# --- Export Code ---
+
+
+def _create_completed_job_with_model(
+    client: TestClient, sample_data_ref: DataRef, tmp_model_path: str
+) -> str:
+    """Create a completed job that has a model_path set."""
+    app = client.app  # type: ignore[union-attr]
+    job_store: JobStore = app.state.job_store
+    job = job_store.create(
+        backend_name="lizyml",
+        config={"task": "binary", "target": "y"},
+        data_ref=sample_data_ref,
+        job_type="fit",
+    )
+    job.status = "completed"
+    job.model_path = tmp_model_path
+    job.fit_result = FitSummary(
+        metrics={"auc": 0.95},
+        fold_count=5,
+        params=[],
+    )
+    job_store.update(job)
+    return job.job_id
+
+
+def test_export_code_returns_zip(
+    client: TestClient,
+    sample_data_ref: DataRef,
+    tmp_path: Path,
+) -> None:
+    """POST /api/jobs/{job_id}/export-code returns a ZIP file for a completed job."""
+    from pathlib import Path
+    from unittest.mock import MagicMock
+
+    # Create a real temp directory for the fake model
+    model_dir = str(tmp_path / "model")
+    job_id = _create_completed_job_with_model(client, sample_data_ref, model_dir)
+
+    def fake_export_code(model: object, path: str) -> str:
+        code_dir = Path(path)
+        code_dir.mkdir(parents=True, exist_ok=True)
+        (code_dir / "train.py").write_text("# train")
+        return str(code_dir)
+
+    mock_backend = MagicMock()
+    mock_backend.load_model.return_value = MagicMock()
+    mock_backend.export_code.side_effect = fake_export_code
+
+    app = client.app  # type: ignore[union-attr]
+    original_backend = app.state.workspace.backend
+    app.state.workspace.backend = mock_backend
+    try:
+        res = client.post(f"/api/jobs/{job_id}/export-code")
+    finally:
+        app.state.workspace.backend = original_backend
+
+    assert res.status_code == 200
+    assert res.headers["content-type"] == "application/zip"
+    assert "zip" in res.headers.get("content-disposition", "").lower()
+
+
+def test_export_code_not_found(client: TestClient) -> None:
+    """POST /api/jobs/nonexistent/export-code returns 404."""
+    res = client.post("/api/jobs/nonexistent/export-code")
+    assert res.status_code == 404
+
+
+def test_export_code_job_not_completed(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    """POST /api/jobs/{job_id}/export-code returns 400 when job is not completed."""
+    app = client.app  # type: ignore[union-attr]
+    job_store: JobStore = app.state.job_store
+    job = job_store.create(
+        backend_name="lizyml",
+        config={"task": "binary"},
+        data_ref=sample_data_ref,
+        job_type="fit",
+    )
+    # Job remains in pending status — no model_path
+    res = client.post(f"/api/jobs/{job.job_id}/export-code")
+    assert res.status_code == 400
+    body = res.json()
+    assert body["error"]["code"] == "JOB_NOT_COMPLETED"
+
+
+def test_export_code_no_model_path(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    """POST /api/jobs/{job_id}/export-code returns 400 when job has no model_path."""
+    app = client.app  # type: ignore[union-attr]
+    job_store: JobStore = app.state.job_store
+    job = job_store.create(
+        backend_name="lizyml",
+        config={"task": "binary"},
+        data_ref=sample_data_ref,
+        job_type="fit",
+    )
+    job.status = "completed"
+    job.fit_result = FitSummary(metrics={"auc": 0.9}, fold_count=5, params=[])
+    # Intentionally NOT setting model_path
+    job_store.update(job)
+
+    res = client.post(f"/api/jobs/{job.job_id}/export-code")
+    assert res.status_code == 400
+    body = res.json()
+    assert body["error"]["code"] == "JOB_NOT_COMPLETED"

@@ -277,3 +277,29 @@ def test_model_info_returns_target() -> None:
     assert info["model_name"] == "lightgbm"
     assert info["target"] == "price"
     assert info["feature_count"] == 3
+
+
+# --- export_code ---
+
+
+def test_export_code_calls_model_export_code() -> None:
+    """export_code() delegates to model and returns str path."""
+    from pathlib import Path
+
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.export_code.return_value = Path("/tmp/exported_code")
+    result = adapter.export_code(mock_model, "/tmp/output")
+    mock_model.export_code.assert_called_once_with("/tmp/output")
+    assert result == "/tmp/exported_code"
+
+
+def test_export_code_returns_str() -> None:
+    """adapter.export_code() must return a str, not a Path object."""
+    from pathlib import Path
+
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.export_code.return_value = Path("/some/path")
+    result = adapter.export_code(mock_model, "/some/output")
+    assert isinstance(result, str)

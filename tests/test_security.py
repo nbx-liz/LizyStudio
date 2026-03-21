@@ -87,6 +87,7 @@ class TestMaxUploadBytes:
 def _make_upload_file(content: bytes) -> AsyncMock:
     """Return an AsyncMock that mimics UploadFile.read(n)."""
     mock = AsyncMock()
+
     # read(max_bytes + 1) returns the slice up to n bytes from content
     async def _read(n: int = -1) -> bytes:
         if n == -1:
