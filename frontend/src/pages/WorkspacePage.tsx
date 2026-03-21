@@ -59,13 +59,13 @@ export function WorkspacePage() {
   }, []);
 
   const handleApplyToFit = useCallback(
-    async (params: Record<string, unknown>) => {
+    async (fullConfig: Record<string, unknown>) => {
       try {
-        await updateConfig(params);
+        await updateConfig(fullConfig);
         queryClient.invalidateQueries({ queryKey: ["config"] });
-        toast.success("Best params applied to config");
+        toast.success("Tune config with best params applied");
       } catch {
-        toast.error("Failed to apply params");
+        toast.error("Failed to apply tune config");
       }
     },
     [queryClient],

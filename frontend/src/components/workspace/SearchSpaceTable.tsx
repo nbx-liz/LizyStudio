@@ -17,6 +17,7 @@ import { NumberInput } from "./NumberInput";
 const GROUP_LABELS: Record<string, string> = {
   model_params: "Model Params",
   smart_params: "Smart Params",
+  additional: "Additional Params",
 };
 
 interface SpaceEntry {
@@ -37,6 +38,7 @@ interface SearchSpaceTableProps {
   task?: string | null;
   objectiveOptions?: string[];
   metricOptions?: string[];
+  additionalParams?: string[];
 }
 
 function toSpaceEntry(raw: unknown): SpaceEntry | undefined {
@@ -73,8 +75,10 @@ export function SearchSpaceTable({
   task: _task,
   objectiveOptions,
   metricOptions,
+  additionalParams,
 }: SearchSpaceTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const [addedParams, setAddedParams] = useState<string[]>([]);
 
   const effectiveCatalog = useMemo(() => {
     if (catalog) {
@@ -101,24 +105,39 @@ export function SearchSpaceTable({
     }));
   }, [catalog]);
 
+  const fullCatalog = useMemo(() => {
+    const extraEntries = addedParams
+      .filter((p) => !effectiveCatalog.some((e) => e.key === p))
+      .map((p) => ({
+        key: p,
+        type: "float" as const,
+        default: 0,
+        description: p,
+        modes: ["fixed", "range"] as string[],
+        paramType: "number",
+        group: "additional",
+      }));
+    return [...effectiveCatalog, ...extraEntries];
+  }, [effectiveCatalog, addedParams]);
+
   const groupedCatalog = useMemo(() => {
     const groups: Array<{
       group: string;
-      items: typeof effectiveCatalog;
+      items: typeof fullCatalog;
     }> = [];
     const seen = new Set<string>();
-    for (const item of effectiveCatalog) {
+    for (const item of fullCatalog) {
       const g = item.group;
       if (!seen.has(g)) {
         seen.add(g);
         groups.push({
           group: g,
-          items: effectiveCatalog.filter((i) => i.group === g),
+          items: fullCatalog.filter((i) => i.group === g),
         });
       }
     }
     return groups;
-  }, [effectiveCatalog]);
+  }, [fullCatalog]);
 
   const toggleExpand = (key: string) => {
     setExpandedRows((prev) => {
@@ -153,7 +172,7 @@ export function SearchSpaceTable({
   const handleModeChange = (key: string, mode: string) => {
     if (mode === "range") {
       const defaults = RANGE_DEFAULTS[key] ?? { low: 0, high: 1, log: false };
-      const param = effectiveCatalog.find((p) => p.key === key);
+      const param = fullCatalog.find((p) => p.key === key);
       const entry: SpaceEntry = {
         type: param?.type === "integer" ? "int" : "float",
         low: defaults.low,
@@ -427,6 +446,33 @@ export function SearchSpaceTable({
           })}
         </div>
       ))}
+
+      {/* Add parameter */}
+      {additionalParams &&
+        additionalParams.length > 0 &&
+        (() => {
+          const usedKeys = new Set(fullCatalog.map((c) => c.key));
+          const available = additionalParams.filter((p) => !usedKeys.has(p));
+          if (available.length === 0) return null;
+          return (
+            <div className="px-3 py-2 border-t">
+              <Select
+                onValueChange={(v) => setAddedParams((prev) => [...prev, v])}
+              >
+                <SelectTrigger className="h-7 w-48 text-xs">
+                  <SelectValue placeholder="+ Add parameter" />
+                </SelectTrigger>
+                <SelectContent>
+                  {available.map((p) => (
+                    <SelectItem key={p} value={p}>
+                      {p}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          );
+        })()}
     </div>
   );
 }
