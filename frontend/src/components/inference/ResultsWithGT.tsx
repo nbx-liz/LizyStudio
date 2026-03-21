@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import {
   fetchInferenceMetrics,
   fetchInferencePlot,
+  fetchInferenceShapPlot,
   type InferenceRecord,
 } from "@/api/inference";
 import { fetchJobPlots } from "@/api/jobs";
@@ -131,12 +132,21 @@ export function ResultsWithGT({
 
       {/* Accordion sections */}
       <Accordion type="multiple">
+        <AccordionItem value="pred-distribution">
+          <AccordionTrigger>Prediction Distribution</AccordionTrigger>
+          <AccordionContent>
+            <PredDistributionPlot infId={record.inf_id} jobId={record.job_id} />
+          </AccordionContent>
+        </AccordionItem>
+
         <AccordionItem value="predictions">
           <AccordionTrigger>Predictions</AccordionTrigger>
           <AccordionContent>
             <PredictionsTable infId={record.inf_id} jobId={record.job_id} />
           </AccordionContent>
         </AccordionItem>
+
+        <ShapAccordionItem infId={record.inf_id} jobId={record.job_id} />
 
         {record.warnings.length > 0 && (
           <AccordionItem value="warnings">
@@ -152,5 +162,53 @@ export function ResultsWithGT({
         )}
       </Accordion>
     </div>
+  );
+}
+
+/** Prediction distribution plot loaded lazily inside an accordion. */
+function PredDistributionPlot({
+  infId,
+  jobId,
+}: {
+  infId: string;
+  jobId: string;
+}) {
+  const { data, isLoading } = useQuery({
+    queryKey: ["inf-plot", infId, jobId, "prediction-distribution"],
+    queryFn: () => fetchInferencePlot(infId, jobId, "prediction-distribution"),
+  });
+
+  if (isLoading) {
+    return (
+      <p className="text-xs text-muted-foreground">Loading distribution...</p>
+    );
+  }
+  if (!data) return null;
+  return <PlotlyChart plotlyJson={data.plotly_json} />;
+}
+
+/** SHAP summary accordion item — renders only when SHAP data is available. */
+function ShapAccordionItem({ infId, jobId }: { infId: string; jobId: string }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ["inf-shap", infId, jobId],
+    queryFn: () => fetchInferenceShapPlot(infId, jobId),
+    retry: false,
+  });
+
+  if (!data && !isLoading) return null;
+
+  return (
+    <AccordionItem value="shap-summary">
+      <AccordionTrigger>SHAP Summary</AccordionTrigger>
+      <AccordionContent>
+        {isLoading ? (
+          <p className="text-xs text-muted-foreground">
+            Loading SHAP summary...
+          </p>
+        ) : data ? (
+          <PlotlyChart plotlyJson={data.plotly_json} />
+        ) : null}
+      </AccordionContent>
+    </AccordionItem>
   );
 }

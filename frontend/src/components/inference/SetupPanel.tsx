@@ -188,7 +188,7 @@ export function SetupPanel({
         {targetCol ? (
           <div className="space-y-2">
             <p className="text-xs text-green-600">
-              Target &apos;{String(targetCol)}&apos; will be auto-detected
+              ✓ Target &apos;{String(targetCol)}&apos; detected
             </p>
             <div className="flex items-center gap-2">
               <Checkbox
@@ -202,9 +202,12 @@ export function SetupPanel({
             </div>
           </div>
         ) : (
-          <p className="text-xs text-muted-foreground">
-            Prediction only (no target column info)
-          </p>
+          <div className="space-y-0.5">
+            <p className="text-xs text-muted-foreground">
+              Target not found in data
+            </p>
+            <p className="text-xs text-muted-foreground">Prediction only</p>
+          </div>
         )}
       </section>
 
