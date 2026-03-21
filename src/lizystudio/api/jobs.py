@@ -261,8 +261,14 @@ def export_job(
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, str]:
     """Export model or report to the given path (H-0005)."""
+    from pathlib import Path as _Path
+
+    import lizystudio.security as security
+    from lizystudio.security import validate_path_within
+
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
+    validate_path_within(_Path(body.output_path), security.ALLOWED_FILES_ROOT)
     try:
         if body.export_type == "report":
             path = export_report(
