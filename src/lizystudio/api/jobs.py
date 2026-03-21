@@ -16,6 +16,7 @@ from lizystudio.api.errors import (
     BackendError,
     JobNotCompletedError,
     JobNotFoundError,
+    JobRunningError,
     StudioError,
 )
 from lizystudio.services.export import export_model, export_report
@@ -74,7 +75,7 @@ def _job_summary(job: Job) -> dict[str, Any]:
             oof = raw.get("oof", {})
             if isinstance(oof, dict) and oof:
                 first_value = next(iter(oof.values()))
-                if isinstance(first_value, (int, float)):
+                if isinstance(first_value, int | float):
                     primary_score = float(first_value)
     summary["primary_score"] = primary_score
 
@@ -136,7 +137,10 @@ def delete_job(
     job_id: str,
     job_store: JobStore = Depends(get_job_store),
 ) -> dict[str, str]:
-    """Delete a job."""
+    """Delete a job. Running jobs cannot be deleted (v2-13 task 2)."""
+    job = _get_job_or_404(job_id, job_store)
+    if job.status == "running":
+        raise JobRunningError(job_id)
     if not job_store.delete(job_id):
         raise JobNotFoundError(job_id)
     return {"status": "deleted"}

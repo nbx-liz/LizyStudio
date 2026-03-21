@@ -51,6 +51,15 @@ class JobNotCompletedError(StudioError):
         super().__init__("JOB_NOT_COMPLETED", f"Job not completed: {job_id}", 400)
 
 
+class JobRunningError(StudioError):
+    def __init__(self, job_id: str) -> None:
+        super().__init__(
+            "JOB_RUNNING",
+            f"Cannot delete a running job: {job_id}",
+            400,
+        )
+
+
 class ValidationError(StudioError):
     def __init__(self, errors: list[dict[str, Any]]) -> None:
         super().__init__(

@@ -53,20 +53,13 @@ router = APIRouter()
 @router.get("/status")
 def workspace_status(
     ws: WorkspaceState = Depends(get_workspace),
-    job_store: JobStore = Depends(get_job_store),
 ) -> dict[str, Any]:
     """Return current workspace state summary.
 
-    If current_job_id is set, attempt to restore results from JobStore
-    so the frontend can recover state after a page refresh.
+    Per BLUEPRINT §4.2.3: browser close = Results empty. Results are only
+    available from volatile memory (set by the background job thread), never
+    restored from disk.
     """
-    # Restore results from JobStore if volatile state was lost
-    if ws.current_job_id and ws.workspace_fit_result is None:
-        job = job_store.get(ws.current_job_id)
-        if job is not None and job.status == "completed":
-            ws.workspace_fit_result = job.fit_result
-            ws.workspace_tune_result = job.tune_result
-
     return {
         "has_data": ws.dataframe is not None,
         "has_config": bool(ws.config),

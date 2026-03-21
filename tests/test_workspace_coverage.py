@@ -10,15 +10,11 @@ Targets:
 from __future__ import annotations
 
 import csv
-import io
-import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 import yaml
 from fastapi.testclient import TestClient
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -97,23 +93,20 @@ def test_status_has_config_true_after_put(client: TestClient) -> None:
     assert res.json()["has_config"] is True
 
 
-def test_status_job_restore_sets_has_result(
+def test_status_no_disk_restore(
     client: TestClient,
     tmp_path: Path,
 ) -> None:
-    """When current_job_id is present and fit_result is in the store the
-    status endpoint restores has_result=True (lines 64-68 in workspace.py)."""
+    """Per BLUEPRINT §4.2.3: browser close = Results empty. The status endpoint
+    must NOT restore fit_result from disk when volatile state is lost (v2-13)."""
     from lizystudio.backends.types import FitSummary
-    from lizystudio.services.jobs import JobStore, get_job_store
-    from lizystudio.services.workspace import WorkspaceState, get_workspace
+    from lizystudio.services.jobs import JobStore
+    from lizystudio.services.workspace import WorkspaceState
 
-    # Access underlying app state via an app-level override
-    # We go via the TestClient's app to manipulate state directly.
     app = client.app  # type: ignore[attr-defined]
     ws: WorkspaceState = app.state.workspace
     job_store: JobStore = app.state.job_store
 
-    # Simulate a completed job in the job_store
     from lizystudio.backends.types import DataRef
 
     data_ref = DataRef(
@@ -133,16 +126,16 @@ def test_status_job_restore_sets_has_result(
     job.fit_result = FitSummary(metrics={"auc": 0.9}, fold_count=5, params=[])
     job_store.update(job)
 
-    # Plant just the job_id into workspace state (no fit_result — simulates page refresh)
+    # Plant job_id into workspace (simulates page refresh)
     ws.current_job_id = job.job_id
     ws.workspace_fit_result = None
 
     res = client.get("/api/workspace/status")
     assert res.status_code == 200
     body = res.json()
-    assert body["has_result"] is True
-    # The workspace state must have been restored in-process
-    assert ws.workspace_fit_result is not None
+    # Results must NOT be restored from disk
+    assert body["has_result"] is False
+    assert ws.workspace_fit_result is None
 
 
 # ---------------------------------------------------------------------------
@@ -177,14 +170,14 @@ def test_fit_starts_job_when_data_and_config_present(
     # Patch start_fit_async so we do not actually spin up a real ML job
     with patch(
         "lizystudio.api.workspace.start_fit_async", return_value="job_test123"
-    ) as mock_start:
+    ) as _mock_start:
         res = client.post("/api/workspace/fit")
 
     assert res.status_code == 200
     body = res.json()
     assert "job_id" in body
     assert body["job_id"] == "job_test123"
-    mock_start.assert_called_once()
+    _mock_start.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +216,7 @@ def test_tune_injects_default_tuning_config_when_missing(
 
     with patch(
         "lizystudio.api.workspace.start_tune_async", return_value="job_tune999"
-    ) as mock_start:
+    ) as _mock_start:
         res = client.post("/api/workspace/tune")
 
     assert res.status_code == 200
@@ -267,12 +260,12 @@ def test_tune_starts_job_when_data_and_config_present(
 
     with patch(
         "lizystudio.api.workspace.start_tune_async", return_value="job_tune_ok"
-    ) as mock_start:
+    ) as _mock_start:
         res = client.post("/api/workspace/tune")
 
     assert res.status_code == 200
     assert res.json()["job_id"] == "job_tune_ok"
-    mock_start.assert_called_once()
+    _mock_start.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
