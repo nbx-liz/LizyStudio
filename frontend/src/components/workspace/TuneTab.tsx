@@ -70,9 +70,7 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
 
   // metric_direction map for auto direction
   const metricDirection = useMemo(() => {
-    const md = uiSchema?.option_sets?.metric_direction;
-    if (md) return md as unknown as Record<string, Record<string, string>>;
-    return undefined;
+    return uiSchema?.metric_direction;
   }, [uiSchema]);
 
   // Objective options for task

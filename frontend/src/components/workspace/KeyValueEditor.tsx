@@ -10,9 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { KNOWN_PARAMS } from "./constants";
-import { FormField } from "./FormField";
 import { NumberInput } from "./NumberInput";
 
 interface KeyValueEditorProps {
@@ -20,8 +18,6 @@ interface KeyValueEditorProps {
   onChange: (params: Record<string, unknown>) => void;
   modelName: string;
   parameterHints?: ParameterHint[];
-  autoNumLeaves?: boolean;
-  onAutoNumLeavesChange?: (checked: boolean) => void;
   shouldShowField?: (key: string) => boolean;
   additionalParams?: string[];
   stepMap?: Record<string, number>;
@@ -42,8 +38,6 @@ export function KeyValueEditor({
   onChange,
   modelName,
   parameterHints,
-  autoNumLeaves,
-  onAutoNumLeavesChange,
   shouldShowField,
   additionalParams,
   stepMap,
@@ -178,21 +172,6 @@ export function KeyValueEditor({
   return (
     <div>
       <p className="text-xs text-muted-foreground font-medium mb-2">{label}</p>
-
-      {/* auto_num_leaves toggle */}
-      {onAutoNumLeavesChange && (
-        <div className="mb-2">
-          <FormField
-            label="Auto Num Leaves"
-            description="Automatically calculate num_leaves from data"
-          >
-            <Switch
-              checked={autoNumLeaves ?? false}
-              onCheckedChange={onAutoNumLeavesChange}
-            />
-          </FormField>
-        </div>
-      )}
 
       {/* Preset parameter rows — using NumberInput for ± stepper */}
       <div className="space-y-1.5">

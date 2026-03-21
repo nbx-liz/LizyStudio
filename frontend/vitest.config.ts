@@ -12,5 +12,10 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.{ts,tsx}"],
+    coverage: {
+      provider: "istanbul",
+      reporter: ["text"],
+      include: ["src/components/workspace/**"],
+    },
   },
 });

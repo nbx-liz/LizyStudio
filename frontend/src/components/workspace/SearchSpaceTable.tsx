@@ -14,6 +14,11 @@ import {
 import { KNOWN_PARAMS, RANGE_DEFAULTS } from "./constants";
 import { NumberInput } from "./NumberInput";
 
+const GROUP_LABELS: Record<string, string> = {
+  model_params: "Model Params",
+  smart_params: "Smart Params",
+};
+
 interface SpaceEntry {
   type: "float" | "int" | "categorical";
   low?: number;
@@ -95,11 +100,6 @@ export function SearchSpaceTable({
       group: "model_params",
     }));
   }, [catalog]);
-
-  const GROUP_LABELS: Record<string, string> = {
-    model_params: "Model Params",
-    smart_params: "Smart Params",
-  };
 
   const groupedCatalog = useMemo(() => {
     const groups: Array<{
