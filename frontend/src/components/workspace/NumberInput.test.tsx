@@ -13,37 +13,37 @@ describe("NumberInput", () => {
     expect(input).toHaveValue("42");
   });
 
+  it("renders with undefined value", () => {
+    render(<NumberInput value={undefined} onChange={vi.fn()} />);
+    const input = screen.getByRole("textbox");
+    expect(input).toHaveValue("");
+  });
+
   it("calls onChange on increment", () => {
     const onChange = vi.fn();
     render(<NumberInput value={10} onChange={onChange} step={1} />);
-    const buttons = screen.getAllByRole("button");
-    // Plus button is the last one
-    fireEvent.click(buttons[buttons.length - 1]);
+    fireEvent.click(screen.getByRole("button", { name: /increment/i }));
     expect(onChange).toHaveBeenCalledWith(11);
   });
 
   it("calls onChange on decrement", () => {
     const onChange = vi.fn();
     render(<NumberInput value={10} onChange={onChange} step={1} />);
-    const buttons = screen.getAllByRole("button");
-    // Minus button is the first one
-    fireEvent.click(buttons[0]);
+    fireEvent.click(screen.getByRole("button", { name: /decrement/i }));
     expect(onChange).toHaveBeenCalledWith(9);
   });
 
   it("clamps value to min", () => {
     const onChange = vi.fn();
     render(<NumberInput value={0} onChange={onChange} step={1} min={0} />);
-    const buttons = screen.getAllByRole("button");
-    fireEvent.click(buttons[0]);
+    fireEvent.click(screen.getByRole("button", { name: /decrement/i }));
     expect(onChange).toHaveBeenCalledWith(0);
   });
 
   it("clamps value to max", () => {
     const onChange = vi.fn();
     render(<NumberInput value={100} onChange={onChange} step={1} max={100} />);
-    const buttons = screen.getAllByRole("button");
-    fireEvent.click(buttons[buttons.length - 1]);
+    fireEvent.click(screen.getByRole("button", { name: /increment/i }));
     expect(onChange).toHaveBeenCalledWith(100);
   });
 

@@ -380,7 +380,7 @@ function CompletedView({
 
   // Primary metric for header badge
   const primaryMetric = tuneResult
-    ? `${tuneResult.metric_name}: ${tuneResult.best_score.toFixed(4)}`
+    ? `${tuneResult.metric_name}: ${Number(tuneResult.best_score ?? 0).toFixed(4)}`
     : metrics
       ? (() => {
           const firstKey = Object.keys(metrics)[0];
@@ -547,19 +547,21 @@ function CompletedView({
                   <TableBody>
                     {[...tuneResult.trials]
                       .sort((a, b) => {
-                        const sa = (a as Record<string, unknown>)
-                          .score as number;
-                        const sb = (b as Record<string, unknown>)
-                          .score as number;
+                        const ra = a as Record<string, unknown>;
+                        const rb = b as Record<string, unknown>;
+                        const sa = Number(ra.score ?? 0);
+                        const sb = Number(rb.score ?? 0);
                         return tuneResult.direction === "maximize"
                           ? sb - sa
                           : sa - sb;
                       })
                       .map((trial, i) => {
                         const trialRecord = trial as Record<string, unknown>;
-                        const trialScore = trialRecord.score as number;
+                        const trialScore = Number(trialRecord.score ?? 0);
                         const isBest =
-                          Math.abs(trialScore - tuneResult.best_score) < 1e-10;
+                          Math.abs(
+                            trialScore - Number(tuneResult.best_score ?? 0),
+                          ) < 1e-10;
                         return (
                           <TableRow
                             key={`trial-${i}`}
@@ -719,6 +721,7 @@ function formatNum(v: unknown): string {
 }
 
 function formatElapsed(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "--:--";
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;

@@ -61,6 +61,7 @@ export function NumberInput({
         onClick={handleDecrement}
         disabled={disabled}
         type="button"
+        aria-label="Decrement"
       >
         <Minus className="h-3 w-3" />
       </Button>
@@ -80,6 +81,7 @@ export function NumberInput({
         onClick={handleIncrement}
         disabled={disabled}
         type="button"
+        aria-label="Increment"
       >
         <Plus className="h-3 w-3" />
       </Button>

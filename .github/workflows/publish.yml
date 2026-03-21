@@ -7,7 +7,9 @@ on:
 
 jobs:
   publish:
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
+    environment: pypi
     permissions:
       id-token: write
     steps:
@@ -19,6 +21,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - run: uv sync
+      - run: uv run pytest -q
+      - run: uv run mypy src/lizystudio/
       - run: cd frontend && pnpm install --frozen-lockfile
       - run: cd frontend && pnpm build
       - run: uv build
