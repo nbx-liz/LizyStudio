@@ -1,3 +1,4 @@
+import { FolderOpen } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { exportJob } from "@/api/jobs";
@@ -104,11 +105,25 @@ export function ExportDialog({
           {/* Output path */}
           <div className="space-y-2">
             <Label>Output Path</Label>
-            <Input
-              value={outputPath}
-              onChange={(e) => setOutputPath(e.target.value)}
-              className="text-sm"
-            />
+            <div className="flex gap-1">
+              <Input
+                value={outputPath}
+                onChange={(e) => setOutputPath(e.target.value)}
+                className="flex-1 text-sm"
+              />
+              <Button
+                variant="outline"
+                size="icon"
+                className="shrink-0"
+                title="Browse output directory"
+                onClick={() => {
+                  // TODO: integrate with FileBrowser when available
+                  toast.info("File browser not yet available");
+                }}
+              >
+                <FolderOpen className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
 
           {/* Actions */}

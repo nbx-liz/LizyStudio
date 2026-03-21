@@ -112,6 +112,16 @@ export function getInferenceDownloadUrl(infId: string, jobId: string): string {
   return `/api/inference/${eid}/download?job_id=${encodeURIComponent(jobId)}`;
 }
 
+export function fetchInferenceShapPlot(
+  infId: string,
+  jobId: string,
+): Promise<{ plotly_json: string }> {
+  const eid = encodeURIComponent(infId);
+  return apiFetch(
+    `/inference/${eid}/plot/shap-summary?job_id=${encodeURIComponent(jobId)}`,
+  );
+}
+
 export function fetchInferenceComparison(
   infId: string,
   otherInfId: string,
