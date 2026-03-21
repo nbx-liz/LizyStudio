@@ -115,9 +115,28 @@ class LizyMLAdapter:
         *,
         on_progress: ProgressCallback | None = None,
     ) -> TuningSummary:
+        from lizyml import TuneProgressCallback, TuneProgressInfo
+
+        lizyml_callback: TuneProgressCallback | None = None
         if on_progress is not None:
-            on_progress(current=0, total=1, message="Tuning hyperparameters...")
-        tune_result = model.tune()
+
+            def _bridge(info: TuneProgressInfo) -> None:
+                msg = f"Trial {info.current_trial}/{info.total_trials}"
+                if info.best_score is not None:
+                    msg += f" | Best: {info.best_score:.4f}"
+                if info.latest_score is not None:
+                    msg += f" | Latest: {info.latest_score:.4f} ({info.latest_state})"
+                on_progress(
+                    current=info.current_trial,
+                    total=info.total_trials,
+                    message=msg,
+                )
+
+            lizyml_callback = _bridge
+            on_progress(current=0, total=1, message="Starting tuning...")
+
+        tune_result = model.tune(progress_callback=lizyml_callback)
+
         if on_progress is not None:
             on_progress(current=1, total=1, message="Tuning complete.")
         return TuningSummary(

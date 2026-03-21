@@ -175,9 +175,96 @@ def test_tune_invokes_on_progress() -> None:
         calls.append({"current": current, "total": total, "message": message})
 
     adapter.tune(mock_model, on_progress=progress_cb)
+    # Must pass progress_callback kwarg to model.tune()
+    mock_model.tune.assert_called_once()
+    _, kwargs = mock_model.tune.call_args
+    assert "progress_callback" in kwargs
+    assert callable(kwargs["progress_callback"])
+    # Start + complete = 2 calls minimum (no trial callbacks fired by mock)
     assert len(calls) == 2
     assert calls[0]["current"] == 0
+    assert calls[0]["message"] == "Starting tuning..."
     assert calls[1]["current"] == 1
+    assert calls[1]["message"] == "Tuning complete."
+
+
+def test_tune_bridge_callback_maps_fields() -> None:
+    """Verify the bridge callback correctly maps TuneProgressInfo fields."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+
+    calls: list[dict] = []
+
+    def progress_cb(*, current: int, total: int, message: str) -> None:
+        calls.append({"current": current, "total": total, "message": message})
+
+    # We need to capture the bridge callback and invoke it manually
+    def fake_tune(*, progress_callback: Any = None) -> MagicMock:
+        if progress_callback is not None:
+            # Simulate TuneProgressInfo with a simple namespace
+            info = MagicMock()
+            info.current_trial = 3
+            info.total_trials = 10
+            info.best_score = 0.9123
+            info.latest_score = 0.8765
+            info.latest_state = "COMPLETE"
+            progress_callback(info)
+
+            # Test with None scores
+            info2 = MagicMock()
+            info2.current_trial = 1
+            info2.total_trials = 10
+            info2.best_score = None
+            info2.latest_score = None
+            info2.latest_state = "PRUNED"
+            progress_callback(info2)
+
+        return MagicMock(
+            best_params={"lr": 0.1},
+            best_score=0.9,
+            trials=[],
+            metric_name="auc",
+            direction="maximize",
+        )
+
+    mock_model.tune = fake_tune
+
+    adapter.tune(mock_model, on_progress=progress_cb)
+
+    # calls: start, trial3, trial1(none scores), complete = 4
+    assert len(calls) == 4
+    assert calls[0]["message"] == "Starting tuning..."
+
+    # Trial with scores
+    assert calls[1]["current"] == 3
+    assert calls[1]["total"] == 10
+    assert "Trial 3/10" in calls[1]["message"]
+    assert "Best: 0.9123" in calls[1]["message"]
+    assert "Latest: 0.8765 (COMPLETE)" in calls[1]["message"]
+
+    # Trial with None scores
+    assert calls[2]["current"] == 1
+    assert calls[2]["total"] == 10
+    assert "Best:" not in calls[2]["message"]
+    assert "Latest:" not in calls[2]["message"]
+
+    assert calls[3]["message"] == "Tuning complete."
+
+
+def test_tune_no_progress_callback_skips_bridge() -> None:
+    """When on_progress is None, tune() skips progress_callback."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = MagicMock(
+        best_params={"lr": 0.1},
+        best_score=0.9,
+        trials=[],
+        metric_name="auc",
+        direction="maximize",
+    )
+
+    adapter.tune(mock_model)
+    mock_model.tune.assert_called_once_with(progress_callback=None)
 
 
 def test_model_info_returns_target() -> None:
