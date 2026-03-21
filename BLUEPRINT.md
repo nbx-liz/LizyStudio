@@ -2238,12 +2238,12 @@ Workspace の `workspace_result` は完了時に自動更新される。
 | メソッド | パス | 説明 |
 |---------|------|------|
 | GET | `/api/inference/history` | 推論履歴一覧（query: `job_id`、省略時は全件） |
-| GET | `/api/inference/{inf_id}` | 推論結果サマリー（meta + has_ground_truth + row_count） |
-| GET | `/api/inference/{inf_id}/predictions` | 予測テーブル（query: `rows=50`, `offset=0`） |
-| GET | `/api/inference/{inf_id}/metrics` | 評価メトリクス（正解あり時。IS/OOS/Inf の3列） |
-| GET | `/api/inference/{inf_id}/plot/{plot_type}` | 評価プロット（正解あり時。Plotly JSON） |
-| GET | `/api/inference/{inf_id}/download` | 予測結果の CSV ダウンロード |
-| GET | `/api/inference/{inf_id}/comparison/{other_inf_id}` | 分布比較統計（Mean/Std/Positive% 等） |
+| GET | `/api/inference/{inf_id}` | 推論結果サマリー（query: `job_id` 必須。meta + has_ground_truth + row_count） |
+| GET | `/api/inference/{inf_id}/predictions` | 予測テーブル（query: `job_id` 必須, `rows=50`, `offset=0`） |
+| GET | `/api/inference/{inf_id}/metrics` | 評価メトリクス（query: `job_id` 必須。正解あり時。IS/OOS/Inf の3列） |
+| GET | `/api/inference/{inf_id}/plot/{plot_type}` | 評価プロット（query: `job_id` 必須。正解あり時。Plotly JSON） |
+| GET | `/api/inference/{inf_id}/download` | 予測結果の CSV ダウンロード（query: `job_id` 必須） |
+| GET | `/api/inference/{inf_id}/comparison/{other_inf_id}` | 分布比較統計（query: `job_id` 必須。Mean/Std/Positive% 等） |
 
 ### 5.5 WebSocket
 

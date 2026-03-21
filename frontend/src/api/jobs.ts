@@ -37,7 +37,7 @@ export function fetchJobPlots(jobId: string): Promise<string[]> {
 export function fetchJobSplitSummary(
   jobId: string,
 ): Promise<SplitSummaryRow[]> {
-  return apiFetch(`/jobs/${jobId}/split_summary`);
+  return apiFetch(`/jobs/${jobId}/split-summary`);
 }
 
 export function fetchJobLog(jobId: string): Promise<{ log: string }> {
