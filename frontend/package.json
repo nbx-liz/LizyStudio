@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "storybook": "echo 'No storybook yet'",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build",
     "generate:api": "openapi-typescript openapi.json -o src/api/generated/schema.d.ts"
   },
   "dependencies": {
@@ -40,6 +41,9 @@
   "devDependencies": {
     "@biomejs/biome": "^2.4.6",
     "@playwright/test": "^1.58.2",
+    "@storybook/addon-essentials": "8",
+    "@storybook/blocks": "8",
+    "@storybook/react-vite": "^8.6.18",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/js-yaml": "^4.0.9",
@@ -49,8 +53,10 @@
     "@vitejs/plugin-react": "^5.1.4",
     "@vitest/coverage-istanbul": "^4.1.0",
     "@vitest/coverage-v8": "^4.1.0",
-    "jsdom": "^28.1.0",
+    "jsdom": "^25.0.1",
+    "msw": "^2.12.14",
     "openapi-typescript": "^7.13.0",
+    "storybook": "^8.6.18",
     "typescript": "~5.9.3",
     "vite": "^6.4.1",
     "vitest": "^4.1.0"

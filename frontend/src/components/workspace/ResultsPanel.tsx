@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { X } from "lucide-react";
+import { Download, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -194,7 +194,7 @@ export function ResultsPanel({
         )}
         {progress?.elapsed != null && (
           <p className="text-xs text-muted-foreground">
-            Elapsed: {Math.round(progress.elapsed)}s
+            Elapsed: {formatElapsed(progress.elapsed)}
           </p>
         )}
 
@@ -257,6 +257,9 @@ export function ResultsPanel({
           <Badge variant="destructive">Failed</Badge>
         </div>
         <div className="rounded-md border border-destructive/30 bg-destructive/10 p-4">
+          {job.error_code && (
+            <p className="mb-1 text-sm font-bold font-mono">{job.error_code}</p>
+          )}
           <p className="text-sm font-mono">{job.error ?? "Unknown error"}</p>
         </div>
         <Button
@@ -272,6 +275,23 @@ export function ResultsPanel({
           onOpenChange={setLogOpen}
           jobId={job.job_id}
         />
+      </div>
+    );
+  }
+
+  // Cancelled state
+  if (job.status === "cancelled") {
+    return (
+      <div className="flex h-full flex-col p-6">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-lg font-medium">
+            {headerLabel} {modelName && `\u2014 ${modelName}`}
+          </h3>
+          <Badge variant="secondary">Cancelled</Badge>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          This job was cancelled before completion.
+        </p>
       </div>
     );
   }
@@ -382,6 +402,18 @@ function CompletedView({
           Completed
         </Badge>
         {primaryMetric && <Badge variant="secondary">{primaryMetric}</Badge>}
+        <div className="ml-auto">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              toast.info("Export Code will be available in H-0027");
+            }}
+          >
+            <Download className="mr-1 h-3 w-3" />
+            Export Code
+          </Button>
+        </div>
       </div>
 
       {/* Tune: Optimization History */}
@@ -496,6 +528,66 @@ function CompletedView({
 
       {/* Accordion sections */}
       <Accordion type="multiple">
+        {/* Trial Results (Tune only) — BLUEPRINT order: before Feature Importance */}
+        {tuneResult && tuneResult.trials.length > 0 && (
+          <AccordionItem value="trials">
+            <AccordionTrigger>Trial Results</AccordionTrigger>
+            <AccordionContent>
+              <div className="max-h-64 overflow-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      {Object.keys(tuneResult.trials[0]).map((k) => (
+                        <TableHead key={k} className="text-xs">
+                          {k}
+                        </TableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {[...tuneResult.trials]
+                      .sort((a, b) => {
+                        const sa = (a as Record<string, unknown>)
+                          .score as number;
+                        const sb = (b as Record<string, unknown>)
+                          .score as number;
+                        return tuneResult.direction === "maximize"
+                          ? sb - sa
+                          : sa - sb;
+                      })
+                      .map((trial, i) => {
+                        const trialRecord = trial as Record<string, unknown>;
+                        const trialScore = trialRecord.score as number;
+                        const isBest =
+                          Math.abs(trialScore - tuneResult.best_score) < 1e-10;
+                        return (
+                          <TableRow
+                            key={`trial-${i}`}
+                            className={
+                              isBest
+                                ? "bg-green-50 dark:bg-green-950/30 font-medium"
+                                : ""
+                            }
+                          >
+                            {Object.entries(trialRecord).map(([k, v], j) => (
+                              <TableCell key={`cell-${j}`} className="text-xs">
+                                {k === "trial" && isBest
+                                  ? `\u2605 ${String(v)}`
+                                  : typeof v === "number"
+                                    ? formatNum(v)
+                                    : String(v)}
+                              </TableCell>
+                            ))}
+                          </TableRow>
+                        );
+                      })}
+                  </TableBody>
+                </Table>
+              </div>
+            </AccordionContent>
+          </AccordionItem>
+        )}
+
         {/* Feature Importance */}
         {(importancePlot || importance) && (
           <AccordionItem value="importance">
@@ -530,7 +622,7 @@ function CompletedView({
           </AccordionItem>
         )}
 
-        {/* Fold Details */}
+        {/* Fold Details (CV only) */}
         {hasFolds && splitSummary && splitSummary.length > 0 && (
           <AccordionItem value="folds">
             <AccordionTrigger>Fold Details</AccordionTrigger>
@@ -557,60 +649,6 @@ function CompletedView({
                   ))}
                 </TableBody>
               </Table>
-            </AccordionContent>
-          </AccordionItem>
-        )}
-
-        {/* Trial Results (Tune only) */}
-        {tuneResult && tuneResult.trials.length > 0 && (
-          <AccordionItem value="trials">
-            <AccordionTrigger>Trial Results</AccordionTrigger>
-            <AccordionContent>
-              <div className="max-h-64 overflow-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      {Object.keys(tuneResult.trials[0]).map((k) => (
-                        <TableHead key={k} className="text-xs">
-                          {k}
-                        </TableHead>
-                      ))}
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {[...tuneResult.trials]
-                      .sort((a, b) => {
-                        const sa = (a as Record<string, unknown>)
-                          .score as number;
-                        const sb = (b as Record<string, unknown>)
-                          .score as number;
-                        return tuneResult.direction === "maximize"
-                          ? sb - sa
-                          : sa - sb;
-                      })
-                      .map((trial, i) => {
-                        const trialScore = (trial as Record<string, unknown>)
-                          .score as number;
-                        const isBest =
-                          Math.abs(trialScore - tuneResult.best_score) < 1e-10;
-                        return (
-                          <TableRow
-                            key={`trial-${i}`}
-                            className={isBest ? "bg-green-50" : ""}
-                          >
-                            {Object.values(trial).map((v, j) => (
-                              <TableCell key={`cell-${j}`} className="text-xs">
-                                {typeof v === "number"
-                                  ? formatNum(v)
-                                  : String(v)}
-                              </TableCell>
-                            ))}
-                          </TableRow>
-                        );
-                      })}
-                  </TableBody>
-                </Table>
-              </div>
             </AccordionContent>
           </AccordionItem>
         )}
@@ -678,4 +716,10 @@ function LogDialog({
 function formatNum(v: unknown): string {
   if (typeof v !== "number") return String(v ?? "");
   return v.toFixed(4);
+}
+
+function formatElapsed(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }

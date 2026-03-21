@@ -10,8 +10,9 @@ export default defineConfig({
     },
   },
   test: {
-    environment: "node",
+    environment: "jsdom",
     include: ["src/**/*.test.{ts,tsx}"],
+    setupFiles: ["./src/test-setup.ts"],
     coverage: {
       provider: "istanbul",
       reporter: ["text"],

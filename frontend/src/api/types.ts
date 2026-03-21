@@ -61,6 +61,7 @@ export interface JobSummary {
   created_at: string;
   completed_at: string | null;
   error: string | null;
+  error_code: string | null;
 }
 
 export interface JobDetail extends JobSummary {
