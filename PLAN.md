@@ -11,26 +11,26 @@ Phase 0〜30 は v1 で完了済み。バックエンド（Python / FastAPI / Ad
 | Phase | 名前 | 依存 | 状態 |
 |-------|------|------|------|
 | v2-0 | v2 ドキュメント整備 | — | ✅ |
-| v2-1 | バックエンド復元 + 開発環境 | v2-0 | 🔧 |
-| v2-2 | フロントエンド基盤（Tailwind + shadcn/ui + Biome） | v2-1 | 🔧 |
-| v2-3 | API 型生成（openapi-typescript） | v2-2 | 🔧 |
-| v2-4 | Workspace 画面 — Data Panel | v2-3 | 🔧 |
-| v2-5 | Workspace 画面 — Model Panel | v2-4 | 🔧 |
-| v2-6 | Workspace 画面 — Results Panel + WebSocket | v2-5 | 🔧 |
-| v2-7 | テスト基盤（Vitest + Storybook + MSW） | v2-2 | 🔧 |
-| v2-8 | pre-commit + CI/CD（GitHub Actions + gh-action-pypi-publish） | v2-2 | 🔧 |
-| v2-9 | Jobs 画面再実装 | v2-6 | 🔧 |
-| v2-10 | Inference 画面再実装 | v2-9 | 🔧 |
+| v2-1 | バックエンド復元 + 開発環境 | v2-0 | ✅ |
+| v2-2 | フロントエンド基盤（Tailwind + shadcn/ui + Biome） | v2-1 | ✅ |
+| v2-3 | API 型生成（openapi-typescript） | v2-2 | ✅ |
+| v2-4 | Workspace 画面 — Data Panel | v2-3 | ✅ |
+| v2-5 | Workspace 画面 — Model Panel | v2-4 | ✅ |
+| v2-6 | Workspace 画面 — Results Panel + WebSocket | v2-5 | ✅ |
+| v2-7 | テスト基盤（Vitest + Storybook + MSW） | v2-2 | ✅ |
+| v2-8 | pre-commit + CI/CD（GitHub Actions + gh-action-pypi-publish） | v2-2 | ✅ |
+| v2-9 | Jobs 画面再実装 | v2-6 | ✅ |
+| v2-10 | Inference 画面再実装 | v2-9 | ✅ |
 | v2-11 | E2E テスト（Playwright）+ 最終監査 | v2-10, v2-7, v2-8 | 🔧 |
-| v2-12 | Workspace 仕様差分是正（requirements-audit 2026-03-11） | v2-6 | 🆕 |
-| v2-13 | API 契約整合（Workspace / Jobs / Inference） | v2-12 | 🆕 |
-| v2-14 | Jobs 画面実装（§4.3 フル準拠） | v2-13, v2-9 | 🆕 |
-| v2-15 | Inference 画面実装（§4.4 フル準拠） | v2-14, v2-10 | 🆕 |
-| v2-16 | API 型生成・テスト基盤の実運用化 | v2-15, v2-7 | 🔧 |
-| v2-17 | 最終統合監査（requirements-audit 再実施） | v2-16, v2-11 | 🆕 |
-| v2-18 | LizyML v0.4.0 対応 — ゲート不要項目（split method, UI 調整） | v2-5 | 🆕 |
-| v2-19 | LizyML v0.4.0 対応 — export_code API（H-0027） | v2-14 | 🆕 |
-| v2-20 | LizyML v0.4.0 対応 — Tune 進捗コールバック（H-0028） | v2-6 | 🆕 |
+| v2-12 | Workspace 仕様差分是正 | v2-6 | ✅ |
+| v2-13 | API 契約整合（Workspace / Jobs / Inference） | v2-12 | ✅ |
+| v2-14 | Jobs 画面実装（§4.3 フル準拠） | v2-13, v2-9 | ✅ |
+| v2-15 | Inference 画面実装（§4.4 フル準拠） | v2-14, v2-10 | ✅ |
+| v2-16 | API 型生成・テスト基盤の実運用化 | v2-15, v2-7 | ✅ |
+| v2-17 | 最終統合監査（requirements-audit 再実施） | v2-16, v2-11 | ✅ |
+| v2-18 | LizyML-Widget 画面仕様統合 + LizyML v0.4.0 対応 | v2-5 | ✅ |
+| v2-19 | LizyML v0.4.0 対応 — export_code API（H-0027） | v2-14 | ✅ |
+| v2-20 | LizyML v0.4.0 対応 — Tune 進捗コールバック（H-0028） | v2-6 | ✅ |
 
 ---
 
