@@ -142,6 +142,27 @@ def test_delete_job_not_found(client: TestClient) -> None:
     assert res.status_code == 404
 
 
+def test_delete_running_job_rejected(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    """DELETE on a running job must return 400 with JOB_RUNNING error (v2-13)."""
+    app = client.app  # type: ignore[union-attr]
+    job_store: JobStore = app.state.job_store
+    job = job_store.create(
+        backend_name="lizyml",
+        config={"task": "binary"},
+        data_ref=sample_data_ref,
+        job_type="fit",
+    )
+    job.status = "running"
+    job_store.update(job)
+
+    res = client.delete(f"/api/jobs/{job.job_id}")
+    assert res.status_code == 400
+    body = res.json()
+    assert body["error"]["code"] == "JOB_RUNNING"
+
+
 # --- Trailing slash ---
 
 
