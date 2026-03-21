@@ -21,7 +21,7 @@ Phase 0〜30 は v1 で完了済み。バックエンド（Python / FastAPI / Ad
 | v2-8 | pre-commit + CI/CD（GitHub Actions + gh-action-pypi-publish） | v2-2 | ✅ |
 | v2-9 | Jobs 画面再実装 | v2-6 | ✅ |
 | v2-10 | Inference 画面再実装 | v2-9 | ✅ |
-| v2-11 | E2E テスト（Playwright）+ 最終監査 | v2-10, v2-7, v2-8 | 🔧 |
+| v2-11 | E2E テスト（Playwright）+ 最終監査 | v2-10, v2-7, v2-8 | ✅ |
 | v2-12 | Workspace 仕様差分是正 | v2-6 | ✅ |
 | v2-13 | API 契約整合（Workspace / Jobs / Inference） | v2-12 | ✅ |
 | v2-14 | Jobs 画面実装（§4.3 フル準拠） | v2-13, v2-9 | ✅ |
