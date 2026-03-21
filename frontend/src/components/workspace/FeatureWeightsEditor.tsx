@@ -43,19 +43,19 @@ export function FeatureWeightsEditor({
   };
 
   const handleWeightChange = (key: string, value: number | undefined) => {
-    const updated = { ...weights };
+    if (!weights) return;
     if (value === undefined) {
-      delete updated[key];
+      const { [key]: _, ...rest } = weights;
+      onChange(rest);
     } else {
-      updated[key] = value;
+      onChange({ ...weights, [key]: value });
     }
-    onChange(updated);
   };
 
   const handleRemove = (key: string) => {
-    const updated = { ...weights };
-    delete updated[key];
-    onChange(updated);
+    if (!weights) return;
+    const { [key]: _, ...rest } = weights;
+    onChange(rest);
   };
 
   return (

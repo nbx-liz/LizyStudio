@@ -19,6 +19,8 @@ import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { CalibrationSection } from "./CalibrationSection";
+import { getNestedValue, setNestedValue } from "./config-utils";
+import { FeatureWeightsEditor } from "./FeatureWeightsEditor";
 import { FormField } from "./FormField";
 import { KeyValueEditor } from "./KeyValueEditor";
 import { MetricsChips } from "./MetricsChips";
@@ -54,6 +56,7 @@ interface ConfigFormProps {
   hiddenFields?: string[];
   task?: string | null;
   uiSchema?: import("@/api/types").UiSchema;
+  columns?: string[];
 }
 
 // --- Schema resolution ---
@@ -173,36 +176,6 @@ function resolveProperties(
   for (const [name, prop] of Object.entries(props)) {
     result[name] = resolveSchema(prop, defs, values[name]);
   }
-  return result;
-}
-
-// --- Value helpers ---
-
-function getNestedValue(obj: Record<string, unknown>, path: string[]): unknown {
-  let current: unknown = obj;
-  for (const key of path) {
-    if (current == null || typeof current !== "object") return undefined;
-    current = (current as Record<string, unknown>)[key];
-  }
-  return current;
-}
-
-function setNestedValue(
-  obj: Record<string, unknown>,
-  path: string[],
-  value: unknown,
-): Record<string, unknown> {
-  const result = { ...obj };
-  if (path.length === 1) {
-    result[path[0]] = value;
-    return result;
-  }
-  const [first, ...rest] = path;
-  result[first] = setNestedValue(
-    (result[first] as Record<string, unknown>) ?? {},
-    rest,
-    value,
-  );
   return result;
 }
 
@@ -389,6 +362,7 @@ export function ConfigForm({
   hiddenFields = HIDDEN,
   task,
   uiSchema,
+  columns = [],
 }: ConfigFormProps) {
   const handleFieldChange = useCallback(
     (path: string[], value: unknown) => {
@@ -451,11 +425,18 @@ export function ConfigForm({
     (key: string) => {
       const vis = uiSchema?.conditional_visibility?.[key];
       if (!vis) return true;
-      if (key === "num_leaves_ratio") return autoNumLeaves;
-      if (key === "num_leaves") return !autoNumLeaves;
+      // Evaluate each condition in the visibility map
+      for (const [condKey, condValue] of Object.entries(
+        vis as Record<string, unknown>,
+      )) {
+        // Check model params and config for the condition value
+        const actualValue =
+          modelParams[condKey] ?? getNestedValue(config, condKey.split("."));
+        if (actualValue !== condValue) return false;
+      }
       return true;
     },
-    [uiSchema, autoNumLeaves],
+    [uiSchema, modelParams, config],
   );
 
   if (!rawProperties) return null;
@@ -557,6 +538,24 @@ export function ConfigForm({
                         />
                       </FormField>
 
+                      <FeatureWeightsEditor
+                        weights={
+                          (modelConfig.feature_weights as Record<
+                            string,
+                            number
+                          >) ?? null
+                        }
+                        columns={columns}
+                        onChange={(weights) => {
+                          const updated = setNestedValue(
+                            config,
+                            ["model", "feature_weights"],
+                            weights,
+                          );
+                          onChange(updated);
+                        }}
+                      />
+
                       {/* Sub-group 2: Model Params */}
                       <Separator className="my-3" />
                       <p className="text-xs text-muted-foreground font-medium mb-2">
@@ -639,6 +638,8 @@ export function ConfigForm({
                       <KeyValueEditor
                         params={modelParams}
                         parameterHints={uiSchema?.parameter_hints}
+                        additionalParams={uiSchema?.additional_params}
+                        stepMap={uiSchema?.step_map}
                         onChange={(newParams) => {
                           const updated = setNestedValue(
                             config,
@@ -648,34 +649,16 @@ export function ConfigForm({
                           onChange(updated);
                         }}
                         modelName={modelName}
-                        autoNumLeaves={autoNumLeaves}
-                        onAutoNumLeavesChange={(checked) => {
-                          const newParams = {
-                            ...modelParams,
-                            auto_num_leaves: checked,
-                          };
-                          const updated = setNestedValue(
-                            config,
-                            ["model", "params"],
-                            newParams,
-                          );
-                          onChange(updated);
-                        }}
                         shouldShowField={shouldShowField}
                       />
-
-                      {/* Sub-group 3: Additional Params */}
-                      <Separator className="my-3" />
-                      <p className="text-xs text-muted-foreground font-medium mb-2">
-                        Additional Params
-                      </p>
-                      {/* AdditionalParamsEditor will be added here */}
                     </>
                   )}
 
                   {/* Training section: inner validation */}
                   {sectionName === "training" &&
-                    uiSchema?.inner_valid_options && (
+                    uiSchema?.inner_valid_options &&
+                    (trainingConfig.early_stopping as Record<string, unknown>)
+                      ?.enabled === true && (
                       <FormField
                         label="Inner Validation"
                         description="Inner validation strategy for early stopping"
@@ -709,27 +692,29 @@ export function ConfigForm({
                         </Select>
                       </FormField>
                     )}
-                  {sectionName === "training" && (
-                    <FormField
-                      label="Inner Valid Ratio"
-                      description="Ratio for inner validation holdout"
-                    >
-                      <NumberInput
-                        value={innerValidRatio}
-                        onChange={(v) => {
-                          const updated = setNestedValue(
-                            config,
-                            ["training", "inner_valid", "ratio"],
-                            v ?? 0.2,
-                          );
-                          onChange(updated);
-                        }}
-                        step={0.05}
-                        min={0.01}
-                        max={0.5}
-                      />
-                    </FormField>
-                  )}
+                  {sectionName === "training" &&
+                    (trainingConfig.early_stopping as Record<string, unknown>)
+                      ?.enabled === true && (
+                      <FormField
+                        label="Inner Valid Ratio"
+                        description="Ratio for inner validation holdout"
+                      >
+                        <NumberInput
+                          value={innerValidRatio}
+                          onChange={(v) => {
+                            const updated = setNestedValue(
+                              config,
+                              ["training", "inner_valid", "ratio"],
+                              v ?? 0.2,
+                            );
+                            onChange(updated);
+                          }}
+                          step={0.05}
+                          min={0.01}
+                          max={0.5}
+                        />
+                      </FormField>
+                    )}
                 </div>
               </AccordionContent>
             </AccordionItem>

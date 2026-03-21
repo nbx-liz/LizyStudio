@@ -137,6 +137,7 @@ export interface SearchSpaceCatalogEntry {
 export interface UiSchema {
   sections: { key: string; title: string }[];
   option_sets: Record<string, Record<string, string[]>>;
+  metric_direction?: Record<string, Record<string, string>>;
   parameter_hints: ParameterHint[];
   search_space_catalog: SearchSpaceCatalogEntry[];
   step_map: Record<string, number>;

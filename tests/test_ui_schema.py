@@ -249,6 +249,58 @@ class TestLizyMLAdapterUiSchema:
             assert key in vis, f"Missing conditional_visibility key: {key}"
 
 
+import sys
+
+
+def _reset_ui_schema_caches() -> None:
+    """Reset module-level caches to force re-evaluation."""
+    import lizystudio.backends.lizyml_ui_schema as m
+
+    m._eval_metrics_cache = None
+    m._metric_direction_cache = None
+
+
+class TestUiSchemaFallbacks:
+    def test_get_eval_metrics_fallback_when_import_fails(self, monkeypatch: object) -> None:
+        """Lines 32-34: ImportError fallback in get_eval_metrics_by_task."""
+        import lizystudio.backends.lizyml_ui_schema as m
+
+        _reset_ui_schema_caches()
+        monkeypatch.setitem(sys.modules, "lizyml.metrics.registry", None)  # type: ignore[attr-defined]
+        try:
+            result = m.get_eval_metrics_by_task()
+            assert "binary" in result
+            assert "regression" in result
+            assert "multiclass" in result
+        finally:
+            _reset_ui_schema_caches()
+
+    def test_get_metric_directions_fallback_when_import_fails(self, monkeypatch: object) -> None:
+        """Lines 88-92: ImportError fallback in get_metric_directions."""
+        import lizystudio.backends.lizyml_ui_schema as m
+
+        _reset_ui_schema_caches()
+        monkeypatch.setitem(sys.modules, "lizyml.metrics.registry", None)  # type: ignore[attr-defined]
+        try:
+            result = m.get_metric_directions()
+            for task_dirs in result.values():
+                for direction in task_dirs.values():
+                    assert direction in ("minimize", "maximize")
+        finally:
+            _reset_ui_schema_caches()
+
+    def test_inner_lock_guard_returns_cached_value(self) -> None:
+        """Lines 26 and 71: inner double-check returns same cached object."""
+        import lizystudio.backends.lizyml_ui_schema as m
+
+        r1 = m.get_eval_metrics_by_task()
+        r2 = m.get_eval_metrics_by_task()
+        assert r1 is r2
+        d1 = m.get_metric_directions()
+        d2 = m.get_metric_directions()
+        assert d1 is d2
+
+
 # --- Integration test: API endpoint ---
 
 

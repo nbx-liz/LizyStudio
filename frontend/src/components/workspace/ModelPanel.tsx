@@ -1,10 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, FileText, FileUp } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { ConfigError } from "@/api/types";
 import {
   fetchBackends,
+  fetchColumns,
   fetchConfig,
   fetchConfigSchema,
   fetchUiSchema,
@@ -64,6 +65,19 @@ export function ModelPanel({
     queryFn: fetchUiSchema,
     staleTime: Number.POSITIVE_INFINITY,
   });
+
+  const { data: columnsData } = useQuery({
+    queryKey: ["columns"],
+    queryFn: () => fetchColumns(),
+    enabled: hasData,
+  });
+
+  const nonExcludedColumns = useMemo(() => {
+    if (!columnsData?.columns) return [];
+    return columnsData.columns
+      .filter((c) => !c.suggested_excluded)
+      .map((c) => c.name);
+  }, [columnsData]);
 
   // Debounced validation
   const validateTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
@@ -183,6 +197,7 @@ export function ModelPanel({
               onChange={handleConfigChange}
               task={task}
               uiSchema={uiSchema}
+              columns={nonExcludedColumns}
             />
           ) : (
             <p className="text-sm text-muted-foreground">Loading config...</p>

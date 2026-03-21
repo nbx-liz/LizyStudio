@@ -3,39 +3,7 @@
  * Covers: resolveSchema, getNestedValue, setNestedValue
  */
 import { describe, expect, it } from "vitest";
-
-// We need to test these functions. Since they're not exported from ConfigForm,
-// we test the logic inline here using the same implementations.
-
-// --- setNestedValue (identical to ConfigForm) ---
-function setNestedValue(
-  obj: Record<string, unknown>,
-  path: string[],
-  value: unknown,
-): Record<string, unknown> {
-  const result = { ...obj };
-  if (path.length === 1) {
-    result[path[0]] = value;
-    return result;
-  }
-  const [first, ...rest] = path;
-  result[first] = setNestedValue(
-    (result[first] as Record<string, unknown>) ?? {},
-    rest,
-    value,
-  );
-  return result;
-}
-
-// --- getNestedValue ---
-function getNestedValue(obj: Record<string, unknown>, path: string[]): unknown {
-  let current: unknown = obj;
-  for (const key of path) {
-    if (current == null || typeof current !== "object") return undefined;
-    current = (current as Record<string, unknown>)[key];
-  }
-  return current;
-}
+import { getNestedValue, setNestedValue } from "./config-utils";
 
 describe("setNestedValue", () => {
   it("sets a top-level key", () => {
