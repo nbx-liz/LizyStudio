@@ -6,16 +6,7 @@ import type {
   ConfigUpdateResponse,
   PreviewResponse,
   UiSchema,
-  WorkspaceStatus,
 } from "./types";
-
-export function fetchStatus(): Promise<WorkspaceStatus> {
-  return apiFetch("/workspace/status");
-}
-
-export function resetWorkspace(): Promise<{ status: string }> {
-  return apiFetch("/workspace/reset", { method: "POST" });
-}
 
 export function loadDataFromPath(
   path: string,
