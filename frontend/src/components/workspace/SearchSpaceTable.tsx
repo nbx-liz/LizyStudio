@@ -78,7 +78,13 @@ export function SearchSpaceTable({
   additionalParams,
 }: SearchSpaceTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
-  const [addedParams, setAddedParams] = useState<string[]>([]);
+  // Initialize addedParams from space keys that exist in additionalParams
+  // but not in the base catalog (survives remount)
+  const [addedParams, setAddedParams] = useState<string[]>(() => {
+    if (!additionalParams) return [];
+    const catalogKeys = new Set((catalog ?? []).map((c) => c.key));
+    return additionalParams.filter((p) => p in space && !catalogKeys.has(p));
+  });
 
   const effectiveCatalog = useMemo(() => {
     if (catalog) {
