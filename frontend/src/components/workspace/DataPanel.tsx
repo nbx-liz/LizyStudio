@@ -20,6 +20,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -352,17 +353,33 @@ export function DataPanel({
                 </div>
                 {sourceType === "path" ? (
                   <div className="space-y-2">
-                    <FileBrowser
-                      onSelect={(path) => {
-                        setDataPath(path);
-                        handleLoadPathByValue(path);
-                      }}
-                    />
-                    {dataPath && (
-                      <p className="truncate text-xs text-muted-foreground">
-                        {dataPath}
-                      </p>
-                    )}
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="/path/to/data.csv"
+                        value={dataPath}
+                        onChange={(e) => setDataPath(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            handleLoadPathByValue(dataPath);
+                          }
+                        }}
+                        className="h-8 text-sm"
+                      />
+                      <FileBrowser
+                        onSelect={(path) => {
+                          setDataPath(path);
+                          handleLoadPathByValue(path);
+                        }}
+                      />
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={!dataPath.trim() || loading}
+                      onClick={() => handleLoadPathByValue(dataPath)}
+                    >
+                      Load
+                    </Button>
                   </div>
                 ) : (
                   <label className="flex cursor-pointer flex-col items-center gap-2 rounded-md border-2 border-dashed p-6 text-sm text-muted-foreground hover:border-primary/50">
