@@ -126,6 +126,7 @@ export interface ParameterHint {
   label: string;
   kind: string;
   step?: number;
+  default?: unknown;
 }
 
 export interface SearchSpaceCatalogEntry {
@@ -134,6 +135,7 @@ export interface SearchSpaceCatalogEntry {
   paramType: string;
   modes: string[];
   group?: string;
+  default?: unknown;
 }
 
 export interface UiSchema {

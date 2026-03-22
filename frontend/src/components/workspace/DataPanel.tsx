@@ -48,6 +48,7 @@ import {
 } from "./CvSection";
 import { getDefaultCvStrategy } from "./constants";
 import { FileBrowser } from "./FileBrowser";
+import { SegmentGroup } from "./SegmentGroup";
 
 type SourceType = "path" | "upload";
 type TaskType = "binary" | "multiclass" | "regression";
@@ -333,27 +334,17 @@ export function DataPanel({
         >
           {/* Data Source */}
           <AccordionItem value="source" className="border-b">
-            <AccordionTrigger className="text-sm font-medium hover:bg-muted/50">
+            <AccordionTrigger className="py-1.5 text-sm font-medium hover:bg-muted/50">
               Data Source
             </AccordionTrigger>
             <AccordionContent>
-              <div className="space-y-3">
-                <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    variant={sourceType === "path" ? "default" : "outline"}
-                    onClick={() => setSourceType("path")}
-                  >
-                    Path
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant={sourceType === "upload" ? "default" : "outline"}
-                    onClick={() => setSourceType("upload")}
-                  >
-                    Upload
-                  </Button>
-                </div>
+              <div className="lzs-form space-y-1.5 pl-[18px]">
+                <SegmentGroup
+                  options={["path", "upload"] as const as string[]}
+                  value={sourceType}
+                  onChange={(v) => setSourceType(v as SourceType)}
+                  labels={{ path: "Path", upload: "Upload" }}
+                />
                 {sourceType === "path" ? (
                   <div className="space-y-2">
                     <div className="flex gap-2">
@@ -440,11 +431,11 @@ export function DataPanel({
 
           {/* Target / Task */}
           <AccordionItem value="target" className="border-b">
-            <AccordionTrigger className="text-sm font-medium hover:bg-muted/50">
+            <AccordionTrigger className="py-1.5 text-sm font-medium hover:bg-muted/50">
               Target / Task
             </AccordionTrigger>
             <AccordionContent>
-              <div className="space-y-3">
+              <div className="lzs-form space-y-1.5 pl-[18px]">
                 <div>
                   <Label>Target</Label>
                   <Select
@@ -466,20 +457,12 @@ export function DataPanel({
                 </div>
                 <div>
                   <Label>Task</Label>
-                  <div className="flex gap-1 pt-1">
-                    {TASK_OPTIONS.map((t) => (
-                      <Button
-                        key={t}
-                        variant={task === t ? "default" : "outline"}
-                        size="sm"
-                        className="h-7 text-xs px-3"
-                        onClick={() => handleTaskChange(t)}
-                        disabled={!target}
-                      >
-                        {t}
-                      </Button>
-                    ))}
-                  </div>
+                  <SegmentGroup
+                    options={TASK_OPTIONS as unknown as string[]}
+                    value={task ?? ""}
+                    onChange={(v) => handleTaskChange(v as TaskType)}
+                    disabled={!target}
+                  />
                   {!target && (
                     <span className="text-xs text-muted-foreground">
                       Auto-detected after target selection
@@ -492,121 +475,128 @@ export function DataPanel({
 
           {/* Column Settings */}
           <AccordionItem value="columns" className="border-b">
-            <AccordionTrigger className="text-sm font-medium hover:bg-muted/50">
+            <AccordionTrigger className="py-1.5 text-sm font-medium hover:bg-muted/50">
               Column Settings
             </AccordionTrigger>
             <AccordionContent>
-              {columns.length > 0 && target ? (
-                <div className="max-h-64 overflow-auto rounded border">
-                  <div className="grid grid-cols-[1fr_60px_60px_100px] gap-x-2 px-3 py-1.5 border-b bg-muted/30">
-                    <span className="text-xs font-medium text-muted-foreground">
-                      Name
-                    </span>
-                    <span className="text-xs font-medium text-muted-foreground">
-                      Unique
-                    </span>
-                    <span className="text-xs font-medium text-muted-foreground">
-                      Exclude
-                    </span>
-                    <span className="text-xs font-medium text-muted-foreground">
-                      Type
-                    </span>
+              <div className="pl-[18px]">
+                {columns.length > 0 && target ? (
+                  <div className="max-h-64 overflow-auto rounded border">
+                    <div className="grid grid-cols-[1fr_60px_60px_100px] gap-x-2 px-3 py-1.5 border-b bg-muted/30">
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Name
+                      </span>
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Unique
+                      </span>
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Exclude
+                      </span>
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Type
+                      </span>
+                    </div>
+                    {columns
+                      .filter((c) => c.name !== target)
+                      .map((col, idx) => {
+                        const o = overrides[col.name];
+                        const isExcluded = o?.excluded ?? false;
+                        const currentType = o?.type ?? col.suggested_type;
+                        return (
+                          <div
+                            key={col.name}
+                            className={`grid grid-cols-[1fr_60px_60px_100px] items-center gap-x-2 px-3 py-1.5 hover:bg-muted/40 ${idx % 2 === 1 ? "bg-muted/20" : ""}`}
+                          >
+                            <span className="text-xs truncate">
+                              {col.name}
+                              {col.exclude_reason === "id" && (
+                                <Badge
+                                  variant="outline"
+                                  className="ml-1 text-[10px]"
+                                >
+                                  ID
+                                </Badge>
+                              )}
+                              {col.exclude_reason === "constant" && (
+                                <Badge
+                                  variant="outline"
+                                  className="ml-1 text-[10px]"
+                                >
+                                  Const
+                                </Badge>
+                              )}
+                            </span>
+                            <span className="text-xs">{col.unique_count}</span>
+                            <div>
+                              <Checkbox
+                                checked={isExcluded}
+                                onCheckedChange={(checked) =>
+                                  handleExcludeToggle(
+                                    col.name,
+                                    checked === true,
+                                  )
+                                }
+                              />
+                            </div>
+                            <div className="flex gap-0.5">
+                              <Button
+                                variant={
+                                  currentType === "numeric"
+                                    ? "default"
+                                    : "outline"
+                                }
+                                size="sm"
+                                className="h-6 text-[10px] px-2"
+                                disabled={isExcluded}
+                                onClick={() =>
+                                  handleTypeChange(col.name, "numeric")
+                                }
+                              >
+                                Num
+                              </Button>
+                              <Button
+                                variant={
+                                  currentType === "categorical"
+                                    ? "default"
+                                    : "outline"
+                                }
+                                size="sm"
+                                className="h-6 text-[10px] px-2"
+                                disabled={isExcluded}
+                                onClick={() =>
+                                  handleTypeChange(col.name, "categorical")
+                                }
+                              >
+                                Cat
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })}
                   </div>
-                  {columns
-                    .filter((c) => c.name !== target)
-                    .map((col, idx) => {
-                      const o = overrides[col.name];
-                      const isExcluded = o?.excluded ?? false;
-                      const currentType = o?.type ?? col.suggested_type;
-                      return (
-                        <div
-                          key={col.name}
-                          className={`grid grid-cols-[1fr_60px_60px_100px] items-center gap-x-2 px-3 py-1.5 hover:bg-muted/40 ${idx % 2 === 1 ? "bg-muted/20" : ""}`}
-                        >
-                          <span className="text-xs truncate">
-                            {col.name}
-                            {col.exclude_reason === "id" && (
-                              <Badge
-                                variant="outline"
-                                className="ml-1 text-[10px]"
-                              >
-                                ID
-                              </Badge>
-                            )}
-                            {col.exclude_reason === "constant" && (
-                              <Badge
-                                variant="outline"
-                                className="ml-1 text-[10px]"
-                              >
-                                Const
-                              </Badge>
-                            )}
-                          </span>
-                          <span className="text-xs">{col.unique_count}</span>
-                          <div>
-                            <Checkbox
-                              checked={isExcluded}
-                              onCheckedChange={(checked) =>
-                                handleExcludeToggle(col.name, checked === true)
-                              }
-                            />
-                          </div>
-                          <div className="flex gap-0.5">
-                            <Button
-                              variant={
-                                currentType === "numeric"
-                                  ? "default"
-                                  : "outline"
-                              }
-                              size="sm"
-                              className="h-6 text-[10px] px-2"
-                              disabled={isExcluded}
-                              onClick={() =>
-                                handleTypeChange(col.name, "numeric")
-                              }
-                            >
-                              Num
-                            </Button>
-                            <Button
-                              variant={
-                                currentType === "categorical"
-                                  ? "default"
-                                  : "outline"
-                              }
-                              size="sm"
-                              className="h-6 text-[10px] px-2"
-                              disabled={isExcluded}
-                              onClick={() =>
-                                handleTypeChange(col.name, "categorical")
-                              }
-                            >
-                              Cat
-                            </Button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  Load data and select a target first
-                </p>
-              )}
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Load data and select a target first
+                  </p>
+                )}
+              </div>
             </AccordionContent>
           </AccordionItem>
 
           {/* Cross Validation */}
           <AccordionItem value="cv" className="border-b">
-            <AccordionTrigger className="text-sm font-medium hover:bg-muted/50">
+            <AccordionTrigger className="py-1.5 text-sm font-medium hover:bg-muted/50">
               Cross Validation
             </AccordionTrigger>
             <AccordionContent>
-              <CvSection
-                cv={cv}
-                onChange={setCv}
-                uiSchema={uiSchema}
-                nonExcludedCols={nonExcludedCols}
-              />
+              <div className="pl-[18px]">
+                <CvSection
+                  cv={cv}
+                  onChange={setCv}
+                  uiSchema={uiSchema}
+                  nonExcludedCols={nonExcludedCols}
+                />
+              </div>
             </AccordionContent>
           </AccordionItem>
         </Accordion>

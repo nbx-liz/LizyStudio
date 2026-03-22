@@ -161,70 +161,90 @@ def build_ui_schema(
                 "key": "objective",
                 "label": "Objective",
                 "kind": "objective",
+                "default": {
+                    "regression": "huber",
+                    "binary": "binary",
+                    "multiclass": "multiclass",
+                },
             },
             {
                 "key": "metric",
                 "label": "Metric",
                 "kind": "model_metric",
+                "default": {
+                    "regression": "rmse",
+                    "binary": "auc",
+                    "multiclass": "multi_logloss",
+                },
             },
             {
                 "key": "n_estimators",
                 "label": "N Estimators",
                 "kind": "integer",
                 "step": 100,
+                "default": 1000,
             },
             {
                 "key": "learning_rate",
                 "label": "Learning Rate",
                 "kind": "number",
                 "step": 0.001,
+                "default": 0.1,
             },
             {
                 "key": "max_depth",
                 "label": "Max Depth",
                 "kind": "integer",
                 "step": 1,
+                "default": -1,
             },
             {
                 "key": "max_bin",
                 "label": "Max Bin",
                 "kind": "integer",
                 "step": 1,
+                "default": 255,
             },
             {
                 "key": "feature_fraction",
                 "label": "Feature Fraction",
                 "kind": "number",
                 "step": 0.05,
+                "default": 1.0,
             },
             {
                 "key": "bagging_fraction",
                 "label": "Bagging Fraction",
                 "kind": "number",
                 "step": 0.05,
+                "default": 1.0,
             },
             {
                 "key": "bagging_freq",
                 "label": "Bagging Freq",
                 "kind": "integer",
                 "step": 1,
+                "default": 0,
             },
             {
                 "key": "lambda_l1",
                 "label": "Lambda L1",
                 "kind": "number",
                 "step": 0.0001,
+                "default": 0.0,
             },
             {
                 "key": "lambda_l2",
                 "label": "Lambda L2",
                 "kind": "number",
                 "step": 0.0001,
+                "default": 0.0,
             },
             {
                 "key": "first_metric_only",
                 "label": "First Metric Only",
                 "kind": "boolean",
+                "default": False,
             },
         ],
         "search_space_catalog": [
@@ -234,6 +254,11 @@ def build_ui_schema(
                 "paramType": "string",
                 "modes": ["fixed", "choice"],
                 "group": "model_params",
+                "default": {
+                    "regression": "huber",
+                    "binary": "binary",
+                    "multiclass": "multiclass",
+                },
             },
             {
                 "key": "metric",
@@ -241,6 +266,11 @@ def build_ui_schema(
                 "paramType": "string",
                 "modes": ["fixed", "choice"],
                 "group": "model_params",
+                "default": {
+                    "regression": "rmse",
+                    "binary": "auc",
+                    "multiclass": "multi_logloss",
+                },
             },
             {
                 "key": "n_estimators",
@@ -248,6 +278,7 @@ def build_ui_schema(
                 "paramType": "integer",
                 "modes": ["fixed", "range"],
                 "group": "model_params",
+                "default": 1000,
             },
             {
                 "key": "learning_rate",
@@ -255,6 +286,7 @@ def build_ui_schema(
                 "paramType": "number",
                 "modes": ["fixed", "range"],
                 "group": "model_params",
+                "default": 0.1,
             },
             {
                 "key": "max_depth",
@@ -262,6 +294,7 @@ def build_ui_schema(
                 "paramType": "integer",
                 "modes": ["fixed", "range"],
                 "group": "model_params",
+                "default": -1,
             },
             {
                 "key": "max_bin",
@@ -269,6 +302,7 @@ def build_ui_schema(
                 "paramType": "integer",
                 "modes": ["fixed", "range"],
                 "group": "model_params",
+                "default": 255,
             },
             {
                 "key": "feature_fraction",
@@ -276,6 +310,7 @@ def build_ui_schema(
                 "paramType": "number",
                 "modes": ["fixed", "range"],
                 "group": "model_params",
+                "default": 1.0,
             },
             {
                 "key": "bagging_fraction",
@@ -283,6 +318,7 @@ def build_ui_schema(
                 "paramType": "number",
                 "modes": ["fixed", "range"],
                 "group": "model_params",
+                "default": 1.0,
             },
             {
                 "key": "bagging_freq",
@@ -290,6 +326,7 @@ def build_ui_schema(
                 "paramType": "integer",
                 "modes": ["fixed", "range"],
                 "group": "model_params",
+                "default": 0,
             },
             {
                 "key": "lambda_l1",
@@ -297,6 +334,7 @@ def build_ui_schema(
                 "paramType": "number",
                 "modes": ["fixed", "range"],
                 "group": "model_params",
+                "default": 0.0,
             },
             {
                 "key": "lambda_l2",
@@ -304,6 +342,7 @@ def build_ui_schema(
                 "paramType": "number",
                 "modes": ["fixed", "range"],
                 "group": "model_params",
+                "default": 0.0,
             },
             {
                 "key": "first_metric_only",
@@ -311,6 +350,7 @@ def build_ui_schema(
                 "paramType": "boolean",
                 "modes": ["fixed", "choice"],
                 "group": "model_params",
+                "default": False,
             },
             {
                 "key": "auto_num_leaves",
@@ -318,6 +358,7 @@ def build_ui_schema(
                 "paramType": "boolean",
                 "modes": ["fixed", "choice"],
                 "group": "smart_params",
+                "default": True,
             },
             {
                 "key": "num_leaves_ratio",
@@ -325,6 +366,7 @@ def build_ui_schema(
                 "paramType": "number",
                 "modes": ["fixed", "range"],
                 "group": "smart_params",
+                "default": 1.0,
             },
             {
                 "key": "min_data_in_leaf_ratio",
@@ -332,6 +374,7 @@ def build_ui_schema(
                 "paramType": "number",
                 "modes": ["fixed", "range"],
                 "group": "smart_params",
+                "default": 0.01,
             },
             {
                 "key": "min_data_in_bin_ratio",
@@ -339,6 +382,7 @@ def build_ui_schema(
                 "paramType": "number",
                 "modes": ["fixed", "range"],
                 "group": "smart_params",
+                "default": 0.01,
             },
             # ── Training group ──
             {

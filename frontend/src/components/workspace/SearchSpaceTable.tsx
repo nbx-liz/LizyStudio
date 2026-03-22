@@ -1,7 +1,6 @@
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import type { SearchSpaceCatalogEntry } from "@/api/types";
-import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -14,6 +13,7 @@ import { ChoiceInput } from "./ChoiceInput";
 import { KNOWN_PARAMS, RANGE_DEFAULTS } from "./constants";
 import { FixedValueEditor } from "./FixedValueEditor";
 import { NumberInput } from "./NumberInput";
+import { SegmentGroup } from "./SegmentGroup";
 
 const GROUP_LABELS: Record<string, string> = {
   model_params: "Model Params",
@@ -279,22 +279,21 @@ export function SearchSpaceTable({
                   {/* Mode segment buttons */}
                   {/* biome-ignore lint/a11y/noStaticElementInteractions: stopPropagation needed */}
                   <div
-                    className="w-32 flex gap-0.5"
+                    className="w-32"
                     onClick={(e) => e.stopPropagation()}
                     onKeyDown={(e) => e.stopPropagation()}
                   >
-                    {availableModes.map((m) => (
-                      <Button
-                        key={m}
-                        variant={mode === m ? "default" : "outline"}
-                        size="sm"
-                        className="h-7 text-[10px] px-2 flex-1"
-                        type="button"
-                        onClick={() => handleModeChange(param.key, m)}
-                      >
-                        {m.charAt(0).toUpperCase() + m.slice(1)}
-                      </Button>
-                    ))}
+                    <SegmentGroup
+                      options={availableModes}
+                      value={mode}
+                      onChange={(m) => handleModeChange(param.key, m)}
+                      labels={Object.fromEntries(
+                        availableModes.map((m) => [
+                          m,
+                          m.charAt(0).toUpperCase() + m.slice(1),
+                        ]),
+                      )}
+                    />
                   </div>
 
                   {/* Summary / Fixed value editor */}

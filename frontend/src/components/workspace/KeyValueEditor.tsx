@@ -1,6 +1,5 @@
 import { Plus, X } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
-import type { ParameterHint } from "@/api/types";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -10,15 +9,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { KNOWN_PARAMS } from "./constants";
-import { NumberInput } from "./NumberInput";
+import { CompactStepper } from "./CompactStepper";
+import { FormRow } from "./FormRow";
 
 interface KeyValueEditorProps {
   params: Record<string, unknown>;
   onChange: (params: Record<string, unknown>) => void;
   modelName: string;
-  parameterHints?: ParameterHint[];
-  shouldShowField?: (key: string) => boolean;
   additionalParams?: string[];
   stepMap?: Record<string, number>;
 }
@@ -37,64 +34,36 @@ export function KeyValueEditor({
   params,
   onChange,
   modelName,
-  parameterHints,
-  shouldShowField,
   additionalParams,
   stepMap,
 }: KeyValueEditorProps) {
-  // Use backend hints when available, fall back to hardcoded constants
-  const effectiveParams = useMemo(() => {
-    if (!parameterHints) return KNOWN_PARAMS;
-    return parameterHints
-      .filter((h) => h.kind === "integer" || h.kind === "number")
-      .map((h) => ({
-        key: h.key,
-        type: h.kind as "float" | "integer",
-        default: 0,
-        description: h.label,
-        step: h.step,
-      }));
-  }, [parameterHints]);
   const [customRows, setCustomRows] = useState<CustomRow[]>([]);
+  const prevCustomKeysRef = useRef<Set<string>>(new Set());
 
-  const emitChange = useCallback(
-    (updates: Record<string, number | undefined>, customs: CustomRow[]) => {
-      const result: Record<string, unknown> = {};
-      // Preserve non-preset params from current config
-      for (const [k, v] of Object.entries(params)) {
-        const isPreset = effectiveParams.some((p) => p.key === k);
-        const isCustom = customs.some((c) => c.key.trim() === k);
-        if (!isPreset && !isCustom) {
-          result[k] = v;
-        }
-      }
-      // Preset values
-      for (const [k, v] of Object.entries(updates)) {
-        if (v !== undefined) {
-          result[k] = v;
-        }
-      }
-      // Custom values
+  const emitCustom = useCallback(
+    (customs: CustomRow[]) => {
+      // Strip previously committed custom keys to avoid orphaned entries on rename
+      const stripped = Object.fromEntries(
+        Object.entries(params).filter(
+          ([k]) => !prevCustomKeysRef.current.has(k),
+        ),
+      );
+      // Add current custom keys
+      const newKeys = new Set<string>();
+      const result: Record<string, unknown> = { ...stripped };
       for (const row of customs) {
-        if (row.key.trim() && row.value.trim()) {
+        const key = row.key.trim();
+        if (key && row.value.trim()) {
           const num = Number(row.value);
-          result[row.key.trim()] = Number.isNaN(num) ? row.value : num;
+          result[key] = Number.isNaN(num) ? row.value : num;
+          newKeys.add(key);
         }
       }
+      prevCustomKeysRef.current = newKeys;
       onChange(result);
     },
-    [onChange, params, effectiveParams],
+    [onChange, params],
   );
-
-  const handlePresetChange = (key: string, value: number | undefined) => {
-    const updates: Record<string, number | undefined> = {};
-    for (const kp of effectiveParams) {
-      const v = params[kp.key];
-      updates[kp.key] = v !== undefined && v !== null ? Number(v) : undefined;
-    }
-    updates[key] = value;
-    emitChange(updates, customRows);
-  };
 
   const handleCustomChange = (
     idx: number,
@@ -105,12 +74,7 @@ export function KeyValueEditor({
       i === idx ? { ...r, [field]: val } : r,
     );
     setCustomRows(updated);
-    const presets: Record<string, number | undefined> = {};
-    for (const kp of effectiveParams) {
-      const v = params[kp.key];
-      presets[kp.key] = v !== undefined && v !== null ? Number(v) : undefined;
-    }
-    emitChange(presets, updated);
+    emitCustom(updated);
   };
 
   const addCustomRow = () => {
@@ -118,34 +82,28 @@ export function KeyValueEditor({
   };
 
   const removeCustomRow = (idx: number) => {
+    const removed = customRows[idx];
     const updated = customRows.filter((_, i) => i !== idx);
     setCustomRows(updated);
-    const presets: Record<string, number | undefined> = {};
-    for (const kp of effectiveParams) {
-      const v = params[kp.key];
-      presets[kp.key] = v !== undefined && v !== null ? Number(v) : undefined;
+    // Also remove the key from params if it was set
+    if (removed?.key.trim()) {
+      const { [removed.key.trim()]: _, ...rest } = params;
+      onChange(rest);
     }
-    emitChange(presets, updated);
   };
 
   // Catalog-driven additional params: entries already present in params
   const catalogEntries = useMemo(() => {
     if (!additionalParams) return [];
-    const presetKeys = new Set(effectiveParams.map((p) => p.key));
-    return additionalParams.filter(
-      (key) => !presetKeys.has(key) && params[key] !== undefined,
-    );
-  }, [additionalParams, effectiveParams, params]);
+    return additionalParams.filter((key) => params[key] !== undefined);
+  }, [additionalParams, params]);
 
   // Available catalog params not yet added
   const availableCatalogParams = useMemo(() => {
     if (!additionalParams) return [];
-    const presetKeys = new Set(effectiveParams.map((p) => p.key));
     const usedKeys = new Set(Object.keys(params));
-    return additionalParams.filter(
-      (key) => !presetKeys.has(key) && !usedKeys.has(key),
-    );
-  }, [additionalParams, effectiveParams, params]);
+    return additionalParams.filter((key) => !usedKeys.has(key));
+  }, [additionalParams, params]);
 
   const handleCatalogAdd = (key: string) => {
     const step = stepMap?.[key] ?? 1;
@@ -173,59 +131,33 @@ export function KeyValueEditor({
     <div>
       <p className="text-sm text-muted-foreground font-medium mb-2">{label}</p>
 
-      {/* Preset parameter rows — using NumberInput for ± stepper */}
-      <div className="space-y-1.5">
-        {effectiveParams
-          .filter((kp) => !shouldShowField || shouldShowField(kp.key))
-          .map((kp) => {
-            const value = params[kp.key];
-            const numValue =
-              value !== undefined && value !== null ? Number(value) : undefined;
-            const step = kp.step ?? (kp.type === "integer" ? 1 : 0.01);
-            return (
-              <div key={kp.key} className="flex items-center gap-2">
-                <span className="text-sm font-mono w-36 truncate text-muted-foreground">
-                  {kp.key}
-                </span>
-                <NumberInput
-                  value={numValue}
-                  onChange={(v) => handlePresetChange(kp.key, v)}
-                  step={step}
-                  placeholder={String(kp.default)}
-                />
-              </div>
-            );
-          })}
-      </div>
-
       {/* Catalog-driven additional params */}
       {additionalParams ? (
-        <div className="mt-2 space-y-1.5">
+        <div className="space-y-1.5">
           {catalogEntries.map((key) => {
             const value = params[key];
             const numValue =
               value !== undefined && value !== null ? Number(value) : undefined;
             const step = stepMap?.[key] ?? 1;
             return (
-              <div key={key} className="flex items-center gap-2">
-                <span className="text-sm font-mono w-36 truncate text-muted-foreground">
-                  {key}
-                </span>
-                <NumberInput
-                  value={numValue}
-                  onChange={(v) => handleCatalogChange(key, v)}
-                  step={step}
-                />
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6"
-                  onClick={() => handleCatalogRemove(key)}
-                  type="button"
-                >
-                  <X className="h-3 w-3" />
-                </Button>
-              </div>
+              <FormRow key={key} label={key}>
+                <div className="flex items-center gap-1">
+                  <CompactStepper
+                    value={numValue}
+                    onChange={(v) => handleCatalogChange(key, v)}
+                    step={step}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6"
+                    onClick={() => handleCatalogRemove(key)}
+                    type="button"
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                </div>
+              </FormRow>
             );
           })}
 

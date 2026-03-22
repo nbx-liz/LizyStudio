@@ -43,11 +43,11 @@ export function TuneSettings({
 
   return (
     <AccordionItem value="settings" className="border-b">
-      <AccordionTrigger className="text-sm font-medium hover:bg-muted/50">
+      <AccordionTrigger className="py-1.5 text-sm font-medium hover:bg-muted/50">
         Settings
       </AccordionTrigger>
       <AccordionContent>
-        <div className="space-y-3 px-1">
+        <div className="lzs-form space-y-1.5 pl-[18px] px-1">
           {/* n_trials */}
           <div>
             <Label className="text-sm text-muted-foreground mb-1">

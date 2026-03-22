@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
-import { Badge } from "@/components/ui/badge";
+import { ChipGroup } from "./ChipGroup";
+import { CompactStepper } from "./CompactStepper";
 import { METRICS_BY_TASK } from "./constants";
-import { NumberInput } from "./NumberInput";
 
 interface ConditionalParamDef {
   label: string;
@@ -61,16 +61,6 @@ export function MetricsChips({
 
   if (effectiveMetrics.available.length === 0) return null;
 
-  const toggleMetric = (metric: string) => {
-    const isSelected = selectedMetrics.includes(metric);
-    if (isSelected) {
-      if (selectedMetrics.length <= 1) return;
-      onChange(selectedMetrics.filter((m) => m !== metric));
-    } else {
-      onChange([...selectedMetrics, metric]);
-    }
-  };
-
   // Determine which conditional param inputs to render
   const activeConditionalParams =
     conditionalParams != null
@@ -81,38 +71,27 @@ export function MetricsChips({
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap gap-1.5">
-        {effectiveMetrics.available.map((metric) => {
-          const selected = selectedMetrics.includes(metric);
-          return (
-            <button
-              key={metric}
-              type="button"
-              onClick={() => toggleMetric(metric)}
-            >
-              <Badge
-                variant={selected ? "default" : "outline"}
-                className="cursor-pointer text-xs"
-              >
-                {metric}
-              </Badge>
-            </button>
-          );
-        })}
-      </div>
+      <ChipGroup
+        options={effectiveMetrics.available}
+        selected={selectedMetrics}
+        onChange={onChange}
+        minSelected={1}
+      />
 
       {activeConditionalParams.map(([metric, def]) => {
         const currentValue = paramValues?.[metric] ?? def.default;
+        const inputId = `cond-param-${metric}`;
         return (
           <div key={metric} className="flex items-center gap-2">
             <label
-              htmlFor={`param-${metric}`}
+              htmlFor={inputId}
               className="text-xs text-muted-foreground"
+              style={{ minWidth: "var(--form-label-width, 90px)" }}
             >
               {def.label}
             </label>
-            <NumberInput
-              id={`param-${metric}`}
+            <CompactStepper
+              inputId={inputId}
               value={currentValue}
               onChange={(v) => {
                 if (v !== undefined && onParamChange) {

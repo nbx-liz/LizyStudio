@@ -5,7 +5,6 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -13,9 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 
-import { Switch } from "@/components/ui/switch";
 import { CalibrationSection } from "./CalibrationSection";
 import {
   type Defs,
@@ -25,6 +22,7 @@ import {
   type SchemaProperty,
   setNestedValue,
 } from "./config-utils";
+import { DynParam } from "./DynParam";
 import { FeatureWeightsEditor } from "./FeatureWeightsEditor";
 import { FormField } from "./FormField";
 import { renderField } from "./field-renderers";
@@ -83,11 +81,6 @@ export function ConfigForm({
   const modelConfig = (config.model as Record<string, unknown>) ?? {};
   const modelName = (modelConfig.name as string) ?? "lgbm";
   const modelParams = (modelConfig.params as Record<string, unknown>) ?? {};
-  const modelMetric = (modelConfig.metric as string) ?? "";
-
-  // auto_num_leaves conditional visibility
-  const autoNumLeaves = modelParams.auto_num_leaves === true;
-
   // Evaluation metrics
   const evalConfig = (config.evaluation as Record<string, unknown>) ?? {};
   const selectedMetrics = Array.isArray(evalConfig.metrics)
@@ -112,13 +105,53 @@ export function ConfigForm({
       ? (config.calibration as Record<string, unknown> | null)
       : null;
 
-  // Model metric options from ui_schema
-  const modelMetricOptions = useMemo(() => {
-    if (!task) return [];
-    const opts = uiSchema?.option_sets?.model_metric;
-    if (opts?.[task]) return opts[task];
-    return [];
-  }, [task, uiSchema]);
+  // Resolve options for objective/model_metric kinds from option_sets
+  const getOptionsForHint = useCallback(
+    (hint: import("@/api/types").ParameterHint): string[] => {
+      if (!task) return [];
+      if (hint.kind === "objective") {
+        return uiSchema?.option_sets?.objective?.[task] ?? [];
+      }
+      if (hint.kind === "model_metric") {
+        return uiSchema?.option_sets?.model_metric?.[task] ?? [];
+      }
+      return [];
+    },
+    [task, uiSchema],
+  );
+
+  // Resolve the current value for a parameter hint
+  const getValueForHint = useCallback(
+    (hint: import("@/api/types").ParameterHint): unknown => {
+      // objective and metric live at model.params.objective and model.metric respectively
+      if (hint.kind === "objective") {
+        return modelParams.objective;
+      }
+      if (hint.kind === "model_metric") {
+        return modelConfig.metric;
+      }
+      // numeric/boolean params live under model.params
+      return modelParams[hint.key];
+    },
+    [modelConfig, modelParams],
+  );
+
+  // Handle changes from DynParam
+  const handleHintChange = useCallback(
+    (hint: import("@/api/types").ParameterHint, value: unknown) => {
+      if (hint.kind === "objective") {
+        handleFieldChange(["model", "params", "objective"], value);
+      } else if (hint.kind === "model_metric") {
+        handleFieldChange(["model", "metric"], value);
+      } else {
+        // numeric/boolean → model.params.<key>
+        const newParams = { ...modelParams, [hint.key]: value };
+        const updated = setNestedValue(config, ["model", "params"], newParams);
+        onChange(updated);
+      }
+    },
+    [handleFieldChange, modelParams, config, onChange],
+  );
 
   // Check which fields should be hidden by conditional_visibility
   const shouldShowField = useCallback(
@@ -187,11 +220,11 @@ export function ConfigForm({
               value={sectionName}
               className="border-b"
             >
-              <AccordionTrigger className="text-sm font-medium hover:bg-muted/50">
+              <AccordionTrigger className="py-1.5 text-sm font-medium hover:bg-muted/50">
                 {sectionProp.title ?? sectionName}
               </AccordionTrigger>
               <AccordionContent>
-                <div className="space-y-3 pt-2">
+                <div className="lzs-form space-y-1.5 pl-[18px] pt-2">
                   {sectionProp.properties &&
                     Object.entries(sectionProp.properties)
                       .filter(([n]) => !hiddenFields.includes(n))
@@ -214,33 +247,20 @@ export function ConfigForm({
                         ),
                       )}
 
-                  {/* Model section: 3 sub-groups */}
+                  {/* Model section: DynParam loop + FeatureWeights + KeyValueEditor */}
                   {sectionName === "model" && (
-                    <>
-                      {/* Sub-group 1: Smart Params */}
-                      <p className="text-sm text-muted-foreground font-medium mb-2">
-                        Smart Params
-                      </p>
-                      <FormField
-                        label="Auto Num Leaves"
-                        description="Automatically calculate num_leaves from data"
-                      >
-                        <Switch
-                          checked={autoNumLeaves}
-                          onCheckedChange={(checked) => {
-                            const newParams = {
-                              ...modelParams,
-                              auto_num_leaves: checked,
-                            };
-                            const updated = setNestedValue(
-                              config,
-                              ["model", "params"],
-                              newParams,
-                            );
-                            onChange(updated);
-                          }}
+                    <div className="lzs-form">
+                      {/* Render all parameter_hints via DynParam */}
+                      {uiSchema?.parameter_hints?.map((hint) => (
+                        <DynParam
+                          key={hint.key}
+                          hint={hint}
+                          value={getValueForHint(hint)}
+                          onChange={(v) => handleHintChange(hint, v)}
+                          options={getOptionsForHint(hint)}
+                          visible={shouldShowField(hint.key)}
                         />
-                      </FormField>
+                      ))}
 
                       <FeatureWeightsEditor
                         weights={
@@ -260,127 +280,8 @@ export function ConfigForm({
                         }}
                       />
 
-                      {/* Balanced */}
-                      <FormField
-                        label="Balanced"
-                        description="Class weight balancing"
-                      >
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const current = modelConfig.balanced;
-                              handleFieldChange(
-                                ["model", "balanced"],
-                                current == null ? true : null,
-                              );
-                            }}
-                          >
-                            <Badge
-                              variant={
-                                modelConfig.balanced == null
-                                  ? "default"
-                                  : "outline"
-                              }
-                              className="cursor-pointer text-xs"
-                            >
-                              {modelConfig.balanced == null
-                                ? "Auto \u2713"
-                                : "Auto"}
-                            </Badge>
-                          </button>
-                          <Switch
-                            checked={modelConfig.balanced === true}
-                            disabled={modelConfig.balanced == null}
-                            onCheckedChange={(v) =>
-                              handleFieldChange(["model", "balanced"], v)
-                            }
-                          />
-                        </div>
-                      </FormField>
-
-                      {/* Sub-group 2: Model Params */}
-                      <Separator className="my-3" />
-                      <p className="text-sm text-muted-foreground font-medium mb-2">
-                        Model Params
-                      </p>
-
-                      {/* Objective segment buttons */}
-                      {task && uiSchema?.option_sets?.objective?.[task] && (
-                        <FormField
-                          label="Objective"
-                          description="LightGBM objective function"
-                        >
-                          <div className="flex flex-wrap gap-1">
-                            {uiSchema.option_sets.objective[task].map(
-                              (obj: string) => (
-                                <button
-                                  key={obj}
-                                  type="button"
-                                  onClick={() => {
-                                    handleFieldChange(
-                                      ["model", "params", "objective"],
-                                      obj,
-                                    );
-                                  }}
-                                >
-                                  <Badge
-                                    variant={
-                                      modelParams.objective === obj
-                                        ? "default"
-                                        : "outline"
-                                    }
-                                    className="cursor-pointer text-xs"
-                                  >
-                                    {obj}
-                                  </Badge>
-                                </button>
-                              ),
-                            )}
-                          </div>
-                        </FormField>
-                      )}
-
-                      {/* Model metric chips */}
-                      {task && modelMetricOptions.length > 0 && (
-                        <div>
-                          <FormField
-                            label="Metric"
-                            description="LightGBM training metric"
-                          >
-                            <span />
-                          </FormField>
-                          <div className="flex flex-wrap gap-1.5 mt-1">
-                            {modelMetricOptions.map((m) => (
-                              <button
-                                key={m}
-                                type="button"
-                                onClick={() => {
-                                  const updated = setNestedValue(
-                                    config,
-                                    ["model", "metric"],
-                                    m,
-                                  );
-                                  onChange(updated);
-                                }}
-                              >
-                                <Badge
-                                  variant={
-                                    modelMetric === m ? "default" : "outline"
-                                  }
-                                  className="cursor-pointer text-xs"
-                                >
-                                  {m}
-                                </Badge>
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
                       <KeyValueEditor
                         params={modelParams}
-                        parameterHints={uiSchema?.parameter_hints}
                         additionalParams={uiSchema?.additional_params}
                         stepMap={uiSchema?.step_map}
                         onChange={(newParams) => {
@@ -392,9 +293,8 @@ export function ConfigForm({
                           onChange(updated);
                         }}
                         modelName={modelName}
-                        shouldShowField={shouldShowField}
                       />
-                    </>
+                    </div>
                   )}
 
                   {/* Training section: inner validation */}
@@ -467,11 +367,11 @@ export function ConfigForm({
         {/* Evaluation section with MetricsChips */}
         {task && (
           <AccordionItem value="evaluation" className="border-b">
-            <AccordionTrigger className="text-sm font-medium hover:bg-muted/50">
+            <AccordionTrigger className="py-1.5 text-sm font-medium hover:bg-muted/50">
               Evaluation
             </AccordionTrigger>
             <AccordionContent>
-              <div className="pt-2">
+              <div className="lzs-form pl-[18px] pt-2">
                 <MetricsChips
                   task={task}
                   selectedMetrics={selectedMetrics}
