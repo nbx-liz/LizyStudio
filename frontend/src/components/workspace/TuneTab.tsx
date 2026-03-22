@@ -89,6 +89,27 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
     return [];
   }, [task, uiSchema]);
 
+  // Per-parameter option sets derived from uiSchema.option_sets for generic choice mode.
+  // Each key in option_sets whose value is a flat string[] is passed through directly;
+  // task-keyed nested records are resolved for the current task.
+  const paramOptionSets = useMemo((): Record<string, string[]> => {
+    if (!uiSchema?.option_sets) return {};
+    const result: Record<string, string[]> = {};
+    for (const [paramKey, value] of Object.entries(uiSchema.option_sets)) {
+      if (Array.isArray(value)) {
+        // Flat string[] — task-independent options
+        result[paramKey] = value as string[];
+      } else if (task && typeof value === "object" && value !== null) {
+        // Nested Record<task, string[]> — resolve for current task
+        const taskMap = value as Record<string, string[]>;
+        if (taskMap[task]) {
+          result[paramKey] = taskMap[task];
+        }
+      }
+    }
+    return result;
+  }, [task, uiSchema]);
+
   // Current evaluation metrics from config
   const evalMetrics = evaluation.metrics ?? [];
   const optimizationMetric = evalMetrics[0] ?? "";
@@ -109,6 +130,15 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
   const handleSpaceChange = (space: Record<string, unknown>) => {
     onChange(updateTuningConfig(config, "space", space));
   };
+
+  const handleModelParamChange = useCallback(
+    (key: string, value: unknown) => {
+      const newParams = { ...modelParams, [key]: value };
+      const model = (config.model as Record<string, unknown>) ?? {};
+      onChange({ ...config, model: { ...model, params: newParams } });
+    },
+    [config, modelParams, onChange],
+  );
 
   const handleOptimizationMetricChange = useCallback(
     (metric: string) => {
@@ -174,8 +204,10 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
         onChange={handleParamsChange}
         nTrialsPresets={uiSchema?.n_trials_presets}
       />
-      <AccordionItem value="search-space">
-        <AccordionTrigger>Search Space</AccordionTrigger>
+      <AccordionItem value="search-space" className="border-b">
+        <AccordionTrigger className="text-sm font-medium hover:bg-muted/50">
+          Search Space
+        </AccordionTrigger>
         <AccordionContent>
           <SearchSpaceTable
             space={searchSpace}
@@ -187,17 +219,21 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
             objectiveOptions={objectiveOptions}
             metricOptions={modelMetricOptions}
             additionalParams={uiSchema?.additional_params}
+            paramOptionSets={paramOptionSets}
+            onModelParamChange={handleModelParamChange}
           />
         </AccordionContent>
       </AccordionItem>
-      <AccordionItem value="evaluation">
-        <AccordionTrigger>Evaluation</AccordionTrigger>
+      <AccordionItem value="evaluation" className="border-b">
+        <AccordionTrigger className="text-sm font-medium hover:bg-muted/50">
+          Evaluation
+        </AccordionTrigger>
         <AccordionContent>
           <div className="space-y-4 px-1">
             {/* Optimization Metric */}
             {task && metricOptions.length > 0 && (
               <div>
-                <Label className="text-xs text-muted-foreground mb-1.5 block">
+                <Label className="text-sm text-muted-foreground mb-1.5 block">
                   Optimization Metric
                 </Label>
                 <div className="flex flex-wrap gap-1">
@@ -232,7 +268,7 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
               additionalMetricOptions.length > 0 &&
               optimizationMetric && (
                 <div>
-                  <Label className="text-xs text-muted-foreground mb-1.5 block">
+                  <Label className="text-sm text-muted-foreground mb-1.5 block">
                     Additional Metrics
                   </Label>
                   <div className="flex flex-wrap gap-1.5">

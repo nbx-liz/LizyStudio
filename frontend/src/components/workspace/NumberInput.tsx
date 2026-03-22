@@ -11,6 +11,7 @@ interface NumberInputProps {
   placeholder?: string;
   disabled?: boolean;
   className?: string;
+  id?: string;
 }
 
 export function NumberInput({
@@ -22,6 +23,7 @@ export function NumberInput({
   placeholder,
   disabled,
   className,
+  id,
 }: NumberInputProps) {
   const clamp = (v: number) => {
     let clamped = v;
@@ -66,6 +68,7 @@ export function NumberInput({
         <Minus className="h-3 w-3" />
       </Button>
       <Input
+        id={id}
         type="text"
         inputMode="decimal"
         value={value ?? ""}

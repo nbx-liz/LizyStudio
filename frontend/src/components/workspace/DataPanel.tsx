@@ -29,6 +29,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
   TableBody,
@@ -331,8 +332,10 @@ export function DataPanel({
           defaultValue={["source", "target", "columns", "cv"]}
         >
           {/* Data Source */}
-          <AccordionItem value="source">
-            <AccordionTrigger>Data Source</AccordionTrigger>
+          <AccordionItem value="source" className="border-b">
+            <AccordionTrigger className="text-sm font-medium hover:bg-muted/50">
+              Data Source
+            </AccordionTrigger>
             <AccordionContent>
               <div className="space-y-3">
                 <div className="flex gap-2">
@@ -394,7 +397,11 @@ export function DataPanel({
                   </label>
                 )}
                 {loading && (
-                  <p className="text-sm text-muted-foreground">Loading...</p>
+                  <div className="space-y-2">
+                    <Skeleton className="h-4 w-3/4" />
+                    <Skeleton className="h-4 w-1/2" />
+                    <Skeleton className="h-4 w-2/3" />
+                  </div>
                 )}
                 {shape && !loading && (
                   <p className="text-sm text-muted-foreground">
@@ -432,8 +439,10 @@ export function DataPanel({
           </AccordionItem>
 
           {/* Target / Task */}
-          <AccordionItem value="target">
-            <AccordionTrigger>Target / Task</AccordionTrigger>
+          <AccordionItem value="target" className="border-b">
+            <AccordionTrigger className="text-sm font-medium hover:bg-muted/50">
+              Target / Task
+            </AccordionTrigger>
             <AccordionContent>
               <div className="space-y-3">
                 <div>
@@ -482,101 +491,101 @@ export function DataPanel({
           </AccordionItem>
 
           {/* Column Settings */}
-          <AccordionItem value="columns">
-            <AccordionTrigger>Column Settings</AccordionTrigger>
+          <AccordionItem value="columns" className="border-b">
+            <AccordionTrigger className="text-sm font-medium hover:bg-muted/50">
+              Column Settings
+            </AccordionTrigger>
             <AccordionContent>
               {columns.length > 0 && target ? (
                 <div className="max-h-64 overflow-auto rounded border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="text-xs">Column</TableHead>
-                        <TableHead className="w-16 text-xs">Uniq</TableHead>
-                        <TableHead className="w-12 text-xs">Excl</TableHead>
-                        <TableHead className="w-28 text-xs">Type</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {columns
-                        .filter((c) => c.name !== target)
-                        .map((col) => {
-                          const o = overrides[col.name];
-                          const isExcluded = o?.excluded ?? false;
-                          const currentType = o?.type ?? col.suggested_type;
-                          return (
-                            <TableRow key={col.name}>
-                              <TableCell className="text-xs">
-                                {col.name}
-                                {col.exclude_reason === "id" && (
-                                  <Badge
-                                    variant="outline"
-                                    className="ml-1 text-[10px]"
-                                  >
-                                    ID
-                                  </Badge>
-                                )}
-                                {col.exclude_reason === "constant" && (
-                                  <Badge
-                                    variant="outline"
-                                    className="ml-1 text-[10px]"
-                                  >
-                                    Const
-                                  </Badge>
-                                )}
-                              </TableCell>
-                              <TableCell className="text-xs">
-                                {col.unique_count}
-                              </TableCell>
-                              <TableCell>
-                                <Checkbox
-                                  checked={isExcluded}
-                                  onCheckedChange={(checked) =>
-                                    handleExcludeToggle(
-                                      col.name,
-                                      checked === true,
-                                    )
-                                  }
-                                />
-                              </TableCell>
-                              <TableCell>
-                                <div className="flex gap-0.5">
-                                  <Button
-                                    variant={
-                                      currentType === "numeric"
-                                        ? "default"
-                                        : "outline"
-                                    }
-                                    size="sm"
-                                    className="h-6 text-[10px] px-2"
-                                    disabled={isExcluded}
-                                    onClick={() =>
-                                      handleTypeChange(col.name, "numeric")
-                                    }
-                                  >
-                                    Num
-                                  </Button>
-                                  <Button
-                                    variant={
-                                      currentType === "categorical"
-                                        ? "default"
-                                        : "outline"
-                                    }
-                                    size="sm"
-                                    className="h-6 text-[10px] px-2"
-                                    disabled={isExcluded}
-                                    onClick={() =>
-                                      handleTypeChange(col.name, "categorical")
-                                    }
-                                  >
-                                    Cat
-                                  </Button>
-                                </div>
-                              </TableCell>
-                            </TableRow>
-                          );
-                        })}
-                    </TableBody>
-                  </Table>
+                  <div className="grid grid-cols-[1fr_60px_60px_100px] gap-x-2 px-3 py-1.5 border-b bg-muted/30">
+                    <span className="text-xs font-medium text-muted-foreground">
+                      Name
+                    </span>
+                    <span className="text-xs font-medium text-muted-foreground">
+                      Unique
+                    </span>
+                    <span className="text-xs font-medium text-muted-foreground">
+                      Exclude
+                    </span>
+                    <span className="text-xs font-medium text-muted-foreground">
+                      Type
+                    </span>
+                  </div>
+                  {columns
+                    .filter((c) => c.name !== target)
+                    .map((col, idx) => {
+                      const o = overrides[col.name];
+                      const isExcluded = o?.excluded ?? false;
+                      const currentType = o?.type ?? col.suggested_type;
+                      return (
+                        <div
+                          key={col.name}
+                          className={`grid grid-cols-[1fr_60px_60px_100px] items-center gap-x-2 px-3 py-1.5 hover:bg-muted/40 ${idx % 2 === 1 ? "bg-muted/20" : ""}`}
+                        >
+                          <span className="text-xs truncate">
+                            {col.name}
+                            {col.exclude_reason === "id" && (
+                              <Badge
+                                variant="outline"
+                                className="ml-1 text-[10px]"
+                              >
+                                ID
+                              </Badge>
+                            )}
+                            {col.exclude_reason === "constant" && (
+                              <Badge
+                                variant="outline"
+                                className="ml-1 text-[10px]"
+                              >
+                                Const
+                              </Badge>
+                            )}
+                          </span>
+                          <span className="text-xs">{col.unique_count}</span>
+                          <div>
+                            <Checkbox
+                              checked={isExcluded}
+                              onCheckedChange={(checked) =>
+                                handleExcludeToggle(col.name, checked === true)
+                              }
+                            />
+                          </div>
+                          <div className="flex gap-0.5">
+                            <Button
+                              variant={
+                                currentType === "numeric"
+                                  ? "default"
+                                  : "outline"
+                              }
+                              size="sm"
+                              className="h-6 text-[10px] px-2"
+                              disabled={isExcluded}
+                              onClick={() =>
+                                handleTypeChange(col.name, "numeric")
+                              }
+                            >
+                              Num
+                            </Button>
+                            <Button
+                              variant={
+                                currentType === "categorical"
+                                  ? "default"
+                                  : "outline"
+                              }
+                              size="sm"
+                              className="h-6 text-[10px] px-2"
+                              disabled={isExcluded}
+                              onClick={() =>
+                                handleTypeChange(col.name, "categorical")
+                              }
+                            >
+                              Cat
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })}
                 </div>
               ) : (
                 <p className="text-sm text-muted-foreground">
@@ -587,8 +596,10 @@ export function DataPanel({
           </AccordionItem>
 
           {/* Cross Validation */}
-          <AccordionItem value="cv">
-            <AccordionTrigger>Cross Validation</AccordionTrigger>
+          <AccordionItem value="cv" className="border-b">
+            <AccordionTrigger className="text-sm font-medium hover:bg-muted/50">
+              Cross Validation
+            </AccordionTrigger>
             <AccordionContent>
               <CvSection
                 cv={cv}

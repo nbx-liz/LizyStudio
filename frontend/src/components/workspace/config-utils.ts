@@ -22,6 +22,8 @@ export interface SchemaProperty {
   discriminator?: { propertyName?: string };
   additionalProperties?: boolean | SchemaProperty;
   nullable?: boolean;
+  /** Resolved alternatives for multi-type anyOf (discriminated unions). */
+  alternatives?: SchemaProperty[];
 }
 
 export type Defs = Record<string, SchemaProperty>;
@@ -57,6 +59,19 @@ export function setNestedValue(
     value,
   );
   return result;
+}
+
+// --- Schema helpers ---
+
+/**
+ * Returns true when `anyOf` represents a simple Optional<T> pattern:
+ * exactly one non-null type alongside a null type.
+ * Returns false for discriminated unions (multiple non-null types).
+ */
+export function isNullableUnion(anyOf: SchemaProperty[]): boolean {
+  const hasNull = anyOf.some((v) => v.type === "null");
+  const nonNullCount = anyOf.filter((v) => v.type !== "null").length;
+  return hasNull && nonNullCount === 1;
 }
 
 // --- Schema resolution ---
@@ -106,6 +121,46 @@ export function resolveSchema(
         ...(hasNull ? { nullable: true } : {}),
       };
     }
+
+    // Multi-type anyOf: discriminated union — expose all alternatives and pick
+    // the best match based on the current value's shape.
+    if (nonNull.length > 1) {
+      const resolvedAlternatives = nonNull.map((v) =>
+        resolveSchema(v, defs, effectiveValue, _visited),
+      );
+
+      // Pick the matching alternative: prefer an alternative whose const-keyed
+      // property value matches what's in the current value object.
+      const currentObj =
+        effectiveValue != null && typeof effectiveValue === "object"
+          ? (effectiveValue as Record<string, unknown>)
+          : null;
+
+      let primary = resolvedAlternatives[0];
+      if (currentObj) {
+        const match = resolvedAlternatives.find((alt) => {
+          if (!alt.properties) return false;
+          return Object.entries(alt.properties).some(([k, p]) => {
+            const resolved = resolveSchema(p, defs, undefined, _visited);
+            return (
+              resolved.const !== undefined &&
+              String(resolved.const) === String(currentObj[k])
+            );
+          });
+        });
+        if (match) primary = match;
+      }
+
+      return {
+        ...primary,
+        ...(prop.title ? { title: prop.title } : {}),
+        ...(prop.default !== undefined ? { default: prop.default } : {}),
+        ...(prop.description ? { description: prop.description } : {}),
+        ...(hasNull ? { nullable: true } : {}),
+        alternatives: resolvedAlternatives,
+      };
+    }
+
     const withOneOf = nonNull.find((v) => v.oneOf || v.$ref);
     if (withOneOf) {
       return resolveSchema(

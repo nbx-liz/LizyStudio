@@ -17,7 +17,7 @@ export function FormField({ label, description, children }: FormFieldProps) {
   return (
     <div className="flex items-center justify-between gap-2">
       <div className="flex items-center gap-1 min-w-0">
-        <Label className="text-xs text-muted-foreground truncate">
+        <Label className="text-sm text-muted-foreground truncate">
           {label}
         </Label>
         {description && (

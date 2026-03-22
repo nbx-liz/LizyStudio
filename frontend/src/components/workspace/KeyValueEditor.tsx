@@ -171,7 +171,7 @@ export function KeyValueEditor({
 
   return (
     <div>
-      <p className="text-xs text-muted-foreground font-medium mb-2">{label}</p>
+      <p className="text-sm text-muted-foreground font-medium mb-2">{label}</p>
 
       {/* Preset parameter rows — using NumberInput for ± stepper */}
       <div className="space-y-1.5">
@@ -184,7 +184,7 @@ export function KeyValueEditor({
             const step = kp.step ?? (kp.type === "integer" ? 1 : 0.01);
             return (
               <div key={kp.key} className="flex items-center gap-2">
-                <span className="text-xs font-mono w-36 truncate text-muted-foreground">
+                <span className="text-sm font-mono w-36 truncate text-muted-foreground">
                   {kp.key}
                 </span>
                 <NumberInput
@@ -208,7 +208,7 @@ export function KeyValueEditor({
             const step = stepMap?.[key] ?? 1;
             return (
               <div key={key} className="flex items-center gap-2">
-                <span className="text-xs font-mono w-36 truncate text-muted-foreground">
+                <span className="text-sm font-mono w-36 truncate text-muted-foreground">
                   {key}
                 </span>
                 <NumberInput

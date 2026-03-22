@@ -153,8 +153,8 @@ def build_ui_schema(
                     "multi_error",
                 ],
             },
-            "metric_direction": metric_directions,
         },
+        "metric_direction": metric_directions,
         "n_trials_presets": [10, 50, 100, 200, 500],
         "parameter_hints": [
             {
@@ -340,6 +340,47 @@ def build_ui_schema(
                 "modes": ["fixed", "range"],
                 "group": "smart_params",
             },
+            # ── Training group ──
+            {
+                "key": "seed",
+                "title": "Seed",
+                "paramType": "integer",
+                "modes": ["fixed"],
+                "group": "training",
+                "default": 42,
+            },
+            {
+                "key": "early_stopping.enabled",
+                "title": "Early Stopping",
+                "paramType": "boolean",
+                "modes": ["fixed"],
+                "group": "training",
+                "default": True,
+            },
+            {
+                "key": "early_stopping.rounds",
+                "title": "Early Stopping Rounds",
+                "paramType": "integer",
+                "modes": ["fixed", "range"],
+                "group": "training",
+                "default": 150,
+            },
+            {
+                "key": "validation_ratio",
+                "title": "Validation Ratio",
+                "paramType": "number",
+                "modes": ["fixed", "range"],
+                "group": "training",
+                "default": 0.1,
+            },
+            {
+                "key": "inner_valid",
+                "title": "Inner Validation",
+                "paramType": "string",
+                "modes": ["fixed"],
+                "group": "training",
+                "default": "holdout",
+            },
         ],
         "step_map": {
             "n_estimators": 100,
@@ -355,14 +396,17 @@ def build_ui_schema(
             "num_leaves": 1,
             "min_data_in_leaf_ratio": 0.001,
             "min_data_in_bin_ratio": 0.001,
+            "early_stopping.rounds": 50,
+            "validation_ratio": 0.05,
+            "seed": 1,
         },
         "conditional_visibility": {
             "calibration": {"task": ["binary"]},
             "num_leaves_ratio": {"auto_num_leaves": True},
             "num_leaves": {"auto_num_leaves": False},
             "early_stopping.rounds": {"early_stopping.enabled": True},
-            "early_stopping.validation_ratio": {"early_stopping.enabled": True},
-            "early_stopping.inner_valid": {"early_stopping.enabled": True},
+            "validation_ratio": {"early_stopping.enabled": True},
+            "inner_valid": {"early_stopping.enabled": True},
         },
         "defaults": {
             "calibration": {

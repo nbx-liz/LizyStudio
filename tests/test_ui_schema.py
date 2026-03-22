@@ -11,6 +11,7 @@ from lizystudio.backends.lizyml import LizyMLAdapter
 UI_SCHEMA_KEYS = {
     "sections",
     "option_sets",
+    "metric_direction",
     "parameter_hints",
     "search_space_catalog",
     "step_map",
@@ -121,14 +122,14 @@ class TestLizyMLAdapterUiSchema:
 
     def test_metric_direction_has_all_tasks(self) -> None:
         schema = LizyMLAdapter().get_ui_schema()
-        md = schema["option_sets"]["metric_direction"]
+        md = schema["metric_direction"]
         assert isinstance(md, dict)
         for task in ("binary", "regression", "multiclass"):
             assert task in md
 
     def test_metric_direction_values_are_minimize_or_maximize(self) -> None:
         schema = LizyMLAdapter().get_ui_schema()
-        md = schema["option_sets"]["metric_direction"]
+        md = schema["metric_direction"]
         for task_metrics in md.values():
             for direction in task_metrics.values():
                 assert direction in ("minimize", "maximize")
@@ -232,7 +233,7 @@ class TestLizyMLAdapterUiSchema:
     def test_search_space_catalog_has_group(self) -> None:
         """Each catalog entry has a valid 'group' key."""
         schema = LizyMLAdapter().get_ui_schema()
-        allowed_groups = {"model_params", "smart_params"}
+        allowed_groups = {"model_params", "smart_params", "training"}
         for entry in schema["search_space_catalog"]:
             assert "group" in entry, f"Missing 'group' on catalog entry: {entry['key']}"
             assert (
@@ -245,8 +246,8 @@ class TestLizyMLAdapterUiSchema:
         vis = schema["conditional_visibility"]
         for key in (
             "early_stopping.rounds",
-            "early_stopping.validation_ratio",
-            "early_stopping.inner_valid",
+            "validation_ratio",
+            "inner_valid",
         ):
             assert key in vis, f"Missing conditional_visibility key: {key}"
 
