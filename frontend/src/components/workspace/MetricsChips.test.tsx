@@ -37,7 +37,7 @@ describe("MetricsChips", () => {
     expect(screen.getByText("mse")).toBeInTheDocument();
   });
 
-  it("selected metrics have default variant (dark background via class)", () => {
+  it("selected metrics have lzs-chip--active class (chip-style rendering)", () => {
     render(
       <MetricsChips
         task="binary"
@@ -45,13 +45,29 @@ describe("MetricsChips", () => {
         onChange={vi.fn()}
       />,
     );
-    // The selected badge wraps auc — its button should be the parent of the badge
-    const aucBadge = screen.getByText("auc").closest("button");
-    const loglossButton = screen.getByText("logloss").closest("button");
-    // Selected badge has bg-primary class via default variant
-    expect(aucBadge?.querySelector(".bg-primary")).not.toBeNull();
-    // Non-selected badge does not have bg-primary
-    expect(loglossButton?.querySelector(".bg-primary")).toBeNull();
+    const aucBtn = screen.getByRole("button", { name: "auc" });
+    const loglossBtn = screen.getByRole("button", { name: "logloss" });
+    // ChipGroup uses lzs-chip--active for selected state
+    expect(aucBtn).toHaveClass("lzs-chip--active");
+    expect(loglossBtn).not.toHaveClass("lzs-chip--active");
+  });
+
+  it("chip buttons expose aria-pressed attribute (chip-style rendering)", () => {
+    render(
+      <MetricsChips
+        task="binary"
+        selectedMetrics={["auc"]}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "auc" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "logloss" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
   });
 
   it("clicking a selected metric deselects it when more than one selected", () => {

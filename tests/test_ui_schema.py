@@ -251,6 +251,135 @@ class TestLizyMLAdapterUiSchema:
         ):
             assert key in vis, f"Missing conditional_visibility key: {key}"
 
+    # --- Default value tests (TDD: RED first) ---
+
+    def test_all_parameter_hints_have_default_field(self) -> None:
+        """Every parameter_hint entry must expose a 'default' field."""
+        schema = LizyMLAdapter().get_ui_schema()
+        hints = schema["parameter_hints"]
+        for h in hints:
+            assert (
+                "default" in h
+            ), f"parameter_hint '{h['key']}' is missing a 'default' field"
+
+    def test_parameter_hint_n_estimators_default_is_1000(self) -> None:
+        """n_estimators default must be 1000."""
+        schema = LizyMLAdapter().get_ui_schema()
+        hints = {h["key"]: h for h in schema["parameter_hints"]}
+        assert hints["n_estimators"]["default"] == 1000
+
+    def test_parameter_hint_learning_rate_default(self) -> None:
+        """learning_rate default must be 0.1."""
+        schema = LizyMLAdapter().get_ui_schema()
+        hints = {h["key"]: h for h in schema["parameter_hints"]}
+        assert hints["learning_rate"]["default"] == 0.1
+
+    def test_parameter_hint_max_depth_default(self) -> None:
+        """max_depth default must be -1 (LightGBM unlimited)."""
+        schema = LizyMLAdapter().get_ui_schema()
+        hints = {h["key"]: h for h in schema["parameter_hints"]}
+        assert hints["max_depth"]["default"] == -1
+
+    def test_parameter_hint_max_bin_default(self) -> None:
+        """max_bin default must be 255."""
+        schema = LizyMLAdapter().get_ui_schema()
+        hints = {h["key"]: h for h in schema["parameter_hints"]}
+        assert hints["max_bin"]["default"] == 255
+
+    def test_parameter_hint_feature_fraction_default(self) -> None:
+        """feature_fraction default must be 1.0."""
+        schema = LizyMLAdapter().get_ui_schema()
+        hints = {h["key"]: h for h in schema["parameter_hints"]}
+        assert hints["feature_fraction"]["default"] == 1.0
+
+    def test_parameter_hint_bagging_fraction_default(self) -> None:
+        """bagging_fraction default must be 1.0."""
+        schema = LizyMLAdapter().get_ui_schema()
+        hints = {h["key"]: h for h in schema["parameter_hints"]}
+        assert hints["bagging_fraction"]["default"] == 1.0
+
+    def test_parameter_hint_bagging_freq_default(self) -> None:
+        """bagging_freq default must be 0."""
+        schema = LizyMLAdapter().get_ui_schema()
+        hints = {h["key"]: h for h in schema["parameter_hints"]}
+        assert hints["bagging_freq"]["default"] == 0
+
+    def test_parameter_hint_lambda_l1_default(self) -> None:
+        """lambda_l1 default must be 0.0."""
+        schema = LizyMLAdapter().get_ui_schema()
+        hints = {h["key"]: h for h in schema["parameter_hints"]}
+        assert hints["lambda_l1"]["default"] == 0.0
+
+    def test_parameter_hint_lambda_l2_default(self) -> None:
+        """lambda_l2 default must be 0.0."""
+        schema = LizyMLAdapter().get_ui_schema()
+        hints = {h["key"]: h for h in schema["parameter_hints"]}
+        assert hints["lambda_l2"]["default"] == 0.0
+
+    def test_parameter_hint_first_metric_only_default(self) -> None:
+        """first_metric_only default must be False."""
+        schema = LizyMLAdapter().get_ui_schema()
+        hints = {h["key"]: h for h in schema["parameter_hints"]}
+        assert hints["first_metric_only"]["default"] is False
+
+    def test_parameter_hint_objective_default_is_task_keyed_dict(self) -> None:
+        """objective default must be a dict with regression/binary/multiclass keys."""
+        schema = LizyMLAdapter().get_ui_schema()
+        hints = {h["key"]: h for h in schema["parameter_hints"]}
+        default = hints["objective"]["default"]
+        assert isinstance(default, dict), "objective default must be a dict"
+        for task in ("regression", "binary", "multiclass"):
+            assert task in default, f"objective default missing task key: {task}"
+        assert default["regression"] == "huber"
+        assert default["binary"] == "binary"
+        assert default["multiclass"] == "multiclass"
+
+    def test_parameter_hint_metric_default_is_task_keyed_dict(self) -> None:
+        """metric default must be a dict with regression/binary/multiclass keys."""
+        schema = LizyMLAdapter().get_ui_schema()
+        hints = {h["key"]: h for h in schema["parameter_hints"]}
+        default = hints["metric"]["default"]
+        assert isinstance(default, dict), "metric default must be a dict"
+        for task in ("regression", "binary", "multiclass"):
+            assert task in default, f"metric default missing task key: {task}"
+        assert default["regression"] == "rmse"
+        assert default["binary"] == "auc"
+        assert default["multiclass"] == "multi_logloss"
+
+    def test_search_space_catalog_model_params_have_default(self) -> None:
+        """All model_params catalog entries must have a 'default' field."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = schema["search_space_catalog"]
+        model_params = [e for e in catalog if e.get("group") == "model_params"]
+        for entry in model_params:
+            assert "default" in entry, (
+                f"search_space_catalog model_params entry '{entry['key']}' "
+                "is missing a 'default' field"
+            )
+
+    def test_search_space_catalog_smart_params_have_default(self) -> None:
+        """All smart_params catalog entries must have a 'default' field."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = schema["search_space_catalog"]
+        smart_params = [e for e in catalog if e.get("group") == "smart_params"]
+        for entry in smart_params:
+            assert "default" in entry, (
+                f"search_space_catalog smart_params entry '{entry['key']}' "
+                "is missing a 'default' field"
+            )
+
+    def test_search_space_catalog_n_estimators_default(self) -> None:
+        """search_space_catalog n_estimators default must be 1000."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        assert catalog["n_estimators"]["default"] == 1000
+
+    def test_search_space_catalog_auto_num_leaves_default(self) -> None:
+        """search_space_catalog auto_num_leaves default must be True."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        assert catalog["auto_num_leaves"]["default"] is True
+
 
 def _reset_ui_schema_caches() -> None:
     """Reset module-level caches to force re-evaluation."""

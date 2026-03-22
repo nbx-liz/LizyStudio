@@ -1,6 +1,5 @@
 import { useCallback, useMemo } from "react";
 import type { ColumnInfo, UiSchema } from "@/api/types";
-import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -12,6 +11,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { CV_STRATEGY_FIELDS, CV_STRATEGY_LABELS } from "./constants";
 import { NumberInput } from "./NumberInput";
+import { SegmentGroup } from "./SegmentGroup";
 
 /** Default values for CV fields, reset when strategy changes. */
 const CV_FIELD_DEFAULTS = {
@@ -157,23 +157,16 @@ export function CvSection({
   );
 
   return (
-    <div className="space-y-3">
+    <div className="lzs-form space-y-1.5">
       {/* Strategy segment buttons */}
       <div>
         <Label>Strategy</Label>
-        <div className="flex flex-wrap gap-1 pt-1">
-          {availableStrategies.map((s) => (
-            <Button
-              key={s}
-              variant={cv.strategy === s ? "default" : "outline"}
-              size="sm"
-              className="h-7 text-xs px-3"
-              onClick={() => handleStrategyChange(s)}
-            >
-              {CV_STRATEGY_LABELS[s] ?? s}
-            </Button>
-          ))}
-        </div>
+        <SegmentGroup
+          options={availableStrategies}
+          value={cv.strategy}
+          onChange={handleStrategyChange}
+          labels={CV_STRATEGY_LABELS}
+        />
       </div>
 
       {/* Conditional fields */}

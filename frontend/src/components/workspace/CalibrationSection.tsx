@@ -54,7 +54,7 @@ export function CalibrationSection({
 
   return (
     <AccordionItem value="calibration">
-      <AccordionTrigger className="text-sm font-medium">
+      <AccordionTrigger className="py-1.5 text-sm font-medium">
         <div className="flex w-full items-center justify-between pr-2">
           <span>Calibration</span>
           {/* biome-ignore lint/a11y/useKeyWithClickEvents: stopPropagation needed for accordion */}
@@ -66,7 +66,7 @@ export function CalibrationSection({
       </AccordionTrigger>
       {isOn && (
         <AccordionContent>
-          <div className="space-y-3 pt-2">
+          <div className="lzs-form space-y-1.5 pl-[18px] pt-2">
             <div className="flex items-center justify-between gap-2">
               <Label className="text-xs text-muted-foreground">method</Label>
               <Select value={method} onValueChange={handleMethodChange}>

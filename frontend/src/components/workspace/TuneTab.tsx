@@ -6,9 +6,9 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { SearchSpaceTable } from "./SearchSpaceTable";
+import { SegmentGroup } from "./SegmentGroup";
 import { TuneSettings } from "./TuneSettings";
 
 interface TuneTabProps {
@@ -205,51 +205,44 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
         nTrialsPresets={uiSchema?.n_trials_presets}
       />
       <AccordionItem value="search-space" className="border-b">
-        <AccordionTrigger className="text-sm font-medium hover:bg-muted/50">
+        <AccordionTrigger className="py-1.5 text-sm font-medium hover:bg-muted/50">
           Search Space
         </AccordionTrigger>
         <AccordionContent>
-          <SearchSpaceTable
-            space={searchSpace}
-            modelParams={modelParams}
-            onChange={handleSpaceChange}
-            catalog={uiSchema?.search_space_catalog}
-            stepMap={uiSchema?.step_map}
-            task={task}
-            objectiveOptions={objectiveOptions}
-            metricOptions={modelMetricOptions}
-            additionalParams={uiSchema?.additional_params}
-            paramOptionSets={paramOptionSets}
-            onModelParamChange={handleModelParamChange}
-          />
+          <div className="pl-[18px]">
+            <SearchSpaceTable
+              space={searchSpace}
+              modelParams={modelParams}
+              onChange={handleSpaceChange}
+              catalog={uiSchema?.search_space_catalog}
+              stepMap={uiSchema?.step_map}
+              task={task}
+              objectiveOptions={objectiveOptions}
+              metricOptions={modelMetricOptions}
+              additionalParams={uiSchema?.additional_params}
+              paramOptionSets={paramOptionSets}
+              onModelParamChange={handleModelParamChange}
+            />
+          </div>
         </AccordionContent>
       </AccordionItem>
       <AccordionItem value="evaluation" className="border-b">
-        <AccordionTrigger className="text-sm font-medium hover:bg-muted/50">
+        <AccordionTrigger className="py-1.5 text-sm font-medium hover:bg-muted/50">
           Evaluation
         </AccordionTrigger>
         <AccordionContent>
-          <div className="space-y-4 px-1">
+          <div className="lzs-form space-y-1.5 pl-[18px] px-1">
             {/* Optimization Metric */}
             {task && metricOptions.length > 0 && (
               <div>
                 <Label className="text-sm text-muted-foreground mb-1.5 block">
                   Optimization Metric
                 </Label>
-                <div className="flex flex-wrap gap-1">
-                  {metricOptions.map((m) => (
-                    <Button
-                      key={m}
-                      variant={optimizationMetric === m ? "default" : "outline"}
-                      size="sm"
-                      className="h-7 text-xs px-3"
-                      type="button"
-                      onClick={() => handleOptimizationMetricChange(m)}
-                    >
-                      {m}
-                    </Button>
-                  ))}
-                </div>
+                <SegmentGroup
+                  options={metricOptions}
+                  value={optimizationMetric}
+                  onChange={handleOptimizationMetricChange}
+                />
                 {optimizationMetric && autoDirection && (
                   <div className="flex items-center gap-1.5 mt-1.5">
                     <span className="text-xs text-muted-foreground">
