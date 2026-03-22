@@ -1,7 +1,6 @@
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import type { SearchSpaceCatalogEntry } from "@/api/types";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
@@ -11,12 +10,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { ChoiceInput } from "./ChoiceInput";
 import { KNOWN_PARAMS, RANGE_DEFAULTS } from "./constants";
+import { FixedValueEditor } from "./FixedValueEditor";
 import { NumberInput } from "./NumberInput";
 
 const GROUP_LABELS: Record<string, string> = {
   model_params: "Model Params",
   smart_params: "Smart Params",
+  training: "Training Params",
   additional: "Additional Params",
 };
 
@@ -39,6 +41,10 @@ interface SearchSpaceTableProps {
   objectiveOptions?: string[];
   metricOptions?: string[];
   additionalParams?: string[];
+  /** Per-parameter option sets for generic choice mode (keyed by param name). */
+  paramOptionSets?: Record<string, string[]>;
+  /** Called when the user edits a fixed-mode parameter value. */
+  onModelParamChange?: (key: string, value: unknown) => void;
 }
 
 function toSpaceEntry(raw: unknown): SpaceEntry | undefined {
@@ -76,6 +82,8 @@ export function SearchSpaceTable({
   objectiveOptions,
   metricOptions,
   additionalParams,
+  paramOptionSets,
+  onModelParamChange,
 }: SearchSpaceTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   // Initialize addedParams from space keys that exist in additionalParams
@@ -165,14 +173,17 @@ export function SearchSpaceTable({
   };
 
   const getChoiceOptions = useCallback(
-    (key: string): string[] => {
+    (key: string): string[] | undefined => {
+      // Per-parameter option sets take precedence
+      if (paramOptionSets?.[key]) return paramOptionSets[key];
       if (key === "objective") return objectiveOptions ?? [];
       if (key === "metric") return metricOptions ?? [];
       if (key === "first_metric_only" || key === "auto_num_leaves")
         return ["true", "false"];
-      return [];
+      // No known options — signal free-text mode
+      return undefined;
     },
-    [objectiveOptions, metricOptions],
+    [objectiveOptions, metricOptions, paramOptionSets],
   );
 
   const handleModeChange = (key: string, mode: string) => {
@@ -230,7 +241,7 @@ export function SearchSpaceTable({
         <div key={group}>
           {groupedCatalog.length > 1 && (
             <div className="flex items-center gap-2 px-3 py-1.5 bg-muted/30 border-b">
-              <span className="text-xs text-muted-foreground font-medium">
+              <span className="text-sm text-muted-foreground font-medium">
                 {GROUP_LABELS[group] ?? group}
               </span>
               <div className="flex-1 border-t border-muted-foreground/20" />
@@ -277,7 +288,7 @@ export function SearchSpaceTable({
                         key={m}
                         variant={mode === m ? "default" : "outline"}
                         size="sm"
-                        className="h-6 text-[10px] px-2 flex-1"
+                        className="h-7 text-[10px] px-2 flex-1"
                         type="button"
                         onClick={() => handleModeChange(param.key, m)}
                       >
@@ -286,12 +297,27 @@ export function SearchSpaceTable({
                     ))}
                   </div>
 
-                  <span className="flex-1 text-right text-xs text-muted-foreground tabular-nums">
-                    {isRange && entry
-                      ? formatSummary(entry)
-                      : isChoice && entry?.choices
-                        ? entry.choices.join(", ")
-                        : String(modelParams[param.key] ?? "default")}
+                  {/* Summary / Fixed value editor */}
+                  {/* biome-ignore lint/a11y/noStaticElementInteractions: stopPropagation needed */}
+                  <span
+                    className="flex-1 flex justify-end text-xs text-muted-foreground tabular-nums"
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => e.stopPropagation()}
+                  >
+                    {isRange && entry ? (
+                      formatSummary(entry)
+                    ) : isChoice && entry?.choices ? (
+                      entry.choices.join(", ")
+                    ) : onModelParamChange ? (
+                      <FixedValueEditor
+                        paramType={param.paramType}
+                        value={modelParams[param.key]}
+                        onChange={(v) => onModelParamChange(param.key, v)}
+                        step={stepMap?.[param.key]}
+                      />
+                    ) : (
+                      String(modelParams[param.key] ?? "default")
+                    )}
                   </span>
                 </button>
 
@@ -299,7 +325,7 @@ export function SearchSpaceTable({
                 {isRange && isExpanded && entry && (
                   <div className="px-6 py-2 bg-muted/20 space-y-2">
                     <div className="flex items-center gap-2">
-                      <Label className="text-xs text-muted-foreground w-20">
+                      <Label className="text-sm text-muted-foreground w-20">
                         Min
                       </Label>
                       <NumberInput
@@ -311,7 +337,7 @@ export function SearchSpaceTable({
                       />
                     </div>
                     <div className="flex items-center gap-2">
-                      <Label className="text-xs text-muted-foreground w-20">
+                      <Label className="text-sm text-muted-foreground w-20">
                         Max
                       </Label>
                       <NumberInput
@@ -323,7 +349,7 @@ export function SearchSpaceTable({
                       />
                     </div>
                     <div className="flex items-center gap-2">
-                      <Label className="text-xs text-muted-foreground w-20">
+                      <Label className="text-sm text-muted-foreground w-20">
                         Distribution
                       </Label>
                       <Select
@@ -345,7 +371,7 @@ export function SearchSpaceTable({
                     </div>
                     {isInteger && (
                       <div className="flex items-center gap-2">
-                        <Label className="text-xs text-muted-foreground w-20">
+                        <Label className="text-sm text-muted-foreground w-20">
                           Step
                         </Label>
                         <NumberInput
@@ -359,92 +385,16 @@ export function SearchSpaceTable({
                   </div>
                 )}
 
-                {/* Choice mode — objective uses segment buttons, metric uses chips */}
+                {/* Choice mode — ChoiceInput handles known options and free-text */}
                 {isChoice && isExpanded && entry && (
                   <div className="px-6 py-2 bg-muted/20">
-                    {param.key === "objective" ? (
-                      /* Objective: segment buttons */
-                      <div className="flex flex-wrap gap-1">
-                        {getChoiceOptions(param.key).map((opt) => {
-                          const selected =
-                            entry.choices?.includes(opt) ?? false;
-                          return (
-                            <Button
-                              key={opt}
-                              variant={selected ? "default" : "outline"}
-                              size="sm"
-                              className="h-7 text-xs px-3"
-                              type="button"
-                              onClick={() => {
-                                const current = entry.choices ?? [];
-                                const next = selected
-                                  ? current.filter((c) => c !== opt)
-                                  : [...current, opt];
-                                updateEntry(param.key, { choices: next });
-                              }}
-                            >
-                              {opt}
-                            </Button>
-                          );
-                        })}
-                      </div>
-                    ) : param.key === "metric" ? (
-                      /* Metric: chips */
-                      <div className="flex flex-wrap gap-1.5">
-                        {getChoiceOptions(param.key).map((opt) => {
-                          const selected =
-                            entry.choices?.includes(opt) ?? false;
-                          return (
-                            <button
-                              key={opt}
-                              type="button"
-                              onClick={() => {
-                                const current = entry.choices ?? [];
-                                const next = selected
-                                  ? current.filter((c) => c !== opt)
-                                  : [...current, opt];
-                                updateEntry(param.key, { choices: next });
-                              }}
-                            >
-                              <Badge
-                                variant={selected ? "default" : "outline"}
-                                className="cursor-pointer text-xs"
-                              >
-                                {opt}
-                              </Badge>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      /* Other: chips */
-                      <div className="flex flex-wrap gap-1.5">
-                        {getChoiceOptions(param.key).map((opt) => {
-                          const selected =
-                            entry.choices?.includes(opt) ?? false;
-                          return (
-                            <button
-                              key={opt}
-                              type="button"
-                              onClick={() => {
-                                const current = entry.choices ?? [];
-                                const next = selected
-                                  ? current.filter((c) => c !== opt)
-                                  : [...current, opt];
-                                updateEntry(param.key, { choices: next });
-                              }}
-                            >
-                              <Badge
-                                variant={selected ? "default" : "outline"}
-                                className="cursor-pointer text-xs"
-                              >
-                                {opt}
-                              </Badge>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
+                    <ChoiceInput
+                      choices={entry.choices ?? []}
+                      availableOptions={getChoiceOptions(param.key)}
+                      onChange={(choices) =>
+                        updateEntry(param.key, { choices })
+                      }
+                    />
                   </div>
                 )}
               </div>

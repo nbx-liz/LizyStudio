@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   type Defs,
   getNestedValue,
+  isNullableUnion,
   resolveSchema,
   type SchemaProperty,
   setNestedValue,
@@ -141,5 +142,107 @@ describe("resolveSchema", () => {
     };
     const result = resolveSchema(prop, {});
     expect(result).toEqual(prop);
+  });
+
+  it("resolves anyOf with multiple non-null types and exposes alternatives", () => {
+    const typeA: SchemaProperty = {
+      type: "object",
+      title: "TypeA",
+      properties: { x: { type: "number" } },
+    };
+    const typeB: SchemaProperty = {
+      type: "object",
+      title: "TypeB",
+      properties: { y: { type: "string" } },
+    };
+    const prop: SchemaProperty = {
+      title: "MyUnion",
+      anyOf: [typeA, typeB],
+    };
+    const result = resolveSchema(prop, {});
+    // Should expose alternatives so UI can render a type selector
+    expect(result.alternatives).toBeDefined();
+    expect(result.alternatives).toHaveLength(2);
+    expect(result.alternatives?.[0].title).toBe("TypeA");
+    expect(result.alternatives?.[1].title).toBe("TypeB");
+    // Title should be preserved
+    expect(result.title).toBe("MyUnion");
+  });
+
+  it("resolves anyOf with null + multiple non-null types and sets nullable + alternatives", () => {
+    const typeA: SchemaProperty = { type: "object", title: "A" };
+    const typeB: SchemaProperty = { type: "object", title: "B" };
+    const prop: SchemaProperty = {
+      title: "NullableUnion",
+      anyOf: [typeA, { type: "null" }, typeB],
+    };
+    const result = resolveSchema(prop, {});
+    expect(result.nullable).toBe(true);
+    expect(result.alternatives).toHaveLength(2);
+    expect(result.title).toBe("NullableUnion");
+  });
+
+  it("resolves anyOf with multiple non-null types and picks matching alternative by currentValue shape", () => {
+    const typeA: SchemaProperty = {
+      type: "object",
+      title: "TypeA",
+      properties: { kind: { const: "a" }, x: { type: "number" } },
+    };
+    const typeB: SchemaProperty = {
+      type: "object",
+      title: "TypeB",
+      properties: { kind: { const: "b" }, y: { type: "string" } },
+    };
+    const prop: SchemaProperty = { anyOf: [typeA, typeB] };
+    // When current value has kind="b", should resolve to TypeB as primary
+    const result = resolveSchema(prop, {}, { kind: "b", y: "hello" });
+    expect(result.properties?.y).toBeDefined();
+  });
+});
+
+// --- isNullableUnion ---
+
+describe("isNullableUnion", () => {
+  it("returns true for [T, null] pattern (Optional<T>)", () => {
+    const anyOf: SchemaProperty[] = [{ type: "number" }, { type: "null" }];
+    expect(isNullableUnion(anyOf)).toBe(true);
+  });
+
+  it("returns true for [null, T] pattern", () => {
+    const anyOf: SchemaProperty[] = [{ type: "null" }, { type: "string" }];
+    expect(isNullableUnion(anyOf)).toBe(true);
+  });
+
+  it("returns false for [T1, T2] — discriminated union", () => {
+    const anyOf: SchemaProperty[] = [
+      { type: "object", title: "A" },
+      { type: "object", title: "B" },
+    ];
+    expect(isNullableUnion(anyOf)).toBe(false);
+  });
+
+  it("returns false for empty array", () => {
+    expect(isNullableUnion([])).toBe(false);
+  });
+
+  it("returns false for single non-null type", () => {
+    expect(isNullableUnion([{ type: "string" }])).toBe(false);
+  });
+
+  it("returns true when exactly one non-null type exists alongside null", () => {
+    const anyOf: SchemaProperty[] = [
+      { type: "object", properties: { x: { type: "number" } } },
+      { type: "null" },
+    ];
+    expect(isNullableUnion(anyOf)).toBe(true);
+  });
+
+  it("returns false for null + multiple non-null types", () => {
+    const anyOf: SchemaProperty[] = [
+      { type: "object", title: "A" },
+      { type: "null" },
+      { type: "object", title: "B" },
+    ];
+    expect(isNullableUnion(anyOf)).toBe(false);
   });
 });

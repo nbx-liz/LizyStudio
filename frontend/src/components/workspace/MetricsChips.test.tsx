@@ -137,4 +137,100 @@ describe("MetricsChips", () => {
     expect(screen.getByText("metric_a")).toBeInTheDocument();
     expect(screen.getByText("metric_b")).toBeInTheDocument();
   });
+
+  // --- conditional params (precision_at_k) ---
+
+  it("does not render NumberInput when no conditionalParams provided", () => {
+    const metricsByTask = { ranking: ["precision_at_k", "ndcg"] };
+    render(
+      <MetricsChips
+        task="ranking"
+        selectedMetrics={["precision_at_k"]}
+        onChange={vi.fn()}
+        metricsByTask={metricsByTask}
+      />,
+    );
+    expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  it("shows labeled NumberInput when precision_at_k is selected and conditionalParams provided", () => {
+    const metricsByTask = { ranking: ["precision_at_k", "ndcg"] };
+    const conditionalParams = {
+      precision_at_k: { label: "k", min: 1, max: 100, default: 10 },
+    };
+    render(
+      <MetricsChips
+        task="ranking"
+        selectedMetrics={["precision_at_k"]}
+        onChange={vi.fn()}
+        metricsByTask={metricsByTask}
+        conditionalParams={conditionalParams}
+        paramValues={{ precision_at_k: 10 }}
+        onParamChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByLabelText("k")).toBeInTheDocument();
+    expect(screen.getByRole("textbox")).toBeInTheDocument();
+  });
+
+  it("hides NumberInput when precision_at_k is deselected", () => {
+    const metricsByTask = { ranking: ["precision_at_k", "ndcg"] };
+    const conditionalParams = {
+      precision_at_k: { label: "k", min: 1, max: 100, default: 10 },
+    };
+    render(
+      <MetricsChips
+        task="ranking"
+        selectedMetrics={["ndcg"]}
+        onChange={vi.fn()}
+        metricsByTask={metricsByTask}
+        conditionalParams={conditionalParams}
+        paramValues={{ precision_at_k: 10 }}
+        onParamChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByLabelText("k")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  it("calls onParamChange with correct metric and value", () => {
+    const metricsByTask = { ranking: ["precision_at_k", "ndcg"] };
+    const conditionalParams = {
+      precision_at_k: { label: "k", min: 1, max: 100, default: 10 },
+    };
+    const onParamChange = vi.fn();
+    render(
+      <MetricsChips
+        task="ranking"
+        selectedMetrics={["precision_at_k"]}
+        onChange={vi.fn()}
+        metricsByTask={metricsByTask}
+        conditionalParams={conditionalParams}
+        paramValues={{ precision_at_k: 10 }}
+        onParamChange={onParamChange}
+      />,
+    );
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "20" } });
+    expect(onParamChange).toHaveBeenCalledWith("precision_at_k", 20);
+  });
+
+  it("uses default param value when paramValues not provided for the metric", () => {
+    const metricsByTask = { ranking: ["precision_at_k", "ndcg"] };
+    const conditionalParams = {
+      precision_at_k: { label: "k", min: 1, max: 100, default: 10 },
+    };
+    render(
+      <MetricsChips
+        task="ranking"
+        selectedMetrics={["precision_at_k"]}
+        onChange={vi.fn()}
+        metricsByTask={metricsByTask}
+        conditionalParams={conditionalParams}
+        onParamChange={vi.fn()}
+      />,
+    );
+    const input = screen.getByRole("textbox") as HTMLInputElement;
+    expect(input.value).toBe("10");
+  });
 });

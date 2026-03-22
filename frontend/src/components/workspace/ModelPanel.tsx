@@ -164,6 +164,7 @@ export function ModelPanel({
           </Tabs>
           <Button
             size="sm"
+            className="h-9"
             onClick={activeTab === "fit" ? onFit : onTune}
             disabled={activeTab === "fit" ? !fitEnabled : !tuneEnabled}
           >

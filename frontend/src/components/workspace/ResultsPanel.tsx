@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, X } from "lucide-react";
+import { Activity, Download, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -14,12 +14,7 @@ import {
 } from "@/api/jobs";
 import type { JobDetail, ProgressMessage } from "@/api/types";
 import { connectJobProgress } from "@/api/websocket";
-import {
-  Accordion,
-  AccordionContent,
-  AccordionItem,
-  AccordionTrigger,
-} from "@/components/ui/accordion";
+import { Accordion } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,22 +24,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
+import { FoldDetailsSection } from "./FoldDetailsSection";
+import { PlotSection } from "./PlotSection";
+import { ScoreSection } from "./ScoreSection";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { PlotlyChart } from "./PlotlyChart";
+  TrialResultsAccordionItem,
+  TuneTrialsSection,
+} from "./TuneTrialsSection";
 
 interface ResultsPanelProps {
   jobId: string | null;
@@ -90,7 +76,6 @@ export function ResultsPanel({
     | string
     | undefined;
 
-  // WebSocket progress — simplified cleanup (no disconnectRef)
   useEffect(() => {
     if (!jobId || job?.status !== "running") return;
 
@@ -124,8 +109,7 @@ export function ResultsPanel({
     return () => disconnect();
   }, [jobId, job?.status, refetchJob, queryClient, onJobDone]);
 
-  // Polling fallback: detect job completion even if WebSocket fails.
-  // Only fires when progress is still set (WebSocket did not already handle it).
+  // Polling fallback: detect completion if WebSocket misses it
   const prevStatusRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     const prev = prevStatusRef.current;
@@ -154,17 +138,19 @@ export function ResultsPanel({
     setCancelConfirm(false);
   }, [jobId, refetchJob]);
 
-  // Empty state
   if (!jobId || !job) {
     return (
       <div className="flex h-full flex-col items-center justify-center p-8 text-center text-muted-foreground">
+        <Activity className="mb-3 h-10 w-10 text-muted-foreground/50" />
         <h3 className="mb-4 text-lg font-medium">Results</h3>
         <ol className="space-y-2 text-sm">
           <li>1. Load data in the Data Panel</li>
           <li>2. Select a model in the Model Panel</li>
           <li>3. Click Fit or Tune</li>
         </ol>
-        <p className="mt-4 text-xs">Results will appear here</p>
+        <p className="mt-4 text-xs">
+          Results will appear here after running a job.
+        </p>
       </div>
     );
   }
@@ -172,7 +158,6 @@ export function ResultsPanel({
   const typeLabel = job.job_type === "fit" ? "Fit" : "Tune";
   const headerLabel = `${typeLabel}${jobNumber ? ` #${jobNumber}` : ""}`;
 
-  // Running state
   if (job.status === "running") {
     const pct = progress ? (progress.current / progress.total) * 100 : 0;
     return (
@@ -183,7 +168,12 @@ export function ResultsPanel({
               {headerLabel} {modelName && `\u2014 ${modelName}`}
             </h3>
           </div>
-          <Badge variant="secondary">Running</Badge>
+          <Badge
+            variant="secondary"
+            className="bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
+          >
+            Running
+          </Badge>
         </div>
 
         <Progress value={pct} className="mb-2" />
@@ -198,7 +188,6 @@ export function ResultsPanel({
           </p>
         )}
 
-        {/* Fold / Trial log */}
         {foldLog.length > 0 && (
           <div className="mt-3 max-h-32 overflow-auto rounded border bg-muted/30 p-2">
             {foldLog.map((msg, i) => (
@@ -223,7 +212,6 @@ export function ResultsPanel({
           </Button>
         </div>
 
-        {/* Cancel confirm dialog */}
         <Dialog open={cancelConfirm} onOpenChange={setCancelConfirm}>
           <DialogContent>
             <DialogHeader>
@@ -246,7 +234,6 @@ export function ResultsPanel({
     );
   }
 
-  // Failed state
   if (job.status === "failed") {
     return (
       <div className="flex h-full flex-col p-6">
@@ -279,7 +266,6 @@ export function ResultsPanel({
     );
   }
 
-  // Cancelled state
   if (job.status === "cancelled") {
     return (
       <div className="flex h-full flex-col p-6">
@@ -287,7 +273,12 @@ export function ResultsPanel({
           <h3 className="text-lg font-medium">
             {headerLabel} {modelName && `\u2014 ${modelName}`}
           </h3>
-          <Badge variant="secondary">Cancelled</Badge>
+          <Badge
+            variant="secondary"
+            className="bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200"
+          >
+            Cancelled
+          </Badge>
         </div>
         <p className="text-sm text-muted-foreground">
           This job was cancelled before completion.
@@ -296,7 +287,6 @@ export function ResultsPanel({
     );
   }
 
-  // Completed state
   return (
     <CompletedView
       job={job}
@@ -363,7 +353,6 @@ function CompletedView({
     enabled: job.job_type === "tune",
   });
 
-  // Auto-select first plot
   useEffect(() => {
     if (plots && plots.length > 0 && !selectedPlot) {
       const first = plots.find((p) => p !== "learning-curve" && p !== "tuning");
@@ -376,9 +365,17 @@ function CompletedView({
   const metrics = fitResult?.metrics as
     | Record<string, Record<string, number>>
     | undefined;
-  const hasFolds = fitResult && fitResult.fold_count > 1;
 
-  // Primary metric for header badge
+  const evalConfig = (job.config?.evaluation as Record<string, unknown>) ?? {};
+  const annotateMetric = (name: string): string => {
+    if (name === "precision_at_k") {
+      const k = evalConfig.precision_at_k;
+      return typeof k === "number" ? `${name}@${k}` : name;
+    }
+    return name;
+  };
+  const hasFolds = fitResult != null && fitResult.fold_count > 1;
+
   const primaryMetric = tuneResult
     ? `${tuneResult.metric_name}: ${Number(tuneResult.best_score ?? 0).toFixed(4)}`
     : metrics
@@ -393,12 +390,14 @@ function CompletedView({
 
   return (
     <div className="h-full overflow-auto p-6">
-      {/* Header */}
       <div className="mb-4 flex items-center gap-2">
         <h3 className="text-lg font-medium">
           {headerLabel} {modelName && `\u2014 ${modelName}`}
         </h3>
-        <Badge variant="default" className="bg-green-600">
+        <Badge
+          variant="default"
+          className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
+        >
           Completed
         </Badge>
         {primaryMetric && <Badge variant="secondary">{primaryMetric}</Badge>}
@@ -416,287 +415,47 @@ function CompletedView({
         </div>
       </div>
 
-      {/* Tune: Optimization History */}
-      {tuneResult && tuningPlot && (
-        <section className="mb-6">
-          <h4 className="mb-2 text-sm font-medium">Optimization History</h4>
-          <PlotlyChart plotlyJson={tuningPlot.plotly_json} />
-        </section>
-      )}
-
-      {/* Tune: Best Params */}
       {tuneResult && (
-        <section className="mb-6">
-          <h4 className="mb-2 text-sm font-medium">Best Params</h4>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Param</TableHead>
-                <TableHead>Value</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {Object.entries(tuneResult.best_params).map(([k, v]) => (
-                <TableRow key={k}>
-                  <TableCell className="text-xs font-mono">{k}</TableCell>
-                  <TableCell className="text-xs">{String(v)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-          {onApplyToFit && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="mt-2"
-              onClick={() => {
-                // Restore full config snapshot with best_params applied
-                const baseConfig =
-                  (job.config as Record<string, unknown>) ?? {};
-                const baseModel =
-                  (baseConfig.model as Record<string, unknown>) ?? {};
-                const tuneConfig: Record<string, unknown> = {
-                  ...baseConfig,
-                  model: {
-                    ...baseModel,
-                    params: {
-                      ...((baseModel.params as Record<string, unknown>) ?? {}),
-                      ...tuneResult.best_params,
-                    },
-                  },
-                };
-                onApplyToFit(tuneConfig);
-              }}
-            >
-              Apply to Fit
-            </Button>
-          )}
-        </section>
+        <TuneTrialsSection
+          tuneResult={tuneResult}
+          tuningPlot={tuningPlot}
+          job={job}
+          onApplyToFit={onApplyToFit}
+        />
       )}
 
       {/* Score */}
       {metrics && (
-        <section className="mb-6">
-          <h4 className="mb-2 text-sm font-medium">Score</h4>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead />
-                <TableHead className="text-center">IS</TableHead>
-                <TableHead className="text-center">OOS</TableHead>
-                {hasFolds && (
-                  <TableHead className="text-center">OOS Std</TableHead>
-                )}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {Object.entries(metrics).map(([name, vals]) => (
-                <TableRow key={name}>
-                  <TableCell className="font-medium text-xs">{name}</TableCell>
-                  <TableCell className="text-center text-xs">
-                    {formatNum(vals.is)}
-                  </TableCell>
-                  <TableCell className="text-center text-xs">
-                    {formatNum(vals.oos)}
-                  </TableCell>
-                  {hasFolds && (
-                    <TableCell className="text-center text-xs">
-                      {formatNum(vals.oos_std)}
-                    </TableCell>
-                  )}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </section>
+        <ScoreSection
+          metrics={metrics}
+          hasFolds={hasFolds}
+          annotateMetric={annotateMetric}
+        />
       )}
 
-      {/* Learning Curve */}
-      {learningCurve && (
-        <section className="mb-6">
-          <h4 className="mb-2 text-sm font-medium">Learning Curve</h4>
-          <PlotlyChart plotlyJson={learningCurve.plotly_json} />
-        </section>
-      )}
-
-      {/* Plots selector */}
+      {/* Learning Curve + Plot selector */}
       {plots && plots.length > 0 && (
-        <section className="mb-6">
-          <div className="mb-2 flex items-center gap-2">
-            <h4 className="text-sm font-medium">Plots</h4>
-            <Select value={selectedPlot} onValueChange={onSelectPlot}>
-              <SelectTrigger className="h-7 w-48 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {plots
-                  .filter((p) => p !== "learning-curve" && p !== "tuning")
-                  .map((p) => (
-                    <SelectItem key={p} value={p}>
-                      {p.replace(/-/g, " ")}
-                    </SelectItem>
-                  ))}
-              </SelectContent>
-            </Select>
-          </div>
-          {plotData && <PlotlyChart plotlyJson={plotData.plotly_json} />}
-        </section>
+        <PlotSection
+          plots={plots}
+          selectedPlot={selectedPlot}
+          onSelectPlot={onSelectPlot}
+          plotData={plotData}
+          learningCurve={learningCurve}
+        />
       )}
 
       {/* Accordion sections */}
       <Accordion type="multiple">
-        {/* Trial Results (Tune only) — BLUEPRINT order: before Feature Importance */}
-        {tuneResult && tuneResult.trials.length > 0 && (
-          <AccordionItem value="trials">
-            <AccordionTrigger>Trial Results</AccordionTrigger>
-            <AccordionContent>
-              <div className="max-h-64 overflow-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      {Object.keys(tuneResult.trials[0]).map((k) => (
-                        <TableHead key={k} className="text-xs">
-                          {k}
-                        </TableHead>
-                      ))}
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {[...tuneResult.trials]
-                      .sort((a, b) => {
-                        const ra = a as Record<string, unknown>;
-                        const rb = b as Record<string, unknown>;
-                        const sa = Number(ra.score ?? 0);
-                        const sb = Number(rb.score ?? 0);
-                        return tuneResult.direction === "maximize"
-                          ? sb - sa
-                          : sa - sb;
-                      })
-                      .map((trial, i) => {
-                        const trialRecord = trial as Record<string, unknown>;
-                        const trialScore = Number(trialRecord.score ?? 0);
-                        const isBest =
-                          Math.abs(
-                            trialScore - Number(tuneResult.best_score ?? 0),
-                          ) < 1e-10;
-                        return (
-                          <TableRow
-                            key={`trial-${i}`}
-                            className={
-                              isBest
-                                ? "bg-green-50 dark:bg-green-950/30 font-medium"
-                                : ""
-                            }
-                          >
-                            {Object.entries(trialRecord).map(([k, v], j) => (
-                              <TableCell key={`cell-${j}`} className="text-xs">
-                                {k === "trial" && isBest
-                                  ? `\u2605 ${String(v)}`
-                                  : typeof v === "number"
-                                    ? formatNum(v)
-                                    : String(v)}
-                              </TableCell>
-                            ))}
-                          </TableRow>
-                        );
-                      })}
-                  </TableBody>
-                </Table>
-              </div>
-            </AccordionContent>
-          </AccordionItem>
-        )}
+        {tuneResult && <TrialResultsAccordionItem tuneResult={tuneResult} />}
 
-        {/* Feature Importance */}
-        {(importancePlot || importance) && (
-          <AccordionItem value="importance">
-            <AccordionTrigger>Feature Importance</AccordionTrigger>
-            <AccordionContent>
-              {importancePlot ? (
-                <PlotlyChart plotlyJson={importancePlot.plotly_json} />
-              ) : importance ? (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Feature</TableHead>
-                      <TableHead className="text-right">Importance</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {Object.entries(importance)
-                      .sort(([, a], [, b]) => b - a)
-                      .slice(0, 20)
-                      .map(([name, val]) => (
-                        <TableRow key={name}>
-                          <TableCell className="text-xs">{name}</TableCell>
-                          <TableCell className="text-right text-xs">
-                            {val.toFixed(4)}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                  </TableBody>
-                </Table>
-              ) : null}
-            </AccordionContent>
-          </AccordionItem>
-        )}
-
-        {/* Fold Details (CV only) */}
-        {hasFolds && splitSummary && splitSummary.length > 0 && (
-          <AccordionItem value="folds">
-            <AccordionTrigger>Fold Details</AccordionTrigger>
-            <AccordionContent>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    {Object.keys(splitSummary[0]).map((k) => (
-                      <TableHead key={k} className="text-xs">
-                        {k}
-                      </TableHead>
-                    ))}
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {splitSummary.map((row, i) => (
-                    <TableRow key={`fold-${i}`}>
-                      {Object.values(row).map((v, j) => (
-                        <TableCell key={`cell-${j}`} className="text-xs">
-                          {typeof v === "number" ? formatNum(v) : String(v)}
-                        </TableCell>
-                      ))}
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </AccordionContent>
-          </AccordionItem>
-        )}
-
-        {/* Parameters */}
-        {fitResult && fitResult.params.length > 0 && (
-          <AccordionItem value="params">
-            <AccordionTrigger>Parameters</AccordionTrigger>
-            <AccordionContent>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Param</TableHead>
-                    <TableHead>Value</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {fitResult.params.map((row, i) =>
-                    Object.entries(row).map(([k, v]) => (
-                      <TableRow key={`param-${i}-${k}`}>
-                        <TableCell className="text-xs font-mono">{k}</TableCell>
-                        <TableCell className="text-xs">{String(v)}</TableCell>
-                      </TableRow>
-                    )),
-                  )}
-                </TableBody>
-              </Table>
-            </AccordionContent>
-          </AccordionItem>
+        {fitResult && (
+          <FoldDetailsSection
+            fitResult={fitResult}
+            hasFolds={hasFolds}
+            splitSummary={splitSummary}
+            importance={importance}
+            importancePlot={importancePlot}
+          />
         )}
       </Accordion>
     </div>
@@ -725,16 +484,11 @@ function LogDialog({
           <DialogTitle>Execution Log</DialogTitle>
         </DialogHeader>
         <pre className="max-h-[60vh] overflow-auto rounded bg-muted p-4 text-xs font-mono">
-          {data?.log ?? "Loading..."}
+          {data?.log ?? "Loading log..."}
         </pre>
       </DialogContent>
     </Dialog>
   );
-}
-
-function formatNum(v: unknown): string {
-  if (typeof v !== "number") return String(v ?? "");
-  return v.toFixed(4);
 }
 
 function formatElapsed(seconds: number): string {

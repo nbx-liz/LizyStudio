@@ -15,6 +15,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { ThemeToggle } from "./ThemeToggle";
 
 const navItems = [
   { to: "/", label: "Workspace", icon: LayoutDashboard },
@@ -91,7 +92,8 @@ export function Sidebar() {
             return link;
           })}
         </nav>
-        <div className="border-t p-2">
+        <div className="border-t p-2 space-y-1">
+          <ThemeToggle collapsed={collapsed} />
           <Button
             variant="ghost"
             size={collapsed ? "icon-sm" : "sm"}

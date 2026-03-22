@@ -42,13 +42,15 @@ export function TuneSettings({
   };
 
   return (
-    <AccordionItem value="settings">
-      <AccordionTrigger>Settings</AccordionTrigger>
+    <AccordionItem value="settings" className="border-b">
+      <AccordionTrigger className="text-sm font-medium hover:bg-muted/50">
+        Settings
+      </AccordionTrigger>
       <AccordionContent>
         <div className="space-y-3 px-1">
           {/* n_trials */}
           <div>
-            <Label className="text-xs text-muted-foreground mb-1">
+            <Label className="text-sm text-muted-foreground mb-1">
               Number of trials
             </Label>
             <SegmentedControl
@@ -62,7 +64,7 @@ export function TuneSettings({
 
           {/* timeout */}
           <div>
-            <Label className="text-xs text-muted-foreground mb-1">
+            <Label className="text-sm text-muted-foreground mb-1">
               Timeout
             </Label>
             <SegmentedControl
