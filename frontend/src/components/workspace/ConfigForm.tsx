@@ -43,7 +43,7 @@ interface ConfigFormProps {
 // --- Main component ---
 
 const HIDDEN = ["config_version", "tuning"];
-const DATA_PANEL_FIELDS = ["data", "features", "split"];
+const DATA_PANEL_FIELDS = ["data", "features", "split", "task", "output_dir"];
 // validation_ratio is replaced by training.inner_valid.ratio rendered manually below
 const TRAINING_HIDDEN_FIELDS = ["validation_ratio"];
 
@@ -182,6 +182,8 @@ export function ConfigForm({
     if (hiddenFields.includes(name)) continue;
     if (DATA_PANEL_FIELDS.includes(name)) continue;
     if (name === "calibration") continue;
+    // Evaluation is rendered separately with MetricsChips below
+    if (name === "evaluation") continue;
     if (prop.type === "object" && prop.properties) {
       sections.push([name, prop]);
     } else {
@@ -221,11 +223,17 @@ export function ConfigForm({
               className="border-b"
             >
               <AccordionTrigger className="py-1.5 text-sm font-medium hover:bg-muted/50">
-                {sectionProp.title ?? sectionName}
+                {uiSchema?.sections?.find(
+                  (s: { key: string }) => s.key === sectionName,
+                )?.title ??
+                  sectionProp.title ??
+                  sectionName}
               </AccordionTrigger>
               <AccordionContent>
                 <div className="lzs-form space-y-1.5 pl-[18px] pt-2">
-                  {sectionProp.properties &&
+                  {/* Non-model sections: render fields from JSON schema */}
+                  {sectionName !== "model" &&
+                    sectionProp.properties &&
                     Object.entries(sectionProp.properties)
                       .filter(([n]) => !hiddenFields.includes(n))
                       .filter(([n]) =>

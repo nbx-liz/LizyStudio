@@ -28,6 +28,23 @@ from lizystudio.ws.progress import ProgressBroadcaster, websocket_progress
 STATIC_DIR = Path(__file__).parent / "static"
 
 
+def _warmup_adapter(adapter: object) -> None:
+    """Pre-import ML backend modules to avoid import-lock deadlocks.
+
+    When uvicorn serves concurrent requests, lazy ``import lizyml`` calls
+    from different threads can deadlock on Python's global import lock.
+    Calling ``info`` and ``get_ui_schema`` once during startup (single-
+    threaded lifespan) forces the import to complete safely.
+    """
+    try:
+        _ = adapter.info  # type: ignore[attr-defined]
+        if hasattr(adapter, "get_ui_schema"):
+            adapter.get_ui_schema()  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        # Non-fatal: the adapter may work once imports settle.
+        pass
+
+
 def create_app() -> FastAPI:
     """Application factory.
 
@@ -43,6 +60,9 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         adapter = get_adapter(backend_name)
+        # Eagerly import the ML backend to avoid import-lock deadlocks
+        # when concurrent API requests trigger lazy imports in threads.
+        _warmup_adapter(adapter)
         application.state.workspace = WorkspaceState(backend=adapter)
         application.state.job_store = JobStore(jobs_dir)
         broadcaster = ProgressBroadcaster()

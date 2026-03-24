@@ -18,6 +18,31 @@ type OnChange = (path: string[], value: unknown) => void;
 
 const MAX_DEPTH = 5;
 
+/** Fields to always hide regardless of nesting depth. */
+const GLOBALLY_HIDDEN = new Set(["validation_ratio"]);
+
+/** Convert snake_case to Title Case (e.g. "early_stopping" → "Early Stopping") */
+function humanize(name: string): string {
+  return name
+    .split("_")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+/**
+ * Derive a human-readable label from a JSON Schema property.
+ * Pydantic v2 sets `title` to the model class name (e.g. "EarlyStoppingConfig")
+ * which is not user-friendly. We prefer a humanized version of the field name,
+ * unless the schema title looks intentionally user-facing (no "Config" suffix).
+ */
+function deriveLabel(prop: SchemaProperty, name: string): string {
+  const title = prop.title;
+  if (title && !title.endsWith("Config") && !title.endsWith("Schema")) {
+    return title;
+  }
+  return humanize(name);
+}
+
 /** Max-depth fallback: raw JSON textarea. */
 function renderDepthFallback(
   name: string,
@@ -427,9 +452,10 @@ export function renderField(
   depth = 0,
 ): ReactNode {
   const prop = resolveSchema(rawProp, defs, value);
-  const label = prop.title ?? name;
+  const label = deriveLabel(prop, name);
 
   if (prop.const !== undefined) return null;
+  if (GLOBALLY_HIDDEN.has(name)) return null;
 
   if (depth >= MAX_DEPTH) {
     return renderDepthFallback(

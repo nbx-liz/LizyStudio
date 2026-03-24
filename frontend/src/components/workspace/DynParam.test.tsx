@@ -54,52 +54,52 @@ describe("DynParam", () => {
     });
   });
 
-  describe("kind=model_metric → SegmentGroup", () => {
-    it("renders a SegmentGroup with options", () => {
+  describe("kind=model_metric → ChipGroup (multi-select)", () => {
+    it("renders a ChipGroup with options", () => {
       render(
         <DynParam
           hint={hint({ kind: "model_metric", key: "metric" })}
-          value="auc"
+          value={["auc"]}
           onChange={vi.fn()}
           options={["auc", "logloss", "f1"]}
         />,
       );
-      expect(screen.getByRole("radio", { name: "auc" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "auc" })).toBeInTheDocument();
       expect(
-        screen.getByRole("radio", { name: "logloss" }),
+        screen.getByRole("button", { name: "logloss" }),
       ).toBeInTheDocument();
-      expect(screen.getByRole("radio", { name: "f1" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "f1" })).toBeInTheDocument();
     });
 
-    it("fires onChange with selected value when segment is clicked", () => {
+    it("fires onChange with toggled array when chip is clicked", () => {
       const onChange = vi.fn();
       render(
         <DynParam
           hint={hint({ kind: "model_metric", key: "metric" })}
-          value="auc"
+          value={["auc"]}
           onChange={onChange}
           options={["auc", "logloss"]}
         />,
       );
-      fireEvent.click(screen.getByRole("radio", { name: "logloss" }));
-      expect(onChange).toHaveBeenCalledWith("logloss");
+      fireEvent.click(screen.getByRole("button", { name: "logloss" }));
+      expect(onChange).toHaveBeenCalledWith(["auc", "logloss"]);
     });
 
-    it("segment buttons have aria-checked attribute", () => {
+    it("selected chips have aria-pressed=true", () => {
       render(
         <DynParam
           hint={hint({ kind: "model_metric", key: "metric" })}
-          value="auc"
+          value={["auc"]}
           onChange={vi.fn()}
           options={["auc", "logloss"]}
         />,
       );
-      expect(screen.getByRole("radio", { name: "auc" })).toHaveAttribute(
-        "aria-checked",
+      expect(screen.getByRole("button", { name: "auc" })).toHaveAttribute(
+        "aria-pressed",
         "true",
       );
-      expect(screen.getByRole("radio", { name: "logloss" })).toHaveAttribute(
-        "aria-checked",
+      expect(screen.getByRole("button", { name: "logloss" })).toHaveAttribute(
+        "aria-pressed",
         "false",
       );
     });
