@@ -53,12 +53,14 @@ class WorkspaceState:
 
     def set_data(self, dataframe: pd.DataFrame, data_ref: DataRef) -> None:
         """Load data into the workspace."""
-        self.dataframe = dataframe
-        self.data_ref = data_ref
+        with self._lock:
+            self.dataframe = dataframe
+            self.data_ref = data_ref
 
     def set_config(self, config: dict[str, Any]) -> None:
         """Update the current config."""
-        self.config = config
+        with self._lock:
+            self.config = config
 
 
 def get_workspace(request: Request) -> WorkspaceState:

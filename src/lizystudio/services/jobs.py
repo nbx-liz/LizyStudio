@@ -166,7 +166,7 @@ class JobStore:
     # --- Internal helpers ---
 
     def _save_meta(self, job: Job) -> None:
-        job_dir = self.jobs_dir / job.job_id
+        job_dir = self._job_dir(job.job_id)
         job_dir.mkdir(parents=True, exist_ok=True)
         meta = {
             "job_id": job.job_id,
