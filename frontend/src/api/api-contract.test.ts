@@ -200,6 +200,7 @@ describe("JobSummary", () => {
       job_type: "fit",
       status: "completed",
       backend_name: "lizyml",
+      model_name: "lgbm",
       config: { model: { name: "lgbm" } },
       data_ref: {
         source_type: "path",
@@ -246,6 +247,7 @@ describe("JobSummary", () => {
       job_type: "tune",
       status: "failed",
       backend_name: "lizyml",
+      model_name: "",
       config: {},
       data_ref: {
         source_type: "path",
@@ -276,6 +278,7 @@ describe("JobDetail", () => {
       job_type: "fit",
       status: "completed",
       backend_name: "lizyml",
+      model_name: "lgbm",
       config: {},
       data_ref: {
         source_type: "path",

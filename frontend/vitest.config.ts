@@ -16,7 +16,19 @@ export default defineConfig({
     coverage: {
       provider: "istanbul",
       reporter: ["text"],
-      include: ["src/components/workspace/**"],
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: [
+        "src/**/*.test.{ts,tsx}",
+        "src/**/*.stories.{ts,tsx}",
+        "src/test-setup.ts",
+        "src/test/**",
+        "src/components/ui/**",
+        "src/api/generated/**",
+        "src/main.tsx",
+        "src/App.tsx",
+        "src/vite-env.d.ts",
+        "src/pages/**",
+      ],
     },
   },
 });
