@@ -128,12 +128,12 @@ export function ConfigForm({
         return modelParams.objective;
       }
       if (hint.kind === "model_metric") {
-        return modelConfig.metric;
+        return modelParams.metric;
       }
       // numeric/boolean params live under model.params
       return modelParams[hint.key];
     },
-    [modelConfig, modelParams],
+    [modelParams],
   );
 
   // Handle changes from DynParam
@@ -142,7 +142,7 @@ export function ConfigForm({
       if (hint.kind === "objective") {
         handleFieldChange(["model", "params", "objective"], value);
       } else if (hint.kind === "model_metric") {
-        handleFieldChange(["model", "metric"], value);
+        handleFieldChange(["model", "params", "metric"], value);
       } else {
         // numeric/boolean → model.params.<key>
         const newParams = { ...modelParams, [hint.key]: value };
@@ -177,15 +177,15 @@ export function ConfigForm({
     if (!task || !uiSchema?.option_sets?.model_metric) return;
     const opts = uiSchema.option_sets.model_metric[task] ?? [];
     if (opts.length === 0) return;
-    const current = modelConfig.metric;
+    const current = modelParams.metric;
     const isEmpty =
       current === undefined ||
       current === null ||
       (Array.isArray(current) && current.length === 0);
     if (isEmpty) {
-      handleFieldChange(["model", "metric"], opts.slice(0, 1));
+      handleFieldChange(["model", "params", "metric"], opts.slice(0, 1));
     }
-  }, [task, uiSchema, modelConfig.metric, handleFieldChange]);
+  }, [task, uiSchema, modelParams, handleFieldChange]);
 
   if (!rawProperties) return null;
 
