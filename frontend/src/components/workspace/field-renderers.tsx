@@ -175,7 +175,7 @@ export function renderNumberField(
 }
 
 /** Array field: array-of-objects with Add/Remove, or primitive comma-separated. */
-export function renderArrayField(
+function renderArrayField(
   name: string,
   label: string,
   description: string | undefined,
@@ -285,7 +285,7 @@ export function renderArrayField(
 }
 
 /** Nested object field: indented sub-group. */
-export function renderObjectField(
+function renderObjectField(
   name: string,
   label: string,
   description: string | undefined,

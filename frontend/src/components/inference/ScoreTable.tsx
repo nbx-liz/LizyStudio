@@ -6,6 +6,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { formatNum } from "@/lib/utils";
 
 interface ScoreTableProps {
   metrics: {
@@ -70,9 +71,4 @@ function isDegradedScore(
   }
   // For score metrics (higher is better): auc, r2, accuracy
   return infVal < oosVal * 0.9;
-}
-
-function formatNum(v: unknown): string {
-  if (typeof v !== "number") return "--";
-  return v.toFixed(4);
 }

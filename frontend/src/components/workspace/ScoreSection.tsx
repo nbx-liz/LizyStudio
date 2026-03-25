@@ -6,6 +6,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { formatNum } from "@/lib/utils";
 
 interface ScoreSectionProps {
   metrics: Record<string, Record<string, number>>;
@@ -53,9 +54,4 @@ export function ScoreSection({
       </Table>
     </section>
   );
-}
-
-function formatNum(v: unknown): string {
-  if (typeof v !== "number" || Number.isNaN(v)) return "—";
-  return v.toFixed(4);
 }
