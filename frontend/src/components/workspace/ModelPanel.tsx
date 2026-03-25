@@ -180,7 +180,7 @@ export function ModelPanel({
 
       {/* Scrollable Content */}
       <div className="flex-1 overflow-auto p-4">
-        {errors.length > 0 && (
+        {hasData && errors.length > 0 && (
           <div className="mb-4 rounded-md border border-destructive/50 bg-destructive/10 p-3">
             {errors
               .filter((err) => err.path || err.message)
