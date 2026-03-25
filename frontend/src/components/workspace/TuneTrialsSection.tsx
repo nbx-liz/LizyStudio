@@ -13,6 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { formatNum } from "@/lib/utils";
 import { PlotlyChart } from "./PlotlyChart";
 
 interface TuneTrialsSectionProps {
@@ -158,9 +159,4 @@ export function TrialResultsAccordionItem({
       </AccordionContent>
     </AccordionItem>
   );
-}
-
-function formatNum(v: unknown): string {
-  if (typeof v !== "number") return String(v ?? "");
-  return v.toFixed(4);
 }

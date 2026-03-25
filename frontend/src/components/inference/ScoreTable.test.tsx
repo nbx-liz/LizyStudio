@@ -115,6 +115,6 @@ describe("ScoreTable", () => {
       oos: { accuracy: 0.93 },
     };
     render(<ScoreTable metrics={metrics} />);
-    expect(screen.getByText("--")).toBeInTheDocument();
+    expect(screen.getByText("—")).toBeInTheDocument();
   });
 });

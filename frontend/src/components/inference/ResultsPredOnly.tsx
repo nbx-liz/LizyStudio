@@ -29,6 +29,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { PlotlyChart } from "@/components/workspace/PlotlyChart";
+import { formatNum } from "@/lib/utils";
 import { PredictionsTable } from "./PredictionsTable";
 
 interface ResultsPredOnlyProps {
@@ -169,11 +170,6 @@ function ComparisonTable({
 function formatStatName(key: string): string {
   if (key === "positive_pct") return "Positive %";
   return key.charAt(0).toUpperCase() + key.slice(1);
-}
-
-function formatNum(v: unknown): string {
-  if (typeof v !== "number") return "--";
-  return v.toFixed(4);
 }
 
 /** Prediction distribution plot section. */
