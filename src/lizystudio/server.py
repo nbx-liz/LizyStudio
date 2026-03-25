@@ -39,7 +39,7 @@ def _warmup_adapter(adapter: object) -> None:
     try:
         _ = adapter.info  # type: ignore[attr-defined]
         if hasattr(adapter, "get_ui_schema"):
-            adapter.get_ui_schema()  # type: ignore[attr-defined]
+            adapter.get_ui_schema()
     except Exception:  # noqa: BLE001
         # Non-fatal: the adapter may work once imports settle.
         pass
