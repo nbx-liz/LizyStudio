@@ -162,14 +162,16 @@ export function ConfigForm({
       for (const [condKey, condValue] of Object.entries(
         vis as Record<string, unknown>,
       )) {
-        // Check model params and config for the condition value
+        // Check model-level fields, model.params, then full config path
         const actualValue =
-          modelParams[condKey] ?? getNestedValue(config, condKey.split("."));
+          modelConfig[condKey] ??
+          modelParams[condKey] ??
+          getNestedValue(config, condKey.split("."));
         if (actualValue !== condValue) return false;
       }
       return true;
     },
-    [uiSchema, modelParams, config],
+    [uiSchema, modelConfig, modelParams, config],
   );
 
   // Auto-select defaults for objective and model_metric when empty
@@ -282,21 +284,34 @@ export function ConfigForm({
                         ),
                       )}
 
-                  {/* Model section: DynParam loop + FeatureWeights + KeyValueEditor */}
+                  {/* Model section: 3-subgroup layout (H-0030) */}
                   {sectionName === "model" && (
                     <div className="lzs-form">
-                      {/* Render all parameter_hints via DynParam */}
-                      {uiSchema?.parameter_hints?.map((hint) => (
-                        <DynParam
-                          key={hint.key}
-                          hint={hint}
-                          value={getValueForHint(hint)}
-                          onChange={(v) => handleHintChange(hint, v)}
-                          options={getOptionsForHint(hint)}
-                          visible={shouldShowField(hint.key)}
-                        />
-                      ))}
-
+                      {/* ── Smart Params ── */}
+                      <div className="border-t my-3" />
+                      <p className="text-xs text-muted-foreground font-medium mb-2">
+                        Smart Params
+                      </p>
+                      {sectionProp.properties &&
+                        Object.entries(sectionProp.properties)
+                          .filter(
+                            ([, p]) =>
+                              resolveSchema(p, defs).const === undefined,
+                          )
+                          .filter(([n]) => n !== "name" && n !== "params")
+                          .filter(([n]) => shouldShowField(n))
+                          .map(([fieldName, fieldProp]) =>
+                            renderField(
+                              fieldProp,
+                              fieldName,
+                              ["model", fieldName],
+                              (sectionValue as Record<string, unknown>)[
+                                fieldName
+                              ],
+                              handleFieldChange,
+                              defs,
+                            ),
+                          )}
                       <FeatureWeightsEditor
                         weights={
                           (modelConfig.feature_weights as Record<
@@ -315,6 +330,27 @@ export function ConfigForm({
                         }}
                       />
 
+                      {/* ── Model Params ── */}
+                      <div className="border-t my-3" />
+                      <p className="text-xs text-muted-foreground font-medium mb-2">
+                        Model Params
+                      </p>
+                      {uiSchema?.parameter_hints?.map((hint) => (
+                        <DynParam
+                          key={hint.key}
+                          hint={hint}
+                          value={getValueForHint(hint)}
+                          onChange={(v) => handleHintChange(hint, v)}
+                          options={getOptionsForHint(hint)}
+                          visible={shouldShowField(hint.key)}
+                        />
+                      ))}
+
+                      {/* ── Additional Params ── */}
+                      <div className="border-t my-3" />
+                      <p className="text-xs text-muted-foreground font-medium mb-2">
+                        Additional Params
+                      </p>
                       <KeyValueEditor
                         params={modelParams}
                         additionalParams={uiSchema?.additional_params}

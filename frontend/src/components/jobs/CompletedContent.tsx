@@ -14,13 +14,6 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Table,
   TableBody,
   TableCell,
@@ -29,6 +22,18 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { PlotlyChart } from "@/components/workspace/PlotlyChart";
+import { SegmentGroup } from "@/components/workspace/SegmentGroup";
+import { pivotMetrics } from "@/lib/metrics";
+
+const PLOT_LABELS: Record<string, string> = {
+  "learning-curve": "Learning Curve",
+  "oof-distribution": "OOF Dist",
+  "roc-curve": "ROC",
+  calibration: "Calibration",
+  "probability-histogram": "Prob Hist",
+  residuals: "Residuals",
+  importance: "Importance",
+};
 
 interface CompletedContentProps {
   job: JobDetail;
@@ -46,16 +51,23 @@ export function CompletedContent({
     queryFn: () => fetchJobPlots(job.job_id),
   });
 
-  const { data: plotData } = useQuery({
+  const {
+    data: plotData,
+    isLoading: isPlotLoading,
+    isError: isPlotError,
+  } = useQuery({
     queryKey: ["job-plot", job.job_id, selectedPlot],
     queryFn: () => fetchJobPlot(job.job_id, selectedPlot),
-    enabled: !!selectedPlot,
+    enabled: !!selectedPlot && selectedPlot !== "learning-curve",
+    retry: false,
   });
 
   const { data: learningCurve } = useQuery({
     queryKey: ["job-plot", job.job_id, "learning-curve"],
     queryFn: () => fetchJobPlot(job.job_id, "learning-curve"),
-    enabled: plots?.includes("learning-curve") ?? false,
+    enabled:
+      selectedPlot === "learning-curve" &&
+      (plots?.includes("learning-curve") ?? false),
   });
 
   const { data: importance } = useQuery({
@@ -80,28 +92,30 @@ export function CompletedContent({
     enabled: job.job_type === "tune",
   });
 
-  // Auto-select first plot
+  // Auto-select first plot (learning-curve first)
   useEffect(() => {
     if (plots && plots.length > 0 && !selectedPlot) {
-      const first = plots.find(
-        (p) => p !== "learning-curve" && p !== "tuning" && p !== "importance",
-      );
+      const first = plots.find((p) => p !== "tuning");
       if (first) onSelectPlot(first);
     }
   }, [plots, selectedPlot, onSelectPlot]);
 
   const fitResult = job.fit_result;
   const tuneResult = job.tune_result;
-  const metrics = fitResult?.metrics as
-    | Record<string, Record<string, number>>
-    | undefined;
+  const metrics = fitResult?.metrics
+    ? pivotMetrics(fitResult.metrics as Record<string, unknown>)
+    : undefined;
   const hasFolds = fitResult != null && fitResult.fold_count > 1;
+  const availablePlots = (plots ?? []).filter((p) => p !== "tuning");
+  const isLearningCurve = selectedPlot === "learning-curve";
+  const activePlotData = isLearningCurve ? learningCurve : plotData;
+  const chartHeight = isLearningCurve ? 500 : 350;
 
   return (
     <>
       {/* Tune: Optimization History */}
       {tuneResult && tuningPlot && (
-        <section className="mb-6">
+        <section className="mb-6 min-w-0">
           <h4 className="mb-2 text-sm font-medium">Optimization History</h4>
           <PlotlyChart plotlyJson={tuningPlot.plotly_json} />
         </section>
@@ -167,40 +181,35 @@ export function CompletedContent({
         </section>
       )}
 
-      {/* Learning Curve */}
-      {learningCurve && (
-        <section className="mb-6">
-          <h4 className="mb-2 text-sm font-medium">Learning Curve</h4>
-          <PlotlyChart plotlyJson={learningCurve.plotly_json} />
-        </section>
-      )}
-
-      {/* Plots selector */}
-      {plots && plots.length > 0 && (
-        <section className="mb-6">
-          <div className="mb-2 flex items-center gap-2">
-            <h4 className="text-sm font-medium">Plots</h4>
-            <Select value={selectedPlot} onValueChange={onSelectPlot}>
-              <SelectTrigger className="h-7 w-48 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {plots
-                  .filter(
-                    (p) =>
-                      p !== "learning-curve" &&
-                      p !== "tuning" &&
-                      p !== "importance",
-                  )
-                  .map((p) => (
-                    <SelectItem key={p} value={p}>
-                      {p.replace(/-/g, " ")}
-                    </SelectItem>
-                  ))}
-              </SelectContent>
-            </Select>
+      {/* Plots (including Learning Curve) */}
+      {availablePlots.length > 0 && (
+        <section className="mb-6 min-w-0">
+          <h4 className="mb-2 text-sm font-medium">Plots</h4>
+          <div className="mb-3">
+            <SegmentGroup
+              options={availablePlots}
+              value={selectedPlot}
+              onChange={onSelectPlot}
+              labels={PLOT_LABELS}
+            />
           </div>
-          {plotData && <PlotlyChart plotlyJson={plotData.plotly_json} />}
+          {isPlotLoading && (
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              Loading plot...
+            </p>
+          )}
+          {isPlotError && !isPlotLoading && (
+            <p className="py-8 text-center text-sm text-destructive">
+              Failed to load plot. This plot may not be available for this
+              model.
+            </p>
+          )}
+          {!isPlotLoading && !isPlotError && activePlotData && (
+            <PlotlyChart
+              plotlyJson={activePlotData.plotly_json}
+              height={chartHeight}
+            />
+          )}
         </section>
       )}
 
@@ -273,31 +282,35 @@ export function CompletedContent({
           <AccordionItem value="importance">
             <AccordionTrigger>Feature Importance</AccordionTrigger>
             <AccordionContent>
-              {importancePlot ? (
-                <PlotlyChart plotlyJson={importancePlot.plotly_json} />
-              ) : importance ? (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Feature</TableHead>
-                      <TableHead className="text-right">Importance</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {Object.entries(importance)
-                      .sort(([, a], [, b]) => b - a)
-                      .slice(0, 20)
-                      .map(([name, val]) => (
-                        <TableRow key={name}>
-                          <TableCell className="text-xs">{name}</TableCell>
-                          <TableCell className="text-right text-xs">
-                            {val.toFixed(4)}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                  </TableBody>
-                </Table>
-              ) : null}
+              {importancePlot && (
+                <div className="mb-4">
+                  <PlotlyChart plotlyJson={importancePlot.plotly_json} />
+                </div>
+              )}
+              {importance && Object.keys(importance).length > 0 && (
+                <div className="lzs-scrollable max-h-64 overflow-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Feature</TableHead>
+                        <TableHead className="text-right">Importance</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {Object.entries(importance)
+                        .sort(([, a], [, b]) => b - a)
+                        .map(([name, val]) => (
+                          <TableRow key={name}>
+                            <TableCell className="text-sm">{name}</TableCell>
+                            <TableCell className="text-right text-sm tabular-nums">
+                              {val.toFixed(4)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
             </AccordionContent>
           </AccordionItem>
         )}

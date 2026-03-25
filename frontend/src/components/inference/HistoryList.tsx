@@ -26,6 +26,7 @@ export function HistoryList({
           <button
             key={rec.inf_id}
             type="button"
+            title={new Date(rec.created_at).toLocaleString()}
             className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm ${
               isSelected
                 ? "bg-accent text-accent-foreground"

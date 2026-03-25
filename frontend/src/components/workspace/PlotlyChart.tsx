@@ -23,12 +23,35 @@ export function PlotlyChart({
       const rawData = Array.isArray(obj.data) ? obj.data : [];
       const rawLayout =
         typeof obj.layout === "object" && obj.layout !== null ? obj.layout : {};
+      // Remove fixed width/height from backend layout to enable responsive sizing
+      const {
+        width: _w,
+        height: _h,
+        ...cleanLayout
+      } = rawLayout as Record<string, unknown>;
+      // Preserve backend margin if present, else use sensible defaults
+      const defaultMargin = { l: 60, r: 20, t: 40, b: 50 };
+      const backendMargin = cleanLayout.margin as
+        | Record<string, number>
+        | undefined;
+
+      // Add standoff to all yaxis titles to prevent overlap on subplots
+      const patched = { ...cleanLayout } as Record<string, unknown>;
+      for (const key of Object.keys(patched)) {
+        if (key.startsWith("yaxis") && typeof patched[key] === "object") {
+          const axis = patched[key] as Record<string, unknown>;
+          if (axis.title && typeof axis.title === "object") {
+            axis.title = { ...(axis.title as object), standoff: 15 };
+          }
+        }
+      }
+
       return {
         data: rawData,
         layout: {
-          ...(rawLayout as object),
+          ...patched,
           autosize: true,
-          margin: { l: 50, r: 40, t: 30, b: 60 },
+          margin: backendMargin ?? defaultMargin,
         },
       };
     } catch {

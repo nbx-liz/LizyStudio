@@ -155,9 +155,8 @@ export function JobList({ jobs, selectedJobId, onSelectJob }: JobListProps) {
                   job.status,
                 );
                 const num = getJobNumber(job, jobs);
-                const modelName = (
-                  job.config?.model as Record<string, unknown> | undefined
-                )?.name as string | undefined;
+                const modelName =
+                  job.model_name.length > 0 ? job.model_name : undefined;
                 const shortModel = shortenModelName(modelName);
                 const score = getJobScore(job);
                 const isSelected = job.job_id === selectedJobId;

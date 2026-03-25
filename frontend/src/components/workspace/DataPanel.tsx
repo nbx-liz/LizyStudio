@@ -400,29 +400,37 @@ export function DataPanel({
                   </p>
                 )}
                 {preview && preview.data.length > 0 && (
-                  <div className="max-h-40 overflow-auto rounded border">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          {preview.columns.map((col) => (
-                            <TableHead key={col} className="text-xs">
-                              {col}
-                            </TableHead>
-                          ))}
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {preview.data.map((row, i) => (
-                          <TableRow key={`row-${i}`}>
+                  <div className="lzs-scrollable max-h-48 overflow-y-scroll rounded border text-sm">
+                    <div className="overflow-x-scroll p-1">
+                      <Table className="min-w-max">
+                        <TableHeader>
+                          <TableRow>
                             {preview.columns.map((col) => (
-                              <TableCell key={col} className="text-xs">
-                                {String(row[col] ?? "")}
-                              </TableCell>
+                              <TableHead
+                                key={col}
+                                className="whitespace-nowrap px-3 text-xs"
+                              >
+                                {col}
+                              </TableHead>
                             ))}
                           </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
+                        </TableHeader>
+                        <TableBody>
+                          {preview.data.map((row, i) => (
+                            <TableRow key={`row-${i}`}>
+                              {preview.columns.map((col) => (
+                                <TableCell
+                                  key={col}
+                                  className="whitespace-nowrap px-3 text-xs"
+                                >
+                                  {String(row[col] ?? "")}
+                                </TableCell>
+                              ))}
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
                   </div>
                 )}
               </div>

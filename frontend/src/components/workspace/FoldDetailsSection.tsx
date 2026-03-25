@@ -45,34 +45,38 @@ export function FoldDetailsSection({
         <AccordionItem value="importance">
           <AccordionTrigger>Feature Importance</AccordionTrigger>
           <AccordionContent>
-            {importancePlot ? (
-              <PlotlyChart plotlyJson={importancePlot.plotly_json} />
-            ) : importance ? (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Feature</TableHead>
-                    <TableHead className="text-right">Importance</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {Object.entries(importance)
-                    .sort(([, a], [, b]) => b - a)
-                    .slice(0, 20)
-                    .map(([name, val]) => (
-                      <TableRow
-                        key={name}
-                        className="hover:bg-muted/50 even:bg-muted/20"
-                      >
-                        <TableCell className="text-xs">{name}</TableCell>
-                        <TableCell className="text-right text-xs">
-                          {val.toFixed(4)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                </TableBody>
-              </Table>
-            ) : null}
+            {importancePlot && (
+              <div className="mb-4">
+                <PlotlyChart plotlyJson={importancePlot.plotly_json} />
+              </div>
+            )}
+            {importance && Object.keys(importance).length > 0 && (
+              <div className="lzs-scrollable max-h-64 overflow-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Feature</TableHead>
+                      <TableHead className="text-right">Importance</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {Object.entries(importance)
+                      .sort(([, a], [, b]) => b - a)
+                      .map(([name, val]) => (
+                        <TableRow
+                          key={name}
+                          className="hover:bg-muted/50 even:bg-muted/20"
+                        >
+                          <TableCell className="text-sm">{name}</TableCell>
+                          <TableCell className="text-right text-sm tabular-nums">
+                            {val.toFixed(4)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
           </AccordionContent>
         </AccordionItem>
       )}
