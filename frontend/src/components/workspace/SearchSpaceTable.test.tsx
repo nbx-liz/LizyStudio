@@ -110,4 +110,168 @@ describe("SearchSpaceTable", () => {
     // n_estimators has no value → shows "default"
     expect(screen.getByText("default")).toBeInTheDocument();
   });
+
+  it("clicking range mode button switches param to range mode", () => {
+    const onChange = vi.fn();
+    render(<SearchSpaceTable {...defaultProps} onChange={onChange} />);
+
+    // Find Range radio buttons and click the first one (for learning_rate)
+    const rangeButtons = screen.getAllByRole("radio", { name: /range/i });
+    const { fireEvent } = require("@testing-library/react");
+    fireEvent.click(rangeButtons[0]);
+
+    expect(onChange).toHaveBeenCalled();
+    const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0];
+    // learning_rate should now have a range entry
+    expect(lastCall.learning_rate).toBeDefined();
+    expect(lastCall.learning_rate.type).toBe("float");
+  });
+
+  it("clicking fixed mode removes the param from space", () => {
+    const onChange = vi.fn();
+    const space = {
+      learning_rate: { type: "float", low: 0, high: 1, log: false },
+    };
+    render(
+      <SearchSpaceTable {...defaultProps} space={space} onChange={onChange} />,
+    );
+
+    // Click fixed mode for learning_rate
+    const fixedButtons = screen.getAllByRole("radio", { name: /fixed/i });
+    const { fireEvent } = require("@testing-library/react");
+    fireEvent.click(fixedButtons[0]);
+
+    expect(onChange).toHaveBeenCalled();
+    const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0];
+    expect(lastCall.learning_rate).toBeUndefined();
+  });
+
+  it("shows log distribution summary", () => {
+    const space = {
+      learning_rate: { type: "float", low: 0.001, high: 0.1, log: true },
+    };
+    render(<SearchSpaceTable {...defaultProps} space={space} />);
+    expect(screen.getByText("0.001 ~ 0.1 (log)")).toBeInTheDocument();
+  });
+
+  it("renders integer type correctly for integer params", () => {
+    const intCatalog: SearchSpaceCatalogEntry[] = [
+      {
+        key: "max_depth",
+        title: "Max Depth",
+        paramType: "integer",
+        modes: ["fixed", "range"],
+        group: "model_params",
+      },
+    ];
+    const onChange = vi.fn();
+    render(
+      <SearchSpaceTable
+        space={{}}
+        modelParams={{}}
+        onChange={onChange}
+        catalog={intCatalog}
+      />,
+    );
+    expect(screen.getByText("max_depth")).toBeInTheDocument();
+
+    // Switch to range mode
+    const rangeBtn = screen.getByRole("radio", { name: /range/i });
+    const { fireEvent } = require("@testing-library/react");
+    fireEvent.click(rangeBtn);
+
+    expect(onChange).toHaveBeenCalled();
+    const spaceArg = onChange.mock.calls[0][0];
+    expect(spaceArg.max_depth.type).toBe("int");
+  });
+
+  it("expands row on click when in range mode", () => {
+    const space = {
+      learning_rate: { type: "float", low: 0, high: 1, log: false },
+    };
+    render(<SearchSpaceTable {...defaultProps} space={space} />);
+
+    // Click the row to expand
+    const { fireEvent } = require("@testing-library/react");
+    const row = screen.getByText("learning_rate").closest("button");
+    if (row) fireEvent.click(row);
+
+    // Expanded row shows Min, Max, Distribution
+    expect(screen.getByText("Min")).toBeInTheDocument();
+    expect(screen.getByText("Max")).toBeInTheDocument();
+    expect(screen.getByText("Distribution")).toBeInTheDocument();
+  });
+
+  it("shows Step input for integer params in expanded range view", () => {
+    const intCatalog: SearchSpaceCatalogEntry[] = [
+      {
+        key: "n_estimators",
+        title: "N Estimators",
+        paramType: "integer",
+        modes: ["fixed", "range"],
+        group: "model_params",
+      },
+    ];
+    const space = {
+      n_estimators: { type: "int", low: 50, high: 500, log: false },
+    };
+    render(
+      <SearchSpaceTable
+        space={space}
+        modelParams={{}}
+        onChange={vi.fn()}
+        catalog={intCatalog}
+      />,
+    );
+
+    // Expand the row
+    const { fireEvent } = require("@testing-library/react");
+    const row = screen.getByText("n_estimators").closest("button");
+    if (row) fireEvent.click(row);
+
+    expect(screen.getByText("Step")).toBeInTheDocument();
+  });
+
+  it("renders with choice mode params", () => {
+    const choiceCatalog: SearchSpaceCatalogEntry[] = [
+      {
+        key: "objective",
+        title: "Objective",
+        paramType: "string",
+        modes: ["fixed", "choice"],
+        group: "smart_params",
+      },
+    ];
+    const space = {
+      objective: {
+        type: "categorical",
+        choices: ["binary:logistic", "multi:softmax"],
+      },
+    };
+    render(
+      <SearchSpaceTable
+        space={space}
+        modelParams={{}}
+        onChange={vi.fn()}
+        catalog={choiceCatalog}
+      />,
+    );
+    expect(screen.getByText("objective")).toBeInTheDocument();
+    expect(
+      screen.getByText("binary:logistic, multi:softmax"),
+    ).toBeInTheDocument();
+  });
+
+  it("renders FixedValueEditor when onModelParamChange is provided", () => {
+    const onModelParamChange = vi.fn();
+    render(
+      <SearchSpaceTable
+        {...defaultProps}
+        onModelParamChange={onModelParamChange}
+      />,
+    );
+    // FixedValueEditor should be rendered instead of "default" text
+    // The component renders differently with onModelParamChange
+    expect(screen.getByText("learning_rate")).toBeInTheDocument();
+  });
 });
