@@ -172,18 +172,30 @@ export function ConfigForm({
     [uiSchema, modelParams, config],
   );
 
-  // Auto-select first model_metric option when metric value is empty
+  // Auto-select defaults for objective and model_metric when empty
   useEffect(() => {
-    if (!task || !uiSchema?.option_sets?.model_metric) return;
-    const opts = uiSchema.option_sets.model_metric[task] ?? [];
-    if (opts.length === 0) return;
-    const current = modelParams.metric;
-    const isEmpty =
-      current === undefined ||
-      current === null ||
-      (Array.isArray(current) && current.length === 0);
-    if (isEmpty) {
-      handleFieldChange(["model", "params", "metric"], opts.slice(0, 1));
+    if (!task || !uiSchema?.option_sets) return;
+
+    // Objective: single-select, pick first option
+    const objOpts = uiSchema.option_sets.objective?.[task] ?? [];
+    if (objOpts.length > 0 && !modelParams.objective) {
+      handleFieldChange(["model", "params", "objective"], objOpts[0]);
+    }
+
+    // Metric: multi-select, pick first option
+    const metricOpts = uiSchema.option_sets.model_metric?.[task] ?? [];
+    if (metricOpts.length > 0) {
+      const cur = modelParams.metric;
+      const empty =
+        cur === undefined ||
+        cur === null ||
+        (Array.isArray(cur) && cur.length === 0);
+      if (empty) {
+        handleFieldChange(
+          ["model", "params", "metric"],
+          metricOpts.slice(0, 1),
+        );
+      }
     }
   }, [task, uiSchema, modelParams, handleFieldChange]);
 

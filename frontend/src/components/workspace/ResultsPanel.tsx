@@ -433,7 +433,7 @@ function CompletedView({
       : null;
 
   return (
-    <div className="h-full overflow-auto p-6">
+    <div className="h-full min-w-0 overflow-auto p-6">
       <div className="mb-4 flex items-center gap-2">
         <h3 className="text-lg font-medium">
           {headerLabel} {modelName && `\u2014 ${modelName}`}
