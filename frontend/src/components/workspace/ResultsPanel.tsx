@@ -172,12 +172,15 @@ export function ResultsPanel({
     try {
       await cancelJob(jobId);
       toast.info("Job cancelled");
+      setProgress(null);
+      setFoldLog([]);
       refetchJob();
+      onJobDone?.();
     } catch {
       toast.error("Failed to cancel job");
     }
     setCancelConfirm(false);
-  }, [jobId, refetchJob]);
+  }, [jobId, refetchJob, onJobDone]);
 
   if (!jobId || !job) {
     return (

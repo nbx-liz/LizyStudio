@@ -31,7 +31,7 @@ export function PlotSection({
     <>
       {/* Learning Curve */}
       {learningCurve && (
-        <section className="mb-6">
+        <section className="mb-6 min-w-0">
           <h4 className="mb-2 text-sm font-medium">Learning Curve</h4>
           <PlotlyChart plotlyJson={learningCurve.plotly_json} />
         </section>
@@ -39,7 +39,7 @@ export function PlotSection({
 
       {/* Plots selector */}
       {filteredPlots.length > 0 && (
-        <section className="mb-6">
+        <section className="mb-6 min-w-0">
           <div className="mb-2 flex items-center gap-2">
             <h4 className="text-sm font-medium">Plots</h4>
             <Select value={selectedPlot} onValueChange={onSelectPlot}>

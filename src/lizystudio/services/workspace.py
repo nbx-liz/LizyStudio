@@ -90,7 +90,8 @@ def validate_config(ws: WorkspaceState, config: dict[str, Any]) -> list[dict[str
         loc = err.get("loc", [])
         path = ".".join(str(p) for p in loc) if loc else err.get("path", "")
         message = err.get("msg", err.get("message", ""))
-        normalized.append({"path": path, "message": message})
+        if path or message:
+            normalized.append({"path": path, "message": message})
     return normalized
 
 

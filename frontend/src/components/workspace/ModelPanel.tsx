@@ -182,11 +182,13 @@ export function ModelPanel({
       <div className="flex-1 overflow-auto p-4">
         {errors.length > 0 && (
           <div className="mb-4 rounded-md border border-destructive/50 bg-destructive/10 p-3">
-            {errors.map((err, i) => (
-              <p key={`err-${i}`} className="text-xs text-destructive">
-                {err.path}: {err.message}
-              </p>
-            ))}
+            {errors
+              .filter((err) => err.path || err.message)
+              .map((err, i) => (
+                <p key={`err-${i}`} className="text-xs text-destructive">
+                  {[err.path, err.message].filter(Boolean).join(": ")}
+                </p>
+              ))}
           </div>
         )}
 
