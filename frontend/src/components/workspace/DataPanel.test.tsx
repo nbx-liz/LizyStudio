@@ -250,6 +250,175 @@ describe("DataPanel", () => {
     ).toBeInTheDocument();
   });
 
+  it("calls loadDataFromPath when Enter is pressed in path input", async () => {
+    mockLoadDataFromPath.mockResolvedValue({
+      data_ref: { shape: [100, 5], path: "/data.csv" },
+    });
+    mockFetchPreview.mockResolvedValue({ columns: [], data: [] });
+    mockFetchColumns.mockResolvedValue({
+      columns: [],
+      suggested_task: null,
+      target: null,
+    });
+
+    render(<DataPanel onDataChanged={vi.fn()} />);
+    await userEvent.click(screen.getByText("Path"));
+    const input = screen.getByPlaceholderText("/path/to/data.csv");
+    await userEvent.type(input, "/data.csv{Enter}");
+
+    await waitFor(() => {
+      expect(mockLoadDataFromPath).toHaveBeenCalledWith("/data.csv");
+    });
+  });
+
+  it("does not call loadDataFromPath when path is empty whitespace", async () => {
+    render(<DataPanel onDataChanged={vi.fn()} />);
+    await userEvent.click(screen.getByText("Path"));
+    const input = screen.getByPlaceholderText("/path/to/data.csv");
+    await userEvent.type(input, "   {Enter}");
+
+    expect(mockLoadDataFromPath).not.toHaveBeenCalled();
+  });
+
+  it("shows error toast when upload fails", async () => {
+    mockUploadData.mockRejectedValue(new Error("Network error"));
+    const { toast } = await import("sonner");
+
+    render(<DataPanel onDataChanged={vi.fn()} />);
+    const fileInput = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    const file = new File(["a,b\n1,2"], "test.csv", { type: "text/csv" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith("Upload failed: Network error");
+    });
+  });
+
+  it("does not upload when no file is selected", async () => {
+    render(<DataPanel onDataChanged={vi.fn()} />);
+    const fileInput = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [] } });
+
+    expect(mockUploadData).not.toHaveBeenCalled();
+  });
+
+  it("calls onDataChanged after successful upload", async () => {
+    mockUploadData.mockResolvedValue({
+      data_ref: { shape: [50, 3], path: "/uploaded.csv" },
+    });
+    mockFetchPreview.mockResolvedValue({ columns: [], data: [] });
+    mockFetchColumns.mockResolvedValue({
+      columns: [],
+      suggested_task: null,
+      target: null,
+    });
+
+    const onDataChanged = vi.fn();
+    render(<DataPanel onDataChanged={onDataChanged} />);
+    const fileInput = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    const file = new File(["a,b\n1,2"], "test.csv", { type: "text/csv" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(onDataChanged).toHaveBeenCalled();
+    });
+  });
+
+  it("calls onTaskChanged with null after data load resets target", async () => {
+    mockLoadDataFromPath.mockResolvedValue({
+      data_ref: { shape: [10, 2], path: "/data.csv" },
+    });
+    mockFetchPreview.mockResolvedValue({ columns: [], data: [] });
+    mockFetchColumns.mockResolvedValue({
+      columns: [],
+      suggested_task: null,
+      target: null,
+    });
+
+    const onTaskChanged = vi.fn();
+    render(<DataPanel onDataChanged={vi.fn()} onTaskChanged={onTaskChanged} />);
+    await userEvent.click(screen.getByText("Path"));
+    const input = screen.getByPlaceholderText("/path/to/data.csv");
+    await userEvent.type(input, "/data.csv");
+    await userEvent.click(screen.getByText("Load"));
+
+    await waitFor(() => {
+      expect(onTaskChanged).toHaveBeenCalledWith(null);
+    });
+  });
+
+  it("renders loading skeleton while data is loading", async () => {
+    // Make the load hang
+    mockLoadDataFromPath.mockReturnValue(new Promise(() => {}));
+
+    render(<DataPanel onDataChanged={vi.fn()} />);
+    await userEvent.click(screen.getByText("Path"));
+    const input = screen.getByPlaceholderText("/path/to/data.csv");
+    await userEvent.type(input, "/data.csv");
+    await userEvent.click(screen.getByText("Load"));
+
+    // Loading state should show skeleton
+    await waitFor(() => {
+      // The load button should be disabled while loading
+      expect(screen.getByText("Load")).toBeDisabled();
+    });
+  });
+
+  it("shows success toast after loading data via path", async () => {
+    mockLoadDataFromPath.mockResolvedValue({
+      data_ref: { shape: [100, 5], path: "/data.csv" },
+    });
+    mockFetchPreview.mockResolvedValue({ columns: [], data: [] });
+    mockFetchColumns.mockResolvedValue({
+      columns: [],
+      suggested_task: null,
+      target: null,
+    });
+    const { toast } = await import("sonner");
+
+    render(<DataPanel onDataChanged={vi.fn()} />);
+    await userEvent.click(screen.getByText("Path"));
+    const input = screen.getByPlaceholderText("/path/to/data.csv");
+    await userEvent.type(input, "/data.csv");
+    await userEvent.click(screen.getByText("Load"));
+
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith(
+        "Data loaded: 100 rows x 5 columns",
+      );
+    });
+  });
+
+  it("shows success toast after file upload", async () => {
+    mockUploadData.mockResolvedValue({
+      data_ref: { shape: [50, 3], path: "/uploaded.csv" },
+    });
+    mockFetchPreview.mockResolvedValue({ columns: [], data: [] });
+    mockFetchColumns.mockResolvedValue({
+      columns: [],
+      suggested_task: null,
+      target: null,
+    });
+    const { toast } = await import("sonner");
+
+    render(<DataPanel onDataChanged={vi.fn()} />);
+    const fileInput = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    const file = new File(["a,b\n1,2"], "test.csv", { type: "text/csv" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith("Uploaded: test.csv");
+    });
+  });
+
   // Note: Radix Select interactions don't work reliably in jsdom,
   // so we skip tests that require Select option clicking.
 });

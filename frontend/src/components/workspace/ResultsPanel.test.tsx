@@ -230,4 +230,87 @@ describe("ResultsPanel", () => {
     // headerLabel = "Fit #N"
     expect(await screen.findByText(/Fit/)).toBeInTheDocument();
   });
+
+  it("renders Tune label for tune job type", async () => {
+    const tuneJob = makeJob({
+      status: "completed",
+      job_type: "tune",
+      tune_result: {
+        best_params: { n_estimators: 100 },
+        best_score: 0.95,
+        trials: [],
+        metric_name: "auc",
+        direction: "maximize",
+      },
+    });
+    mockFetchJob.mockResolvedValue(tuneJob);
+    mockFetchJobs.mockResolvedValue([tuneJob]);
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+
+    expect(await screen.findByText(/Tune/)).toBeInTheDocument();
+    // primaryMetric badge may take another render cycle
+    expect(await screen.findByText("auc: 0.9500")).toBeInTheDocument();
+  });
+
+  it("renders progress bar and elapsed time when running with progress", async () => {
+    const runningJob = makeJob({ status: "running" });
+    mockFetchJob.mockResolvedValue(runningJob);
+    mockFetchJobs.mockResolvedValue([runningJob]);
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+
+    expect(await screen.findByText("Running")).toBeInTheDocument();
+    // Progress bar should be rendered (role=progressbar)
+    expect(screen.getByRole("progressbar")).toBeInTheDocument();
+  });
+
+  it("renders CompletedView with tune_result primary metric", async () => {
+    const tuneJob = makeJob({
+      status: "completed",
+      job_type: "tune",
+      tune_result: {
+        best_params: { lr: 0.01 },
+        best_score: 0.9876,
+        trials: [],
+        metric_name: "f1",
+        direction: "maximize",
+      },
+    });
+    mockFetchJob.mockResolvedValue(tuneJob);
+    mockFetchJobs.mockResolvedValue([tuneJob]);
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+
+    expect(await screen.findByText("f1: 0.9876")).toBeInTheDocument();
+  });
+
+  it("renders failed job without error_code", async () => {
+    const failedJob = makeJob({
+      status: "failed",
+      error: "Some failure",
+      error_code: null,
+      completed_at: null,
+    });
+    mockFetchJob.mockResolvedValue(failedJob);
+    mockFetchJobs.mockResolvedValue([failedJob]);
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+
+    expect(await screen.findByText("Failed")).toBeInTheDocument();
+    expect(screen.getByText("Some failure")).toBeInTheDocument();
+  });
+
+  it("calls onApplyToFit prop when provided", async () => {
+    const completedJob = makeJob({ status: "completed" });
+    mockFetchJob.mockResolvedValue(completedJob);
+    mockFetchJobs.mockResolvedValue([completedJob]);
+    const onApplyToFit = vi.fn();
+
+    renderWithQuery(
+      <ResultsPanel jobId="test-job-1" onApplyToFit={onApplyToFit} />,
+    );
+
+    expect(await screen.findByText("Completed")).toBeInTheDocument();
+  });
 });

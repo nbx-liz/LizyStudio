@@ -47,4 +47,115 @@ describe("ExportDialog", () => {
     render(<ExportDialog {...defaultProps} open={false} />);
     expect(screen.queryByText("Export Job #5")).not.toBeInTheDocument();
   });
+
+  it("switches to Report format when Report button is clicked", async () => {
+    const { fireEvent } = await import("@testing-library/react");
+    render(<ExportDialog {...defaultProps} />);
+
+    const reportButton = screen.getByRole("button", { name: "Report" });
+    fireEvent.click(reportButton);
+
+    // Path should update to include _report
+    expect(
+      screen.getByDisplayValue("./exports/job_5_report"),
+    ).toBeInTheDocument();
+    // Description should change
+    expect(
+      screen.getByText(
+        "Includes: HTML evaluation report with metrics and plots",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("shows Model description when Model format is active", () => {
+    render(<ExportDialog {...defaultProps} />);
+    expect(
+      screen.getByText("Includes: pkl + metadata JSON"),
+    ).toBeInTheDocument();
+  });
+
+  it("calls exportJob and shows success toast on successful export", async () => {
+    const { exportJob } = await import("@/api/jobs");
+    (exportJob as ReturnType<typeof vi.fn>).mockResolvedValue({
+      exported_path: "/output/model",
+    });
+    const { toast } = await import("sonner");
+
+    render(<ExportDialog {...defaultProps} />);
+    const { fireEvent, waitFor } = await import("@testing-library/react");
+
+    const exportButton = screen.getByRole("button", { name: "Export" });
+    fireEvent.click(exportButton);
+
+    await waitFor(() => {
+      expect(exportJob).toHaveBeenCalledWith(
+        "job-xyz",
+        "model",
+        "./exports/job_5_model",
+      );
+      expect(toast.success).toHaveBeenCalledWith("Exported to /output/model");
+      expect(defaultProps.onOpenChange).toHaveBeenCalledWith(false);
+    });
+  });
+
+  it("shows error toast on export failure", async () => {
+    const { exportJob } = await import("@/api/jobs");
+    (exportJob as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("Network error"),
+    );
+    const { toast } = await import("sonner");
+
+    render(<ExportDialog {...defaultProps} />);
+    const { fireEvent, waitFor } = await import("@testing-library/react");
+
+    const exportButton = screen.getByRole("button", { name: "Export" });
+    fireEvent.click(exportButton);
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith("Export failed");
+    });
+  });
+
+  it("disables Export button when path is empty", async () => {
+    const { fireEvent } = await import("@testing-library/react");
+    render(<ExportDialog {...defaultProps} />);
+
+    const pathInput = screen.getByDisplayValue("./exports/job_5_model");
+    fireEvent.change(pathInput, { target: { value: "" } });
+
+    const exportButton = screen.getByRole("button", { name: "Export" });
+    expect(exportButton).toBeDisabled();
+  });
+
+  it("disables Export button when path contains '..'", async () => {
+    const { fireEvent } = await import("@testing-library/react");
+    render(<ExportDialog {...defaultProps} />);
+
+    const pathInput = screen.getByDisplayValue("./exports/job_5_model");
+    fireEvent.change(pathInput, { target: { value: "../../../etc/passwd" } });
+
+    const exportButton = screen.getByRole("button", { name: "Export" });
+    expect(exportButton).toBeDisabled();
+  });
+
+  it("disables Export button when path starts with /etc", async () => {
+    const { fireEvent } = await import("@testing-library/react");
+    render(<ExportDialog {...defaultProps} />);
+
+    const pathInput = screen.getByDisplayValue("./exports/job_5_model");
+    fireEvent.change(pathInput, { target: { value: "/etc/config" } });
+
+    const exportButton = screen.getByRole("button", { name: "Export" });
+    expect(exportButton).toBeDisabled();
+  });
+
+  it("calls onOpenChange(false) when Cancel is clicked", async () => {
+    const { fireEvent } = await import("@testing-library/react");
+    render(<ExportDialog {...defaultProps} />);
+
+    const cancelButton = screen.getByRole("button", { name: "Cancel" });
+    fireEvent.click(cancelButton);
+
+    expect(defaultProps.onOpenChange).toHaveBeenCalledWith(false);
+  });
 });

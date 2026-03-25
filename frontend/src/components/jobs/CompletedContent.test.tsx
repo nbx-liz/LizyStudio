@@ -203,3 +203,109 @@ describe("CompletedContent — no results", () => {
     expect(screen.queryByText("Score")).not.toBeInTheDocument();
   });
 });
+
+describe("CompletedContent — tune job", () => {
+  it("renders TuneTrialsSection for tune result with tuning plot", () => {
+    const job = makeTuneJob();
+    renderWithQuery(
+      <CompletedContent
+        job={job}
+        selectedPlot="learning-curve"
+        onSelectPlot={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Best Params")).toBeInTheDocument();
+    expect(screen.getByText("auc")).toBeInTheDocument();
+  });
+
+  it("does not render TuneTrialsSection when tune_result is null", () => {
+    const job = makeFitJob({ tune_result: null });
+    renderWithQuery(
+      <CompletedContent
+        job={job}
+        selectedPlot="learning-curve"
+        onSelectPlot={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText("Best Params")).not.toBeInTheDocument();
+  });
+});
+
+describe("CompletedContent — annotateMetric", () => {
+  it("annotates precision_at_k metric with k value from config", () => {
+    const job = makeFitJob({
+      config: { evaluation: { precision_at_k: 5 } },
+      fit_result: {
+        metrics: {
+          raw: {
+            if_mean: { precision_at_k: 0.8 },
+            oof: { precision_at_k: 0.75 },
+            oof_std: { precision_at_k: 0.02 },
+          },
+        },
+        fold_count: 5,
+        params: [],
+      },
+    });
+    renderWithQuery(
+      <CompletedContent
+        job={job}
+        selectedPlot="learning-curve"
+        onSelectPlot={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("precision_at_k@5")).toBeInTheDocument();
+  });
+
+  it("shows precision_at_k without annotation when k is not a number", () => {
+    const job = makeFitJob({
+      config: { evaluation: {} },
+      fit_result: {
+        metrics: {
+          raw: {
+            if_mean: { precision_at_k: 0.8 },
+            oof: { precision_at_k: 0.75 },
+            oof_std: {},
+          },
+        },
+        fold_count: 1,
+        params: [],
+      },
+    });
+    renderWithQuery(
+      <CompletedContent
+        job={job}
+        selectedPlot="learning-curve"
+        onSelectPlot={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("precision_at_k")).toBeInTheDocument();
+  });
+});
+
+describe("CompletedContent — multiple metrics", () => {
+  it("renders multiple metric rows in score table", () => {
+    const job = makeFitJob({
+      fit_result: {
+        metrics: {
+          raw: {
+            if_mean: { auc: 0.95, f1: 0.88 },
+            oof: { auc: 0.9, f1: 0.85 },
+            oof_std: { auc: 0.01, f1: 0.02 },
+          },
+        },
+        fold_count: 5,
+        params: [],
+      },
+    });
+    renderWithQuery(
+      <CompletedContent
+        job={job}
+        selectedPlot="learning-curve"
+        onSelectPlot={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("auc")).toBeInTheDocument();
+    expect(screen.getByText("f1")).toBeInTheDocument();
+  });
+});
