@@ -22,7 +22,7 @@ export function PlotlyChart({ plotlyJson, className }: PlotlyChartProps) {
         layout: {
           ...(rawLayout as object),
           autosize: true,
-          margin: { l: 50, r: 20, t: 30, b: 50 },
+          margin: { l: 50, r: 30, t: 30, b: 60 },
         },
       };
     } catch {
@@ -37,7 +37,7 @@ export function PlotlyChart({ plotlyJson, className }: PlotlyChartProps) {
         layout={layout}
         config={{ responsive: true, displayModeBar: false }}
         useResizeHandler
-        style={{ width: "100%", height: "300px" }}
+        style={{ width: "100%", height: "350px" }}
       />
     </div>
   );

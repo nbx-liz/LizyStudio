@@ -54,16 +54,16 @@ export function CalibrationSection({
 
   return (
     <AccordionItem value="calibration">
-      <AccordionTrigger className="py-1.5 text-sm font-medium">
-        <div className="flex w-full items-center justify-between pr-2">
-          <span>Calibration</span>
-          {/* biome-ignore lint/a11y/useKeyWithClickEvents: stopPropagation needed for accordion */}
-          {/* biome-ignore lint/a11y/noStaticElementInteractions: wrapper for event isolation */}
-          <div onClick={(e) => e.stopPropagation()}>
-            <Switch checked={isOn} onCheckedChange={handleToggle} />
-          </div>
-        </div>
-      </AccordionTrigger>
+      <div className="flex items-center justify-between py-1.5">
+        <AccordionTrigger className="flex-1 text-sm font-medium [&>svg]:ml-auto">
+          Calibration
+        </AccordionTrigger>
+        <Switch
+          checked={isOn}
+          onCheckedChange={handleToggle}
+          className="ml-2"
+        />
+      </div>
       {isOn && (
         <AccordionContent>
           <div className="lzs-form space-y-1.5 pl-[18px] pt-2">
