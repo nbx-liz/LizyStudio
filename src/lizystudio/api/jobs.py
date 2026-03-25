@@ -51,6 +51,14 @@ def _require_completed(job: Job) -> None:
         raise JobNotCompletedError(job.job_id)
 
 
+def _sanitize_error(error: str | None) -> str | None:
+    """Strip stack traces from error messages for API responses."""
+    if not error:
+        return error
+    # Keep only the first line (e.g. "ValueError: invalid config")
+    return error.split("\n", 1)[0]
+
+
 def _job_summary(job: Job) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "job_id": job.job_id,
@@ -59,7 +67,7 @@ def _job_summary(job: Job) -> dict[str, Any]:
         "job_type": job.job_type,
         "created_at": job.created_at,
         "completed_at": job.completed_at,
-        "error": job.error,
+        "error": _sanitize_error(job.error),
     }
 
     # Model name from config

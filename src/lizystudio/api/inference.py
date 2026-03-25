@@ -101,6 +101,7 @@ def inference_run(
 @router.post("/upload")
 async def inference_upload(
     file: UploadFile,
+    ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, str]:
     """Upload data file for inference (H-0015)."""
     suffix = ".csv"
@@ -115,6 +116,7 @@ async def inference_upload(
     ) as tmp:
         tmp.write(content)
         tmp_path = tmp.name
+    ws.track_temp_file(tmp_path)
     return {"upload_path": tmp_path, "filename": file.filename or "upload"}
 
 
