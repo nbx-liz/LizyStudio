@@ -31,7 +31,7 @@ export function PlotlyChart({ plotlyJson, className }: PlotlyChartProps) {
   }, [plotlyJson]);
 
   return (
-    <div className={className}>
+    <div className={`overflow-hidden min-w-0 ${className ?? ""}`}>
       <Plot
         data={data}
         layout={layout}

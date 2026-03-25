@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import {
   Accordion,
   AccordionContent,
@@ -171,6 +171,21 @@ export function ConfigForm({
     },
     [uiSchema, modelParams, config],
   );
+
+  // Auto-select first model_metric option when metric value is empty
+  useEffect(() => {
+    if (!task || !uiSchema?.option_sets?.model_metric) return;
+    const opts = uiSchema.option_sets.model_metric[task] ?? [];
+    if (opts.length === 0) return;
+    const current = modelConfig.metric;
+    const isEmpty =
+      current === undefined ||
+      current === null ||
+      (Array.isArray(current) && current.length === 0);
+    if (isEmpty) {
+      handleFieldChange(["model", "metric"], opts.slice(0, 1));
+    }
+  }, [task, uiSchema, modelConfig.metric, handleFieldChange]);
 
   if (!rawProperties) return null;
 
