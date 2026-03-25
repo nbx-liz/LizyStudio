@@ -67,6 +67,10 @@ export function CalibrationSection({
       {isOn && (
         <AccordionContent>
           <div className="lzs-form space-y-1.5 pl-[18px] pt-2">
+            <p className="text-[10px] text-muted-foreground/70">
+              Calibration trains an additional model per fold — expect longer
+              processing time.
+            </p>
             <div className="flex items-center justify-between gap-2">
               <Label className="text-xs text-muted-foreground">method</Label>
               <Select value={method} onValueChange={handleMethodChange}>
