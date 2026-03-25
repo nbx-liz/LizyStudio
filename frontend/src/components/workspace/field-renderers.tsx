@@ -19,7 +19,7 @@ type OnChange = (path: string[], value: unknown) => void;
 const MAX_DEPTH = 5;
 
 /** Fields to always hide regardless of nesting depth. */
-const GLOBALLY_HIDDEN = new Set(["validation_ratio"]);
+const GLOBALLY_HIDDEN = new Set(["validation_ratio", "inner_valid"]);
 
 /** Convert snake_case to Title Case (e.g. "early_stopping" → "Early Stopping") */
 function humanize(name: string): string {
