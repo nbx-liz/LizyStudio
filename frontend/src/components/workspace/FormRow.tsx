@@ -22,7 +22,7 @@ export function FormRow({ label, description, children }: FormRowProps) {
           minWidth: "var(--form-label-width, 90px)",
           maxWidth: "var(--form-label-width, 90px)",
           fontSize: "var(--control-font-size, 12px)",
-          color: "var(--lzs-label-color, #666)",
+          color: "var(--lzs-label-color, #4a5568)",
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",

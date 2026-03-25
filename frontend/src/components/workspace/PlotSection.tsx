@@ -1,12 +1,16 @@
 import type { PlotResponse } from "@/api/types";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { PlotlyChart } from "./PlotlyChart";
+import { SegmentGroup } from "./SegmentGroup";
+
+const PLOT_LABELS: Record<string, string> = {
+  "learning-curve": "Learning Curve",
+  "oof-distribution": "OOF Dist",
+  "roc-curve": "ROC",
+  calibration: "Calibration",
+  "probability-histogram": "Prob Hist",
+  residuals: "Residuals",
+  importance: "Importance",
+};
 
 interface PlotSectionProps {
   plots: string[];
@@ -14,6 +18,8 @@ interface PlotSectionProps {
   onSelectPlot: (p: string) => void;
   plotData: PlotResponse | undefined;
   learningCurve: PlotResponse | undefined;
+  isLoading?: boolean;
+  isError?: boolean;
 }
 
 export function PlotSection({
@@ -22,42 +28,46 @@ export function PlotSection({
   onSelectPlot,
   plotData,
   learningCurve,
+  isLoading = false,
+  isError = false,
 }: PlotSectionProps) {
-  const filteredPlots = plots.filter(
-    (p) => p !== "learning-curve" && p !== "tuning",
-  );
+  // Include learning-curve in the button list, exclude tuning
+  const availablePlots = plots.filter((p) => p !== "tuning");
+
+  // Resolve which data to display
+  const isLearningCurve = selectedPlot === "learning-curve";
+  const activePlotData = isLearningCurve ? learningCurve : plotData;
+  const chartHeight = isLearningCurve ? 500 : 350;
+
+  if (availablePlots.length === 0) return null;
 
   return (
-    <>
-      {/* Learning Curve */}
-      {learningCurve && (
-        <section className="mb-6 min-w-0">
-          <h4 className="mb-2 text-sm font-medium">Learning Curve</h4>
-          <PlotlyChart plotlyJson={learningCurve.plotly_json} height={500} />
-        </section>
+    <section className="mb-6 min-w-0">
+      <h4 className="mb-2 text-sm font-medium">Plots</h4>
+      <div className="mb-3">
+        <SegmentGroup
+          options={availablePlots}
+          value={selectedPlot}
+          onChange={onSelectPlot}
+          labels={PLOT_LABELS}
+        />
+      </div>
+      {isLoading && (
+        <p className="py-8 text-center text-sm text-muted-foreground">
+          Loading plot...
+        </p>
       )}
-
-      {/* Plots selector */}
-      {filteredPlots.length > 0 && (
-        <section className="mb-6 min-w-0">
-          <div className="mb-2 flex items-center gap-2">
-            <h4 className="text-sm font-medium">Plots</h4>
-            <Select value={selectedPlot} onValueChange={onSelectPlot}>
-              <SelectTrigger className="h-7 w-48 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {filteredPlots.map((p) => (
-                  <SelectItem key={p} value={p}>
-                    {p.replace(/-/g, " ")}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          {plotData && <PlotlyChart plotlyJson={plotData.plotly_json} />}
-        </section>
+      {isError && !isLoading && (
+        <p className="py-8 text-center text-sm text-destructive">
+          Failed to load plot. This plot may not be available for this model.
+        </p>
       )}
-    </>
+      {!isLoading && !isError && activePlotData && (
+        <PlotlyChart
+          plotlyJson={activePlotData.plotly_json}
+          height={chartHeight}
+        />
+      )}
+    </section>
   );
 }

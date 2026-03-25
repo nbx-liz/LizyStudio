@@ -159,7 +159,7 @@ export function CvSection({
   return (
     <div className="lzs-form space-y-1.5">
       {/* Strategy segment buttons */}
-      <div>
+      <div className="space-y-2">
         <Label>Strategy</Label>
         <SegmentGroup
           options={availableStrategies}
