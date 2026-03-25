@@ -31,8 +31,10 @@ Thumbs.db
 # Playwright MCP
 .playwright-mcp/
 
-# Testing
+# Testing & Audit
 .audit/
+audit-*.png
+audit-*.md
 .coverage
 htmlcov/
 .pytest_cache/
