@@ -80,8 +80,18 @@ def get_default_config(ws: WorkspaceState, task: str, target: str) -> dict[str, 
 
 
 def validate_config(ws: WorkspaceState, config: dict[str, Any]) -> list[dict[str, Any]]:
-    """Validate a config dict against the backend."""
-    return ws.backend.validate_config(config)
+    """Validate a config dict against the backend.
+
+    Normalizes Pydantic v2 error dicts to ``{path, message}`` for the frontend.
+    """
+    raw_errors = ws.backend.validate_config(config)
+    normalized: list[dict[str, Any]] = []
+    for err in raw_errors:
+        loc = err.get("loc", [])
+        path = ".".join(str(p) for p in loc) if loc else err.get("path", "")
+        message = err.get("msg", err.get("message", ""))
+        normalized.append({"path": path, "message": message})
+    return normalized
 
 
 def load_config_from_file(
