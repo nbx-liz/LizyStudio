@@ -11,9 +11,9 @@ export interface DataRef {
 export interface WorkspaceStatus {
   has_data: boolean;
   has_config: boolean;
-  data_ref: DataRef | null;
+  has_result: boolean;
+  data_ref: { filename: string; shape: [number, number] } | null;
   current_job_id: string | null;
-  backend_name: string;
 }
 
 export interface ColumnInfo {
@@ -57,16 +57,15 @@ export interface JobSummary {
   status: "pending" | "running" | "completed" | "failed" | "cancelled";
   backend_name: string;
   model_name: string;
-  config: Record<string, unknown>;
-  data_ref: DataRef;
   created_at: string;
   completed_at: string | null;
   error: string | null;
-  error_code: string | null;
   primary_score: number | null;
 }
 
 export interface JobDetail extends JobSummary {
+  config: Record<string, unknown>;
+  data_ref: DataRef;
   fit_result: FitResult | null;
   tune_result: TuneResult | null;
   model_path: string | null;

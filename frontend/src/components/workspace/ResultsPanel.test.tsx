@@ -133,7 +133,6 @@ describe("ResultsPanel", () => {
 
     expect(await screen.findByText("Failed")).toBeInTheDocument();
     expect(screen.getByText("Out of memory")).toBeInTheDocument();
-    expect(screen.getByText("OOM")).toBeInTheDocument();
     expect(screen.getByText("View Full Log")).toBeInTheDocument();
   });
 

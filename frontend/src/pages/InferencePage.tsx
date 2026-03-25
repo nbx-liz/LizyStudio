@@ -63,13 +63,17 @@ export function InferencePage() {
       dataPath: string;
       evaluate: boolean;
       returnShap: boolean;
-    }) =>
-      runInference({
-        job_id: selectedJobId ?? "",
+    }) => {
+      if (!selectedJobId) {
+        return Promise.reject(new Error("No job selected"));
+      }
+      return runInference({
+        job_id: selectedJobId,
         data: { source_type: "path", path: params.dataPath },
         return_shap: params.returnShap,
         evaluate: params.evaluate,
-      }),
+      });
+    },
     onSuccess: (result) => {
       toast.success("Inference completed");
       queryClient.invalidateQueries({ queryKey: ["inf-history"] });

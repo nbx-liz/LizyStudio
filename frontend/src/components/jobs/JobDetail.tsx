@@ -399,9 +399,6 @@ function FailedView({
     <div>
       <h4 className="mb-2 text-sm font-medium">Error</h4>
       <div className="rounded-md border border-destructive/30 bg-destructive/10 p-4">
-        {job.error_code && (
-          <p className="mb-1 text-sm font-bold font-mono">{job.error_code}</p>
-        )}
         <p className="text-sm font-mono">{job.error ?? "Unknown error"}</p>
       </div>
       <Button variant="outline" size="sm" className="mt-3" onClick={onViewLog}>

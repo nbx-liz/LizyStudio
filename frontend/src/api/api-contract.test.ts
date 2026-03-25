@@ -73,30 +73,26 @@ describe("WorkspaceStatus", () => {
     const status: WorkspaceStatus = {
       has_data: true,
       has_config: true,
+      has_result: false,
       data_ref: {
-        source_type: "path",
-        path: "/data/test.csv",
         filename: "test.csv",
-        fingerprint: "fp1",
         shape: [100, 10],
       },
       current_job_id: "job-1",
-      backend_name: "lizyml",
     };
     expect(status.has_data).toBe(true);
     expect(status.has_config).toBe(true);
     assertDefined(status.data_ref, "data_ref");
     assertDefined(status.current_job_id, "current_job_id");
-    assertDefined(status.backend_name, "backend_name");
   });
 
   it("allows null data_ref and current_job_id", () => {
     const status: WorkspaceStatus = {
       has_data: false,
       has_config: false,
+      has_result: false,
       data_ref: null,
       current_job_id: null,
-      backend_name: "lizyml",
     };
     expect(status.data_ref).toBeNull();
     expect(status.current_job_id).toBeNull();
@@ -201,26 +197,15 @@ describe("JobSummary", () => {
       status: "completed",
       backend_name: "lizyml",
       model_name: "lgbm",
-      config: { model: { name: "lgbm" } },
-      data_ref: {
-        source_type: "path",
-        path: "/test",
-        filename: "test.csv",
-        fingerprint: "abc",
-        shape: [100, 10],
-      },
       created_at: "2026-01-01T00:00:00Z",
       completed_at: "2026-01-01T00:05:00Z",
       error: null,
-      error_code: null,
       primary_score: 0.95,
     };
     assertDefined(job.job_id, "job_id");
     assertDefined(job.job_type, "job_type");
     assertDefined(job.status, "status");
     assertDefined(job.backend_name, "backend_name");
-    assertDefined(job.config, "config");
-    assertDefined(job.data_ref, "data_ref");
     assertDefined(job.created_at, "created_at");
     expect(job.primary_score).toBe(0.95);
   });
@@ -248,18 +233,9 @@ describe("JobSummary", () => {
       status: "failed",
       backend_name: "lizyml",
       model_name: "",
-      config: {},
-      data_ref: {
-        source_type: "path",
-        path: "/test",
-        filename: "test.csv",
-        fingerprint: "abc",
-        shape: [50, 5],
-      },
       created_at: "2026-01-01T00:00:00Z",
       completed_at: null,
       error: "Out of memory",
-      error_code: "OOM",
       primary_score: null,
     };
     expect(job.completed_at).toBeNull();
