@@ -29,14 +29,13 @@ export function PlotlyChart({
         height: _h,
         ...cleanLayout
       } = rawLayout as Record<string, unknown>;
-      // Preserve backend margin if present, else use sensible defaults
-      const defaultMargin = { l: 60, r: 20, t: 40, b: 50 };
-      const backendMargin = cleanLayout.margin as
-        | Record<string, number>
-        | undefined;
+      // Use backend margin if present, else sensible defaults
+      const patched = { ...cleanLayout } as Record<string, unknown>;
+      if (!patched.margin) {
+        patched.margin = { l: 60, r: 20, t: 40, b: 50 };
+      }
 
       // Add standoff to all yaxis titles to prevent overlap on subplots
-      const patched = { ...cleanLayout } as Record<string, unknown>;
       for (const key of Object.keys(patched)) {
         if (key.startsWith("yaxis") && typeof patched[key] === "object") {
           const axis = patched[key] as Record<string, unknown>;
@@ -48,11 +47,7 @@ export function PlotlyChart({
 
       return {
         data: rawData,
-        layout: {
-          ...patched,
-          autosize: true,
-          margin: backendMargin ?? defaultMargin,
-        },
+        layout: { ...patched, autosize: true },
       };
     } catch {
       return { data: [], layout: { autosize: true } };

@@ -2,7 +2,7 @@ import type { PlotResponse } from "@/api/types";
 import { PlotlyChart } from "./PlotlyChart";
 import { SegmentGroup } from "./SegmentGroup";
 
-const PLOT_LABELS: Record<string, string> = {
+export const PLOT_LABELS: Record<string, string> = {
   "learning-curve": "Learning Curve",
   "oof-distribution": "OOF Dist",
   "roc-curve": "ROC",
