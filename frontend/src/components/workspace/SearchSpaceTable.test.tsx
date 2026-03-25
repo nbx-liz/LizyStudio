@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SearchSpaceCatalogEntry } from "@/api/types";
 import { SearchSpaceTable } from "./SearchSpaceTable";
@@ -117,7 +117,6 @@ describe("SearchSpaceTable", () => {
 
     // Find Range radio buttons and click the first one (for learning_rate)
     const rangeButtons = screen.getAllByRole("radio", { name: /range/i });
-    const { fireEvent } = require("@testing-library/react");
     fireEvent.click(rangeButtons[0]);
 
     expect(onChange).toHaveBeenCalled();
@@ -138,7 +137,6 @@ describe("SearchSpaceTable", () => {
 
     // Click fixed mode for learning_rate
     const fixedButtons = screen.getAllByRole("radio", { name: /fixed/i });
-    const { fireEvent } = require("@testing-library/react");
     fireEvent.click(fixedButtons[0]);
 
     expect(onChange).toHaveBeenCalled();
@@ -177,7 +175,6 @@ describe("SearchSpaceTable", () => {
 
     // Switch to range mode
     const rangeBtn = screen.getByRole("radio", { name: /range/i });
-    const { fireEvent } = require("@testing-library/react");
     fireEvent.click(rangeBtn);
 
     expect(onChange).toHaveBeenCalled();
