@@ -251,8 +251,8 @@ describe("DynParam", () => {
     });
   });
 
-  describe("undefined value → hint.default as placeholder", () => {
-    it("CompactStepper has empty input when value is undefined", () => {
+  describe("undefined value → hint.default used as actual value", () => {
+    it("CompactStepper shows default value when value is undefined", () => {
       const onChange = vi.fn();
       render(
         <DynParam
@@ -262,11 +262,11 @@ describe("DynParam", () => {
         />,
       );
       const input = screen.getByRole("textbox") as HTMLInputElement;
-      expect(input.value).toBe("");
+      expect(input.value).toBe("50");
       expect(onChange).not.toHaveBeenCalled();
     });
 
-    it("CompactStepper uses hint.default as placeholder when value is undefined", () => {
+    it("CompactStepper shows decimal default when value is undefined", () => {
       render(
         <DynParam
           hint={hint({ kind: "number", key: "lr", default: 0.01 })}
@@ -275,7 +275,7 @@ describe("DynParam", () => {
         />,
       );
       const input = screen.getByRole("textbox") as HTMLInputElement;
-      expect(input.placeholder).toBe("0.01");
+      expect(input.value).toBe("0.01");
     });
   });
 });

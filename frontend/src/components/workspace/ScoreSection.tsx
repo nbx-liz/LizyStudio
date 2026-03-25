@@ -56,6 +56,6 @@ export function ScoreSection({
 }
 
 function formatNum(v: unknown): string {
-  if (typeof v !== "number") return String(v ?? "");
+  if (typeof v !== "number" || Number.isNaN(v)) return "—";
   return v.toFixed(4);
 }

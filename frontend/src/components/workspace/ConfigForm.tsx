@@ -45,7 +45,7 @@ interface ConfigFormProps {
 const HIDDEN = ["config_version", "tuning"];
 const DATA_PANEL_FIELDS = ["data", "features", "split", "task", "output_dir"];
 // validation_ratio is replaced by training.inner_valid.ratio rendered manually below
-const TRAINING_HIDDEN_FIELDS = ["validation_ratio"];
+const TRAINING_HIDDEN_FIELDS = ["validation_ratio", "inner_valid"];
 
 export function ConfigForm({
   schema,

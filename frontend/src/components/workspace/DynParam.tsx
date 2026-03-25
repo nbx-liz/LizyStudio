@@ -71,20 +71,20 @@ export function DynParam({
 
     case "integer":
     case "number": {
-      const numValue =
+      const rawValue =
         value !== undefined && value !== null ? Number(value) : undefined;
-      const step = hint.step ?? (hint.kind === "integer" ? 1 : 0.01);
-      const placeholder =
+      const defaultNum =
         hint.default !== undefined && hint.default !== null
-          ? String(hint.default)
+          ? Number(hint.default)
           : undefined;
+      const numValue = rawValue ?? defaultNum;
+      const step = hint.step ?? (hint.kind === "integer" ? 1 : 0.01);
       return (
         <FormRow label={hint.label}>
           <CompactStepper
             value={numValue}
             onChange={(v) => onChange(v)}
             step={step}
-            placeholder={placeholder}
           />
         </FormRow>
       );

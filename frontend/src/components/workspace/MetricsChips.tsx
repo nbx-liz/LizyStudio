@@ -49,15 +49,17 @@ export function MetricsChips({
 
   const prevTask = useRef(task);
 
-  // Reset to defaults when task changes
+  // Reset to defaults when task changes or when no metrics are selected
   useEffect(() => {
-    if (task !== prevTask.current) {
-      prevTask.current = task;
-      if (effectiveMetrics.defaults.length > 0) {
-        onChange([...effectiveMetrics.defaults]);
-      }
+    const taskChanged = task !== prevTask.current;
+    prevTask.current = task;
+    if (
+      (taskChanged || selectedMetrics.length === 0) &&
+      effectiveMetrics.defaults.length > 0
+    ) {
+      onChange([...effectiveMetrics.defaults]);
     }
-  }, [task, onChange, effectiveMetrics]);
+  }, [task, onChange, effectiveMetrics, selectedMetrics.length]);
 
   if (effectiveMetrics.available.length === 0) return null;
 
