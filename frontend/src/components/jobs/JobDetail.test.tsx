@@ -140,7 +140,6 @@ describe("JobDetailPanel", () => {
     expect(await screen.findByText(/Failed/)).toBeInTheDocument();
     expect(screen.getByText("Error")).toBeInTheDocument();
     expect(screen.getByText("Division by zero in fold 3")).toBeInTheDocument();
-    expect(screen.getByText("RUNTIME_ERROR")).toBeInTheDocument();
     expect(screen.getByText("View Full Log")).toBeInTheDocument();
 
     // Failed jobs get Re-fit and Delete buttons

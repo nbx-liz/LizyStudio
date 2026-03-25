@@ -248,9 +248,6 @@ export function ResultsPanel({
           <Badge variant="destructive">Failed</Badge>
         </div>
         <div className="rounded-md border border-destructive/30 bg-destructive/10 p-4">
-          {job.error_code && (
-            <p className="mb-1 text-sm font-bold font-mono">{job.error_code}</p>
-          )}
           <p className="text-sm font-mono">{job.error ?? "Unknown error"}</p>
         </div>
         <Button

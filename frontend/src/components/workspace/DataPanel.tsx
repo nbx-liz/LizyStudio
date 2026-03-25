@@ -133,8 +133,11 @@ export function DataPanel({
       await updateConfig(merged, { signal: controller.signal });
       if (controller.signal.aborted) return;
       onDataChanged();
-    } catch {
-      // silent — config sync errors are non-fatal
+    } catch (err) {
+      // Aborted requests are expected; only report real errors
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      console.warn("Config sync failed:", err);
+      toast.error("Config sync failed — changes may not be saved");
     }
   }, [dataPath, target, task, overrides, cv, onDataChanged]);
 
