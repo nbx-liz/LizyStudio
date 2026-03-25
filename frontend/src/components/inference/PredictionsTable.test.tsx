@@ -10,6 +10,11 @@ vi.mock("@/api/inference", () => ({
     .mockReturnValue("/api/inference/inf1/download?job_id=j1"),
 }));
 
+import {
+  fetchInferencePredictions,
+  getInferenceDownloadUrl,
+} from "@/api/inference";
+
 function renderWithQuery(ui: React.ReactElement) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -34,7 +39,6 @@ describe("PredictionsTable", () => {
   });
 
   it("renders table with columns and rows when data is loaded", async () => {
-    const { fetchInferencePredictions } = await import("@/api/inference");
     vi.mocked(fetchInferencePredictions).mockResolvedValueOnce({
       columns: ["id", "prediction"],
       data: [
@@ -58,7 +62,6 @@ describe("PredictionsTable", () => {
   });
 
   it("shows row count info", async () => {
-    const { fetchInferencePredictions } = await import("@/api/inference");
     vi.mocked(fetchInferencePredictions).mockResolvedValueOnce({
       columns: ["x"],
       data: [{ x: 1 }],
@@ -72,7 +75,6 @@ describe("PredictionsTable", () => {
   });
 
   it("renders Download CSV button", async () => {
-    const { fetchInferencePredictions } = await import("@/api/inference");
     vi.mocked(fetchInferencePredictions).mockResolvedValueOnce({
       columns: ["x"],
       data: [{ x: 1 }],
@@ -87,7 +89,6 @@ describe("PredictionsTable", () => {
   });
 
   it("shows pagination controls when multiple pages exist", async () => {
-    const { fetchInferencePredictions } = await import("@/api/inference");
     vi.mocked(fetchInferencePredictions).mockResolvedValueOnce({
       columns: ["x"],
       data: Array.from({ length: 50 }, (_, i) => ({ x: i })),
@@ -100,7 +101,6 @@ describe("PredictionsTable", () => {
   });
 
   it("does not show pagination controls when only one page", async () => {
-    const { fetchInferencePredictions } = await import("@/api/inference");
     vi.mocked(fetchInferencePredictions).mockResolvedValueOnce({
       columns: ["x"],
       data: [{ x: 1 }],
@@ -114,7 +114,6 @@ describe("PredictionsTable", () => {
   });
 
   it("formats integer and float cell values correctly", async () => {
-    const { fetchInferencePredictions } = await import("@/api/inference");
     vi.mocked(fetchInferencePredictions).mockResolvedValueOnce({
       columns: ["int_col", "float_col", "str_col"],
       data: [{ int_col: 42, float_col: 3.14159, str_col: "hello" }],

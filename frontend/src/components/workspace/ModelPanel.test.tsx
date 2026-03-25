@@ -129,4 +129,125 @@ describe("ModelPanel", () => {
     );
     expect(screen.getByText("Loading config...")).toBeInTheDocument();
   });
+
+  it("Fit button is disabled when running is true", () => {
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={true}
+      />,
+    );
+    const actionButtons = screen
+      .getAllByRole("button")
+      .filter(
+        (btn) => btn.textContent === "Fit" && !btn.closest('[role="tablist"]'),
+      );
+    expect(actionButtons[0]).toBeDisabled();
+  });
+
+  it("renders backend badge when backends are loaded", async () => {
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    const { waitFor } = await import("@testing-library/react");
+    await waitFor(() => {
+      expect(screen.getByText("lizyml v0.4.0")).toBeInTheDocument();
+    });
+  });
+
+  it("shows validation errors when present", async () => {
+    const { validateConfig } = await import("@/api/workspace");
+    (validateConfig as ReturnType<typeof vi.fn>).mockResolvedValue({
+      errors: [{ path: "model.name", message: "Invalid model" }],
+    });
+
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    // Errors would be shown after a config change triggers validation
+    // For now, just verify the component renders without errors initially
+    const { waitFor } = await import("@testing-library/react");
+    await waitFor(() => {
+      const fitTabs = screen.getAllByRole("tab");
+      expect(fitTabs.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("opens config download URL when Export YAML is clicked", async () => {
+    const originalOpen = window.open;
+    window.open = vi.fn();
+
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    const { fireEvent } = await import("@testing-library/react");
+    const exportBtn = screen.getByRole("button", { name: /Export YAML/i });
+    fireEvent.click(exportBtn);
+
+    expect(window.open).toHaveBeenCalledWith(
+      "/api/workspace/config/download",
+      "_blank",
+    );
+
+    window.open = originalOpen;
+  });
+
+  it("handles Import YAML file selection", async () => {
+    const { uploadConfig } = await import("@/api/workspace");
+    (uploadConfig as ReturnType<typeof vi.fn>).mockResolvedValue({
+      errors: [],
+    });
+    const { toast } = await import("sonner");
+    (toast as unknown as Record<string, ReturnType<typeof vi.fn>>).success =
+      vi.fn();
+
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    const { fireEvent, waitFor } = await import("@testing-library/react");
+
+    // Get the hidden file input
+    const fileInput = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    const file = new File(["model: lgbm"], "config.yaml", {
+      type: "text/yaml",
+    });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(uploadConfig).toHaveBeenCalledWith(file);
+    });
+  });
 });

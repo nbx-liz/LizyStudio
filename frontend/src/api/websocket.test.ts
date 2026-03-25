@@ -33,8 +33,29 @@ class MockWebSocket {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Helper: capture last created MockWebSocket
+// ---------------------------------------------------------------------------
+let wsInstances: MockWebSocket[] = [];
+
+function getLastWebSocket(): MockWebSocket {
+  const last = wsInstances[wsInstances.length - 1];
+  if (!last) throw new Error("No WebSocket instance created");
+  return last;
+}
+
 beforeEach(() => {
-  vi.stubGlobal("WebSocket", MockWebSocket);
+  wsInstances = [];
+  const OrigMock = MockWebSocket;
+  vi.stubGlobal(
+    "WebSocket",
+    class extends OrigMock {
+      constructor(url: string) {
+        super(url);
+        wsInstances.push(this);
+      }
+    },
+  );
   // Simulate http: protocol for ws: derivation
   Object.defineProperty(window, "location", {
     value: { protocol: "http:", host: "localhost:5173" },
@@ -45,6 +66,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 // ---------------------------------------------------------------------------
@@ -153,28 +175,3 @@ describe("connectJobProgress", () => {
     expect(ws.url).toBe("wss://example.com/ws/jobs/j1/progress");
   });
 });
-
-// ---------------------------------------------------------------------------
-// Helper: capture last created MockWebSocket
-// ---------------------------------------------------------------------------
-let wsInstances: MockWebSocket[] = [];
-
-beforeEach(() => {
-  wsInstances = [];
-  const OrigMock = MockWebSocket;
-  vi.stubGlobal(
-    "WebSocket",
-    class extends OrigMock {
-      constructor(url: string) {
-        super(url);
-        wsInstances.push(this);
-      }
-    },
-  );
-});
-
-function getLastWebSocket(): MockWebSocket {
-  const last = wsInstances[wsInstances.length - 1];
-  if (!last) throw new Error("No WebSocket instance created");
-  return last;
-}

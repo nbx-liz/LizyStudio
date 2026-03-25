@@ -153,4 +153,182 @@ describe("ConfigForm", () => {
     });
     expect(screen.getByText("Training")).toBeInTheDocument();
   });
+
+  it("renders Model section with Smart Params and Additional Params labels", () => {
+    renderConfigForm({
+      schema: minimalSchema,
+      config: minimalConfig,
+      onChange: vi.fn(),
+    });
+    expect(screen.getByText("Smart Params")).toBeInTheDocument();
+    expect(screen.getByText("Model Params")).toBeInTheDocument();
+    expect(screen.getByText("Additional Params")).toBeInTheDocument();
+  });
+
+  it("renders inner_valid ratio when early_stopping is enabled", () => {
+    const schema = {
+      properties: {
+        model: {
+          type: "object",
+          title: "Model",
+          properties: {
+            name: { type: "string", const: "lgbm" },
+            params: { type: "object", additionalProperties: true },
+          },
+        },
+        training: {
+          type: "object",
+          title: "Training",
+          properties: {
+            early_stopping: {
+              type: "object",
+              properties: {
+                enabled: { type: "boolean", default: true },
+                patience: { type: "integer", default: 10 },
+              },
+            },
+          },
+        },
+      },
+      $defs: {},
+    };
+    const config = {
+      model: { name: "lgbm", params: {} },
+      training: {
+        early_stopping: { enabled: true, patience: 10 },
+        inner_valid: { method: "holdout", ratio: 0.15 },
+      },
+    };
+
+    renderConfigForm({
+      schema,
+      config,
+      onChange: vi.fn(),
+    });
+
+    expect(screen.getByText("Inner Valid Ratio")).toBeInTheDocument();
+  });
+
+  it("does not render inner_valid ratio when early_stopping is disabled", () => {
+    const schema = {
+      properties: {
+        model: {
+          type: "object",
+          title: "Model",
+          properties: {
+            name: { type: "string", const: "lgbm" },
+            params: { type: "object", additionalProperties: true },
+          },
+        },
+        training: {
+          type: "object",
+          title: "Training",
+          properties: {
+            early_stopping: {
+              type: "object",
+              properties: {
+                enabled: { type: "boolean", default: false },
+              },
+            },
+          },
+        },
+      },
+      $defs: {},
+    };
+    const config = {
+      model: { name: "lgbm", params: {} },
+      training: {
+        early_stopping: { enabled: false },
+      },
+    };
+
+    renderConfigForm({
+      schema,
+      config,
+      onChange: vi.fn(),
+    });
+
+    expect(screen.queryByText("Inner Valid Ratio")).not.toBeInTheDocument();
+  });
+
+  it("renders calibration section for binary task by default", () => {
+    renderConfigForm({
+      schema: minimalSchema,
+      config: { ...minimalConfig, calibration: null },
+      onChange: vi.fn(),
+      task: "binary",
+    });
+
+    expect(screen.getByText("Calibration")).toBeInTheDocument();
+  });
+
+  it("does not render calibration section for regression task", () => {
+    renderConfigForm({
+      schema: minimalSchema,
+      config: { ...minimalConfig, calibration: null },
+      onChange: vi.fn(),
+      task: "regression",
+    });
+
+    expect(screen.queryByText("Calibration")).not.toBeInTheDocument();
+  });
+
+  it("renders section title from uiSchema when provided", () => {
+    renderConfigForm({
+      schema: multiSectionSchema,
+      config: multiSectionConfig,
+      onChange: vi.fn(),
+      uiSchema: {
+        sections: [{ key: "training", title: "Training Settings" }],
+      },
+    });
+    expect(screen.getByText("Training Settings")).toBeInTheDocument();
+  });
+
+  it("renders calibration section based on conditional_visibility", () => {
+    renderConfigForm({
+      schema: minimalSchema,
+      config: { ...minimalConfig, calibration: null },
+      onChange: vi.fn(),
+      task: "multiclass",
+      uiSchema: {
+        conditional_visibility: {
+          calibration: { task: ["binary", "multiclass"] },
+        },
+      },
+    });
+
+    expect(screen.getByText("Calibration")).toBeInTheDocument();
+  });
+
+  it("hides calibration section based on conditional_visibility when task not included", () => {
+    renderConfigForm({
+      schema: minimalSchema,
+      config: { ...minimalConfig, calibration: null },
+      onChange: vi.fn(),
+      task: "regression",
+      uiSchema: {
+        conditional_visibility: {
+          calibration: { task: ["binary", "multiclass"] },
+        },
+      },
+    });
+
+    expect(screen.queryByText("Calibration")).not.toBeInTheDocument();
+  });
+
+  it("renders DynParam components when parameter_hints are provided", () => {
+    renderConfigForm({
+      schema: minimalSchema,
+      config: minimalConfig,
+      onChange: vi.fn(),
+      uiSchema: {
+        parameter_hints: [
+          { key: "objective", kind: "objective", label: "Objective" },
+        ],
+      },
+    });
+
+    expect(screen.getByTestId("dyn-param")).toBeInTheDocument();
+  });
 });

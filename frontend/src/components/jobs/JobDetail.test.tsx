@@ -259,4 +259,183 @@ describe("JobDetailPanel", () => {
 
     expect(await screen.findByText("Config")).toBeInTheDocument();
   });
+
+  it("renders Unknown error when error is null for failed job", async () => {
+    const failedJob = makeJob({
+      status: "failed",
+      error: null,
+      error_code: null,
+    });
+    mockFetchJob.mockResolvedValue(failedJob);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("Unknown error")).toBeInTheDocument();
+  });
+
+  it("shows Fitting... as default progress message for running fit job", async () => {
+    const runningJob = makeJob({
+      status: "running",
+      completed_at: null,
+    });
+    mockFetchJob.mockResolvedValue(runningJob);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("Progress")).toBeInTheDocument();
+    expect(screen.getByText("Fitting...")).toBeInTheDocument();
+  });
+
+  it("renders primary metric badge for completed fit job", async () => {
+    const job = makeJob({
+      status: "completed",
+      fit_result: {
+        metrics: { accuracy: { is: 0.96, oos: 0.95, oos_std: 0.01 } },
+        fold_count: 5,
+        params: [],
+      },
+    });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("accuracy: 0.9500")).toBeInTheDocument();
+  });
+
+  it("renders primary metric for completed tune job", async () => {
+    const job = makeJob({
+      status: "completed",
+      job_type: "tune",
+      tune_result: {
+        best_params: { lr: 0.01 },
+        best_score: 0.92,
+        trials: [],
+        metric_name: "f1",
+        direction: "maximize",
+      },
+    });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={2}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("f1: 0.9200")).toBeInTheDocument();
+  });
+
+  it("does not show primary metric for non-completed jobs", async () => {
+    const job = makeJob({ status: "running" });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("Running")).toBeInTheDocument();
+    expect(screen.queryByText(/0\.\d{4}/)).not.toBeInTheDocument();
+  });
+
+  it("renders Execution Log accordion for completed jobs", async () => {
+    const job = makeJob({ status: "completed" });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("Execution Log")).toBeInTheDocument();
+  });
+
+  it("does not render Execution Log for running jobs", async () => {
+    const job = makeJob({ status: "running" });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("Running")).toBeInTheDocument();
+    expect(screen.queryByText("Execution Log")).not.toBeInTheDocument();
+  });
+
+  it("navigates to inference page when Inference button is clicked", async () => {
+    const job = makeJob({ status: "completed" });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    const inferenceBtn = await screen.findByText("Inference");
+    inferenceBtn.click();
+
+    expect(mockNavigate).toHaveBeenCalledWith("/inference?job_id=test-job-1");
+  });
+
+  it("navigates to workspace for re-fit", async () => {
+    const job = makeJob({ status: "completed" });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    const refitBtn = await screen.findByText("Re-fit");
+    refitBtn.click();
+
+    expect(mockNavigate).toHaveBeenCalledWith("/", {
+      state: { refitJobId: "test-job-1" },
+    });
+  });
 });
