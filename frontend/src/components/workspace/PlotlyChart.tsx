@@ -4,9 +4,15 @@ import Plot from "react-plotly.js";
 interface PlotlyChartProps {
   plotlyJson: string;
   className?: string;
+  /** Chart height in pixels. Defaults to 350. */
+  height?: number;
 }
 
-export function PlotlyChart({ plotlyJson, className }: PlotlyChartProps) {
+export function PlotlyChart({
+  plotlyJson,
+  className,
+  height = 350,
+}: PlotlyChartProps) {
   const { data, layout } = useMemo(() => {
     try {
       const parsed: unknown = JSON.parse(plotlyJson);
@@ -22,7 +28,7 @@ export function PlotlyChart({ plotlyJson, className }: PlotlyChartProps) {
         layout: {
           ...(rawLayout as object),
           autosize: true,
-          margin: { l: 50, r: 30, t: 30, b: 60 },
+          margin: { l: 50, r: 40, t: 30, b: 60 },
         },
       };
     } catch {
@@ -37,7 +43,7 @@ export function PlotlyChart({ plotlyJson, className }: PlotlyChartProps) {
         layout={layout}
         config={{ responsive: true, displayModeBar: false }}
         useResizeHandler
-        style={{ width: "100%", height: "350px" }}
+        style={{ width: "100%", height: `${height}px` }}
       />
     </div>
   );

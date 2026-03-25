@@ -435,15 +435,15 @@ export function DataPanel({
               Target / Task
             </AccordionTrigger>
             <AccordionContent>
-              <div className="lzs-form space-y-1.5 pl-[18px]">
-                <div>
-                  <Label>Target</Label>
+              <div className="lzs-form space-y-3 pl-[18px]">
+                <div className="flex items-center gap-2">
+                  <Label className="min-w-[60px] text-xs">Target</Label>
                   <Select
                     value={target ?? ""}
                     onValueChange={handleTargetChange}
                     disabled={allColumnNames.length === 0}
                   >
-                    <SelectTrigger>
+                    <SelectTrigger className="h-8 flex-1">
                       <SelectValue placeholder="Select target column" />
                     </SelectTrigger>
                     <SelectContent>
@@ -455,19 +455,21 @@ export function DataPanel({
                     </SelectContent>
                   </Select>
                 </div>
-                <div>
-                  <Label>Task</Label>
-                  <SegmentGroup
-                    options={TASK_OPTIONS as unknown as string[]}
-                    value={task ?? ""}
-                    onChange={(v) => handleTaskChange(v as TaskType)}
-                    disabled={!target}
-                  />
-                  {!target && (
-                    <span className="text-xs text-muted-foreground">
-                      Auto-detected after target selection
-                    </span>
-                  )}
+                <div className="flex items-start gap-2">
+                  <Label className="mt-1 min-w-[60px] text-xs">Task</Label>
+                  <div className="flex flex-col gap-1">
+                    <SegmentGroup
+                      options={TASK_OPTIONS as unknown as string[]}
+                      value={task ?? ""}
+                      onChange={(v) => handleTaskChange(v as TaskType)}
+                      disabled={!target}
+                    />
+                    {!target && (
+                      <span className="text-xs text-muted-foreground">
+                        Auto-detected after target selection
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             </AccordionContent>

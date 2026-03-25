@@ -33,7 +33,7 @@ export function PlotSection({
       {learningCurve && (
         <section className="mb-6 min-w-0">
           <h4 className="mb-2 text-sm font-medium">Learning Curve</h4>
-          <PlotlyChart plotlyJson={learningCurve.plotly_json} />
+          <PlotlyChart plotlyJson={learningCurve.plotly_json} height={500} />
         </section>
       )}
 
