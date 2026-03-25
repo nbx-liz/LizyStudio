@@ -670,8 +670,8 @@ step 値は `ui_schema.step_map` から取得。値が未設定の場合は plac
 | Early Stopping | Accordion（入れ子） | `training.early_stopping` | 以下のフィールドを含む |
 | → enabled | Switch | `training.early_stopping.enabled` | ON/OFF |
 | → rounds | NumberInput（integer） | `training.early_stopping.rounds` | デフォルト 150。enabled=true 時のみ編集可能 |
-| → validation_ratio | NumberInput（float, 0.0–1.0） | `training.early_stopping.validation_ratio` | デフォルト 0.1。enabled=true 時のみ編集可能 |
-| → inner_valid | Select | `training.early_stopping.inner_valid.method` | enabled=true 時のみ表示。選択肢: `ui_schema.inner_valid_options`（holdout / group_holdout / time_holdout）。null の場合は Backend デフォルト |
+| → inner_valid | Select | `training.inner_valid.method` | enabled=true 時のみ表示。選択肢: `ui_schema.inner_valid_options`（holdout / group_holdout / time_holdout）。null の場合は Backend デフォルト |
+| → inner_valid_ratio | NumberInput（float, 0.0–0.5） | `training.inner_valid.ratio` | デフォルト 0.2。enabled=true 時のみ編集可能。旧 `early_stopping.validation_ratio` から移動 |
 
 **Evaluation セクション（config.evaluation）:**
 
@@ -2286,6 +2286,12 @@ Workspace の `workspace_result` は完了時に自動更新される。
 |----------|------|------|
 | GET | `/api/backends` | 利用可能なバックエンド一覧 |
 | GET | `/api/backends/ui-schema` | UI メタデータ（H-0026） |
+
+### 5.7 Files API
+
+| メソッド | パス | 説明 |
+|----------|------|------|
+| GET | `/api/files` | ディレクトリ内容一覧（query: `path`）。Data Panel のファイルブラウザ用。CSV/Parquet/TSV に限定 |
 
 **GET /api/backends レスポンス:**
 

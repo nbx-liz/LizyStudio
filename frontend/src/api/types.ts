@@ -56,6 +56,7 @@ export interface JobSummary {
   job_type: "fit" | "tune";
   status: "pending" | "running" | "completed" | "failed" | "cancelled";
   backend_name: string;
+  model_name: string;
   config: Record<string, unknown>;
   data_ref: DataRef;
   created_at: string;
