@@ -3,6 +3,10 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ModelPanel } from "./ModelPanel";
 
+vi.mock("sonner", () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
+}));
+
 vi.mock("@/api/workspace", () => ({
   fetchConfigSchema: vi.fn().mockResolvedValue({ properties: {}, $defs: {} }),
   fetchConfig: vi
