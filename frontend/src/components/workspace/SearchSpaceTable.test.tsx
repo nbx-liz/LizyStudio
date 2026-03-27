@@ -189,7 +189,6 @@ describe("SearchSpaceTable", () => {
     render(<SearchSpaceTable {...defaultProps} space={space} />);
 
     // Click the row to expand
-    const { fireEvent } = require("@testing-library/react");
     const row = screen.getByText("learning_rate").closest("button");
     if (row) fireEvent.click(row);
 
@@ -222,7 +221,6 @@ describe("SearchSpaceTable", () => {
     );
 
     // Expand the row
-    const { fireEvent } = require("@testing-library/react");
     const row = screen.getByText("n_estimators").closest("button");
     if (row) fireEvent.click(row);
 

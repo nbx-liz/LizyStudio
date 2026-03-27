@@ -54,8 +54,11 @@ export function SetupPanel({
   const selectedJob = completedJobs.find((j) => j.job_id === selectedJobId);
   // TODO: config is not in JobSummary type. GET /jobs list does not return config.
   // Either add config to the list endpoint or fetch job detail separately.
-  const targetCol = selectedJob?.config?.data
-    ? (selectedJob.config.data as Record<string, unknown>).target
+  const selectedJobAny = selectedJob as
+    | (JobSummary & { config?: Record<string, unknown> })
+    | undefined;
+  const targetCol = selectedJobAny?.config?.data
+    ? (selectedJobAny.config.data as Record<string, unknown>).target
     : null;
 
   const canRun = selectedJobId != null && dataPath.trim() !== "" && !isRunning;
@@ -249,7 +252,8 @@ export function SetupPanel({
 }
 
 function extractModelName(job: JobSummary): string {
-  const config = job.config;
+  const config = (job as JobSummary & { config?: Record<string, unknown> })
+    .config;
   if (!config) return "";
   const model = config.model as Record<string, unknown> | undefined;
   return String(model?.name ?? model?.type ?? "");

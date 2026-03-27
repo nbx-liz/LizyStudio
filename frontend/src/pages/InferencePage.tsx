@@ -132,7 +132,9 @@ export function InferencePage() {
   // TODO: config is not in JobSummary type. GET /jobs list does not return config.
   // Either add config to the list endpoint or fetch job detail separately.
   const targetCol = useMemo(() => {
-    const job = completedJobs.find((j) => j.job_id === selectedJobId);
+    const job = completedJobs.find((j) => j.job_id === selectedJobId) as
+      | (JobSummary & { config?: Record<string, unknown> })
+      | undefined;
     if (!job?.config) return "";
     const data = job.config.data as Record<string, unknown> | undefined;
     return String(data?.target ?? "");
@@ -187,7 +189,8 @@ export function InferencePage() {
 }
 
 function extractModelName(job: JobSummary): string {
-  const config = job.config;
+  const config = (job as JobSummary & { config?: Record<string, unknown> })
+    .config;
   if (!config) return "";
   const model = config.model as Record<string, unknown> | undefined;
   return String(model?.name ?? model?.type ?? "");

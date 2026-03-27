@@ -1,5 +1,6 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { UiSchema } from "@/api/types";
 import { TuneTab } from "./TuneTab";
 
 const tuneConfig = {
@@ -40,11 +41,13 @@ describe("TuneTab", () => {
         config={tuneConfig}
         onChange={vi.fn()}
         task="binary"
-        uiSchema={{
-          option_sets: {
-            metric: { binary: ["auc", "f1", "accuracy"] },
-          },
-        }}
+        uiSchema={
+          {
+            option_sets: {
+              metric: { binary: ["auc", "f1", "accuracy"] },
+            },
+          } as unknown as UiSchema
+        }
       />,
     );
     expect(screen.getByText("Optimization Metric")).toBeInTheDocument();
@@ -56,7 +59,7 @@ describe("TuneTab", () => {
         config={tuneConfig}
         onChange={vi.fn()}
         task="binary"
-        uiSchema={{ option_sets: { metric: {} } }}
+        uiSchema={{ option_sets: { metric: {} } } as unknown as UiSchema}
       />,
     );
     expect(screen.queryByText("Optimization Metric")).not.toBeInTheDocument();
@@ -78,11 +81,13 @@ describe("TuneTab", () => {
         config={config}
         onChange={vi.fn()}
         task="binary"
-        uiSchema={{
-          option_sets: {
-            metric: { binary: ["auc", "f1", "accuracy"] },
-          },
-        }}
+        uiSchema={
+          {
+            option_sets: {
+              metric: { binary: ["auc", "f1", "accuracy"] },
+            },
+          } as unknown as UiSchema
+        }
       />,
     );
     expect(screen.getByText("Additional Metrics")).toBeInTheDocument();
@@ -104,14 +109,16 @@ describe("TuneTab", () => {
         config={config}
         onChange={vi.fn()}
         task="binary"
-        uiSchema={{
-          option_sets: {
-            metric: { binary: ["auc", "f1"] },
-          },
-          metric_direction: {
-            binary: { auc: "maximize", f1: "maximize" },
-          },
-        }}
+        uiSchema={
+          {
+            option_sets: {
+              metric: { binary: ["auc", "f1"] },
+            },
+            metric_direction: {
+              binary: { auc: "maximize", f1: "maximize" },
+            },
+          } as unknown as UiSchema
+        }
       />,
     );
     expect(screen.getByText("Direction:")).toBeInTheDocument();
@@ -151,11 +158,13 @@ describe("TuneTab", () => {
         config={config}
         onChange={onChange}
         task="binary"
-        uiSchema={{
-          option_sets: {
-            metric: { binary: ["auc", "f1", "accuracy"] },
-          },
-        }}
+        uiSchema={
+          {
+            option_sets: {
+              metric: { binary: ["auc", "f1", "accuracy"] },
+            },
+          } as unknown as UiSchema
+        }
       />,
     );
 
