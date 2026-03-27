@@ -1,96 +1,108 @@
-/**
- * Workspace Data API client.
- */
-
 import { apiFetch } from "./client";
-
-// --- Types ---
-
-export interface DataRef {
-  source_type: "path" | "upload";
-  path: string;
-  filename: string;
-  fingerprint: string;
-  shape: [number, number];
-}
-
-export interface WorkspaceStatus {
-  has_data: boolean;
-  has_config: boolean;
-  has_result: boolean;
-  data_ref: { filename: string; shape: [number, number] } | null;
-  current_job_id: string | null;
-}
-
-export interface ColumnInfo {
-  name: string;
-  dtype: string;
-  unique_count: number;
-  suggested_type: "numeric" | "categorical";
-  suggested_excluded: boolean;
-  exclude_reason: "id" | "constant" | null;
-}
-
-export interface ColumnsResponse {
-  target: string | null;
-  columns: ColumnInfo[];
-}
-
-export interface PreviewResponse {
-  columns: string[];
-  data: Record<string, unknown>[];
-  total_rows: number;
-  total_cols: number;
-}
-
-// --- API calls ---
-
-export function fetchStatus(): Promise<WorkspaceStatus> {
-  return apiFetch<WorkspaceStatus>("/workspace/status");
-}
-
-export function resetWorkspace(): Promise<{ status: string }> {
-  return apiFetch("/workspace/reset", { method: "POST" });
-}
+import type {
+  BackendInfo,
+  ColumnsResponse,
+  ConfigError,
+  ConfigUpdateResponse,
+  PreviewResponse,
+  UiSchema,
+} from "./types";
 
 export function loadDataFromPath(
   path: string,
-): Promise<{ data_ref: DataRef }> {
+): Promise<{ data_ref: { path: string; shape: [number, number] } }> {
   return apiFetch("/workspace/data/path", {
     method: "POST",
     body: JSON.stringify({ path }),
   });
 }
 
-export async function uploadData(
+export function uploadData(
   file: File,
-): Promise<{ data_ref: DataRef }> {
-  const form = new FormData();
-  form.append("file", file);
-  const res = await fetch("/api/workspace/data/upload", {
+): Promise<{ data_ref: { path: string; shape: [number, number] } }> {
+  const formData = new FormData();
+  formData.append("file", file);
+  return apiFetch("/workspace/data/upload", {
     method: "POST",
-    body: form,
+    body: formData,
+    headers: {},
   });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`API ${res.status}: ${body}`);
-  }
-  return res.json();
 }
 
-export function fetchPreview(
-  rows: number = 50,
-): Promise<PreviewResponse> {
+export function fetchPreview(rows = 5): Promise<PreviewResponse> {
   return apiFetch(`/workspace/data/preview?rows=${rows}`);
 }
 
-export function fetchColumns(
-  target?: string,
-): Promise<ColumnsResponse> {
+export function fetchColumns(target?: string): Promise<ColumnsResponse> {
   const params = target ? `?target=${encodeURIComponent(target)}` : "";
   return apiFetch(`/workspace/data/columns${params}`);
 }
 
-export function fetchDescribe(): Promise<Record<string, unknown>[]> {
-  return apiFetch("/workspace/data/describe");
+export function fetchConfigSchema(): Promise<Record<string, unknown>> {
+  return apiFetch("/workspace/config/schema");
+}
+
+export function fetchConfigDefaults(
+  task: string,
+  target: string,
+): Promise<Record<string, unknown>> {
+  return apiFetch(
+    `/workspace/config/defaults?task=${encodeURIComponent(task)}&target=${encodeURIComponent(target)}`,
+  );
+}
+
+export function fetchConfig(opts?: {
+  signal?: AbortSignal;
+}): Promise<Record<string, unknown>> {
+  return apiFetch("/workspace/config", { signal: opts?.signal });
+}
+
+export function updateConfig(
+  config: Record<string, unknown>,
+  opts?: { signal?: AbortSignal },
+): Promise<ConfigUpdateResponse> {
+  return apiFetch("/workspace/config", {
+    method: "PUT",
+    body: JSON.stringify(config),
+    signal: opts?.signal,
+  });
+}
+
+export function validateConfig(
+  config: Record<string, unknown>,
+): Promise<{ valid: boolean; errors: ConfigError[] }> {
+  return apiFetch("/workspace/config/validate", {
+    method: "POST",
+    body: JSON.stringify(config),
+  });
+}
+
+export function uploadConfig(file: File): Promise<ConfigUpdateResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  return apiFetch("/workspace/config/upload", {
+    method: "POST",
+    body: formData,
+    headers: {},
+  });
+}
+
+export function getConfigDownloadUrl(): string {
+  return "/api/workspace/config/download";
+}
+
+export function runFit(): Promise<{ job_id: string }> {
+  return apiFetch("/workspace/fit", { method: "POST" });
+}
+
+export function runTune(): Promise<{ job_id: string }> {
+  return apiFetch("/workspace/tune", { method: "POST" });
+}
+
+export function fetchBackends(): Promise<BackendInfo[]> {
+  return apiFetch("/backends");
+}
+
+export function fetchUiSchema(): Promise<UiSchema> {
+  return apiFetch("/backends/ui-schema");
 }

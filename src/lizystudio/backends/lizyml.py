@@ -33,10 +33,33 @@ class LizyMLAdapter:
 
     # -- Config --
 
+    def get_ui_schema(self) -> dict[str, Any]:
+        from lizystudio.backends.lizyml_ui_schema import (
+            build_ui_schema,
+            get_eval_metrics_by_task,
+        )
+
+        return build_ui_schema(get_eval_metrics_by_task())
+
     def get_config_schema(self) -> ConfigSchema:
         from lizyml.config.schema import LizyMLConfig
 
         return ConfigSchema(json_schema=LizyMLConfig.model_json_schema())
+
+    def get_default_config(self, task: str, target: str) -> dict[str, Any]:
+        from lizyml.config.schema import LizyMLConfig
+
+        is_classification = task in ("binary", "multiclass")
+        split_method = "stratified_kfold" if is_classification else "kfold"
+        minimal = {
+            "config_version": 1,
+            "task": task,
+            "data": {"target": target},
+            "model": {"name": "lgbm"},
+            "split": {"method": split_method},
+        }
+        validated = LizyMLConfig.model_validate(minimal)
+        return validated.model_dump(mode="json")
 
     def validate_config(self, config: dict[str, Any]) -> list[dict[str, Any]]:
         from lizyml.config.schema import LizyMLConfig
@@ -79,7 +102,11 @@ class LizyMLAdapter:
         params: dict[str, Any] | None = None,
         on_progress: ProgressCallback | None = None,
     ) -> FitSummary:
+        if on_progress is not None:
+            on_progress(current=0, total=1, message="Fitting model...")
         fit_result = model.fit(params=params)
+        if on_progress is not None:
+            on_progress(current=1, total=1, message="Fit complete.")
         return self._convert_fit_result(model, fit_result)
 
     def tune(
@@ -88,7 +115,30 @@ class LizyMLAdapter:
         *,
         on_progress: ProgressCallback | None = None,
     ) -> TuningSummary:
-        tune_result = model.tune()
+        lizyml_callback: Any = None
+        if on_progress is not None:
+            from lizyml import TuneProgressInfo
+
+            def _bridge(info: TuneProgressInfo) -> None:
+                msg = f"Trial {info.current_trial}/{info.total_trials}"
+                if info.best_score is not None:
+                    msg += f" | Best: {info.best_score:.4f}"
+                if info.latest_score is not None:
+                    msg += f" | Latest: {info.latest_score:.4f} ({info.latest_state})"
+                on_progress(
+                    current=info.current_trial,
+                    total=info.total_trials,
+                    message=msg,
+                )
+
+            lizyml_callback = _bridge
+            on_progress(current=0, total=1, message="Starting tuning...")
+
+        tune_result = model.tune(progress_callback=lizyml_callback)
+
+        if on_progress is not None:
+            total = len(tune_result.trials) or 1
+            on_progress(current=total, total=total, message="Tuning complete.")
         return TuningSummary(
             best_params=dict(tune_result.best_params),
             best_score=float(tune_result.best_score),
@@ -166,8 +216,9 @@ class LizyMLAdapter:
         return PlotData(plotly_json=fig.to_json())
 
     def available_plots(self, model: Any) -> list[str]:
-        task: str = model._config.task  # noqa: SLF001
-        calibration_enabled = model._config.calibration is not None  # noqa: SLF001
+        cfg = model.fit_result.run_meta.config_normalized
+        task: str = str(cfg["task"])
+        calibration_enabled = cfg.get("calibration") is not None
         plots = ["learning-curve", "oof-distribution", "importance"]
         if task == "regression":
             plots.append("residuals")
@@ -176,8 +227,11 @@ class LizyMLAdapter:
             plots.append("probability-histogram")
             if calibration_enabled:
                 plots.append("calibration")
-        if hasattr(model, "_tune_result") and model._tune_result is not None:  # noqa: SLF001
+        try:
+            model.tuning_plot()
             plots.append("tuning")
+        except Exception:  # noqa: BLE001
+            pass
         return plots
 
     # -- Persistence --
@@ -186,19 +240,30 @@ class LizyMLAdapter:
         exported: Path = model.export(path)
         return str(exported)
 
+    def export_code(self, model: Any, path: str) -> str:
+        """Generate standalone Python code from *model* into *path*.
+
+        Return the resolved path.
+        """
+        exported: Path = model.export_code(path)
+        return str(exported)
+
     def load_model(self, path: str) -> Any:
         from lizyml import Model
 
         return Model.load(path)
 
     def model_info(self, model: Any) -> dict[str, Any]:
-        cfg = model._config  # noqa: SLF001
+        cfg = model.fit_result.run_meta.config_normalized
+        model_cfg = cfg.get("model", {})
+        data_cfg = cfg.get("data", {})
         return {
-            "task": cfg.task,
-            "model_name": cfg.model.name,
-            "feature_count": len(model.fit_result.feature_names)
-            if hasattr(model, "fit_result")
-            else None,
+            "task": str(cfg["task"]),
+            "model_name": (
+                model_cfg.get("name", "") if isinstance(model_cfg, dict) else ""
+            ),
+            "target": data_cfg.get("target") if isinstance(data_cfg, dict) else None,
+            "feature_count": len(model.fit_result.feature_names),
         }
 
     # -- Internal helpers --

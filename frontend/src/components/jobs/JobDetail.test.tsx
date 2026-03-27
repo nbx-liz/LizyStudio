@@ -1,0 +1,495 @@
+import { cleanup, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { makeJob, renderWithProviders } from "@/test/helpers";
+
+const mockNavigate = vi.fn();
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual("react-router-dom");
+  return { ...actual, useNavigate: () => mockNavigate };
+});
+
+const mockFetchJob = vi.fn();
+
+vi.mock("@/api/jobs", () => ({
+  fetchJob: (...args: unknown[]) => mockFetchJob(...args),
+  fetchJobLog: vi.fn().mockResolvedValue({ log: "test log" }),
+  cancelJob: vi.fn(),
+}));
+vi.mock("@/api/websocket", () => ({
+  connectJobProgress: vi.fn().mockReturnValue(() => {}),
+}));
+vi.mock("sonner", () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
+}));
+vi.mock("./CompletedContent", () => ({
+  CompletedContent: () => <div>CompletedContent</div>,
+}));
+vi.mock("./DeleteDialog", () => ({
+  DeleteDialog: () => null,
+}));
+vi.mock("./ExportDialog", () => ({
+  ExportDialog: () => null,
+}));
+
+import { JobDetailPanel } from "./JobDetail";
+
+describe("JobDetailPanel", () => {
+  afterEach(() => {
+    cleanup();
+    mockNavigate.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it("shows Loading... when job data is not yet available", () => {
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Loading...")).toBeInTheDocument();
+  });
+
+  it("renders completed job with action buttons", async () => {
+    const completedJob = makeJob({ status: "completed" });
+    mockFetchJob.mockResolvedValue(completedJob);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    // Wait for the job to load
+    expect((await screen.findAllByText(/Completed/))[0]).toBeInTheDocument();
+
+    // Action buttons for completed jobs
+    expect(screen.getByText("Inference")).toBeInTheDocument();
+    expect(screen.getByText("Export")).toBeInTheDocument();
+    expect(screen.getByText("Re-fit")).toBeInTheDocument();
+    expect(screen.getByText("Delete")).toBeInTheDocument();
+
+    // CompletedContent mock should be rendered
+    expect(screen.getByText("CompletedContent")).toBeInTheDocument();
+  });
+
+  it("renders failed job with Error heading and error message", async () => {
+    const failedJob = makeJob({
+      status: "failed",
+      error: "Division by zero in fold 3",
+      completed_at: null,
+    });
+    mockFetchJob.mockResolvedValue(failedJob);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText(/Failed/)).toBeInTheDocument();
+    expect(screen.getByText("Error")).toBeInTheDocument();
+    expect(screen.getByText("Division by zero in fold 3")).toBeInTheDocument();
+    expect(screen.getByText("View Full Log")).toBeInTheDocument();
+
+    // Failed jobs get Re-fit and Delete buttons
+    expect(screen.getByText("Re-fit")).toBeInTheDocument();
+    expect(screen.getByText("Delete")).toBeInTheDocument();
+
+    // No Inference or Export for failed jobs
+    expect(screen.queryByText("Inference")).not.toBeInTheDocument();
+    expect(screen.queryByText("Export")).not.toBeInTheDocument();
+  });
+
+  it("renders cancelled job with cancellation message", async () => {
+    const cancelledJob = makeJob({
+      status: "cancelled",
+      completed_at: null,
+    });
+    mockFetchJob.mockResolvedValue(cancelledJob);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("Cancelled")).toBeInTheDocument();
+    expect(
+      screen.getByText("This job was cancelled before completion."),
+    ).toBeInTheDocument();
+
+    // Cancelled jobs get Delete but not Inference/Export
+    expect(screen.getByText("Delete")).toBeInTheDocument();
+    expect(screen.queryByText("Inference")).not.toBeInTheDocument();
+    expect(screen.queryByText("Export")).not.toBeInTheDocument();
+  });
+
+  it("renders running job with Progress heading and Cancel button", async () => {
+    const runningJob = makeJob({
+      status: "running",
+      completed_at: null,
+    });
+    mockFetchJob.mockResolvedValue(runningJob);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("Running")).toBeInTheDocument();
+    expect(screen.getByText("Progress")).toBeInTheDocument();
+    expect(screen.getByText("Cancel")).toBeInTheDocument();
+
+    // Running jobs should not show Delete or completed-only actions
+    expect(screen.queryByText("Delete")).not.toBeInTheDocument();
+    expect(screen.queryByText("Inference")).not.toBeInTheDocument();
+    expect(screen.queryByText("Export")).not.toBeInTheDocument();
+  });
+
+  it("renders header with model name and job number", async () => {
+    const job = makeJob({
+      status: "completed",
+      config: { model: { name: "XGBoost" } },
+    });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={3}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText(/Fit #3/)).toBeInTheDocument();
+    expect(screen.getByText(/XGBoost/)).toBeInTheDocument();
+  });
+
+  it("renders tune job type label correctly", async () => {
+    const tuneJob = makeJob({
+      status: "completed",
+      job_type: "tune",
+    });
+    mockFetchJob.mockResolvedValue(tuneJob);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={2}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText(/Tune #2/)).toBeInTheDocument();
+  });
+
+  it("renders Config accordion for all job states", async () => {
+    const job = makeJob({ status: "failed", error: "Some error" });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("Config")).toBeInTheDocument();
+  });
+
+  it("renders Unknown error when error is null for failed job", async () => {
+    const failedJob = makeJob({
+      status: "failed",
+      error: null,
+    });
+    mockFetchJob.mockResolvedValue(failedJob);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("Unknown error")).toBeInTheDocument();
+  });
+
+  it("shows Fitting... as default progress message for running fit job", async () => {
+    const runningJob = makeJob({
+      status: "running",
+      completed_at: null,
+    });
+    mockFetchJob.mockResolvedValue(runningJob);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("Progress")).toBeInTheDocument();
+    expect(screen.getByText("Fitting...")).toBeInTheDocument();
+  });
+
+  it("renders primary metric badge for completed fit job", async () => {
+    const job = makeJob({
+      status: "completed",
+      fit_result: {
+        metrics: { accuracy: { is: 0.96, oos: 0.95, oos_std: 0.01 } },
+        fold_count: 5,
+        params: [],
+      },
+    });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("accuracy: 0.9500")).toBeInTheDocument();
+  });
+
+  it("renders primary metric for completed tune job", async () => {
+    const job = makeJob({
+      status: "completed",
+      job_type: "tune",
+      tune_result: {
+        best_params: { lr: 0.01 },
+        best_score: 0.92,
+        trials: [],
+        metric_name: "f1",
+        direction: "maximize",
+      },
+    });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={2}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("f1: 0.9200")).toBeInTheDocument();
+  });
+
+  it("does not show primary metric for non-completed jobs", async () => {
+    const job = makeJob({ status: "running" });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("Running")).toBeInTheDocument();
+    expect(screen.queryByText(/0\.\d{4}/)).not.toBeInTheDocument();
+  });
+
+  it("renders Execution Log accordion for completed jobs", async () => {
+    const job = makeJob({ status: "completed" });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("Execution Log")).toBeInTheDocument();
+  });
+
+  it("does not render Execution Log for running jobs", async () => {
+    const job = makeJob({ status: "running" });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("Running")).toBeInTheDocument();
+    expect(screen.queryByText("Execution Log")).not.toBeInTheDocument();
+  });
+
+  it("navigates to inference page when Inference button is clicked", async () => {
+    const job = makeJob({ status: "completed" });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    const inferenceBtn = await screen.findByText("Inference");
+    inferenceBtn.click();
+
+    expect(mockNavigate).toHaveBeenCalledWith("/inference?job_id=test-job-1");
+  });
+
+  it("navigates to workspace for re-fit", async () => {
+    const job = makeJob({ status: "completed" });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    const refitBtn = await screen.findByText("Re-fit");
+    refitBtn.click();
+
+    expect(mockNavigate).toHaveBeenCalledWith("/", {
+      state: { refitJobId: "test-job-1" },
+    });
+  });
+
+  it("renders failed job with error text and View Full Log button", async () => {
+    const job = makeJob({
+      status: "failed",
+      error: "OutOfMemoryError: heap exhausted",
+    });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(
+      await screen.findByText("OutOfMemoryError: heap exhausted"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("View Full Log")).toBeInTheDocument();
+  });
+
+  it("renders tune job primary metric from tune_result", async () => {
+    const job = makeJob({
+      status: "completed",
+      job_type: "tune",
+      tune_result: {
+        best_params: { learning_rate: 0.05 },
+        best_score: 0.9678,
+        trials: [],
+        metric_name: "auc",
+        direction: "maximize",
+      },
+    });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText(/auc: 0\.9678/)).toBeInTheDocument();
+  });
+
+  it("renders fit job primary metric from fit_result", async () => {
+    const job = makeJob({
+      status: "completed",
+      job_type: "fit",
+      fit_result: {
+        metrics: { auc: { oos: 0.8912, mean: 0.89 } },
+        fold_count: 5,
+        params: [],
+      },
+    });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText(/auc: 0\.8912/)).toBeInTheDocument();
+  });
+
+  it("renders Config accordion trigger for completed job with config", async () => {
+    const job = makeJob({
+      status: "completed",
+      config: {
+        model: { name: "LightGBM", params: { learning_rate: 0.1 } },
+        data: { target: "y" },
+      },
+    });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    // Config accordion trigger should be visible for completed jobs
+    expect(await screen.findByText("Config")).toBeInTheDocument();
+    // Config tree content is in a collapsed Radix Accordion item;
+    // full content rendering is verified via E2E visual tests.
+  });
+});

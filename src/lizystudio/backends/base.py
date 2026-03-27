@@ -39,8 +39,16 @@ class BackendAdapter(Protocol):
 
     def get_config_schema(self) -> ConfigSchema: ...
 
+    def get_ui_schema(self) -> dict[str, Any]:
+        """Return UI metadata (parameter hints, option sets, etc.)."""
+        ...
+
     def validate_config(self, config: dict[str, Any]) -> list[dict[str, Any]]:
         """Return a list of validation errors (empty == valid)."""
+        ...
+
+    def get_default_config(self, task: str, target: str) -> dict[str, Any]:
+        """Return a complete valid config with all defaults."""
         ...
 
     def load_config_from_file(self, content: bytes, filename: str) -> dict[str, Any]:
@@ -96,6 +104,13 @@ class BackendAdapter(Protocol):
 
     def export_model(self, model: Any, path: str) -> str:
         """Save model artifacts to *path*. Return the resolved path."""
+        ...
+
+    def export_code(self, model: Any, path: str) -> str:
+        """Generate standalone Python code from *model* into *path*.
+
+        Return the resolved path.
+        """
         ...
 
     def load_model(self, path: str) -> Any:

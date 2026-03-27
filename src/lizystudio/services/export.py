@@ -1,12 +1,17 @@
-"""Export service — model and report export (H-0005)."""
+"""Export service — model, report, and code export (H-0005, H-0027)."""
 
 from __future__ import annotations
 
+import logging
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from lizystudio.backends.base import BackendAdapter
 from lizystudio.services.jobs import Job
+
+_log = logging.getLogger(__name__)
 
 
 def export_model(
@@ -55,7 +60,7 @@ def export_report(
             pd = backend.plot(model, pt)
             plot_jsons.append(pd.plotly_json)
         except Exception:  # noqa: BLE001
-            pass
+            _log.warning("Failed to generate plot %r for report", pt, exc_info=True)
 
     # Build HTML
     out = Path(output_path)
@@ -68,6 +73,37 @@ def export_report(
     )
     out.write_text(html, encoding="utf-8")
     return str(out)
+
+
+def export_code_as_zip(
+    *,
+    job: Job,
+    backend: BackendAdapter,
+) -> Path:
+    """Generate standalone Python code from a completed job and return a ZIP archive.
+
+    Loads the model from the job's saved model_path, generates standalone code via
+    the backend adapter, and archives the output into a ZIP file.
+
+    The caller is responsible for removing the returned file after serving it.
+    The ZIP is written outside the temporary working directory so it survives cleanup.
+    """
+    if job.model_path is None:
+        msg = f"Job {job.job_id} has no saved model"
+        raise ValueError(msg)
+
+    model: Any = backend.load_model(job.model_path)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        code_dir = Path(tmpdir) / "code"
+        backend.export_code(model, str(code_dir))
+        zip_base = Path(tmpdir) / "export"
+        shutil.make_archive(str(zip_base), "zip", str(code_dir))
+        # Move to a persistent temp file (survives TemporaryDirectory cleanup)
+        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_file:
+            final = Path(tmp_file.name)
+        shutil.move(str(zip_base) + ".zip", str(final))
+        return final
 
 
 def _build_report_html(

@@ -8,19 +8,41 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from lizystudio.api import inference, jobs, workspace
-from lizystudio.api.errors import StudioError, studio_error_handler
+from lizystudio.api import backends, files, inference, jobs, workspace
+from lizystudio.api.errors import (
+    StudioError,
+    studio_error_handler,
+    validation_error_handler,
+)
 from lizystudio.backends.registry import get_adapter
 from lizystudio.services.jobs import JobStore
 from lizystudio.services.workspace import WorkspaceState
 from lizystudio.ws.progress import ProgressBroadcaster, websocket_progress
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _warmup_adapter(adapter: object) -> None:
+    """Pre-import ML backend modules to avoid import-lock deadlocks.
+
+    When uvicorn serves concurrent requests, lazy ``import lizyml`` calls
+    from different threads can deadlock on Python's global import lock.
+    Calling ``info`` and ``get_ui_schema`` once during startup (single-
+    threaded lifespan) forces the import to complete safely.
+    """
+    try:
+        _ = adapter.info  # type: ignore[attr-defined]
+        if hasattr(adapter, "get_ui_schema"):
+            adapter.get_ui_schema()
+    except Exception:  # noqa: BLE001
+        # Non-fatal: the adapter may work once imports settle.
+        pass
 
 
 def create_app() -> FastAPI:
@@ -38,6 +60,9 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         adapter = get_adapter(backend_name)
+        # Eagerly import the ML backend to avoid import-lock deadlocks
+        # when concurrent API requests trigger lazy imports in threads.
+        _warmup_adapter(adapter)
         application.state.workspace = WorkspaceState(backend=adapter)
         application.state.job_store = JobStore(jobs_dir)
         broadcaster = ProgressBroadcaster()
@@ -60,8 +85,9 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Exception handler
+    # Exception handlers
     application.add_exception_handler(StudioError, studio_error_handler)  # type: ignore[arg-type]
+    application.add_exception_handler(RequestValidationError, validation_error_handler)
 
     # API routers (BLUEPRINT §5.2–§5.4)
     application.include_router(
@@ -71,6 +97,10 @@ def create_app() -> FastAPI:
     application.include_router(
         inference.router, prefix="/api/inference", tags=["inference"]
     )
+    application.include_router(
+        backends.router, prefix="/api/backends", tags=["backends"]
+    )
+    application.include_router(files.router, prefix="/api/files", tags=["files"])
 
     # WebSocket route for job progress (BLUEPRINT §5.5)
     @application.websocket("/ws/jobs/{job_id}/progress")
@@ -86,10 +116,14 @@ def create_app() -> FastAPI:
 
         @application.get("/{full_path:path}")
         async def serve_spa(full_path: str) -> FileResponse:
-            """Serve the SPA — all non-API routes return index.html."""
-            file_path = STATIC_DIR / full_path
-            if file_path.is_file():
-                return FileResponse(file_path)
+            """Serve the SPA — all non-API/WS routes return index.html."""
+            if full_path.startswith(("api/", "ws/")):
+                raise HTTPException(status_code=404, detail="Not found")
+            from lizystudio.security import validate_static_path
+
+            safe = validate_static_path(STATIC_DIR / full_path, STATIC_DIR)
+            if safe is not None:
+                return FileResponse(safe)
             return FileResponse(STATIC_DIR / "index.html")
 
     return application

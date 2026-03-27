@@ -10,7 +10,9 @@ Persistence layout::
 
 from __future__ import annotations
 
+import builtins
 import json
+import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,7 +47,12 @@ class InferenceStore:
         self.jobs_dir = jobs_dir
 
     def _inf_dir(self, job_id: str, inf_id: str) -> Path:
-        return self.jobs_dir / job_id / "inferences" / inf_id
+        candidate = (self.jobs_dir / job_id / "inferences" / inf_id).resolve()
+        root = self.jobs_dir.resolve()
+        if not str(candidate).startswith(str(root) + "/"):
+            msg = f"Path escapes jobs_dir: {candidate}"
+            raise ValueError(msg)
+        return candidate
 
     # --- CRUD ---
 
@@ -92,6 +99,24 @@ class InferenceStore:
             mp = d / "meta.json"
             if d.is_dir() and mp.exists():
                 records.append(self._load_record(mp))
+        records.sort(key=lambda r: r.created_at, reverse=True)
+        return records
+
+    def list_all(self) -> builtins.list[InferenceRecord]:
+        """List all inferences across all jobs, newest first (H-0010)."""
+        records: builtins.list[InferenceRecord] = []
+        if not self.jobs_dir.exists():
+            return records
+        for job_dir in self.jobs_dir.iterdir():
+            if not job_dir.is_dir():
+                continue
+            inf_base = job_dir / "inferences"
+            if not inf_base.exists():
+                continue
+            for d in inf_base.iterdir():
+                mp = d / "meta.json"
+                if d.is_dir() and mp.exists():
+                    records.append(self._load_record(mp))
         records.sort(key=lambda r: r.created_at, reverse=True)
         return records
 
@@ -153,11 +178,13 @@ def run_inference(
     backend: BackendAdapter,
     data_path: str,
     return_shap: bool = False,
+    evaluate: bool = True,
 ) -> InferenceRecord:
     """Run prediction on new data using a completed job's model.
 
-    Detects ground truth automatically when the training target column
-    exists in the inference data.
+    When *evaluate* is True (default), ground truth is detected automatically
+    and metrics are computed.  When False, metrics are skipped even if the
+    target column exists in the data (H-0009).
     """
     # Load model
     if job.model_path is None:
@@ -174,11 +201,11 @@ def run_inference(
     # Detect ground truth — check if training target column is in inference data
     model_info = backend.model_info(model)
     target_col: str | None = model_info.get("target")
-    # LizyML stores target in config
+    # Fallback: resolve target from stored job config
     if target_col is None and job.config:
-        target_col = job.config.get("target")
+        target_col = job.config.get("data", {}).get("target")
 
-    has_ground_truth = target_col is not None and target_col in df.columns
+    has_ground_truth = evaluate and target_col is not None and target_col in df.columns
 
     # Run prediction
     pred_result = backend.predict(model, df, return_shap=return_shap)
@@ -191,7 +218,7 @@ def run_inference(
     # Compute inference metrics if ground truth
     metrics: dict[str, Any] | None = None
     if has_ground_truth:
-        metrics = _compute_inference_metrics(pred_df, model_info)
+        metrics = _compute_inference_metrics(pred_df, model_info, job=job)
 
     # Create record
     inf_id = f"inf_{uuid4().hex[:8]}"
@@ -213,9 +240,40 @@ def run_inference(
 
 
 def _compute_inference_metrics(
+    pred_df: pd.DataFrame,
+    model_info: dict[str, Any],
+    *,
+    job: Job | None = None,
+) -> dict[str, Any]:
+    """Compute metrics and return IS/OOS/Inf 3-column structure.
+
+    When a ``job`` with ``fit_result`` is available, the returned dict has
+    the shape ``{"inf": {...}, "is": {...}, "oos": {...}}``.  Otherwise a
+    flat dict of inference metrics is returned for backward compatibility.
+    """
+    inf_metrics = _compute_inf_metrics(pred_df, model_info)
+
+    if job is None or job.fit_result is None:
+        return inf_metrics
+
+    # Extract IS / OOS from job's fit_result.metrics
+    raw = job.fit_result.metrics
+    raw_nested = raw.get("raw", {})
+    if raw_nested:
+        is_metrics: dict[str, Any] = dict(raw_nested.get("if_mean", {}))
+        oos_metrics: dict[str, Any] = dict(raw_nested.get("oof", {}))
+    else:
+        # Flat metrics fallback — use same values for both IS and OOS
+        is_metrics = {k: v for k, v in raw.items() if isinstance(v, int | float)}
+        oos_metrics = dict(is_metrics)
+
+    return {"inf": inf_metrics, "is": is_metrics, "oos": oos_metrics}
+
+
+def _compute_inf_metrics(
     pred_df: pd.DataFrame, model_info: dict[str, Any]
 ) -> dict[str, Any]:
-    """Compute basic metrics from predictions vs actuals."""
+    """Compute basic inference metrics from predictions vs actuals."""
     actual = pred_df["actual"]
     pred = pred_df["pred"]
     task = model_info.get("task", "regression")
@@ -245,7 +303,9 @@ def _compute_inference_metrics(
                 metrics["auc"] = float(roc_auc_score(actual, proba))
                 metrics["logloss"] = float(log_loss(actual, proba))
             except Exception:  # noqa: BLE001
-                pass
+                logging.getLogger("lizystudio.inference").warning(
+                    "Failed to compute AUC/logloss", exc_info=True
+                )
 
     return metrics
 
@@ -255,21 +315,35 @@ def get_comparison_stats(
     job_id: str,
     inf_id: str,
     other_inf_id: str,
+    *,
+    task: str = "regression",
 ) -> dict[str, Any]:
-    """Compare two inference runs on the same job."""
+    """Compare two inference runs on the same job.
+
+    Returns base statistics for both runs, plus task-specific extras:
+    - regression: ``median``
+    - binary: ``positive_pct`` (percentage of predictions > 0.5)
+    """
     df1 = inf_store.get_predictions_df(job_id, inf_id)
     df2 = inf_store.get_predictions_df(job_id, other_inf_id)
     if df1 is None or df2 is None:
-        return {"error": "predictions not found"}
+        missing = inf_id if df1 is None else other_inf_id
+        msg = f"Predictions not found for inference {missing}"
+        raise ValueError(msg)
 
     def _stats(s: pd.Series[Any]) -> dict[str, float]:
-        return {
+        base: dict[str, float] = {
             "mean": float(s.mean()),
             "std": float(s.std()),
             "min": float(s.min()),
             "max": float(s.max()),
             "count": int(len(s)),
         }
+        if task == "regression":
+            base["median"] = float(s.median())
+        elif task == "binary":
+            base["positive_pct"] = float((s > 0.5).mean() * 100)
+        return base
 
     result: dict[str, Any] = {
         "current": _stats(df1["pred"]),
@@ -282,3 +356,12 @@ def get_comparison_stats(
         result["other_proba"] = _stats(df2["proba"])
 
     return result
+
+
+def get_inference_plot(job: Job, backend: BackendAdapter, plot_type: str) -> Any:
+    """Get a plot from the model used for an inference's parent job."""
+    if job.model_path is None:
+        msg = f"Job {job.job_id} has no saved model"
+        raise ValueError(msg)
+    model = backend.load_model(job.model_path)
+    return backend.plot(model, plot_type)

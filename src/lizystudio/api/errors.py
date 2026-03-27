@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
+
+_backend_logger = logging.getLogger("lizystudio.errors")
 
 
 class StudioError(Exception):
@@ -48,6 +51,15 @@ class JobNotCompletedError(StudioError):
         super().__init__("JOB_NOT_COMPLETED", f"Job not completed: {job_id}", 400)
 
 
+class JobRunningError(StudioError):
+    def __init__(self, job_id: str) -> None:
+        super().__init__(
+            "JOB_RUNNING",
+            f"Cannot delete a running job: {job_id}",
+            400,
+        )
+
+
 class ValidationError(StudioError):
     def __init__(self, errors: list[dict[str, Any]]) -> None:
         super().__init__(
@@ -70,15 +82,21 @@ class PathNotFoundError(StudioError):
 
 class BackendError(StudioError):
     def __init__(self, original: Exception) -> None:
+        _backend_logger.exception("Backend error", exc_info=original)
         super().__init__(
             "BACKEND_ERROR",
-            f"Backend error: {original}",
+            f"Backend processing failed: {type(original).__name__}",
             500,
-            details={"type": type(original).__name__, "message": str(original)},
+            details={"type": type(original).__name__},
         )
 
 
-# --- FastAPI exception handler ---
+class InferenceNotFoundError(StudioError):
+    def __init__(self, inf_id: str) -> None:
+        super().__init__("INFERENCE_NOT_FOUND", f"Inference not found: {inf_id}", 404)
+
+
+# --- FastAPI exception handlers ---
 
 
 async def studio_error_handler(_request: Request, exc: StudioError) -> JSONResponse:
@@ -90,6 +108,25 @@ async def studio_error_handler(_request: Request, exc: StudioError) -> JSONRespo
                 "code": exc.code,
                 "message": exc.message,
                 "details": exc.details,
+            }
+        },
+    )
+
+
+async def validation_error_handler(_request: Request, exc: Exception) -> JSONResponse:
+    """Convert FastAPI RequestValidationError to the standard JSON envelope (H-0007)."""
+    from fastapi.exceptions import RequestValidationError
+
+    errors: list[Any] = []
+    if isinstance(exc, RequestValidationError):
+        errors = exc.errors()  # type: ignore[assignment]
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "message": "Request validation failed",
+                "details": {"errors": errors},
             }
         },
     )

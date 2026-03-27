@@ -9,21 +9,27 @@ from __future__ import annotations
 import tempfile
 from dataclasses import asdict
 from io import StringIO
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+import lizystudio.security as security
 from lizystudio.api.errors import (
     BackendError,
+    FileInvalidError,
+    InferenceNotFoundError,
     JobNotCompletedError,
     JobNotFoundError,
-    StudioError,
+    PathNotFoundError,
 )
+from lizystudio.security import read_upload_checked, validate_path_within
 from lizystudio.services.inference import (
     InferenceStore,
     get_comparison_stats,
+    get_inference_plot,
     run_inference,
 )
 from lizystudio.services.jobs import JobStore, get_job_store
@@ -33,11 +39,6 @@ router = APIRouter()
 
 
 # --- Helpers ---
-
-
-class InferenceNotFoundError(StudioError):
-    def __init__(self, inf_id: str) -> None:
-        super().__init__("INFERENCE_NOT_FOUND", f"Inference not found: {inf_id}", 404)
 
 
 def _get_inf_store(job_store: JobStore) -> InferenceStore:
@@ -58,10 +59,16 @@ def _get_job_or_404(job_id: str, job_store: JobStore) -> Any:
 # --- Run ---
 
 
+class DataSource(BaseModel):
+    source_type: str  # "path" or "upload"
+    path: str
+
+
 class RunRequest(BaseModel):
     job_id: str
-    data_path: str
+    data: DataSource
     return_shap: bool = False
+    evaluate: bool = True
 
 
 @router.post("/run")
@@ -70,15 +77,21 @@ def inference_run(
     job_store: JobStore = Depends(get_job_store),
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, str]:
-    """Run inference with a path to data."""
+    """Run inference with a path to data (H-0009)."""
+    # Validate data path is within allowed root
+    try:
+        validate_path_within(Path(body.data.path), security.ALLOWED_FILES_ROOT)
+    except ValueError as exc:
+        raise PathNotFoundError(str(exc)) from exc
     job = _get_job_or_404(body.job_id, job_store)
     try:
         record = run_inference(
             job=job,
             job_store=job_store,
             backend=ws.backend,
-            data_path=body.data_path,
+            data_path=body.data.path,
             return_shap=body.return_shap,
+            evaluate=body.evaluate,
         )
         return {"inf_id": record.inf_id, "job_id": record.job_id}
     except Exception as exc:
@@ -88,32 +101,23 @@ def inference_run(
 @router.post("/upload")
 async def inference_upload(
     file: UploadFile,
-    job_id: str,
-    return_shap: bool = False,
-    job_store: JobStore = Depends(get_job_store),
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, str]:
-    """Upload data and run inference in one step."""
-    job = _get_job_or_404(job_id, job_store)
-    # Save upload to temp file
+    """Upload data file for inference (H-0015)."""
     suffix = ".csv"
     if file.filename and file.filename.endswith(".parquet"):
         suffix = ".parquet"
-    content = await file.read()
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+    try:
+        content = await read_upload_checked(file)
+    except ValueError as exc:
+        raise FileInvalidError(str(exc)) from exc
+    with tempfile.NamedTemporaryFile(
+        suffix=suffix, delete=False, prefix="lizystudio_"
+    ) as tmp:
         tmp.write(content)
         tmp_path = tmp.name
-    try:
-        record = run_inference(
-            job=job,
-            job_store=job_store,
-            backend=ws.backend,
-            data_path=tmp_path,
-            return_shap=return_shap,
-        )
-        return {"inf_id": record.inf_id, "job_id": record.job_id}
-    except Exception as exc:
-        raise BackendError(exc) from exc
+    ws.track_temp_file(tmp_path)
+    return {"upload_path": tmp_path, "filename": file.filename or "upload"}
 
 
 # --- Query ---
@@ -121,12 +125,12 @@ async def inference_upload(
 
 @router.get("/history")
 def inference_history(
-    job_id: str,
+    job_id: str | None = None,
     job_store: JobStore = Depends(get_job_store),
 ) -> list[dict[str, Any]]:
-    """List inference records for a job."""
+    """List inference records. job_id optional — omit for all records (H-0010)."""
     store = _get_inf_store(job_store)
-    records = store.list(job_id)
+    records = store.list_all() if job_id is None else store.list(job_id)
     return [asdict(r) for r in records]
 
 
@@ -173,7 +177,7 @@ def inference_metrics(
         raise InferenceNotFoundError(inf_id)
     metrics = store.get_metrics(job_id, inf_id)
     if metrics is None:
-        return {"error": "no ground truth available"}
+        raise InferenceNotFoundError(f"{inf_id}/metrics (no ground truth)")
     return metrics
 
 
@@ -190,13 +194,12 @@ def inference_plot(
     record = store.get(job_id, inf_id)
     if record is None:
         raise InferenceNotFoundError(inf_id)
-    # Load model from the job and generate plot
+    # Load model from the parent job and generate plot
     job = job_store.get(job_id)
     if job is None or job.model_path is None:
         raise JobNotFoundError(job_id)
     try:
-        model = ws.backend.load_model(job.model_path)
-        plot_data = ws.backend.plot(model, plot_type)
+        plot_data = get_inference_plot(job, ws.backend, plot_type)
         return {"plotly_json": plot_data.plotly_json}
     except Exception as exc:
         raise BackendError(exc) from exc
@@ -236,4 +239,16 @@ def inference_comparison(
 ) -> dict[str, Any]:
     """Compare two inference runs."""
     store = _get_inf_store(job_store)
-    return get_comparison_stats(store, job_id, inf_id, other_inf_id)
+
+    # Resolve task type from the job's config
+    task = "regression"
+    record = store.get(job_id, inf_id)
+    if record is not None:
+        job = job_store.get(record.job_id)
+        if job is not None:
+            task = job.config.get("model", {}).get("task", "regression")
+
+    try:
+        return get_comparison_stats(store, job_id, inf_id, other_inf_id, task=task)
+    except ValueError as exc:
+        raise InferenceNotFoundError(str(exc)) from exc

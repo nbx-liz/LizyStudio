@@ -47,7 +47,7 @@ ML分析ワークフロー（Config編集→学習→評価→推論→管理）
 ┌──────────────┐     HTTP/WS      ┌──────────────────────────────┐
 │   Browser    │ ◄──────────────► │       FastAPI Server          │
 │  React SPA   │   localhost:8501  │                              │
-│  (Mantine)   │                  │  api/      ← Router           │
+│ (shadcn/ui)  │                  │  api/      ← Router           │
 │              │                  │  services/ ← Session & 調整    │
 │              │                  │  backends/ ← Adapter 層        │
 │              │                  │  ws/       ← Progress          │
@@ -109,6 +109,8 @@ class TuningSummary:
     best_params: dict[str, Any]
     best_score: float
     trials: list[dict[str, Any]]       # trial history (行のリスト)
+    metric_name: str                   # 最適化対象メトリクス名 (H-0013)
+    direction: str                     # "minimize" | "maximize" (H-0013)
 
 @dataclass
 class PredictionSummary:
@@ -135,14 +137,15 @@ class BackendAdapter(Protocol):
 
     # --- Config ---
     def get_config_schema(self) -> ConfigSchema: ...
+    def get_default_config(self, task: str, target: str) -> dict: ...  # 完全なデフォルト Config (H-0025)
     def validate_config(self, config: dict) -> list[dict]: ...  # エラー一覧 (空=valid)
     def load_config_from_file(self, content: bytes, filename: str) -> dict: ...
 
     # --- Model lifecycle ---
     def create_model(self, config: dict, dataframe: pd.DataFrame) -> Any: ...  # 内部モデルオブジェクト
-    def fit(self, model: Any, on_progress: Callable | None = None) -> FitSummary: ...
-    def tune(self, model: Any, on_progress: Callable | None = None) -> TuningSummary: ...
-    def predict(self, model: Any, data: pd.DataFrame) -> PredictionSummary: ...
+    def fit(self, model: Any, *, params: dict | None = None, on_progress: Callable | None = None) -> FitSummary: ...  # params: H-0012
+    def tune(self, model: Any, *, on_progress: Callable | None = None) -> TuningSummary: ...
+    def predict(self, model: Any, data: pd.DataFrame, *, return_shap: bool = False) -> PredictionSummary: ...  # return_shap: H-0012
 
     # --- Evaluation ---
     def evaluate_table(self, model: Any) -> list[dict]: ...
@@ -411,13 +414,41 @@ Target 以外の全カラムを単一テーブルで表示する。
 
 ##### Cross Validation
 
-| 要素 | 条件 | 説明 |
-|------|------|------|
-| Strategy | 常時 | ドロップダウン（KFold / StratifiedKFold / GroupKFold / TimeSeriesSplit） |
-| Folds | 常時 | 数値入力（デフォルト: 5） |
-| Group column | GroupKFold 時のみ | 非除外カラムのドロップダウン |
+**Strategy セレクタ（Segment buttons, 折返し可）:**
 
-Task に応じたデフォルト: binary / multiclass → StratifiedKFold、regression → KFold。
+LizyML の全 8 split method を `capabilities.cv_strategies` から動的表示する。
+
+| Strategy | 表示名 | 説明 |
+|----------|--------|------|
+| `kfold` | KFold | ランダム分割 |
+| `stratified_kfold` | StratifiedKFold | 層化分割（classification デフォルト） |
+| `group_kfold` | GroupKFold | グループ境界分割 |
+| `stratified_group_kfold` | StratifiedGroup | 層化 + グループ |
+| `time_series` | TimeSeriesSplit | 時系列分割 |
+| `purged_time_series` | PurgedTimeSeries | 時系列 + パージ + エンバーゴ |
+| `group_time_series` | GroupTimeSeries | グループ時系列 |
+| `blocked_group_kfold` | BlockedGroup | 期間ブロック × グループ |
+
+Task に応じたデフォルト: binary / multiclass → `stratified_kfold`、regression → `kfold`。
+
+**条件付きフィールド（Strategy に応じて動的表示）:**
+
+| フィールド | 対象 Strategy | コンポーネント | デフォルト |
+|-----------|-------------|-------------|----------|
+| Folds | 全 Strategy | NumberInput（stepper） | 5 |
+| Random State | kfold, stratified_kfold, stratified_group_kfold | NumberInput | 42 |
+| Shuffle | kfold | Switch | true |
+| Group Column | group_kfold, stratified_group_kfold, group_time_series, blocked_group_kfold | Select（非除外カラム） | null |
+| Time Column | time_series, purged_time_series, group_time_series, blocked_group_kfold | Select（非除外カラム） | null |
+| Gap | time_series, group_time_series | NumberInput | 0 |
+| Purge Gap | purged_time_series | NumberInput | 0 |
+| Embargo | purged_time_series | NumberInput | 0 |
+| Train Size Max | time_series, purged_time_series, group_time_series | NumberInput（nullable） | null |
+| Test Size Max | time_series, purged_time_series, group_time_series | NumberInput（nullable） | null |
+| Blocks (col/cutoffs/mode/train_window) | blocked_group_kfold | 専用サブフォーム | null |
+| Groups (col/n_splits/stratify/shuffle) | blocked_group_kfold | 専用サブフォーム | null |
+| Min Train Rows | blocked_group_kfold | NumberInput（nullable） | null |
+| Min Valid Rows | blocked_group_kfold | NumberInput（nullable） | null |
 
 ##### Feature Summary
 
@@ -448,9 +479,20 @@ Data Panel の設定は Config の `data` / `features` / `split` セクション
 | Task | `data.task` |
 | Column Settings (Type=Categorical, Excl OFF) | `features.categorical` |
 | Column Settings (Excl=ON) | `features.exclude` |
-| CV Strategy | `split.strategy` |
+| CV Strategy | `split.method` |
 | CV Folds | `split.n_splits` |
-| CV Group column | `split.group_column` |
+| CV Group column | `data.group_col` |
+| CV Time column | `data.time_col` |
+| CV Random State | `split.random_state` |
+| CV Shuffle | `split.shuffle` |
+| CV Gap | `split.gap` |
+| CV Purge Gap | `split.purge_gap` |
+| CV Embargo | `split.embargo` |
+| CV Train Size Max | `split.train_size_max` |
+| CV Test Size Max | `split.test_size_max` |
+| CV Blocks | `split.blocks` |
+| CV Groups | `split.groups` |
+| CV Min Train/Valid Rows | `split.min_train_rows`, `split.min_valid_rows` |
 
 ##### トリガーフロー
 
@@ -468,19 +510,40 @@ Target 選択 ──► Task 自動判定
 #### 4.2.2 Model Panel（中央パネル）
 
 モデル設定・学習実行を行う。**Fit タブ**と **Tune タブ**でワークフローを完全に分離する。
+Fit タブと Tune タブは**同一の Config オブジェクト**を操作するが、Config 内の担当セクションが異なる。
+
+**Config と UI セクションの対応:**
+
+| Config パス | 担当 | 説明 |
+|-------------|------|------|
+| `task` | Data Panel | Data Panel の Target/Task で決定。Model Panel は読み取り専用で参照 |
+| `data.*` | Data Panel | パス・ターゲット等 |
+| `features.*` | Data Panel | カラム設定 |
+| `split.*` | Data Panel | CV 設定 |
+| `model.*` | Fit タブ Model セクション | モデル選択 + ハイパーパラメータ |
+| `training.*` | Fit タブ Training セクション | Early stopping 等 |
+| `evaluation.*` | Fit タブ Evaluation セクション | メトリクス選択 |
+| `calibration` | Fit タブ Calibration セクション | binary 時のみ。`null` = 無効 |
+| `tuning.optuna.params.*` | Tune タブ Settings セクション | n_trials, direction, timeout |
+| `tuning.optuna.space` | Tune タブ Search Space セクション | パラメータ探索範囲 |
 
 ##### パネルヘッダー（sticky）
 
 タブ切替とアクションボタンを同一行に配置し、パネル上部に sticky 固定する。スクロール位置に関係なくボタンが常に操作可能。
 
 ```
-┌─────┬───────┐          [━━ Fit ━━]
-│▶Fit │ Tune  │     ← sticky header
-└─────┴───────┘
+┌──────────────────────────────────┐
+│ ┌─────┬───────┐    [━━ Fit ━━]  │
+│ │▶Fit │ Tune  │  lizyml v0.x.x  │ ← sticky header
+│ └─────┴───────┘                  │
+└──────────────────────────────────┘
 ```
 
-- ボタンのラベルはアクティブタブに連動（Fit タブ → `Fit`、Tune タブ → `Tune`）
-- Backend 名・バージョンをバッジ表示（`lizyml v0.x.x`）
+| 要素 | コンポーネント | 説明 |
+|------|-------------|------|
+| タブ | shadcn Tabs | Fit / Tune を切替。ボタンラベルはアクティブタブに連動 |
+| 実行ボタン | Button (primary) | Fit タブ → `Fit`、Tune タブ → `Tune` |
+| Backend バッジ | Badge (secondary) | `/api/backends` から取得。`lizyml v{version}` |
 
 ##### Fit タブ
 
@@ -488,191 +551,648 @@ Target 選択 ──► Task 自動判定
 
 ```
 ┌──────────────────────────────────┐
-│ lizyml v0.x.x                    │
-│ ┌─────┬───────┐    [━━ Fit ━━]  │ ← sticky header
-│ │▶Fit │ Tune  │                  │
+│ ┌─────┬───────┐    [━━ Fit ━━]  │
+│ │▶Fit │ Tune  │  lizyml v0.x.x  │ ← sticky
 │ └─────┴───────┘                  │
 │┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄│
-│ ▸ Model                          │ ← scrollable
-│   [LightGBM               ▼]    │
-│   learning_rate      [0.1    ]   │
-│   num_leaves         [31     ]   │
-│   n_estimators       [1000   ]   │
-│   max_depth          [-1     ]   │
+│ ▸ Model               ← config.model │
+│   name   [lgbm             ▼]   │ ← discriminator
+│   ── Smart Params ──             │
+│   auto_num_leaves     [ON ]     │
+│   num_leaves_ratio    [1.0  ]   │ ← auto=ON時のみ
+│   min_data_in_leaf_ratio [0.01] │
+│   min_data_in_bin_ratio  [0.01] │
+│   feature_weights     [OFF]     │ ← Toggle → Multi-row editor
+│   balanced            [Auto ✓]  │ ← nullable Toggle
+│   ── Model Params ──             │
+│   objective  [binary|cross_entropy] │ ← Segment buttons
+│   metric     ☑auc ☑binary_logloss │ ← Chip buttons
+│   n_estimators        [1000 ]   │
+│   learning_rate       [0.1  ]   │
+│   max_depth           [-1   ]   │
 │   ...                            │
+│   ── Additional Params ──        │
+│   [param_select ▼]  [value] [×] │ ← カタログ選択
+│   [＋ Add]                       │
 │                                  │
-│ ▸ Training                       │
-│   early_stopping_rounds   [50]   │
-│   verbose                [100]   │
+│ ▸ Training             ← config.training │
+│   seed                [42   ]   │
+│   ▸ Early Stopping              │
+│     enabled           [ON ]     │
+│     rounds            [150  ]   │
+│     validation_ratio  [0.1  ]   │
+│     inner_valid [holdout    ▼]  │ ← enabled=ON時のみ
 │                                  │
-│ ▸ Evaluation                     │
-│   ☑ AUC  ☑ LogLoss              │
+│ ▸ Evaluation           ← config.evaluation │
+│   ☑ AUC  ☑ LogLoss              │ ← ui_schema.option_sets.metric から
 │   ☐ Accuracy  ☐ F1              │
 │                                  │
-│ ▸ Calibration ──── [ON|OFF]     │ ← binary 時のみ表示
-│   method [isotonic         ▼]   │
+│ ▸ Calibration          ← config.calibration │
+│   [ON|OFF]                      │ ← binary 時のみ表示
+│   method [platt           ▼]   │ ← ui_schema.calibration_methods から
+│   n_splits            [5    ]   │ ← ※非推奨注記
 │                                  │
 │ [Import YAML] [Export YAML]      │
 │ [Raw Config]                     │
 └──────────────────────────────────┘
 ```
 
-**Model:**
+**Model セクション（config.model）— Widget 準拠の3サブグループ構成（H-0030）:**
 
-| 要素 | 説明 |
-|------|------|
-| モデル選択 | Backend が提供するモデル一覧からドロップダウンで選択 |
-| ハイパーパラメータ | 選択モデルの JSON Schema から動的にフォーム生成（後述「フォーム動的生成」参照） |
+LizyML の Config Schema は `model` を `oneOf` + discriminator (`model.name`) で定義する。現在 `lgbm`（LGBMConfig）のみ。
 
-モデル変更時はハイパーパラメータがデフォルト値にリセットされる。
+| 要素 | コンポーネント | Config パス | 説明 |
+|------|-------------|------------|------|
+| モデル選択 | Select | `model.name` | `oneOf` の discriminator 値から選択肢を生成。現在は `lgbm` のみ |
 
-**Training:**
+Model セクション内を3つのサブグループに Separator で視覚分離する:
 
-| 要素 | 説明 |
-|------|------|
-| フォームフィールド | Backend の training セクション JSON Schema から動的生成 |
+**── Smart Params ──**（スキーマフィールド、`model.*` 直下）
 
-代表的な設定: early_stopping_rounds、verbose 等。
+JSON Schema から動的生成する LGBMConfig 固有フィールド。
 
-**Evaluation:**
+| 要素 | コンポーネント | Config パス | 説明 |
+|------|-------------|------------|------|
+| auto_num_leaves | Switch | `model.auto_num_leaves` | ON: 自動計算、OFF: 手動 |
+| num_leaves_ratio | NumberInput (float) | `model.num_leaves_ratio` | `auto_num_leaves=true` 時のみ表示（conditional_visibility） |
+| num_leaves | NumberInput (int) | `model.params.num_leaves` | `auto_num_leaves=false` 時のみ表示 |
+| min_data_in_leaf_ratio | NumberInput (float, nullable) | `model.min_data_in_leaf_ratio` | nullable → Auto chip パターン |
+| min_data_in_bin_ratio | NumberInput (float, nullable) | `model.min_data_in_bin_ratio` | nullable → Auto chip パターン |
+| feature_weights | Toggle + Multi-row editor | `model.feature_weights` | OFF=null。ON: column dropdown + weight stepper の行追加 |
+| balanced | Toggle (nullable) | `model.balanced` | OFF=null（Auto）、ON=true |
 
-| 要素 | 説明 |
-|------|------|
-| メトリクス選択 | Task に応じて Backend が提供する選択肢をチップまたはチェックボックスで表示 |
-
-**Calibration（Optional・binary 時のみ表示）:**
-
-| 要素 | 説明 |
-|------|------|
-| 有効/無効トグル | OFF 時: セクション折りたたみ。ON 時: 設定フォーム表示 |
-| フォームフィールド | method 等。Backend の JSON Schema から動的生成 |
-| 表示条件 | Data Panel の Task が binary の場合のみセクションを表示。それ以外では非表示 |
-
-**Fit ボタン有効条件:** Data Panel 設定完了 + Model 選択済み。
-
-##### Tune タブ
-
-ハイパーパラメータの探索空間を定義し、最適なパラメータを自動探索するワークフロー。Fit タブの設定とは独立。全操作がマウスで完結するよう設計する。
-
-```
-┌──────────────────────────────────┐
-│ lizyml v0.x.x                    │
-│ ┌─────┬───────┐    [━━ Tune ━━] │ ← sticky header
-│ │ Fit │▶Tune  │                  │
-│ └─────┴───────┘                  │
-│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄│
-│ ▸ Model                          │ ← scrollable
-│   [LightGBM               ▼]    │
-│                                  │
-│ ▸ Settings                       │
-│   n_trials        [100       ▼]  │
-│   timeout (sec)   [600       ▼]  │
-│   scoring         [AUC       ▼]  │
-│                                  │
-│ ▸ Search Space                   │
-│   ┌──────────┬────────┬─────────┐│
-│   │Param     │Mode    │Config   ││
-│   ├──────────┼────────┼─────────┤│
-│   │▸ lr      │[Range▼]│.01~.3   ││
-│   │  dist:[Log     ▼]           ││
-│   │▸ n_leaves│[Range▼]│10~100   ││
-│   │  dist:[Uniform▼] step:[1]  ││
-│   │▸ n_estim │[Fixed▼]│[1000]   ││
-│   │▸ boosting│[Choice▼]│☑gbdt ☑dart││
-│   └──────────┴────────┴─────────┘│
-│                                  │
-│ [Import YAML] [Export YAML]      │
-│ [Raw Config]                     │
-└──────────────────────────────────┘
-```
-
-**Model:**
-
-| 要素 | 説明 |
-|------|------|
-| モデル選択 | Backend が提供するモデル一覧からドロップダウンで選択。Fit タブとは独立 |
-
-モデル変更時は Search Space がそのモデルのパラメータ一覧とデフォルト探索範囲にリセットされる。
-
-**Settings:**
+**Feature Weights Editor（feature_weights Toggle=ON 時）:**
 
 | 要素 | コンポーネント | 説明 |
 |------|-------------|------|
-| n_trials | Select ドロップダウン（50 / 100 / 200 / 500 / カスタム） | 探索試行回数 |
-| timeout | Select ドロップダウン（300 / 600 / 1800 / 3600 / カスタム） | 最大探索時間（秒） |
-| scoring | Select ドロップダウン | 最適化対象メトリクス。Task に応じて Backend が選択肢を提供 |
+| 行 | column Select + NumberInput (weight, default=1.0) + × 削除ボタン | 非除外カラムから選択 |
+| 追加ボタン | `[+ Add]` | 新規行を追加。weight > 0 を強制 |
 
-**Search Space:**
+**── Model Params ──**（`model.params` の既知パラメータ、`ui_schema.parameter_hints` から）
 
-各ハイパーパラメータを展開可能な行で表示する。サマリー行にパラメータ名・Mode・設定概要を表示し、クリックで展開して詳細設定を編集する。
+`parameter_hints` のうち `kind` に応じたコンポーネントで描画する:
 
-| 列 | 説明 |
-|-----|------|
-| Param | パラメータ名（クリックで展開/折りたたみ） |
-| Mode | ドロップダウン。パラメータ型に応じた選択肢（後述） |
-| Config | Mode に応じた設定のサマリー表示 |
+| 要素 | コンポーネント | Config パス | 説明 |
+|------|-------------|------------|------|
+| objective | Segment buttons（task 別） | `model.params.objective` | `ui_schema.option_sets.objective[task]` から選択肢生成 |
+| metric | Chip buttons（multi-select） | `model.params.metric` | `ui_schema.option_sets.model_metric[task]` から選択肢生成 |
+| n_estimators | NumberInput (int, step=100) | `model.params.n_estimators` | |
+| learning_rate | NumberInput (float, step=0.001) | `model.params.learning_rate` | |
+| max_depth | NumberInput (int, step=1) | `model.params.max_depth` | |
+| max_bin | NumberInput (int, step=1) | `model.params.max_bin` | |
+| feature_fraction | NumberInput (float, step=0.05) | `model.params.feature_fraction` | |
+| bagging_fraction | NumberInput (float, step=0.05) | `model.params.bagging_fraction` | |
+| bagging_freq | NumberInput (int, step=1) | `model.params.bagging_freq` | |
+| lambda_l1 | NumberInput (float, step=0.0001) | `model.params.lambda_l1` | |
+| lambda_l2 | NumberInput (float, step=0.0001) | `model.params.lambda_l2` | |
+| first_metric_only | Switch | `model.params.first_metric_only` | |
+
+step 値は `ui_schema.step_map` から取得。値が未設定の場合は placeholder にデフォルト値を表示。空の params は `model.params` に含めない。
+
+**── Additional Params ──**（`ui_schema.additional_params` カタログからの選択）
+
+| 要素 | コンポーネント | 説明 |
+|------|-------------|------|
+| パラメータ選択 | Select（ドロップダウン） | `ui_schema.additional_params` リストから未使用のパラメータを選択 |
+| 値入力 | NumberInput / TextInput | step は `step_map` から。型は `parameter_hints` がある場合はそこから判定 |
+| 削除 | × ボタン | 行を削除 |
+| 追加 | `[+ Add]` ボタン | 新規行を追加 |
+
+> 注: Model Params と Additional Params の境界は `parameter_hints` に定義されているか否か。`parameter_hints` にあるパラメータは Model Params に常時表示、それ以外は Additional Params でオンデマンド追加。
+
+モデル変更時は全ハイパーパラメータがデフォルト値にリセットされる。
+
+**Training セクション（config.training）:**
+
+| 要素 | コンポーネント | Config パス | 説明 |
+|------|-------------|------------|------|
+| seed | NumberInput（integer） | `training.seed` | ランダムシード。デフォルト 42 |
+| Early Stopping | Accordion（入れ子） | `training.early_stopping` | 以下のフィールドを含む |
+| → enabled | Switch | `training.early_stopping.enabled` | ON/OFF |
+| → rounds | NumberInput（integer） | `training.early_stopping.rounds` | デフォルト 150。enabled=true 時のみ編集可能 |
+| → inner_valid | Select | `training.inner_valid.method` | enabled=true 時のみ表示。選択肢: `ui_schema.inner_valid_options`（holdout / group_holdout / time_holdout）。null の場合は Backend デフォルト |
+| → inner_valid_ratio | NumberInput（float, 0.0–0.5） | `training.inner_valid.ratio` | デフォルト 0.2。enabled=true 時のみ編集可能。旧 `early_stopping.validation_ratio` から移動 |
+
+**Evaluation セクション（config.evaluation）:**
+
+`evaluation.metrics` は `string[]` 型。選択肢は `ui_schema.option_sets.metric[task]` から動的取得する（フロントエンドにハードコードしない）。
+
+| 要素 | コンポーネント | 説明 |
+|------|-------------|------|
+| メトリクス | Chip グループ（Toggle） | `ui_schema.option_sets.metric[task]` から選択肢を生成。Task 変更時にデフォルト選択にリセット。クリックで ON/OFF |
+
+Data Panel で Task が変更されたとき、`evaluation.metrics` をそのタスクのデフォルト値にリセットする。空選択の場合は Backend のランタイムデフォルトが使用される。
+
+**Calibration セクション（config.calibration）:**
+
+| 条件 | 表示 |
+|------|------|
+| Task ≠ binary | セクション非表示 |
+| Task = binary かつ calibration = null | セクション表示、トグル OFF、フォーム非表示 |
+| Task = binary かつ calibration ≠ null | セクション表示、トグル ON、フォーム表示 |
+
+| 要素 | コンポーネント | Config パス | 説明 |
+|------|-------------|------------|------|
+| 有効/無効 | Switch | `calibration` | OFF → `calibration = null`、ON → `calibration = {method: "platt", params: {}}`（`ui_schema.defaults.calibration` から初期値） |
+| method | Select | `calibration.method` | `ui_schema.calibration_methods` から選択肢生成（platt / isotonic / beta）。デフォルト `platt` |
+| n_splits | NumberInput（integer） | `calibration.n_splits` | デフォルト 5。※LizyML v0.2.0 以降では非推奨（outer CV splits を再利用するため無視される）。UI に注記を表示 |
+
+**Fit ボタン有効条件:**
+
+| 条件 | チェック方法 |
+|------|------------|
+| Data Panel 完了 | `workspace/status` の `has_data = true` |
+| Config 設定済み | `model.name` が選択されている |
+| Config 検証通過 | `/api/workspace/config/validate` のエラーが 0 件 |
+| 実行中でない | `running = false` |
+
+##### Tune タブ
+
+ハイパーパラメータの探索空間を定義し、最適なパラメータを自動探索するワークフロー。全操作がマウスで完結するよう設計する。
+
+Fit タブと Tune タブは**同一の Config オブジェクト**の異なるセクションを編集する。Tune タブは `tuning` セクションを担当し、`model` / `training` は Fit タブの値を共有する。
+
+```
+┌──────────────────────────────────┐
+│ ┌─────┬───────┐    [━━ Tune ━━] │
+│ │ Fit │▶Tune  │  lizyml v0.x.x  │ ← sticky
+│ └─────┴───────┘                  │
+│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄│
+│ ▸ Settings      ← config.tuning.optuna.params │
+│   n_trials  [50 ▼] [100] [200] [カスタム]    │
+│   timeout   [None ▼] [300] [600] [カスタム]  │
+│                                  │
+│ ▸ Search Space  ← config.tuning.optuna.space │
+│   ── Model Params ──             │ ← group 分け
+│   ┌────────────────┬────────┬──────────┐    │
+│   │ Param          │ Mode   │ Summary  │    │
+│   ├────────────────┼────────┼──────────┤    │
+│   │ objective      │Fixed ▼ │ binary   │    │
+│   │▸learning_rate  │Range ▼ │ .01~.3   │    │
+│   │  min:[.01] max:[.3] dist:[Log ▼]  │    │
+│   │ ...            │        │          │    │
+│   ── Smart Params ──                    │
+│   │▸num_leaves_ratio│Range ▼│ 0.5~2.0 │    │
+│   │ ...            │        │          │    │
+│   ── Training ──                        │
+│   │ seed           │Fixed ▼ │ 42       │    │
+│   │▸early_stop.rounds│Range▼│ 50~300  │    │
+│   └────────────────┴────────┴──────────┘    │
+│   [＋ Add ▼]                     │ ← additional_params から追加
+│                                  │
+│ ▸ Evaluation     ← config.tuning.evaluation │
+│   Optimization Metric            │
+│   [auc] [logloss] [f1]          │ ← Segment(single)
+│   Additional Metrics             │
+│   ☑ logloss  ☐ accuracy         │ ← Chip(multi)
+│                                  │
+│ [Import YAML] [Export YAML]      │
+│ [Raw Config]                     │
+└──────────────────────────────────┘
+```
+
+**Settings セクション（config.tuning.optuna.params）:**
+
+| 要素 | コンポーネント | Config パス | 選択肢 | デフォルト |
+|------|-------------|------------|--------|----------|
+| n_trials | SegmentedControl + カスタム NumberInput | `tuning.optuna.params.n_trials` | `ui_schema.n_trials_presets` から（デフォルト: 10/50/100/200/500）+ カスタム | 50 |
+| timeout | SegmentedControl + カスタム NumberInput | `tuning.optuna.params.timeout` | None / 300 / 600 / 1800 / カスタム（秒） | null (None) |
+
+SegmentedControl: プリセット値をボタン群で表示し、「カスタム」を選ぶと NumberInput が出現する。
+
+> 注: `direction` は廃止。Optimization Metric の選択に応じて `ui_schema.option_sets.metric_direction[task][metric]` から自動判定する（H-0031）。
+
+**Search Space セクション（config.tuning.optuna.space）:**
+
+Search Space は `model.params` のキーに対応する探索範囲を定義する。`tuning.optuna.space` は以下の形式の辞書:
+
+```yaml
+# config.tuning.optuna.space の構造
+tuning:
+  optuna:
+    space:
+      learning_rate:          # パラメータ名 = model.params のキー
+        type: float           # float | int | categorical
+        low: 0.01             # Range: 下限
+        high: 0.3             # Range: 上限
+        log: true             # Range: Log-uniform 分布
+      num_leaves:
+        type: int
+        low: 10
+        high: 100
+        step: 1               # integer の step（optional）
+      boosting_type:
+        type: categorical
+        choices: [gbdt, dart] # Choice: 選択肢リスト
+      n_estimators:           # Fixed = space に含めない（model.params の値を使用）
+        # (エントリなし = Fixed)
+```
+
+**パラメータ一覧の生成ルール:**
+
+Search Space テーブルに表示するパラメータは `ui_schema.search_space_catalog` から生成し、`group` フィールドでグループ分け表示する（H-0031）。
+
+| ステップ | 処理 |
+|---------|------|
+| 1 | `search_space_catalog` の全エントリをテーブル行として表示。`group` でグループ分離（── Model Params ──, ── Smart Params ──, ── Training ──） |
+| 2 | 各行の初期 Mode は `Fixed`。**Fixed 値は Tune タブ初回遷移時に Fit config から取り込む**（以後は独立して編集可能） |
+| 3 | ユーザーが Mode を `Range` / `Choice` に変更すると `tuning.optuna.space` にエントリを追加 |
+| 4 | Mode を `Fixed` に戻すと `space` からエントリを削除 |
+| 5 | `[+ Add]` ボタンで `ui_schema.additional_params` から追加パラメータを Search Space に追加可能 |
 
 **Mode 選択肢（パラメータ型で決まる）:**
 
-| パラメータ型 | 選択可能な Mode |
-|------------|---------------|
-| `float` / `integer` | Fixed / Range |
-| `enum` / `string` | Fixed / Choice |
-| `boolean` | Fixed / Choice |
+| パラメータ型 | 選択可能な Mode | 判定方法 |
+|------------|---------------|---------|
+| `float` | Fixed / Range | プリセット定義の型が float |
+| `integer` | Fixed / Range | プリセット定義の型が integer |
+| `categorical`（文字列選択肢あり） | Fixed / Choice | プリセット定義に `choices` がある場合 |
 
 **Mode = Fixed（全型共通）:**
 
 | 要素 | コンポーネント | 説明 |
 |------|-------------|------|
-| 値 | NumberInput（+/- ステッパー付き）/ Select / Switch | 固定値を1つ指定。探索対象外 |
+| 値表示 | テキスト（読み取り専用） | `model.params` の現在値を表示。Fit タブで編集する |
+
+Fixed パラメータは `space` に含めず、`model.params` の値がそのまま使われる。行は折りたたみ状態で表示。
 
 **Mode = Range（float / integer）:**
 
-展開行に以下を表示。すべてマウス操作可能なコンポーネントを使用。
+行を展開して以下のフォームを表示。
 
-| 要素 | コンポーネント | 説明 |
-|------|-------------|------|
-| min | NumberInput（+/- ステッパー付き） | 探索範囲の下限 |
-| max | NumberInput（+/- ステッパー付き） | 探索範囲の上限 |
-| distribution | Select ドロップダウン | Uniform / Log-uniform |
-| step | NumberInput（integer のみ、optional） | 探索のステップ幅 |
+| 要素 | コンポーネント | space エントリ | 説明 |
+|------|-------------|---------------|------|
+| min | NumberInput（ステッパー付き） | `low` | 探索範囲の下限 |
+| max | NumberInput（ステッパー付き） | `high` | 探索範囲の上限 |
+| distribution | Select | `log: true/false` | Uniform（`log: false`）/ Log-uniform（`log: true`） |
+| step | NumberInput（integer のみ） | `step` | ステップ幅。省略可。float には表示しない |
 
-**Mode = Choice（enum / boolean）:**
+Range のデフォルト初期値:
 
-| 要素 | コンポーネント | 説明 |
-|------|-------------|------|
-| 選択肢 | Chip グループ（クリックで ON/OFF） | 探索対象の値を複数選択 |
+| パラメータ | low | high | log | step |
+|-----------|-----|------|-----|------|
+| learning_rate | 0.005 | 0.3 | true | — |
+| num_leaves | 10 | 200 | false | 1 |
+| n_estimators | 100 | 3000 | false | 100 |
+| max_depth | 3 | 12 | false | 1 |
+| subsample | 0.5 | 1.0 | false | — |
+| colsample_bytree | 0.5 | 1.0 | false | — |
+| reg_alpha | 1e-8 | 10.0 | true | — |
+| reg_lambda | 1e-8 | 10.0 | true | — |
 
-Backend がデフォルトの探索範囲を提供する場合はそれを初期値とする。提供されない場合は JSON Schema の `minimum` / `maximum` 等から推定する。
+**Mode = Choice（categorical）:**
 
-**Tune ボタン有効条件:** Data Panel 設定完了 + Model 選択済み + Mode = Range/Choice のパラメータが1つ以上。
+| 要素 | コンポーネント | space エントリ | 説明 |
+|------|-------------|---------------|------|
+| 選択肢 | Chip グループ（ON/OFF） | `choices: [...]` | 探索対象の値を複数選択。最低1つ選択必須 |
+
+**Tune Evaluation セクション（config.tuning.evaluation）— H-0031:**
+
+Tune 時の評価メトリクスを Fit の `evaluation.metrics` とは独立して設定する。2段構成:
+
+| 要素 | コンポーネント | Config パス | 説明 |
+|------|-------------|------------|------|
+| Optimization Metric | Segment buttons（single select） | `tuning.evaluation.metrics[0]` | Optuna の objective として使用されるメトリクス。`ui_schema.option_sets.metric[task]` から選択肢生成。`direction` は `metric_direction[task][metric]` から自動判定 |
+| Additional Metrics | Chip buttons（multi-select） | `tuning.evaluation.metrics[1..]` | Optuna が全メトリクスを計算するが objective は metrics[0] のみ。Optimization Metric は候補から除外 |
+
+**Tune ボタン有効条件:**
+
+| 条件 | チェック方法 |
+|------|------------|
+| Data Panel 完了 | `workspace/status` の `has_data = true` |
+| Config 設定済み | `model.name` が選択されている |
+| 実行中でない | `running = false` |
+
+> 注: 「探索パラメータあり」の条件は廃止（H-0031）。全 Fixed（empty space）でも Tune 可能。`capabilities.tune.allow_empty_space = true` の場合、LizyML がデフォルトの探索空間を自動生成する。
 
 ##### フォーム動的生成
 
-両タブのフォームフィールドは Backend の Config JSON Schema から動的に生成する。
+Fit タブのフォームフィールドは Backend の Config JSON Schema から動的に生成する。
 
-| JSON Schema 型 | フォームコンポーネント |
-|----------------|---------------------|
-| `number` / `integer` | NumberInput |
-| `boolean` | Switch |
-| `string` + `enum` | Select |
-| `string` | TextInput |
-| `array` | MultiSelect またはタグ入力 |
+**JSON Schema → コンポーネントマッピング:**
+
+| JSON Schema 型 | コンポーネント | 備考 |
+|----------------|-------------|------|
+| `number` / `integer` | NumberInput（ステッパー付き） | `minimum`/`maximum` がある場合は範囲制約を表示 |
+| `boolean` | Switch | |
+| `string` + `enum` | Select | enum 値をドロップダウンに |
+| `string`（enum なし） | TextInput | |
+| `array` of `string` | TagInput（カンマ区切り入力 + タグ表示） | `evaluation.metrics` 等 |
+| `anyOf: [T, null]` | T のコンポーネント + 「Auto」チップ | null = Backend デフォルト使用。チップ ON → null を送信 |
+| `object` + named properties | Accordion（入れ子） | `training.early_stopping` 等 |
+| `object` + `additionalProperties` のみ | Key-Value エディタ | `model.params` 等。後述 |
+| `const` | 非表示 | `model.name = "lgbm"`, `config_version = 1` |
+| `oneOf` + discriminator | Select（discriminator 値） + 動的フォーム | `model` セクション |
+
+**anyOf null パターンの扱い:**
+
+LizyML の Schema は多くのフィールドを `anyOf: [{type: T}, {type: null}]` で定義する。`null` は「Backend デフォルトに任せる」を意味する。
+
+| 値 | UI 表示 |
+|-----|---------|
+| `null` | 「Auto」チップが ON。入力フィールドは disabled で placeholder にデフォルト値を表示 |
+| 数値/文字列 | 「Auto」チップが OFF。入力フィールドが enabled で値を表示 |
+
+ユーザーが「Auto」チップをクリックすると値を `null` に設定し、Config に `null` を送信する。
+
+**その他のルール:**
 
 - `default` 値 → フォーム初期値
-- `description` → ツールチップ表示
-- `config_version` は固定値（1）。ユーザーには非表示
-- フォーム変更時にデバウンスして自動バリデーション（`/api/workspace/config/validate`）
+- `description` → ツールチップ表示（info アイコンをフィールド横に配置）
+- `config_version` は固定値（`const: 1`）。ユーザーには非表示
+- フォーム変更時に 500ms デバウンスして `PUT /api/workspace/config` で自動保存。保存前に `POST /api/workspace/config/validate` でバリデーションし、エラーがある場合は保存せずエラーをインラインで表示
+- Accordion セクションの開閉状態はローカル state で管理。Config には影響しない
 
 ##### Config Import / Export
 
 各タブ内の Action Button 上に配置。どちらのタブから操作しても対象は同じ（フル Config）。
 
-| 操作 | 説明 |
-|------|------|
-| Import YAML | YAML/JSON ファイルを読み込み。data / features / split の値は Data Panel に反映、それ以外は Model Panel の各タブに反映 |
-| Export YAML | 現在の全設定（Data Panel + Model Panel 両タブ）を YAML でダウンロード |
-| Raw Config | フル Config の YAML テキストビュー（モーダル）。読み取り専用 |
+| 操作 | コンポーネント | 説明 |
+|------|-------------|------|
+| Import YAML | Button → ファイル選択ダイアログ | YAML/JSON ファイルを読み込み、`POST /api/workspace/config/upload` で送信。data / features / split の値は Data Panel の state に反映（Target/Task/CV 等を更新）、model / training / evaluation / calibration / tuning は Model Panel の Config に反映 |
+| Export YAML | Button → ダウンロード | `GET /api/workspace/config/download` で現在の全 Config を YAML としてダウンロード |
+| Raw Config | Button → Dialog | フル Config を YAML テキストで表示するモーダル。読み取り専用。コピーボタン付き |
+
+##### デザイン仕様
+
+Model Panel 全体のコンポーネントスタイルを定義する。shadcn/ui + Tailwind CSS で統一。
+
+**Sticky ヘッダー:**
+
+```
+┌──────────────────────────────────────────────┐
+│ ┌──────────────────┐              [━ Fit ━]  │
+│ │ ▶ Fit  │  Tune   │  ┌─────────────────┐   │
+│ └──────────────────┘  │lizyml v0.5.2    │   │
+│                       └─────────────────┘   │
+└──────────────────────────────────────────────┘
+  ← TabsList (w-full)     Badge(secondary)
+                            Button(default, sm)
+```
+
+| 要素 | Tailwind クラス | 備考 |
+|------|----------------|------|
+| ヘッダー外枠 | `sticky top-0 z-10 border-b bg-background p-3` | パネル内スクロール時に固定 |
+| タブ行 | `flex items-center justify-between gap-2` | タブとボタンを左右に配置 |
+| TabsList | shadcn `TabsList` + `w-full` を**使わない** → `w-auto` | タブ幅はコンテンツ幅に合わせる |
+| TabsTrigger | shadcn `TabsTrigger` + `px-6` | Fit / Tune の2つ |
+| 実行ボタン | `Button size="sm"` (default variant) | ラベルはアクティブタブに連動 |
+| 実行ボタン (disabled) | `opacity-50 cursor-not-allowed` | 条件未達時は自動で disabled スタイル |
+| Backend バッジ | `Badge variant="secondary"` + `text-xs` | タブ行の下、左寄せ。`mt-1.5` |
+
+**Accordion セクション:**
+
+```
+▸ Model                              ← AccordionTrigger
+  ┌──────────────────────────────┐
+  │ name         [lgbm       ▼] │   ← Select (h-8)
+  │ ──────────── separator ──── │
+  │ auto_num_leaves    [━━ON━]  │   ← Switch
+  │ num_leaves_ratio   [1.0   ] │   ← NumberInput
+  │ balanced           [Auto ✓] │   ← nullable → Auto chip
+  │ ──────────── separator ──── │
+  │ LightGBM params              │   ← Label (text-xs, muted)
+  │ learning_rate  [0.1      ]  │   ← Input (h-8)
+  │ num_leaves     [31       ]  │   ← Input (h-8)
+  │ ...                          │
+  │ [＋ Add parameter]           │   ← Button ghost, sm
+  └──────────────────────────────┘
+```
+
+| 要素 | コンポーネント | Tailwind | 備考 |
+|------|-------------|----------|------|
+| Accordion | shadcn `Accordion type="multiple"` | — | 複数セクション同時展開可 |
+| セクション名 | `AccordionTrigger` | `text-sm font-medium` | Model / Training / Evaluation / Calibration |
+| セクション内容 | `AccordionContent` | `space-y-3 pt-2` | フィールド間のスペース統一 |
+| セパレータ | `<Separator />` または `<div>` | `border-t my-3` | スキーマフィールドと params の間 |
+| デフォルト開閉 | Model: open, Training: open, Evaluation: open, Calibration: closed | — | `defaultValue={["model","training","evaluation"]}` |
+
+**フォームフィールド共通レイアウト:**
+
+各フィールドは Label + Input の2段構成。ラベルとインプットは同一行に配置するか、幅に応じて縦積みする。
+
+```
+┌─────────────────────────────────────┐
+│ learning_rate ⓘ        [  0.1    ] │
+│ ← Label (text-xs)       Input (h-8)│
+│   + tooltip icon         w-24      │
+└─────────────────────────────────────┘
+```
+
+| 要素 | コンポーネント | Tailwind | 備考 |
+|------|-------------|----------|------|
+| フィールド行 | `<div>` | `flex items-center justify-between gap-2` | ラベル左、入力右 |
+| Label | shadcn `Label` | `text-xs text-muted-foreground truncate` | パラメータ名。長い場合は truncate |
+| ツールチップアイコン | lucide `Info` (14px) | `h-3.5 w-3.5 text-muted-foreground/60 cursor-help` | `description` がある場合のみ表示 |
+| ツールチップ | shadcn `Tooltip` | — | hover で `description` テキスト表示 |
+
+**NumberInput（数値入力）:**
+
+```
+┌──────────────────────┐
+│ [−] [  0.1      ] [+]│
+│  ← stepper buttons    │
+│     Input (h-8, w-20) │
+└──────────────────────┘
+```
+
+| 要素 | コンポーネント | Tailwind | 備考 |
+|------|-------------|----------|------|
+| 外枠 | `<div>` | `flex items-center gap-1` | |
+| −/＋ ボタン | `Button variant="outline" size="icon"` | `h-7 w-7` | lucide `Minus` / `Plus` (12px) |
+| 入力フィールド | shadcn `Input` | `h-8 w-20 text-center text-xs tabular-nums` | `type="number"`, step は型に応じて設定 |
+| float の step | — | — | 0.01（learning_rate 等）、0.1（ratio 等） |
+| integer の step | — | — | 1 |
+
+**Switch（真偽値）:**
+
+| 要素 | コンポーネント | Tailwind | 備考 |
+|------|-------------|----------|------|
+| Switch | shadcn `Switch` | デフォルト | ON = primary color、OFF = muted |
+| ラベル配置 | Label + Switch | `flex items-center justify-between` | ラベル左、スイッチ右 |
+
+**Select（ドロップダウン）:**
+
+| 要素 | コンポーネント | Tailwind | 備考 |
+|------|-------------|----------|------|
+| Select | shadcn `Select` | — | |
+| SelectTrigger | shadcn `SelectTrigger` | `h-8 text-xs` | |
+| SelectContent | shadcn `SelectContent` | — | Portal でオーバーフロー回避 |
+| SelectItem | shadcn `SelectItem` | `text-xs` | |
+
+**Auto チップ（nullable フィールド）:**
+
+```
+┌───────────────────────────────────┐
+│ balanced   [Auto ✓]  [  ─  ]     │
+│            ← chip     disabled    │
+│            primary/sm  when Auto  │
+│                                   │
+│ balanced   [Auto  ]  [ true ━]   │
+│            ← chip     enabled     │
+│            outline/sm  when set   │
+└───────────────────────────────────┘
+```
+
+| 要素 | コンポーネント | Tailwind | 備考 |
+|------|-------------|----------|------|
+| Auto チップ (ON) | `Badge variant="default"` | `cursor-pointer text-xs px-2 py-0.5` | クリックで OFF に切替。値を `null` にリセット |
+| Auto チップ (OFF) | `Badge variant="outline"` | `cursor-pointer text-xs px-2 py-0.5` | クリックで ON に切替（Auto = null） |
+| 入力フィールド | 型に応じた Input | Auto ON 時: `opacity-40 pointer-events-none` | Auto ON → disabled + placeholder にデフォルト値表示 |
+
+**Evaluation メトリクスチップ:**
+
+```
+┌────────────────────────────────────┐
+│ ☑ AUC   ☑ LogLoss   ☐ Accuracy   │
+│ ☐ F1    ☐ Precision  ☐ Recall    │
+│ ← Badge toggles, wrap             │
+└────────────────────────────────────┘
+```
+
+| 要素 | コンポーネント | Tailwind | 備考 |
+|------|-------------|----------|------|
+| チップ (選択) | `Badge variant="default"` | `cursor-pointer text-xs` | クリックでトグル |
+| チップ (非選択) | `Badge variant="outline"` | `cursor-pointer text-xs` | クリックでトグル |
+| コンテナ | `<div>` | `flex flex-wrap gap-1.5` | チップを折り返し配置 |
+
+**Calibration トグル:**
+
+| 要素 | コンポーネント | Tailwind | 備考 |
+|------|-------------|----------|------|
+| AccordionTrigger 内トグル | Switch（AccordionTrigger の右端） | `ml-auto` | トグルクリックで `calibration = null ↔ {method: "platt", ...}` |
+| OFF 時 | AccordionContent 非表示 | — | Accordion を閉じた状態で固定 |
+| ON 時 | AccordionContent 表示 | — | method Select + n_splits NumberInput |
+
+**Model セクション 3グループ構成（H-0030）:**
+
+```
+┌──────────────────────────────────────┐
+│ name        [lgbm            ▼]     │ ← discriminator
+│ ── Smart Params ──                   │ ← Separator + Label
+│ auto_num_leaves    [━━ON━]          │
+│ num_leaves_ratio   [1.0   ]         │ ← auto=ON時のみ
+│ min_data_in_leaf_ratio [0.01]       │
+│ min_data_in_bin_ratio  [0.01]       │
+│ feature_weights    [OFF]            │ ← Toggle → Multi-row
+│ balanced           [Auto ✓]         │
+│ ── Model Params ──                   │ ← Separator + Label
+│ objective  [binary|cross_entropy]   │ ← Segment buttons
+│ metric     ☑auc ☑binary_logloss    │ ← Chip buttons
+│ n_estimators [1000 ]                │
+│ learning_rate [0.1  ]               │
+│ ...                                  │
+│ ── Additional Params ──              │ ← Separator + Label
+│ [param_select ▼] [value ] [×]       │ ← カタログ選択
+│ [＋ Add]                             │
+└──────────────────────────────────────┘
+```
+
+| 要素 | コンポーネント | Tailwind | 備考 |
+|------|-------------|----------|------|
+| グループ見出し | `<p>` | `text-xs text-muted-foreground font-medium mb-2` | "Smart Params", "Model Params", "Additional Params" |
+| セパレータ | `<Separator />` | `border-t my-3` | グループ間の視覚分離 |
+| Model Params 行 | Label + NumberInput | 前述のフォームフィールド仕様 | `parameter_hints` から生成。step は `step_map` から |
+| Objective | Segment buttons | 前述の SegmentedControl 仕様 | `option_sets.objective[task]` から選択肢 |
+| Metric | Chip buttons | 前述のメトリクスチップ仕様 | `option_sets.model_metric[task]` から選択肢 |
+| Additional Params 選択 | `Select` | `h-7 w-40 text-xs` | `ui_schema.additional_params` から未使用のパラメータ |
+| Additional Params 値 | NumberInput / Input | `h-7 w-24 text-xs text-right` | step は `step_map` から |
+| 削除ボタン | `Button variant="ghost" size="icon"` | `h-6 w-6` | lucide `X` (12px) |
+| 追加ボタン | `Button variant="ghost" size="sm"` | `text-xs text-muted-foreground` | lucide `Plus` (12px) + "Add" |
+
+**Tune タブ — Settings セクション:**
+
+```
+┌──────────────────────────────────────┐
+│ n_trials                             │
+│ [50] [100] [200] [500] [カスタム▸]   │ ← SegmentedControl
+│                          [  150  ]   │ ← カスタム選択時に表示
+│                                      │
+│ timeout                              │
+│ [None] [300] [600] [1800] [カスタム▸]│
+└──────────────────────────────────────┘
+```
+
+> 注: `direction` は廃止。Optimization Metric 選択時に `metric_direction` マップから自動判定する（H-0031）。
+
+| 要素 | コンポーネント | Tailwind | 備考 |
+|------|-------------|----------|------|
+| SegmentedControl | `<div>` + 複数 `Button` | `flex flex-wrap gap-1` | プリセット値ボタン群 |
+| プリセットボタン (選択) | `Button variant="default" size="sm"` | `h-7 text-xs px-3` | |
+| プリセットボタン (非選択) | `Button variant="outline" size="sm"` | `h-7 text-xs px-3` | |
+| 「カスタム」ボタン | `Button variant="outline" size="sm"` | `h-7 text-xs px-3` | 選択すると NumberInput が出現 |
+| カスタム NumberInput | `Input` | `h-8 w-24 text-xs mt-1.5` | `type="number"` |
+
+**Tune タブ — Search Space テーブル:**
+
+```
+┌──────────────┬──────────┬──────────────────┐
+│ Param        │ Mode     │ Summary          │ ← ヘッダー行
+├──────────────┼──────────┼──────────────────┤
+│▸learning_rate│ Range  ▼ │ 0.01 ~ 0.3 (log)│ ← サマリー行
+│  min  [.01 ] max [.3  ] dist [Log   ▼]    │ ← 展開行
+│                                            │
+│ n_estimators │ Fixed  ▼ │ 1000             │ ← Fixed は展開不可
+│                                            │
+│▸boosting_type│ Choice ▼ │ gbdt, dart       │ ← サマリー行
+│  ☑ gbdt  ☑ dart  ☐ goss                   │ ← 展開行（チップ群）
+└──────────────┴──────────┴──────────────────┘
+```
+
+| 要素 | コンポーネント | Tailwind | 備考 |
+|------|-------------|----------|------|
+| テーブル外枠 | `<div>` | `rounded-md border` | |
+| ヘッダー行 | `<div>` | `flex items-center border-b bg-muted/50 px-3 py-1.5 text-xs font-medium text-muted-foreground` | 3列: Param / Mode / Summary |
+| サマリー行 | `<div>` | `flex items-center px-3 py-2 border-b hover:bg-muted/30 cursor-pointer` | クリックで展開 |
+| サマリー行 (Range/Choice) | — | `font-medium text-foreground` | 展開可能を示す `▸` アイコン |
+| サマリー行 (Fixed) | — | `text-muted-foreground` | 展開不可。値を直接表示 |
+| Mode Select | shadcn `Select` | `h-7 w-24 text-xs` | Fixed / Range / Choice |
+| Summary テキスト | `<span>` | `text-xs text-muted-foreground tabular-nums` | Range: `0.01 ~ 0.3 (log)`、Choice: `gbdt, dart` |
+| 展開行 | `<div>` | `px-6 py-2 border-b bg-muted/20 space-y-2` | indent + 背景色で視覚的区別 |
+| 展開行: Range | NumberInput × 2 + Select | 前述の NumberInput スタイル | min, max, distribution, step |
+| 展開行: Choice | Badge 群 | 前述のメトリクスチップと同じスタイル | ON/OFF トグル |
+| 展開アイコン | lucide `ChevronRight` / `ChevronDown` | `h-3.5 w-3.5 mr-1.5 transition-transform` | 展開時に回転 |
+
+**Config Import/Export ボタン群:**
+
+```
+┌─────────────────────────────────────┐
+│ [📥 Import YAML] [📤 Export YAML]  │
+│ [📄 Raw Config]                     │
+└─────────────────────────────────────┘
+```
+
+| 要素 | コンポーネント | Tailwind | アイコン | 備考 |
+|------|-------------|----------|---------|------|
+| コンテナ | `<div>` | `mt-6 flex flex-wrap gap-2` | — | Accordion の下に配置 |
+| Import YAML | `Button variant="outline" size="sm"` | — | lucide `FileUp` (12px) + `mr-1` | hidden file input をトリガー |
+| Export YAML | `Button variant="outline" size="sm"` | — | lucide `Download` (12px) + `mr-1` | `window.open()` でダウンロード |
+| Raw Config | `Button variant="outline" size="sm"` | — | lucide `FileText` (12px) + `mr-1` | Dialog をトリガー |
+
+**Raw Config ダイアログ:**
+
+| 要素 | コンポーネント | Tailwind | 備考 |
+|------|-------------|----------|------|
+| Dialog | shadcn `Dialog` | `max-h-[80vh] max-w-2xl overflow-auto` | |
+| タイトル | `DialogTitle` | — | "Raw Config (read-only)" |
+| YAML テキスト | `<pre>` | `max-h-[60vh] overflow-auto rounded bg-muted p-4 text-xs font-mono` | YAML フォーマット表示 |
+| コピーボタン | `Button variant="outline" size="sm"` | `absolute top-2 right-2` | lucide `Copy` (12px)。クリックで `navigator.clipboard.writeText()` → toast "Copied" |
+
+**バリデーションエラー表示:**
+
+| 要素 | コンポーネント | Tailwind | 備考 |
+|------|-------------|----------|------|
+| エラーコンテナ | `<div>` | `mb-4 rounded-md border border-destructive/50 bg-destructive/10 p-3` | Accordion の上に表示 |
+| エラー行 | `<p>` | `text-xs text-destructive` | `{path}: {message}` 形式 |
+| インラインエラー | `<p>` | `text-xs text-destructive mt-0.5` | 各フィールドの下にバリデーションエラーを表示（将来対応） |
+
+**レスポンシブ:**
+
+Model Panel は中央パネル（デフォルト幅 35%、min 25%、max 45%）で表示される。
+幅が狭い場合（< 300px）は以下を適用:
+- フィールド行を縦積みに変更（Label 上、Input 下）
+- NumberInput のステッパーボタンを非表示
+- SegmentedControl を2行に折り返し
 
 #### 4.2.3 Results Panel（右パネル）
 
@@ -878,7 +1398,7 @@ Fit 完了と同じ評価項目に加え、探索結果（Best Params・収束�
 | 要素 | 説明 |
 |------|------|
 | パラメータテーブル | 探索で見つかった最適パラメータの一覧 |
-| Apply to Fit | Best Params を Fit タブのハイパーパラメータにコピーし、Fit タブに切替 |
+| Apply to Fit | Tune 実行時の **全 Config snapshot を復元**（best_params だけでなく全設定）し、Fit タブに切替。Widget 準拠: best_params を model.params に設定した上で、training / evaluation / calibration 等も Tune 時の設定を引き継ぐ |
 
 **Score:** Fit 完了と同じ仕様（IS / OOS / OOS Std）。Best Params で学習したモデルの評価値。
 
@@ -927,6 +1447,7 @@ Fit 完了と同じ評価項目に加え、探索結果（Best Params・収束�
 | モデル名 | `LightGBM` 等 |
 | ステータス | `Running` / `✓ Completed` / `✗ Failed` |
 | プライマリメトリクス | 完了時のみ。OOF スコア（Fit）/ Best Score（Tune） |
+| Export Code ボタン | 完了時のみ。`[Export Code]`。LizyML 非依存のコードを ZIP ダウンロード（H-0027）。`POST /api/jobs/{job_id}/export-code` を呼び出す |
 
 ##### Workspace の状態ルール
 
@@ -1572,6 +2093,7 @@ Workspace の揮発状態を管理する。
 | メソッド | パス | 説明 |
 |---------|------|------|
 | GET | `/api/workspace/config/schema` | Config の JSON Schema を返す |
+| GET | `/api/workspace/config/defaults` | 完全なデフォルト Config を返す（query: `task`, `target`）(H-0025) |
 | GET | `/api/workspace/config` | 現在の Config を返す |
 | PUT | `/api/workspace/config` | Config を更新（バリデーション付き） |
 | POST | `/api/workspace/config/validate` | Config dict をバリデーションのみ行う |
@@ -1642,6 +2164,8 @@ Workspace の `workspace_result` は完了時に自動更新される。
 | GET | `/api/jobs/{job_id}/plot/{plot_type}` | Plotly 図 JSON |
 | GET | `/api/jobs/{job_id}/plots` | 利用可能なプロットタイプ一覧 |
 | POST | `/api/jobs/{job_id}/export` | モデル/レポートを指定パスにExport |
+| GET | `/api/jobs/{job_id}/log` | 実行ログ取得（H-0006） |
+| POST | `/api/jobs/{job_id}/cancel` | Running ジョブのキャンセル（H-0011） |
 | DELETE | `/api/jobs/{job_id}` | ジョブを削除 |
 
 **POST /api/jobs/{job_id}/export リクエスト:**
@@ -1714,12 +2238,12 @@ Workspace の `workspace_result` は完了時に自動更新される。
 | メソッド | パス | 説明 |
 |---------|------|------|
 | GET | `/api/inference/history` | 推論履歴一覧（query: `job_id`、省略時は全件） |
-| GET | `/api/inference/{inf_id}` | 推論結果サマリー（meta + has_ground_truth + row_count） |
-| GET | `/api/inference/{inf_id}/predictions` | 予測テーブル（query: `rows=50`, `offset=0`） |
-| GET | `/api/inference/{inf_id}/metrics` | 評価メトリクス（正解あり時。IS/OOS/Inf の3列） |
-| GET | `/api/inference/{inf_id}/plot/{plot_type}` | 評価プロット（正解あり時。Plotly JSON） |
-| GET | `/api/inference/{inf_id}/download` | 予測結果の CSV ダウンロード |
-| GET | `/api/inference/{inf_id}/comparison/{other_inf_id}` | 分布比較統計（Mean/Std/Positive% 等） |
+| GET | `/api/inference/{inf_id}` | 推論結果サマリー（query: `job_id` 必須。meta + has_ground_truth + row_count） |
+| GET | `/api/inference/{inf_id}/predictions` | 予測テーブル（query: `job_id` 必須, `rows=50`, `offset=0`） |
+| GET | `/api/inference/{inf_id}/metrics` | 評価メトリクス（query: `job_id` 必須。正解あり時。IS/OOS/Inf の3列） |
+| GET | `/api/inference/{inf_id}/plot/{plot_type}` | 評価プロット（query: `job_id` 必須。正解あり時。Plotly JSON） |
+| GET | `/api/inference/{inf_id}/download` | 予測結果の CSV ダウンロード（query: `job_id` 必須） |
+| GET | `/api/inference/{inf_id}/comparison/{other_inf_id}` | 分布比較統計（query: `job_id` 必須。Mean/Std/Positive% 等） |
 
 ### 5.5 WebSocket
 
@@ -1733,8 +2257,8 @@ Workspace の `workspace_result` は完了時に自動更新される。
 {
   "type": "progress",
   "job_id": "job_042",
-  "fold": 2,
-  "total_folds": 5,
+  "current": 2,
+  "total": 5,
   "message": "Fold 2/5 training..."
 }
 ```
@@ -1755,6 +2279,124 @@ Workspace の `workspace_result` は完了時に自動更新される。
   "code": "CONFIG_INVALID"
 }
 ```
+
+### 5.6 Backend API
+
+| メソッド | パス | 説明 |
+|----------|------|------|
+| GET | `/api/backends` | 利用可能なバックエンド一覧 |
+| GET | `/api/backends/ui-schema` | UI メタデータ（H-0026） |
+
+### 5.7 Files API
+
+| メソッド | パス | 説明 |
+|----------|------|------|
+| GET | `/api/files` | ディレクトリ内容一覧（query: `path`）。Data Panel のファイルブラウザ用。CSV/Parquet/TSV に限定 |
+
+**GET /api/backends レスポンス:**
+
+```json
+[
+  {
+    "name": "lizyml",
+    "version": "0.4.0"
+  }
+]
+```
+
+**GET /api/backends/ui-schema レスポンス（H-0026, H-0032）:**
+
+```json
+{
+  "sections": [
+    {"key": "model", "title": "Model"},
+    {"key": "training", "title": "Training"},
+    {"key": "calibration", "title": "Calibration"},
+    {"key": "evaluation", "title": "Evaluation"}
+  ],
+  "option_sets": {
+    "objective": {
+      "regression": ["huber", "mse", "mae", "..."],
+      "binary": ["binary", "cross_entropy", "..."],
+      "multiclass": ["multiclass", "softmax", "..."]
+    },
+    "metric": {
+      "regression": ["mae", "mape", "rmse", "..."],
+      "binary": ["auc", "logloss", "auc_pr", "..."],
+      "multiclass": ["multi_logloss", "auc_mu", "..."]
+    },
+    "model_metric": {
+      "regression": ["huber", "mae", "rmse", "..."],
+      "binary": ["auc", "binary_logloss", "..."],
+      "multiclass": ["multi_logloss", "auc_mu", "..."]
+    },
+    "metric_direction": {
+      "regression": {"mae": "minimize", "r2": "maximize", "...": "..."},
+      "binary": {"auc": "maximize", "logloss": "minimize", "...": "..."},
+      "multiclass": {"multi_logloss": "minimize", "...": "..."}
+    }
+  },
+  "n_trials_presets": [10, 50, 100, 200, 500],
+  "parameter_hints": [
+    {"key": "objective", "label": "Objective", "kind": "objective"},
+    {"key": "metric", "label": "Metric", "kind": "model_metric"},
+    {"key": "n_estimators", "label": "N Estimators", "kind": "integer", "step": 100},
+    {"key": "learning_rate", "label": "Learning Rate", "kind": "number", "step": 0.001},
+    "..."
+  ],
+  "search_space_catalog": [
+    {"key": "objective", "title": "Objective", "paramType": "string", "modes": ["fixed", "choice"], "group": "model_params"},
+    {"key": "n_estimators", "title": "N Estimators", "paramType": "integer", "modes": ["fixed", "range"], "group": "model_params"},
+    {"key": "auto_num_leaves", "title": "Auto Num Leaves", "paramType": "boolean", "modes": ["fixed", "choice"], "group": "smart_params"},
+    {"key": "num_leaves_ratio", "title": "Num Leaves Ratio", "paramType": "number", "modes": ["fixed", "range"], "group": "smart_params"},
+    {"key": "seed", "title": "Seed", "paramType": "integer", "modes": ["fixed"], "group": "training"},
+    "..."
+  ],
+  "step_map": {
+    "n_estimators": 100, "learning_rate": 0.001, "max_depth": 1,
+    "feature_fraction": 0.05, "bagging_fraction": 0.05, "..."
+  },
+  "conditional_visibility": {
+    "calibration": {"task": ["binary"]},
+    "num_leaves_ratio": {"auto_num_leaves": true},
+    "num_leaves": {"auto_num_leaves": false},
+    "early_stopping.rounds": {"early_stopping.enabled": true},
+    "early_stopping.validation_ratio": {"early_stopping.enabled": true},
+    "early_stopping.inner_valid": {"early_stopping.enabled": true}
+  },
+  "defaults": {
+    "calibration": {"method": "platt", "n_splits": 5, "params": {}}
+  },
+  "calibration_methods": ["platt", "isotonic", "beta"],
+  "inner_valid_options": ["holdout", "group_holdout", "time_holdout"],
+  "additional_params": ["min_child_weight", "subsample", "colsample_bytree", "..."],
+  "capabilities": {
+    "cv_strategies": [
+      "kfold", "stratified_kfold", "group_kfold", "stratified_group_kfold",
+      "time_series", "purged_time_series", "group_time_series", "blocked_group_kfold"
+    ],
+    "tune": {
+      "allow_empty_space": true
+    }
+  }
+}
+```
+
+**フィールド説明:**
+
+| フィールド | 説明 |
+|-----------|------|
+| `sections` | Fit タブの Accordion セクション定義 |
+| `option_sets` | Task 別の選択肢リスト（objective, metric, model_metric, metric_direction） |
+| `parameter_hints` | Model Params セクションに常時表示するパラメータ定義 |
+| `search_space_catalog` | Tune Search Space に表示するパラメータ定義（`group` でグループ分け） |
+| `step_map` | NumberInput のステップ値マップ |
+| `conditional_visibility` | 親フィールドの値に応じた子フィールドの表示/非表示ルール |
+| `defaults` | セクション有効化時の初期値 |
+| `calibration_methods` | Calibration method の選択肢 |
+| `inner_valid_options` | Inner Validation method の選択肢 |
+| `additional_params` | Additional Params セクションで追加可能なパラメータ名リスト |
+| `capabilities` | バックエンドの動的機能判定。`cv_strategies`: 利用可能な CV strategy、`tune.allow_empty_space`: 全 Fixed での Tune 可否 |
 
 ---
 
@@ -1780,7 +2422,7 @@ Workspace の `workspace_result` は完了時に自動更新される。
 
 ### 6.3 フロントエンドのエラー表示
 
-- API エラーは Mantine の `Notification` で画面上部に表示
+- API エラーは Toast（sonner）で画面上部に表示
 - バリデーションエラーはフォームフィールドにインラインで表示
 - WebSocket の error メッセージは Training 画面のログに表示
 

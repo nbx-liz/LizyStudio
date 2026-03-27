@@ -11,6 +11,7 @@ frontend/node_modules/
 frontend/dist/
 *.tsbuildinfo
 .eslintcache
+.lizystudio/
 
 # Built frontend assets served by backend
 src/lizystudio/static/
@@ -27,7 +28,13 @@ Thumbs.db
 .env
 .env.local
 
-# Testing
+# Playwright MCP
+.playwright-mcp/
+
+# Testing & Audit
+.audit/
+audit-*.png
+audit-*.md
 .coverage
 htmlcov/
 .pytest_cache/

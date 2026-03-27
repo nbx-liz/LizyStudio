@@ -2,66 +2,38 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
-
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+    branches: [main, develop]
 
 jobs:
   backend:
-    name: Backend (lint / typecheck / test)
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11"]
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v5
         with:
-          version: "latest"
-
-      - name: Set up Python
-        run: uv python install 3.11
-
-      - name: Install dependencies
-        run: uv sync --dev
-
-      - name: Ruff lint
-        run: uv run ruff check .
-
-      - name: Ruff format check
-        run: uv run ruff format --check .
-
-      - name: Mypy
-        run: uv run mypy src/lizystudio/
-
-      - name: Pytest
-        run: uv run pytest --cov=lizystudio -q
+          enable-cache: true
+      - run: uv sync
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy src/lizystudio/
+      - run: uv run pytest --cov=src/lizystudio --cov-report=term-missing -q
 
   frontend:
-    name: Frontend (lint / build)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
-
       - uses: pnpm/action-setup@v4
         with:
           version: 9
-
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: "20"
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: ESLint
-        run: pnpm lint
-
-      - name: Build
-        run: pnpm build
+      - run: cd frontend && pnpm install --frozen-lockfile
+      - run: cd frontend && pnpm check
+      - run: cd frontend && pnpm build
+      - run: cd frontend && pnpm test -- --run

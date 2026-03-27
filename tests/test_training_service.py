@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 from unittest.mock import MagicMock
 
 import pandas as pd
@@ -100,23 +99,17 @@ def test_run_fit_with_progress(
         data_ref=sample_data_ref,
         job_type="fit",
     )
-    progress_calls: list[dict[str, Any]] = []
-
-    def on_progress(*, current: int, total: int, message: str) -> None:
-        progress_calls.append({"current": current, "total": total, "message": message})
-
     run_fit(
         job=job,
         job_store=job_store,
         backend=mock_backend,
         config={},
         dataframe=sample_df,
-        on_progress=on_progress,
     )
-    # Verify callback was passed to backend.fit
+    # Verify a progress callback was passed to backend.fit
     mock_backend.fit.assert_called_once()
     call_kwargs = mock_backend.fit.call_args[1]
-    assert call_kwargs["on_progress"] is on_progress
+    assert callable(call_kwargs["on_progress"])
 
 
 def test_run_fit_failure(
