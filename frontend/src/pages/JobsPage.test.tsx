@@ -1,7 +1,6 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { act, cleanup, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeJob, renderWithProviders } from "@/test/helpers";
 import { JobsPage } from "./JobsPage";
 
 // --- API mocks ---
@@ -49,36 +48,6 @@ vi.mock("@/components/jobs/JobDetail", () => ({
     );
   },
 }));
-
-// --- Test data factories ---
-
-function makeJob(overrides: Partial<Record<string, unknown>> = {}) {
-  return {
-    job_id: "job-1",
-    job_type: "fit",
-    status: "completed",
-    backend_name: "lizyml",
-    model_name: "LGBMClassifier",
-    created_at: "2026-01-01T00:00:00Z",
-    completed_at: "2026-01-01T00:10:00Z",
-    error: null,
-    primary_score: 0.95,
-    ...overrides,
-  };
-}
-
-// --- Helpers ---
-
-function renderWithProviders(ui: React.ReactElement) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>{ui}</MemoryRouter>
-    </QueryClientProvider>,
-  );
-}
 
 // --- Tests ---
 

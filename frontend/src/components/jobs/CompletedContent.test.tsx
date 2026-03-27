@@ -1,7 +1,7 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { JobDetail } from "@/api/types";
+import { renderWithQuery } from "@/test/helpers";
 import { CompletedContent } from "./CompletedContent";
 
 // ---------------------------------------------------------------------------
@@ -49,14 +49,6 @@ vi.mock("@/components/workspace/SegmentGroup", () => ({
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-function renderWithQuery(ui: React.ReactElement) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
-  );
-}
 
 function makeFitJob(overrides?: Partial<JobDetail>): JobDetail {
   return {
@@ -76,7 +68,6 @@ function makeFitJob(overrides?: Partial<JobDetail>): JobDetail {
     created_at: "2025-01-01T00:00:00Z",
     completed_at: "2025-01-01T00:01:00Z",
     error: null,
-    error_code: null,
     primary_score: 0.95,
     fit_result: {
       metrics: {

@@ -266,7 +266,6 @@ describe("JobDetail", () => {
       created_at: "2026-01-01T00:00:00Z",
       completed_at: "2026-01-01T00:05:00Z",
       error: null,
-      error_code: null,
       primary_score: 0.92,
       fit_result: {
         metrics: { auc: 0.92, logloss: 0.3 },

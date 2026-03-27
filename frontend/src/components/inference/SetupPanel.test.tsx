@@ -132,7 +132,6 @@ describe("SetupPanel", () => {
       created_at: "2025-01-01T00:00:00Z",
       completed_at: "2025-01-01T00:01:00Z",
       error: null,
-      error_code: null,
       primary_score: 0.95,
     };
     render(
@@ -159,7 +158,6 @@ describe("SetupPanel", () => {
       created_at: "2025-01-01T00:00:00Z",
       completed_at: "2025-01-01T00:01:00Z",
       error: null,
-      error_code: null,
       primary_score: 0.9512,
     };
     render(
@@ -293,7 +291,6 @@ describe("SetupPanel", () => {
       created_at: "2025-01-01T00:00:00Z",
       completed_at: "2025-01-01T00:01:00Z",
       error: null,
-      error_code: null,
       primary_score: 0.95,
     };
 
@@ -328,7 +325,6 @@ describe("SetupPanel", () => {
       created_at: "2025-01-01T00:00:00Z",
       completed_at: "2025-01-01T00:01:00Z",
       error: null,
-      error_code: null,
       primary_score: 0.95,
     };
 

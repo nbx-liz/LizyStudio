@@ -1,6 +1,6 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderWithQuery } from "@/test/helpers";
 import { FileBrowser } from "./FileBrowser";
 
 vi.mock("@/api/files", () => ({
@@ -8,15 +8,6 @@ vi.mock("@/api/files", () => ({
 }));
 
 afterEach(cleanup);
-
-function renderWithQuery(ui: React.ReactElement) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
-  );
-}
 
 describe("FileBrowser", () => {
   it('renders default "Browse" button when no trigger provided', () => {

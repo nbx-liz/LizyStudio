@@ -47,8 +47,3 @@ export async function waitForPlotly(page: Page): Promise<void> {
     );
   });
 }
-
-/** Common screenshot assertion options. */
-export const screenshotOptions = {
-  animations: "disabled" as const,
-};

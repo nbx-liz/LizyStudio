@@ -1,8 +1,6 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-import type { JobDetail } from "@/api/types";
+import { makeJob, renderWithQuery } from "@/test/helpers";
 
 const mockFetchJob = vi.fn();
 const mockFetchJobs = vi.fn().mockResolvedValue([]);
@@ -41,42 +39,6 @@ vi.mock("./TuneTrialsSection", () => ({
 }));
 
 import { ResultsPanel } from "./ResultsPanel";
-
-function renderWithQuery(ui: React.ReactElement) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
-  );
-}
-
-function makeJob(overrides: Partial<JobDetail>): JobDetail {
-  return {
-    job_id: "test-job-1",
-    job_type: "fit",
-    status: "completed",
-    backend_name: "lizyml",
-    model_name: "LightGBM",
-    config: { model: { name: "LightGBM" } },
-    data_ref: {
-      source_type: "path",
-      path: "/data.csv",
-      filename: "data.csv",
-      fingerprint: "abc123",
-      shape: [100, 5],
-    },
-    created_at: "2026-01-01T00:00:00Z",
-    completed_at: "2026-01-01T00:01:00Z",
-    error: null,
-    error_code: null,
-    primary_score: 0.95,
-    fit_result: null,
-    tune_result: null,
-    model_path: null,
-    ...overrides,
-  };
-}
 
 describe("ResultsPanel", () => {
   afterEach(() => {
@@ -123,7 +85,6 @@ describe("ResultsPanel", () => {
     const failedJob = makeJob({
       status: "failed",
       error: "Out of memory",
-      error_code: "OOM",
       completed_at: null,
     });
     mockFetchJob.mockResolvedValue(failedJob);
@@ -284,11 +245,10 @@ describe("ResultsPanel", () => {
     expect(await screen.findByText("f1: 0.9876")).toBeInTheDocument();
   });
 
-  it("renders failed job without error_code", async () => {
+  it("renders failed job with error message only", async () => {
     const failedJob = makeJob({
       status: "failed",
       error: "Some failure",
-      error_code: null,
       completed_at: null,
     });
     mockFetchJob.mockResolvedValue(failedJob);

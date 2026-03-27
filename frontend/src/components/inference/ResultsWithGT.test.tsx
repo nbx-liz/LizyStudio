@@ -1,6 +1,6 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderWithQuery } from "@/test/helpers";
 
 vi.mock("@/api/inference", () => ({
   fetchInferenceMetrics: vi.fn().mockResolvedValue({}),
@@ -32,15 +32,6 @@ vi.mock("@/components/workspace/PlotlyChart", () => ({
 
 import type { InferenceRecord } from "@/api/inference";
 import { ResultsWithGT } from "./ResultsWithGT";
-
-function renderWithQuery(ui: React.ReactElement) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
-  );
-}
 
 function makeRecord(overrides: Partial<InferenceRecord> = {}): InferenceRecord {
   return {
