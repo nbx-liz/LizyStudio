@@ -65,6 +65,6 @@ def test_router_no_direct_backend_calls() -> None:
             continue
         content = py.read_text()
         for pattern in _FORBIDDEN_BACKEND_PATTERNS:
-            assert (
-                pattern not in content
-            ), f"{py.name} contains direct backend call: {pattern}"
+            assert pattern not in content, (
+                f"{py.name} contains direct backend call: {pattern}"
+            )
