@@ -95,9 +95,7 @@ test.describe("Workspace core flow", () => {
       page.getByRole("heading", { name: "Results" }),
     ).toBeVisible();
 
-    // Screenshot
-    const screenshot = await page.screenshot({ fullPage: false });
-    fs.writeFileSync("/tmp/e2e-workspace-layout.png", screenshot);
+    await expect(page).toHaveScreenshot("workspace-layout.png");
   });
 
   test("UI: navigate between pages", async ({ page }) => {

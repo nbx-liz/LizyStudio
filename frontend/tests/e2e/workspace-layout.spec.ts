@@ -1,14 +1,11 @@
 import { expect, test } from "@playwright/test";
-import * as fs from "node:fs";
 
 test.describe("Workspace layout", () => {
   test("3-panel layout renders correctly", async ({ page }) => {
     await page.goto("/");
     await page.waitForLoadState("networkidle");
 
-    // Take full-page screenshot for visual inspection
-    const screenshot = await page.screenshot({ fullPage: false });
-    fs.writeFileSync("/tmp/workspace-layout.png", screenshot);
+    await expect(page).toHaveScreenshot("workspace-layout.png");
 
     // Verify sidebar and main content exist
     await expect(page.getByText("LizyStudio")).toBeVisible();
@@ -33,9 +30,7 @@ test.describe("Workspace layout", () => {
     // Wait for schema to load
     await page.waitForTimeout(1000);
 
-    // Take screenshot for visual inspection
-    const screenshot = await page.screenshot({ fullPage: false });
-    fs.writeFileSync("/tmp/workspace-model-panel.png", screenshot);
+    await expect(page).toHaveScreenshot("workspace-model-panel.png");
 
     // Check that config form sections are rendered as accordions (not flat inputs)
     // After $ref resolution, "model", "training" should appear as expandable sections
@@ -84,8 +79,6 @@ test.describe("Workspace layout", () => {
     });
     console.log("T=2s (after delay):", JSON.stringify(t1));
 
-    // Take a focused screenshot of the data panel area
-    const screenshot = await page.screenshot({ fullPage: false });
-    fs.writeFileSync("/tmp/workspace-data-panel.png", screenshot);
+    await expect(page).toHaveScreenshot("workspace-data-panel.png");
   });
 });
