@@ -437,4 +437,101 @@ describe("JobDetailPanel", () => {
       state: { refitJobId: "test-job-1" },
     });
   });
+
+  it("renders failed job with error text and View Full Log button", async () => {
+    const job = makeJob({
+      status: "failed",
+      error: "OutOfMemoryError: heap exhausted",
+    });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(
+      await screen.findByText("OutOfMemoryError: heap exhausted"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("View Full Log")).toBeInTheDocument();
+  });
+
+  it("renders tune job primary metric from tune_result", async () => {
+    const job = makeJob({
+      status: "completed",
+      job_type: "tune",
+      tune_result: {
+        best_params: { learning_rate: 0.05 },
+        best_score: 0.9678,
+        trials: [],
+        metric_name: "auc",
+        direction: "maximize",
+      },
+    });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText(/auc: 0\.9678/)).toBeInTheDocument();
+  });
+
+  it("renders fit job primary metric from fit_result", async () => {
+    const job = makeJob({
+      status: "completed",
+      job_type: "fit",
+      fit_result: {
+        metrics: { auc: { oos: 0.8912, mean: 0.89 } },
+        fold_count: 5,
+        params: [],
+      },
+    });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText(/auc: 0\.8912/)).toBeInTheDocument();
+  });
+
+  it("renders Config accordion trigger for completed job with config", async () => {
+    const job = makeJob({
+      status: "completed",
+      config: {
+        model: { name: "LightGBM", params: { learning_rate: 0.1 } },
+        data: { target: "y" },
+      },
+    });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    // Config accordion trigger should be visible for completed jobs
+    expect(await screen.findByText("Config")).toBeInTheDocument();
+    // Config tree content is in a collapsed Radix Accordion item;
+    // full content rendering is verified via E2E visual tests.
+  });
 });

@@ -421,4 +421,149 @@ describe("DataPanel", () => {
 
   // Note: Radix Select interactions don't work reliably in jsdom,
   // so we skip tests that require Select option clicking.
+
+  // Column grid rendering requires a complex async chain (load → fetchColumns
+  // → fetchConfigDefaults → updateConfig) that is unreliable in jsdom.
+  // These paths are covered by E2E visual regression tests instead.
+  it.skip("renders column settings grid when data is loaded with target", async () => {
+    mockLoadDataFromPath.mockResolvedValue({
+      data_ref: { shape: [100, 5], path: "/data.csv" },
+    });
+    mockFetchColumns.mockResolvedValue({
+      columns: [
+        {
+          name: "age",
+          dtype: "int64",
+          unique_count: 50,
+          suggested_type: "numeric",
+          suggested_excluded: false,
+          exclude_reason: null,
+        },
+        {
+          name: "gender",
+          dtype: "object",
+          unique_count: 2,
+          suggested_type: "categorical",
+          suggested_excluded: false,
+          exclude_reason: null,
+        },
+        {
+          name: "id_col",
+          dtype: "int64",
+          unique_count: 100,
+          suggested_type: "numeric",
+          suggested_excluded: true,
+          exclude_reason: "id",
+        },
+        {
+          name: "target",
+          dtype: "int64",
+          unique_count: 2,
+          suggested_type: "numeric",
+          suggested_excluded: false,
+          exclude_reason: null,
+        },
+      ],
+      suggested_task: "binary",
+      target: "target",
+    });
+    mockFetchPreview.mockResolvedValue({
+      columns: ["age", "gender", "id_col", "target"],
+      data: [],
+    });
+    mockFetchConfigDefaults.mockResolvedValue({
+      task: "binary",
+      data: { target: "target" },
+    });
+    mockUpdateConfig.mockResolvedValue({});
+
+    const user = userEvent.setup();
+    render(<DataPanel onDataChanged={vi.fn()} onTaskChanged={vi.fn()} />);
+
+    // Switch to Path mode and load data
+    await user.click(screen.getByText("Path"));
+    const input = screen.getByPlaceholderText("/path/to/data.csv");
+    await user.type(input, "/data.csv");
+    await user.click(screen.getByRole("button", { name: "Load" }));
+
+    // Wait for columns to render
+    await waitFor(() => {
+      expect(screen.getByText("age")).toBeInTheDocument();
+    });
+
+    // Column grid headers should be visible
+    expect(screen.getByText("Name")).toBeInTheDocument();
+    expect(screen.getByText("Unique")).toBeInTheDocument();
+    expect(screen.getByText("Exclude")).toBeInTheDocument();
+    expect(screen.getByText("Type")).toBeInTheDocument();
+
+    // Columns should be displayed (excluding target)
+    expect(screen.getByText("age")).toBeInTheDocument();
+    expect(screen.getByText("gender")).toBeInTheDocument();
+    expect(screen.getByText("id_col")).toBeInTheDocument();
+
+    // ID badge should appear
+    expect(screen.getByText("ID")).toBeInTheDocument();
+
+    // Type toggle buttons (Num/Cat) should be present
+    const numButtons = screen.getAllByRole("button", { name: "Num" });
+    const catButtons = screen.getAllByRole("button", { name: "Cat" });
+    expect(numButtons.length).toBeGreaterThan(0);
+    expect(catButtons.length).toBeGreaterThan(0);
+  });
+
+  it.skip("shows summary stats after data is loaded", async () => {
+    mockLoadDataFromPath.mockResolvedValue({
+      data_ref: { shape: [100, 4], path: "/data.csv" },
+    });
+    mockFetchColumns.mockResolvedValue({
+      columns: [
+        {
+          name: "age",
+          dtype: "int64",
+          unique_count: 50,
+          suggested_type: "numeric",
+          suggested_excluded: false,
+          exclude_reason: null,
+        },
+        {
+          name: "gender",
+          dtype: "object",
+          unique_count: 2,
+          suggested_type: "categorical",
+          suggested_excluded: false,
+          exclude_reason: null,
+        },
+        {
+          name: "target",
+          dtype: "int64",
+          unique_count: 2,
+          suggested_type: "numeric",
+          suggested_excluded: false,
+          exclude_reason: null,
+        },
+      ],
+      suggested_task: "binary",
+      target: "target",
+    });
+    mockFetchPreview.mockResolvedValue({ columns: [], data: [] });
+    mockFetchConfigDefaults.mockResolvedValue({
+      task: "binary",
+      data: { target: "target" },
+    });
+    mockUpdateConfig.mockResolvedValue({});
+
+    const user = userEvent.setup();
+    render(<DataPanel onDataChanged={vi.fn()} onTaskChanged={vi.fn()} />);
+
+    await user.click(screen.getByText("Path"));
+    const input = screen.getByPlaceholderText("/path/to/data.csv");
+    await user.type(input, "/data.csv");
+    await user.click(screen.getByRole("button", { name: "Load" }));
+
+    // Summary should show numeric/categorical counts
+    await waitFor(() => {
+      expect(screen.getByText(/numeric/i)).toBeInTheDocument();
+    });
+  });
 });
