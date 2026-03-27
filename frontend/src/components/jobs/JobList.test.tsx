@@ -1,43 +1,8 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { cleanup, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JobSummary } from "@/api/types";
+import { makeJobSummary, renderWithProviders } from "@/test/helpers";
 import { JobList } from "./JobList";
-
-// --- Helpers ---
-
-function renderWithProviders(ui: React.ReactElement) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>{ui}</MemoryRouter>
-    </QueryClientProvider>,
-  );
-}
-
-function makeJob(overrides: Partial<JobSummary> = {}): JobSummary {
-  return {
-    job_id: "job-1",
-    job_type: "fit",
-    status: "completed",
-    backend_name: "lizyml",
-    model_name: "LightGBM",
-    config: {},
-    data_ref: {
-      source_type: "path",
-      path: "/data.csv",
-    } as JobSummary["data_ref"],
-    created_at: new Date().toISOString(),
-    completed_at: new Date().toISOString(),
-    error: null,
-    error_code: null,
-    primary_score: 0.95,
-    ...overrides,
-  };
-}
 
 // --- Tests ---
 
@@ -90,8 +55,12 @@ describe("JobList", () => {
 
   it("renders job items with model abbreviation and score", () => {
     const jobs: JobSummary[] = [
-      makeJob({ job_id: "j1", model_name: "LightGBM", primary_score: 0.912 }),
-      makeJob({
+      makeJobSummary({
+        job_id: "j1",
+        model_name: "LightGBM",
+        primary_score: 0.912,
+      }),
+      makeJobSummary({
         job_id: "j2",
         job_type: "tune",
         model_name: "XGBoost",
@@ -115,8 +84,8 @@ describe("JobList", () => {
 
   it("renders job numbers based on position", () => {
     const jobs: JobSummary[] = [
-      makeJob({ job_id: "j1" }),
-      makeJob({ job_id: "j2" }),
+      makeJobSummary({ job_id: "j1" }),
+      makeJobSummary({ job_id: "j2" }),
     ];
 
     renderWithProviders(
@@ -130,8 +99,8 @@ describe("JobList", () => {
 
   it("renders badge for fit and tune types", () => {
     const jobs: JobSummary[] = [
-      makeJob({ job_id: "j1", job_type: "fit" }),
-      makeJob({ job_id: "j2", job_type: "tune" }),
+      makeJobSummary({ job_id: "j1", job_type: "fit" }),
+      makeJobSummary({ job_id: "j2", job_type: "tune" }),
     ];
 
     renderWithProviders(
@@ -144,7 +113,7 @@ describe("JobList", () => {
 
   it("shows dash for failed job score", () => {
     const jobs: JobSummary[] = [
-      makeJob({ job_id: "j1", status: "failed", primary_score: null }),
+      makeJobSummary({ job_id: "j1", status: "failed", primary_score: null }),
     ];
 
     renderWithProviders(
@@ -157,7 +126,7 @@ describe("JobList", () => {
 
   it("shows ellipsis for running job score", () => {
     const jobs: JobSummary[] = [
-      makeJob({ job_id: "j1", status: "running", primary_score: null }),
+      makeJobSummary({ job_id: "j1", status: "running", primary_score: null }),
     ];
 
     renderWithProviders(

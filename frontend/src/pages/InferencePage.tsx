@@ -129,6 +129,8 @@ export function InferencePage() {
   }, [selectedJobId, completedJobs]);
 
   // Target column from job config
+  // TODO: config is not in JobSummary type. GET /jobs list does not return config.
+  // Either add config to the list endpoint or fetch job detail separately.
   const targetCol = useMemo(() => {
     const job = completedJobs.find((j) => j.job_id === selectedJobId);
     if (!job?.config) return "";

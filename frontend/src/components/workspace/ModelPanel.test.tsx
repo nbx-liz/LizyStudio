@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderWithQuery } from "@/test/helpers";
 import { ModelPanel } from "./ModelPanel";
 
 vi.mock("sonner", () => ({
@@ -24,15 +25,6 @@ vi.mock("@/api/workspace", () => ({
     .fn()
     .mockReturnValue("/api/workspace/config/download"),
 }));
-
-function renderWithQuery(ui: React.ReactElement) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
-  );
-}
 
 describe("ModelPanel", () => {
   afterEach(() => {

@@ -1,7 +1,6 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { act, cleanup, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { renderWithProviders } from "@/test/helpers";
 import { WorkspacePage } from "./WorkspacePage";
 
 // --- API mocks ---
@@ -66,19 +65,6 @@ vi.mock("@/components/workspace/ResultsPanel", () => ({
     return <div data-testid="results-panel">ResultsPanel</div>;
   },
 }));
-
-// --- Helpers ---
-
-function renderWithProviders(ui: React.ReactElement) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>{ui}</MemoryRouter>
-    </QueryClientProvider>,
-  );
-}
 
 // --- Tests ---
 

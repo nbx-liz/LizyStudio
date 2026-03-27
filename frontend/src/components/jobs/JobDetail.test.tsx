@@ -1,9 +1,7 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { cleanup, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { JobDetail } from "@/api/types";
+import { makeJob, renderWithProviders } from "@/test/helpers";
 
 const mockNavigate = vi.fn();
 vi.mock("react-router-dom", async () => {
@@ -35,44 +33,6 @@ vi.mock("./ExportDialog", () => ({
 }));
 
 import { JobDetailPanel } from "./JobDetail";
-
-function makeJob(overrides: Partial<JobDetail>): JobDetail {
-  return {
-    job_id: "test-job-1",
-    job_type: "fit",
-    status: "completed",
-    backend_name: "lizyml",
-    model_name: "LightGBM",
-    config: { model: { name: "LightGBM" } },
-    data_ref: {
-      source_type: "path",
-      path: "/data.csv",
-      filename: "data.csv",
-      fingerprint: "abc123",
-      shape: [100, 5],
-    },
-    created_at: "2026-01-01T00:00:00Z",
-    completed_at: "2026-01-01T00:01:00Z",
-    error: null,
-    error_code: null,
-    primary_score: 0.95,
-    fit_result: null,
-    tune_result: null,
-    model_path: null,
-    ...overrides,
-  };
-}
-
-function renderWithProviders(ui: React.ReactElement) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>{ui}</MemoryRouter>
-    </QueryClientProvider>,
-  );
-}
 
 describe("JobDetailPanel", () => {
   afterEach(() => {
@@ -123,7 +83,6 @@ describe("JobDetailPanel", () => {
     const failedJob = makeJob({
       status: "failed",
       error: "Division by zero in fold 3",
-      error_code: "RUNTIME_ERROR",
       completed_at: null,
     });
     mockFetchJob.mockResolvedValue(failedJob);
@@ -263,7 +222,6 @@ describe("JobDetailPanel", () => {
     const failedJob = makeJob({
       status: "failed",
       error: null,
-      error_code: null,
     });
     mockFetchJob.mockResolvedValue(failedJob);
 

@@ -1,7 +1,6 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { act, cleanup, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeJob, renderWithProviders } from "@/test/helpers";
 import { InferencePage } from "./InferencePage";
 
 // --- API mocks ---
@@ -67,24 +66,6 @@ vi.mock("@/components/inference/ResultsPredOnly", () => ({
   ),
 }));
 
-// --- Test data factories ---
-
-function makeJob(overrides: Partial<Record<string, unknown>> = {}) {
-  return {
-    job_id: "job-1",
-    job_type: "fit",
-    status: "completed",
-    backend_name: "lizyml",
-    model_name: "LGBMClassifier",
-    created_at: "2026-01-01T00:00:00Z",
-    completed_at: "2026-01-01T00:10:00Z",
-    error: null,
-    primary_score: 0.95,
-    config: { model: { name: "LGBMClassifier" }, data: { target: "y" } },
-    ...overrides,
-  };
-}
-
 function makeInfRecord(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     inf_id: "inf-1",
@@ -102,22 +83,6 @@ function makeInfRecord(overrides: Partial<Record<string, unknown>> = {}) {
     warnings: [],
     ...overrides,
   };
-}
-
-// --- Helpers ---
-
-function renderWithProviders(
-  ui: React.ReactElement,
-  { initialEntries = ["/inference"] }: { initialEntries?: string[] } = {},
-) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={initialEntries}>{ui}</MemoryRouter>
-    </QueryClientProvider>,
-  );
 }
 
 // --- Tests ---

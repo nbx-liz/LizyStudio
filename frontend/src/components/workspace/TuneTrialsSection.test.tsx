@@ -36,7 +36,6 @@ function makeJob(overrides: Partial<JobDetail> = {}): JobDetail {
     created_at: "2026-01-01T00:00:00Z",
     completed_at: "2026-01-01T00:01:00Z",
     error: null,
-    error_code: null,
     primary_score: 0.95,
     fit_result: null,
     tune_result: null,

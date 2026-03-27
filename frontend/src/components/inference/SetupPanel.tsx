@@ -52,6 +52,8 @@ export function SetupPanel({
   const [uploading, setUploading] = useState(false);
 
   const selectedJob = completedJobs.find((j) => j.job_id === selectedJobId);
+  // TODO: config is not in JobSummary type. GET /jobs list does not return config.
+  // Either add config to the list endpoint or fetch job detail separately.
   const targetCol = selectedJob?.config?.data
     ? (selectedJob.config.data as Record<string, unknown>).target
     : null;
