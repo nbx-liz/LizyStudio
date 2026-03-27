@@ -236,9 +236,9 @@ class TestLizyMLAdapterUiSchema:
         allowed_groups = {"model_params", "smart_params", "training"}
         for entry in schema["search_space_catalog"]:
             assert "group" in entry, f"Missing 'group' on catalog entry: {entry['key']}"
-            assert (
-                entry["group"] in allowed_groups
-            ), f"Invalid group '{entry['group']}' on entry '{entry['key']}'"
+            assert entry["group"] in allowed_groups, (
+                f"Invalid group '{entry['group']}' on entry '{entry['key']}'"
+            )
 
     def test_conditional_visibility_early_stopping(self) -> None:
         """conditional_visibility must include all three early_stopping sub-keys."""
@@ -258,9 +258,9 @@ class TestLizyMLAdapterUiSchema:
         schema = LizyMLAdapter().get_ui_schema()
         hints = schema["parameter_hints"]
         for h in hints:
-            assert (
-                "default" in h
-            ), f"parameter_hint '{h['key']}' is missing a 'default' field"
+            assert "default" in h, (
+                f"parameter_hint '{h['key']}' is missing a 'default' field"
+            )
 
     def test_parameter_hint_n_estimators_default_is_1000(self) -> None:
         """n_estimators default must be 1000."""

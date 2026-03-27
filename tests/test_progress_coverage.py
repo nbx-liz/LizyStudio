@@ -138,9 +138,9 @@ class TestWebsocketProgressKeepalive:
 
         sent_texts = [c.args[0] for c in ws.send_text.call_args_list]
         payloads = [json.loads(t) for t in sent_texts]
-        assert any(
-            p.get("type") == "ping" for p in payloads
-        ), "Expected at least one keepalive ping message"
+        assert any(p.get("type") == "ping" for p in payloads), (
+            "Expected at least one keepalive ping message"
+        )
 
     def test_keepalive_ping_includes_job_id(self) -> None:
         """Keepalive ping payload must contain the correct job_id."""
