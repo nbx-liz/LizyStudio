@@ -1,0 +1,1 @@
+/home/rem/repos/LizyStudio/.ai_settings/AGENTS.md

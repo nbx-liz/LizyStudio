@@ -206,8 +206,7 @@ test.describe("Workspace Fit Flow", () => {
     const panels = page.locator('[data-slot="resizable-panel"]');
     await expect(panels).toHaveCount(3);
 
-    const screenshot = await page.screenshot({ fullPage: false });
-    fs.writeFileSync("/tmp/e2e-fit-workspace-layout.png", screenshot);
+    await expect(page).toHaveScreenshot("fit-workspace-layout.png");
   });
 
   test("UI: Fit tab is active by default and shows config form", async ({
@@ -224,8 +223,7 @@ test.describe("Workspace Fit Flow", () => {
     // Wait for schema to load
     await page.waitForTimeout(1000);
 
-    const screenshot = await page.screenshot({ fullPage: false });
-    fs.writeFileSync("/tmp/e2e-fit-tab-config.png", screenshot);
+    await expect(page).toHaveScreenshot("fit-tab-config.png");
   });
 
   test("UI: Data load via Path button populates data panel", async ({
@@ -247,7 +245,6 @@ test.describe("Workspace Fit Flow", () => {
     await page.reload();
     await page.waitForLoadState("networkidle");
 
-    const screenshot = await page.screenshot({ fullPage: false });
-    fs.writeFileSync("/tmp/e2e-fit-data-loaded.png", screenshot);
+    await expect(page).toHaveScreenshot("fit-data-loaded.png");
   });
 });

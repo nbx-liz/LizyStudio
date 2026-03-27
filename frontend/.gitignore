@@ -26,3 +26,6 @@ dist-ssr
 # Test artifacts
 test-results/
 tsconfig.tsbuildinfo
+
+# Storybook build output
+storybook-static/

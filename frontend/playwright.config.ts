@@ -5,6 +5,14 @@ export default defineConfig({
   outputDir: "test-results",
   forbidOnly: !!process.env.CI,
   timeout: 120_000,
+  snapshotPathTemplate:
+    "{testDir}/__screenshots__/{projectName}/{testFilePath}/{arg}{ext}",
+  expect: {
+    toHaveScreenshot: {
+      maxDiffPixelRatio: 0.01,
+      animations: "disabled",
+    },
+  },
   use: {
     baseURL: "http://localhost:5173",
     screenshot: "on",
@@ -14,6 +22,20 @@ export default defineConfig({
     {
       name: "chromium",
       use: { browserName: "chromium" },
+    },
+    {
+      name: "chromium-tablet",
+      use: {
+        browserName: "chromium",
+        viewport: { width: 768, height: 1024 },
+      },
+    },
+    {
+      name: "chromium-mobile",
+      use: {
+        browserName: "chromium",
+        viewport: { width: 375, height: 812 },
+      },
     },
   ],
 });

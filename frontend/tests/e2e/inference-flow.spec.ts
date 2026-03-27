@@ -182,8 +182,7 @@ test.describe("Inference flow", () => {
     // The page should show the setup panel
     await expect(page.locator("text=Model")).toBeVisible({ timeout: 10_000 });
 
-    // Take a screenshot for debugging
-    await page.screenshot({ path: "/tmp/e2e-inference-page.png" });
+    await expect(page).toHaveScreenshot("inference-page.png");
   });
 
   // ---------------------------------------------------------------

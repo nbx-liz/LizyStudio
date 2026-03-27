@@ -121,8 +121,7 @@ test.describe("Workspace UI Improvements", () => {
       page.getByRole("button", { name: "TimeSeriesSplit", exact: true }),
     ).toBeVisible();
 
-    const screenshot = await page.screenshot({ fullPage: false });
-    fs.writeFileSync("/tmp/e2e-data-panel-segments.png", screenshot);
+    await expect(page).toHaveScreenshot("data-panel-segments.png");
   });
 
   test("UI: Model Panel — no Auto button visible", async ({ page }) => {
@@ -187,8 +186,7 @@ test.describe("Workspace UI Improvements", () => {
       page.getByRole("combobox").filter({ hasText: /minimize|maximize/ }),
     ).toHaveCount(0);
 
-    const screenshot = await page.screenshot({ fullPage: false });
-    fs.writeFileSync("/tmp/e2e-tune-tab.png", screenshot);
+    await expect(page).toHaveScreenshot("tune-tab.png");
   });
 
   test("UI: Search Space shows segment buttons for Mode", async ({ page }) => {
@@ -209,8 +207,7 @@ test.describe("Workspace UI Improvements", () => {
     // Should have at least several Fixed buttons (one per parameter)
     expect(fixedCount).toBeGreaterThan(5);
 
-    const screenshot = await page.screenshot({ fullPage: false });
-    fs.writeFileSync("/tmp/e2e-search-space.png", screenshot);
+    await expect(page).toHaveScreenshot("search-space.png");
   });
 
   test("API+UI: full data load → target select → task segment buttons appear", async ({
@@ -232,7 +229,6 @@ test.describe("Workspace UI Improvements", () => {
     await page.reload();
     await page.waitForLoadState("networkidle");
 
-    const screenshot = await page.screenshot({ fullPage: false });
-    fs.writeFileSync("/tmp/e2e-after-data-load.png", screenshot);
+    await expect(page).toHaveScreenshot("after-data-load.png");
   });
 });
