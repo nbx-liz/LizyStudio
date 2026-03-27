@@ -1,5 +1,6 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { UiSchema } from "@/api/types";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ConfigForm } from "./ConfigForm";
 
@@ -280,7 +281,7 @@ describe("ConfigForm", () => {
       onChange: vi.fn(),
       uiSchema: {
         sections: [{ key: "training", title: "Training Settings" }],
-      },
+      } as unknown as UiSchema,
     });
     expect(screen.getByText("Training Settings")).toBeInTheDocument();
   });
@@ -295,7 +296,7 @@ describe("ConfigForm", () => {
         conditional_visibility: {
           calibration: { task: ["binary", "multiclass"] },
         },
-      },
+      } as unknown as UiSchema,
     });
 
     expect(screen.getByText("Calibration")).toBeInTheDocument();
@@ -311,7 +312,7 @@ describe("ConfigForm", () => {
         conditional_visibility: {
           calibration: { task: ["binary", "multiclass"] },
         },
-      },
+      } as unknown as UiSchema,
     });
 
     expect(screen.queryByText("Calibration")).not.toBeInTheDocument();
@@ -326,7 +327,7 @@ describe("ConfigForm", () => {
         parameter_hints: [
           { key: "objective", kind: "objective", label: "Objective" },
         ],
-      },
+      } as unknown as UiSchema,
     });
 
     expect(screen.getByTestId("dyn-param")).toBeInTheDocument();

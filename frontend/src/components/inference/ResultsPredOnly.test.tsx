@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithQuery } from "@/test/helpers";
 
@@ -20,7 +20,7 @@ vi.mock("./PredictionsTable", () => ({
 }));
 
 vi.mock("@/components/workspace/PlotlyChart", () => ({
-  PlotlyChart: ({ plotlyJson }: { plotlyJson: string }) => (
+  PlotlyChart: ({ plotlyJson: _plotlyJson }: { plotlyJson: string }) => (
     <div data-testid="plotly-chart">PlotlyChart</div>
   ),
 }));

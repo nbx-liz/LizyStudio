@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithQuery } from "@/test/helpers";
 import { PredictionsTable } from "./PredictionsTable";
@@ -10,10 +10,7 @@ vi.mock("@/api/inference", () => ({
     .mockReturnValue("/api/inference/inf1/download?job_id=j1"),
 }));
 
-import {
-  fetchInferencePredictions,
-  getInferenceDownloadUrl,
-} from "@/api/inference";
+import { fetchInferencePredictions } from "@/api/inference";
 
 describe("PredictionsTable", () => {
   afterEach(() => {

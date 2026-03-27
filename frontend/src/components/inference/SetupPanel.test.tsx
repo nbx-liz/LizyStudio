@@ -115,7 +115,7 @@ describe("SetupPanel", () => {
   });
 
   it("shows target detected when selected job has target column", () => {
-    const job: JobSummary = {
+    const job = {
       job_id: "j1",
       job_type: "fit",
       status: "completed",
@@ -133,7 +133,7 @@ describe("SetupPanel", () => {
       completed_at: "2025-01-01T00:01:00Z",
       error: null,
       primary_score: 0.95,
-    };
+    } as JobSummary;
     render(
       <SetupPanel {...baseProps} completedJobs={[job]} selectedJobId="j1" />,
     );
@@ -141,7 +141,7 @@ describe("SetupPanel", () => {
   });
 
   it("shows score info for selected job with primary_score", () => {
-    const job: JobSummary = {
+    const job = {
       job_id: "j1",
       job_type: "fit",
       status: "completed",
@@ -159,7 +159,7 @@ describe("SetupPanel", () => {
       completed_at: "2025-01-01T00:01:00Z",
       error: null,
       primary_score: 0.9512,
-    };
+    } as JobSummary;
     render(
       <SetupPanel {...baseProps} completedJobs={[job]} selectedJobId="j1" />,
     );
@@ -274,7 +274,7 @@ describe("SetupPanel", () => {
 
   it("enables Run Inference button when job and data path are set", async () => {
     const user = userEvent.setup();
-    const job: JobSummary = {
+    const job = {
       job_id: "j1",
       job_type: "fit",
       status: "completed",
@@ -292,7 +292,7 @@ describe("SetupPanel", () => {
       completed_at: "2025-01-01T00:01:00Z",
       error: null,
       primary_score: 0.95,
-    };
+    } as JobSummary;
 
     render(
       <SetupPanel {...baseProps} completedJobs={[job]} selectedJobId="j1" />,
@@ -308,7 +308,7 @@ describe("SetupPanel", () => {
 
   it("calls onRunInference with correct params when Run button is clicked", async () => {
     const user = userEvent.setup();
-    const job: JobSummary = {
+    const job = {
       job_id: "j1",
       job_type: "fit",
       status: "completed",
@@ -326,7 +326,7 @@ describe("SetupPanel", () => {
       completed_at: "2025-01-01T00:01:00Z",
       error: null,
       primary_score: 0.95,
-    };
+    } as JobSummary;
 
     render(
       <SetupPanel {...baseProps} completedJobs={[job]} selectedJobId="j1" />,
