@@ -312,4 +312,75 @@ describe("ResultsPanel", () => {
 
     expect(await screen.findByText("Completed")).toBeInTheDocument();
   });
+
+  it("renders completed tune job with TuneTrialsSection", async () => {
+    const tuneJob = makeJob({
+      status: "completed",
+      job_type: "tune",
+      primary_score: 0.9623,
+      tune_result: {
+        best_params: { learning_rate: 0.05 },
+        best_score: 0.9623,
+        trials: [{ trial: 1, score: 0.93 }],
+        metric_name: "auc",
+        direction: "maximize",
+      },
+      fit_result: {
+        metrics: { raw: { oof: { auc: 0.9623 } } },
+        fold_count: 5,
+        params: [],
+      },
+    });
+    mockFetchJob.mockResolvedValue(tuneJob);
+    mockFetchJobs.mockResolvedValue([tuneJob]);
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+
+    expect(await screen.findByText("auc: 0.9623")).toBeInTheDocument();
+    // TuneTrialsSection mock should render
+    expect(screen.getByTestId("tune-trials")).toBeInTheDocument();
+  });
+
+  it("renders completed fit job with score section and model name", async () => {
+    const fitJob = makeJob({
+      status: "completed",
+      job_type: "fit",
+      model_name: "RandomForest",
+      config: { model: { name: "RandomForest" } },
+      fit_result: {
+        metrics: {
+          raw: {
+            oof: { rmse: 1.234 },
+            oof_std: { rmse: 0.05 },
+            if_mean: { rmse: 1.1 },
+          },
+        },
+        fold_count: 3,
+        params: [],
+      },
+    });
+    mockFetchJob.mockResolvedValue(fitJob);
+    mockFetchJobs.mockResolvedValue([fitJob]);
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+
+    expect(await screen.findByText(/RandomForest/)).toBeInTheDocument();
+    expect(screen.getByText("Completed")).toBeInTheDocument();
+    // Score section should render
+    expect(screen.getByTestId("score-section")).toBeInTheDocument();
+  });
+
+  it("renders running state with onJobDone prop provided", async () => {
+    const runningJob = makeJob({ status: "running" });
+    mockFetchJob.mockResolvedValue(runningJob);
+    mockFetchJobs.mockResolvedValue([runningJob]);
+    const onJobDone = vi.fn();
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" onJobDone={onJobDone} />);
+
+    expect(await screen.findByText("Running")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar")).toBeInTheDocument();
+    // onJobDone is triggered via WebSocket onCompleted callback,
+    // not testable without mocking connectJobProgress internals.
+  });
 });

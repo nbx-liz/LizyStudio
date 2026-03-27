@@ -1,15 +1,31 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { InferenceRecord } from "@/api/inference";
 import type { JobSummary } from "@/api/types";
 import { SetupPanel } from "./SetupPanel";
 
-vi.mock("@/api/inference", () => ({
-  uploadInferenceData: vi.fn(),
+const { mockUpload, mockToast } = vi.hoisted(() => ({
+  mockUpload: vi.fn(),
+  mockToast: { success: vi.fn(), error: vi.fn() },
 }));
-vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+
+vi.mock("@/api/inference", () => ({
+  uploadInferenceData: (...args: unknown[]) => mockUpload(...args),
+}));
+vi.mock("sonner", () => ({ toast: mockToast }));
 vi.mock("@/components/workspace/FileBrowser", () => ({
-  FileBrowser: () => <button type="button">Browse</button>,
+  FileBrowser: ({ onSelect }: { onSelect: (p: string) => void }) => (
+    <button type="button" onClick={() => onSelect("/browse/selected.csv")}>
+      Browse
+    </button>
+  ),
 }));
 
 describe("SetupPanel", () => {
@@ -175,5 +191,160 @@ describe("SetupPanel", () => {
     };
     render(<SetupPanel {...baseProps} history={[record]} />);
     expect(screen.getByText("History")).toBeInTheDocument();
+  });
+
+  it("switches to Upload mode when Upload button is clicked", async () => {
+    const user = userEvent.setup();
+    render(<SetupPanel {...baseProps} />);
+
+    await user.click(screen.getByRole("button", { name: "Upload" }));
+    expect(screen.getByText("Drop CSV/Parquet or click")).toBeInTheDocument();
+    // Path input should no longer be visible
+    expect(
+      screen.queryByPlaceholderText("/path/to/data.csv"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("handles successful file upload with toast", async () => {
+    mockUpload.mockResolvedValue({
+      upload_path: "/uploads/test.csv",
+      filename: "test.csv",
+    });
+
+    const user = userEvent.setup();
+    render(<SetupPanel {...baseProps} />);
+
+    // Switch to Upload mode
+    await user.click(screen.getByRole("button", { name: "Upload" }));
+
+    // Create a fake file and trigger upload
+    const file = new File(["a,b\n1,2"], "test.csv", { type: "text/csv" });
+    const input = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(mockUpload).toHaveBeenCalledWith(file);
+    });
+    await waitFor(() => {
+      expect(mockToast.success).toHaveBeenCalledWith("Uploaded: test.csv");
+    });
+  });
+
+  it("handles file upload error with toast", async () => {
+    mockUpload.mockRejectedValue(new Error("File too large"));
+
+    const user = userEvent.setup();
+    render(<SetupPanel {...baseProps} />);
+
+    await user.click(screen.getByRole("button", { name: "Upload" }));
+
+    const file = new File(["data"], "big.csv", { type: "text/csv" });
+    const input = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(mockToast.error).toHaveBeenCalledWith(
+        "Upload failed: File too large",
+      );
+    });
+  });
+
+  it("sets data path when Browse selects a file", async () => {
+    const user = userEvent.setup();
+    render(<SetupPanel {...baseProps} />);
+
+    await user.click(screen.getByRole("button", { name: "Browse" }));
+
+    // Data path should be displayed
+    expect(screen.getByText("/browse/selected.csv")).toBeInTheDocument();
+  });
+
+  it("shows data path text when a path is entered", async () => {
+    const user = userEvent.setup();
+    render(<SetupPanel {...baseProps} />);
+
+    const input = screen.getByPlaceholderText("/path/to/data.csv");
+    await user.clear(input);
+    await user.type(input, "/my/data.csv");
+
+    expect(screen.getByText("/my/data.csv")).toBeInTheDocument();
+  });
+
+  it("enables Run Inference button when job and data path are set", async () => {
+    const user = userEvent.setup();
+    const job: JobSummary = {
+      job_id: "j1",
+      job_type: "fit",
+      status: "completed",
+      backend_name: "lizyml",
+      model_name: "lgbm",
+      config: { model: { name: "lgbm" } },
+      data_ref: {
+        source_type: "path",
+        path: "/d.csv",
+        filename: "d.csv",
+        fingerprint: "x",
+        shape: [10, 2],
+      },
+      created_at: "2025-01-01T00:00:00Z",
+      completed_at: "2025-01-01T00:01:00Z",
+      error: null,
+      error_code: null,
+      primary_score: 0.95,
+    };
+
+    render(
+      <SetupPanel {...baseProps} completedJobs={[job]} selectedJobId="j1" />,
+    );
+
+    const input = screen.getByPlaceholderText("/path/to/data.csv");
+    await user.type(input, "/data/test.csv");
+
+    expect(
+      screen.getByRole("button", { name: /run inference/i }),
+    ).toBeEnabled();
+  });
+
+  it("calls onRunInference with correct params when Run button is clicked", async () => {
+    const user = userEvent.setup();
+    const job: JobSummary = {
+      job_id: "j1",
+      job_type: "fit",
+      status: "completed",
+      backend_name: "lizyml",
+      model_name: "lgbm",
+      config: { data: { target: "y" }, model: { name: "lgbm" } },
+      data_ref: {
+        source_type: "path",
+        path: "/d.csv",
+        filename: "d.csv",
+        fingerprint: "x",
+        shape: [10, 2],
+      },
+      created_at: "2025-01-01T00:00:00Z",
+      completed_at: "2025-01-01T00:01:00Z",
+      error: null,
+      error_code: null,
+      primary_score: 0.95,
+    };
+
+    render(
+      <SetupPanel {...baseProps} completedJobs={[job]} selectedJobId="j1" />,
+    );
+
+    const input = screen.getByPlaceholderText("/path/to/data.csv");
+    await user.type(input, "/data/test.csv");
+
+    await user.click(screen.getByRole("button", { name: /run inference/i }));
+
+    expect(baseProps.onRunInference).toHaveBeenCalledWith({
+      dataPath: "/data/test.csv",
+      evaluate: true,
+      returnShap: false,
+    });
   });
 });
