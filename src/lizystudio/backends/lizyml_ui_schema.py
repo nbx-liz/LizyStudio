@@ -39,11 +39,8 @@ _KNOWN_PARAM_KEYS: frozenset[str] = frozenset(
         "min_child_weight",
         "min_split_gain",
         "min_gain_to_split",  # LightGBM alias for min_split_gain
-        "subsample",
-        "colsample_bytree",
         "scale_pos_weight",
-        "reg_alpha",
-        "reg_lambda",
+        "is_unbalance",  # LightGBM native; use `balanced` smart param instead
     }
 )
 
@@ -473,7 +470,7 @@ def build_ui_schema(
                 "key": "verbose",
                 "title": "Log Output",
                 "paramType": "integer",
-                "modes": ["fixed", "range"],
+                "modes": ["fixed"],
                 "group": "model_params",
                 "default": -1,
             },
@@ -552,22 +549,6 @@ def build_ui_schema(
                 "default": 0.0,
             },
             {
-                "key": "subsample",
-                "title": "Subsample",
-                "paramType": "number",
-                "modes": ["fixed", "range"],
-                "group": "additional",
-                "default": 1.0,
-            },
-            {
-                "key": "colsample_bytree",
-                "title": "Col Sample By Tree",
-                "paramType": "number",
-                "modes": ["fixed", "range"],
-                "group": "additional",
-                "default": 1.0,
-            },
-            {
                 "key": "scale_pos_weight",
                 "title": "Scale Pos Weight",
                 "paramType": "number",
@@ -575,22 +556,9 @@ def build_ui_schema(
                 "group": "additional",
                 "default": 1.0,
             },
-            {
-                "key": "reg_alpha",
-                "title": "Reg Alpha (L1)",
-                "paramType": "number",
-                "modes": ["fixed", "range"],
-                "group": "additional",
-                "default": 0.0,
-            },
-            {
-                "key": "reg_lambda",
-                "title": "Reg Lambda (L2)",
-                "paramType": "number",
-                "modes": ["fixed", "range"],
-                "group": "additional",
-                "default": 0.0,
-            },
+            # Note: subsample/colsample_bytree/reg_alpha/reg_lambda are
+            # XGBoost aliases for bagging_fraction/feature_fraction/lambda_l1/lambda_l2
+            # and are available via additional_params only (not in catalog).
             # ── Training group ──
             {
                 "key": "seed",
@@ -653,11 +621,7 @@ def build_ui_schema(
             # Additional params step values
             "min_child_weight": 0.001,
             "min_split_gain": 0.001,
-            "subsample": 0.05,
-            "colsample_bytree": 0.05,
             "scale_pos_weight": 0.1,
-            "reg_alpha": 0.0001,
-            "reg_lambda": 0.0001,
         },
         "conditional_visibility": {
             "calibration": {"task": ["binary"]},

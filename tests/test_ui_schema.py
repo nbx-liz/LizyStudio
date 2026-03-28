@@ -469,6 +469,7 @@ class TestLizyMLAdapterUiSchema:
         additional = set(schema["additional_params"])
         # These should be in additional_params (not promoted to catalog)
         # min_gain_to_split excluded: alias for min_split_gain (in catalog)
+        # is_unbalance excluded: use `balanced` smart param instead
         expected_subset = {
             "min_child_samples",
             "min_data_in_leaf",
@@ -481,7 +482,6 @@ class TestLizyMLAdapterUiSchema:
             "force_col_wise",
             "force_row_wise",
             "histogram_pool_size",
-            "is_unbalance",
             "sigmoid",
             "boost_from_average",
             "bin_construct_sample_cnt",
@@ -509,14 +509,12 @@ class TestLizyMLAdapterUiSchema:
         additional_entries = [e for e in catalog if e.get("group") == "additional"]
         # At least the commonly tuned additional params
         additional_keys = {e["key"] for e in additional_entries}
+        # subsample/colsample_bytree/reg_alpha/reg_lambda excluded:
+        # XGBoost aliases for existing model_params entries
         expected_tunable = {
             "min_child_weight",
             "min_split_gain",
-            "subsample",
-            "colsample_bytree",
             "scale_pos_weight",
-            "reg_alpha",
-            "reg_lambda",
         }
         missing = expected_tunable - additional_keys
         assert not missing, f"Tunable additional params missing from catalog: {missing}"
@@ -588,9 +586,7 @@ class TestLizyMLAdapterUiSchema:
         for key in (
             "min_child_weight",
             "min_split_gain",
-            "subsample",
-            "reg_alpha",
-            "reg_lambda",
+            "scale_pos_weight",
         ):
             assert key in step_map, f"step_map missing: {key}"
 
