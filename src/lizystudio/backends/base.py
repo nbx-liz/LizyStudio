@@ -92,6 +92,10 @@ class BackendAdapter(Protocol):
 
     def importance(self, model: Any, kind: str = "split") -> dict[str, float]: ...
 
+    def importance_kinds(self, model: Any) -> list[str]:
+        """Return the list of valid importance kind identifiers."""
+        return ["split"]
+
     def confusion_matrix(
         self, model: Any, threshold: float = 0.5
     ) -> dict[str, Any]: ...

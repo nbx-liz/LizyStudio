@@ -11,6 +11,7 @@ import {
   exportJob,
   fetchJob,
   fetchJobImportance,
+  fetchJobImportanceKinds,
   fetchJobLog,
   fetchJobPlot,
   fetchJobPlots,
@@ -68,6 +69,18 @@ describe("fetchJobImportance", () => {
     mockApiFetch.mockResolvedValue({});
     await fetchJobImportance("j1", "shap");
     expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1/importance?kind=shap");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchJobImportanceKinds
+// ---------------------------------------------------------------------------
+describe("fetchJobImportanceKinds", () => {
+  it("calls /jobs/:id/importance-kinds", async () => {
+    mockApiFetch.mockResolvedValue(["split", "gain", "shap"]);
+    const result = await fetchJobImportanceKinds("j1");
+    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1/importance-kinds");
+    expect(result).toEqual(["split", "gain", "shap"]);
   });
 });
 

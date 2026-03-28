@@ -187,6 +187,10 @@ class LizyMLAdapter:
         result: dict[str, float] = model.importance(kind=kind)
         return result
 
+    def importance_kinds(self, model: Any) -> list[str]:
+        """Return valid importance kinds for LizyML models."""
+        return ["split", "gain", "shap"]
+
     def confusion_matrix(self, model: Any, threshold: float = 0.5) -> dict[str, Any]:
         result = model.confusion_matrix(threshold=threshold)
         return {

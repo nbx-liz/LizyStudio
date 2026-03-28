@@ -26,6 +26,7 @@ from lizystudio.services.jobs import (
     JobStore,
     get_available_plots,
     get_importance,
+    get_importance_kinds,
     get_job_plot,
     get_job_store,
     get_metrics_table,
@@ -217,6 +218,21 @@ def get_job_importance_endpoint(
     _require_completed(job)
     try:
         return get_importance(job, ws.backend, kind=kind)
+    except Exception as exc:
+        raise BackendError(exc) from exc
+
+
+@router.get("/{job_id}/importance-kinds")
+def get_job_importance_kinds_endpoint(
+    job_id: str,
+    job_store: JobStore = Depends(get_job_store),
+    ws: WorkspaceState = Depends(get_workspace),
+) -> list[str]:
+    """Get the list of valid importance kind identifiers."""
+    job = _get_job_or_404(job_id, job_store)
+    _require_completed(job)
+    try:
+        return get_importance_kinds(job, ws.backend)
     except Exception as exc:
         raise BackendError(exc) from exc
 

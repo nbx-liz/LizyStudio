@@ -1,4 +1,5 @@
 import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   FitResult,
@@ -21,6 +22,9 @@ interface FoldDetailsSectionProps {
   splitSummary: SplitSummaryRow[] | undefined;
   importance: ImportanceResponse | undefined;
   importancePlot: PlotResponse | undefined;
+  importanceKinds?: string[];
+  selectedKind?: string;
+  onKindChange?: (kind: string) => void;
 }
 
 function renderSection(props: FoldDetailsSectionProps) {
@@ -88,6 +92,50 @@ describe("FoldDetailsSection", () => {
       expect(cells[3]).toHaveTextContent("0.3000");
       expect(cells[4]).toHaveTextContent("feature_a");
       expect(cells[5]).toHaveTextContent("0.1000");
+    });
+
+    it("renders kind selector when importanceKinds has multiple options", () => {
+      renderSection({
+        fitResult: baseFitResult,
+        hasFolds: false,
+        splitSummary: undefined,
+        importance: { feature_a: 0.5 },
+        importancePlot: undefined,
+        importanceKinds: ["split", "gain", "shap"],
+        selectedKind: "split",
+        onKindChange: vi.fn(),
+      });
+      expect(screen.getByRole("radiogroup")).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: "Split" })).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: "Gain" })).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: "SHAP" })).toBeInTheDocument();
+    });
+
+    it("calls onKindChange when a different kind is selected", async () => {
+      const onKindChange = vi.fn();
+      renderSection({
+        fitResult: baseFitResult,
+        hasFolds: false,
+        splitSummary: undefined,
+        importance: { feature_a: 0.5 },
+        importancePlot: undefined,
+        importanceKinds: ["split", "gain", "shap"],
+        selectedKind: "split",
+        onKindChange,
+      });
+      await userEvent.click(screen.getByRole("radio", { name: "Gain" }));
+      expect(onKindChange).toHaveBeenCalledWith("gain");
+    });
+
+    it("does not render kind selector when importanceKinds is undefined", () => {
+      renderSection({
+        fitResult: baseFitResult,
+        hasFolds: false,
+        splitSummary: undefined,
+        importance: { feature_a: 0.5 },
+        importancePlot: undefined,
+      });
+      expect(screen.queryByRole("radiogroup")).not.toBeInTheDocument();
     });
   });
 
