@@ -468,9 +468,9 @@ class TestLizyMLAdapterUiSchema:
         schema = LizyMLAdapter().get_ui_schema()
         additional = set(schema["additional_params"])
         # These should be in additional_params (not promoted to catalog)
+        # min_gain_to_split excluded: alias for min_split_gain (in catalog)
         expected_subset = {
             "min_child_samples",
-            "min_gain_to_split",
             "min_data_in_leaf",
             "min_data_in_bin",
             "max_cat_to_onehot",

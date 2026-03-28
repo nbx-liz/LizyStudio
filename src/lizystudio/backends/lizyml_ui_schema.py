@@ -26,7 +26,7 @@ _KNOWN_PARAM_KEYS: frozenset[str] = frozenset(
         "lambda_l2",
         "first_metric_only",
         "verbose",
-        "num_threads",
+        "num_threads",  # Excluded from UI intentionally (server-managed)
         "num_leaves",
         # Smart params (in search_space_catalog)
         "auto_num_leaves",
@@ -38,6 +38,7 @@ _KNOWN_PARAM_KEYS: frozenset[str] = frozenset(
         # Additional params promoted to search_space_catalog
         "min_child_weight",
         "min_split_gain",
+        "min_gain_to_split",  # LightGBM alias for min_split_gain
         "subsample",
         "colsample_bytree",
         "scale_pos_weight",
