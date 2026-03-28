@@ -198,6 +198,87 @@ describe("resolveSchema", () => {
     const result = resolveSchema(prop, {}, { kind: "b", y: "hello" });
     expect(result.properties?.y).toBeDefined();
   });
+
+  it("resolves oneOf with discriminator matching currentValue", () => {
+    const variantA: SchemaProperty = {
+      type: "object",
+      properties: {
+        strategy: { const: "kfold" },
+        n_splits: { type: "integer" },
+      },
+    };
+    const variantB: SchemaProperty = {
+      type: "object",
+      properties: {
+        strategy: { const: "timeseries" },
+        gap: { type: "integer" },
+      },
+    };
+    const prop: SchemaProperty = {
+      title: "CV Strategy",
+      oneOf: [variantA, variantB],
+      discriminator: { propertyName: "strategy" },
+    };
+    const result = resolveSchema(prop, {}, { strategy: "timeseries", gap: 5 });
+    expect(result.title).toBe("CV Strategy");
+    expect(result.properties?.gap).toBeDefined();
+    expect(result.properties?.strategy?.const).toBe("timeseries");
+  });
+
+  it("resolves oneOf with discriminator fallback to first variant when no match", () => {
+    const variantA: SchemaProperty = {
+      type: "object",
+      properties: { strategy: { const: "kfold" } },
+    };
+    const variantB: SchemaProperty = {
+      type: "object",
+      properties: { strategy: { const: "timeseries" } },
+    };
+    const prop: SchemaProperty = {
+      title: "CV Strategy",
+      oneOf: [variantA, variantB],
+      discriminator: { propertyName: "strategy" },
+    };
+    // currentValue has unknown strategy
+    const result = resolveSchema(prop, {}, { strategy: "unknown" });
+    expect(result.title).toBe("CV Strategy");
+    expect(result.properties?.strategy?.const).toBe("kfold");
+  });
+
+  it("resolves oneOf with discriminator and null currentValue falls back to first variant", () => {
+    const variantA: SchemaProperty = {
+      type: "object",
+      properties: { mode: { const: "auto" } },
+    };
+    const prop: SchemaProperty = {
+      oneOf: [variantA],
+      discriminator: { propertyName: "mode" },
+    };
+    const result = resolveSchema(prop, {}, null);
+    expect(result.properties?.mode?.const).toBe("auto");
+  });
+
+  it("resolves oneOf without discriminator using first variant", () => {
+    const variantA: SchemaProperty = {
+      type: "object",
+      title: "OptionA",
+      properties: { x: { type: "number" } },
+    };
+    const variantB: SchemaProperty = {
+      type: "object",
+      title: "OptionB",
+      properties: { y: { type: "string" } },
+    };
+    const prop: SchemaProperty = {
+      title: "MyChoice",
+      default: { x: 42 },
+      oneOf: [variantA, variantB],
+    };
+    const result = resolveSchema(prop, {});
+    expect(result.title).toBe("MyChoice");
+    expect(result.default).toEqual({ x: 42 });
+    expect(result.properties?.x).toBeDefined();
+  });
 });
 
 // --- isNullableUnion ---

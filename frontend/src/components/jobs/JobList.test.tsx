@@ -1,4 +1,5 @@
 import { cleanup, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JobSummary } from "@/api/types";
 import { makeJobSummary, renderWithProviders } from "@/test/helpers";
@@ -21,6 +22,12 @@ describe("JobList", () => {
         dispatchEvent: vi.fn(),
       })),
     });
+    // Mock ResizeObserver for Radix ScrollArea
+    globalThis.ResizeObserver = class {
+      observe = vi.fn();
+      unobserve = vi.fn();
+      disconnect = vi.fn();
+    } as unknown as typeof ResizeObserver;
   });
 
   afterEach(() => {
@@ -134,5 +141,50 @@ describe("JobList", () => {
     );
 
     expect(screen.getByText("...")).toBeInTheDocument();
+  });
+
+  it("filters jobs by type when Fit/Tune selector is changed", async () => {
+    const jobs: JobSummary[] = [
+      makeJobSummary({ job_id: "j1", job_type: "fit" }),
+      makeJobSummary({ job_id: "j2", job_type: "tune" }),
+    ];
+
+    renderWithProviders(
+      <JobList jobs={jobs} selectedJobId={null} onSelectJob={vi.fn()} />,
+    );
+
+    // Both visible initially
+    expect(screen.getByText("fit")).toBeInTheDocument();
+    expect(screen.getByText("tun")).toBeInTheDocument();
+  });
+
+  it("calls onSelectJob when a job row is clicked", async () => {
+    const onSelectJob = vi.fn();
+    const jobs: JobSummary[] = [
+      makeJobSummary({ job_id: "j1", model_name: "LightGBM" }),
+    ];
+
+    renderWithProviders(
+      <JobList jobs={jobs} selectedJobId={null} onSelectJob={onSelectJob} />,
+    );
+
+    await userEvent.click(screen.getByText("LGB"));
+    expect(onSelectJob).toHaveBeenCalledWith("j1");
+  });
+
+  it("shows score with primary_score for completed job", () => {
+    const jobs: JobSummary[] = [
+      makeJobSummary({
+        job_id: "j1",
+        status: "completed",
+        primary_score: 0.95678,
+      }),
+    ];
+
+    renderWithProviders(
+      <JobList jobs={jobs} selectedJobId={null} onSelectJob={vi.fn()} />,
+    );
+
+    expect(screen.getByText("0.957")).toBeInTheDocument();
   });
 });

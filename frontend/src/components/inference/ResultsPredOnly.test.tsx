@@ -1,14 +1,18 @@
-import { cleanup, screen } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithQuery } from "@/test/helpers";
+
+const mockFetchInferencePlot = vi.fn().mockResolvedValue(null);
+const mockFetchInferenceShapPlot = vi.fn().mockResolvedValue(null);
 
 vi.mock("@/api/inference", () => ({
   fetchInferenceComparison: vi.fn().mockResolvedValue({
     current: {},
     other: {},
   }),
-  fetchInferencePlot: vi.fn().mockResolvedValue(null),
-  fetchInferenceShapPlot: vi.fn().mockResolvedValue(null),
+  fetchInferencePlot: (...args: unknown[]) => mockFetchInferencePlot(...args),
+  fetchInferenceShapPlot: (...args: unknown[]) =>
+    mockFetchInferenceShapPlot(...args),
 }));
 
 vi.mock("./PredictionsTable", () => ({
@@ -151,5 +155,46 @@ describe("ResultsPredOnly", () => {
     );
 
     expect(screen.getByText("Warnings")).toBeInTheDocument();
+  });
+
+  it("renders Prediction Distribution plot when data is available", async () => {
+    mockFetchInferencePlot.mockResolvedValue({
+      plotly_json: '{"data":[],"layout":{}}',
+    });
+
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsPredOnly
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        history={[record]}
+      />,
+    );
+
+    expect(screen.getByText("Prediction Distribution")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId("plotly-chart")).toBeInTheDocument();
+    });
+  });
+
+  it("renders SHAP accordion when shap data is available", async () => {
+    mockFetchInferenceShapPlot.mockResolvedValue({
+      plotly_json: '{"data":[],"layout":{}}',
+    });
+
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsPredOnly
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        history={[record]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("SHAP Summary")).toBeInTheDocument();
+    });
   });
 });

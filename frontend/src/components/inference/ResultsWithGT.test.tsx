@@ -1,15 +1,22 @@
-import { cleanup, screen } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithQuery } from "@/test/helpers";
 
+const mockFetchInferenceMetrics = vi.fn().mockResolvedValue({});
+const mockFetchInferencePlot = vi.fn().mockResolvedValue(null);
+const mockFetchInferenceShapPlot = vi.fn().mockResolvedValue(null);
+const mockFetchJobPlots = vi.fn().mockResolvedValue([]);
+
 vi.mock("@/api/inference", () => ({
-  fetchInferenceMetrics: vi.fn().mockResolvedValue({}),
-  fetchInferencePlot: vi.fn().mockResolvedValue(null),
-  fetchInferenceShapPlot: vi.fn().mockResolvedValue(null),
+  fetchInferenceMetrics: (...args: unknown[]) =>
+    mockFetchInferenceMetrics(...args),
+  fetchInferencePlot: (...args: unknown[]) => mockFetchInferencePlot(...args),
+  fetchInferenceShapPlot: (...args: unknown[]) =>
+    mockFetchInferenceShapPlot(...args),
 }));
 
 vi.mock("@/api/jobs", () => ({
-  fetchJobPlots: vi.fn().mockResolvedValue([]),
+  fetchJobPlots: (...args: unknown[]) => mockFetchJobPlots(...args),
 }));
 
 vi.mock("./PredictionsTable", () => ({
@@ -157,5 +164,69 @@ describe("ResultsWithGT", () => {
     // Score heading should not appear since mocked metrics is {}
     expect(screen.queryByText("Score")).not.toBeInTheDocument();
     expect(screen.queryByTestId("score-table")).not.toBeInTheDocument();
+  });
+
+  it("renders Score section when metrics have three-column structure", async () => {
+    mockFetchInferenceMetrics.mockResolvedValue({
+      inf: { accuracy: 0.92 },
+      is: { accuracy: 0.95 },
+      oos: { accuracy: 0.9 },
+    });
+
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsWithGT
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        targetCol="target"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Score")).toBeInTheDocument();
+      expect(screen.getByTestId("score-table")).toBeInTheDocument();
+    });
+  });
+
+  it("renders Plots section when plots are available", async () => {
+    mockFetchJobPlots.mockResolvedValue(["confusion-matrix", "roc-curve"]);
+    mockFetchInferencePlot.mockResolvedValue({
+      plotly_json: '{"data":[],"layout":{}}',
+    });
+
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsWithGT
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        targetCol="target"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Plots")).toBeInTheDocument();
+    });
+  });
+
+  it("renders SHAP accordion when shap data is available", async () => {
+    mockFetchInferenceShapPlot.mockResolvedValue({
+      plotly_json: '{"data":[],"layout":{}}',
+    });
+
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsWithGT
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        targetCol="target"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("SHAP Summary")).toBeInTheDocument();
+    });
   });
 });

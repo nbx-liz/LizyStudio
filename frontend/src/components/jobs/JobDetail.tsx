@@ -450,7 +450,8 @@ function LogDialog({
   );
 }
 
-function formatElapsed(seconds: number): string {
+/** @internal Exported for testing only. */
+export function formatElapsed(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return "--:--";
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
@@ -461,7 +462,8 @@ function formatElapsed(seconds: number): string {
 /*  Config Tree View                                                   */
 /* ------------------------------------------------------------------ */
 
-function ConfigTreeView({ data }: { data: unknown }) {
+/** @internal Exported for testing only. */
+export function ConfigTreeView({ data }: { data: unknown }) {
   if (data == null) {
     return <span className="text-muted-foreground italic">null</span>;
   }

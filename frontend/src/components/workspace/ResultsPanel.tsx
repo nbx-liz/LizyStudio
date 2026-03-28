@@ -526,7 +526,8 @@ function LogDialog({
   );
 }
 
-function formatElapsed(seconds: number): string {
+/** @internal Exported for testing only. */
+export function formatElapsed(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return "--:--";
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);

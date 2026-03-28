@@ -1,5 +1,5 @@
 import { cleanup, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { makeJob, renderWithQuery } from "@/test/helpers";
 
 const mockFetchJob = vi.fn();
@@ -342,5 +342,41 @@ describe("ResultsPanel", () => {
     expect(screen.getByRole("progressbar")).toBeInTheDocument();
     // onJobDone is triggered via WebSocket onCompleted callback,
     // not testable without mocking connectJobProgress internals.
+  });
+});
+
+// --- formatElapsed ---
+describe("formatElapsed", () => {
+  // Dynamic import to get the exported function without triggering module mocks
+  let formatElapsed: (seconds: number) => string;
+
+  beforeAll(async () => {
+    const mod =
+      await vi.importActual<typeof import("./ResultsPanel")>("./ResultsPanel");
+    formatElapsed = mod.formatElapsed;
+  });
+
+  it("formats 0 seconds as 00:00", () => {
+    expect(formatElapsed(0)).toBe("00:00");
+  });
+
+  it("formats 65 seconds as 01:05", () => {
+    expect(formatElapsed(65)).toBe("01:05");
+  });
+
+  it("formats 3661 seconds as 61:01", () => {
+    expect(formatElapsed(3661)).toBe("61:01");
+  });
+
+  it("returns --:-- for negative seconds", () => {
+    expect(formatElapsed(-1)).toBe("--:--");
+  });
+
+  it("returns --:-- for NaN", () => {
+    expect(formatElapsed(Number.NaN)).toBe("--:--");
+  });
+
+  it("returns --:-- for Infinity", () => {
+    expect(formatElapsed(Number.POSITIVE_INFINITY)).toBe("--:--");
   });
 });

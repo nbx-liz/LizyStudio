@@ -1,5 +1,6 @@
-import { cleanup, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { makeJob, renderWithProviders } from "@/test/helpers";
 
@@ -491,5 +492,85 @@ describe("JobDetailPanel", () => {
     expect(await screen.findByText("Config")).toBeInTheDocument();
     // Config tree content is in a collapsed Radix Accordion item;
     // full content rendering is verified via E2E visual tests.
+  });
+});
+
+// --- formatElapsed ---
+describe("formatElapsed", () => {
+  let formatElapsed: (seconds: number) => string;
+
+  beforeAll(async () => {
+    const mod =
+      await vi.importActual<typeof import("./JobDetail")>("./JobDetail");
+    formatElapsed = mod.formatElapsed;
+  });
+
+  it("formats 0 as 00:00", () => {
+    expect(formatElapsed(0)).toBe("00:00");
+  });
+
+  it("formats 125 as 02:05", () => {
+    expect(formatElapsed(125)).toBe("02:05");
+  });
+
+  it("returns --:-- for negative", () => {
+    expect(formatElapsed(-1)).toBe("--:--");
+  });
+
+  it("returns --:-- for NaN", () => {
+    expect(formatElapsed(Number.NaN)).toBe("--:--");
+  });
+});
+
+// --- ConfigTreeView ---
+describe("ConfigTreeView", () => {
+  let ConfigTreeView: React.FC<{ data: unknown }>;
+
+  beforeAll(async () => {
+    const mod =
+      await vi.importActual<typeof import("./JobDetail")>("./JobDetail");
+    ConfigTreeView = mod.ConfigTreeView;
+  });
+
+  it("renders null as italic 'null'", () => {
+    render(<ConfigTreeView data={null} />);
+    expect(screen.getByText("null")).toBeInTheDocument();
+  });
+
+  it("renders primitives as mono text", () => {
+    render(<ConfigTreeView data={42} />);
+    expect(screen.getByText("42")).toBeInTheDocument();
+  });
+
+  it("renders empty array as []", () => {
+    render(<ConfigTreeView data={[]} />);
+    expect(screen.getByText("[]")).toBeInTheDocument();
+  });
+
+  it("renders empty object as {}", () => {
+    render(<ConfigTreeView data={{}} />);
+    expect(screen.getByText("{}")).toBeInTheDocument();
+  });
+
+  it("renders nested object with expandable nodes", async () => {
+    render(<ConfigTreeView data={{ model: { name: "XGBoost" } }} />);
+    // "model" should be a button with expandable toggle
+    const btn = screen.getByRole("button");
+    expect(btn).toHaveTextContent(/model/);
+    // Click to expand
+    await userEvent.click(btn);
+    expect(screen.getByText("XGBoost")).toBeInTheDocument();
+  });
+
+  it("renders array items with dash prefix", () => {
+    render(<ConfigTreeView data={["a", "b"]} />);
+    expect(screen.getByText("a")).toBeInTheDocument();
+    expect(screen.getByText("b")).toBeInTheDocument();
+  });
+
+  it("renders leaf key-value pairs inline", () => {
+    render(<ConfigTreeView data={{ lr: 0.01 }} />);
+    expect(screen.getByText(/lr/)).toBeInTheDocument();
+    expect(screen.getByText("0.01")).toBeInTheDocument();
   });
 });
