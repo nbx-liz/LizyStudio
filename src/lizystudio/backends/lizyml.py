@@ -211,12 +211,16 @@ class LizyMLAdapter:
         "tuning": "tuning_plot",
     }
 
-    def plot(self, model: Any, plot_type: str) -> PlotData:
+    def plot(self, model: Any, plot_type: str, **kwargs: Any) -> PlotData:
         method_name = self._PLOT_DISPATCH.get(plot_type)
         if method_name is None:
             msg = f"Unknown plot type: {plot_type!r}"
             raise ValueError(msg)
-        fig = getattr(model, method_name)()
+        # Forward supported kwargs to the underlying plot method
+        call_kwargs: dict[str, Any] = {}
+        if plot_type == "learning-curve" and "metrics" in kwargs:
+            call_kwargs["metrics"] = kwargs["metrics"]
+        fig = getattr(model, method_name)(**call_kwargs)
         return PlotData(plotly_json=fig.to_json())
 
     def available_plots(self, model: Any) -> list[str]:

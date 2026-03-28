@@ -6,6 +6,7 @@ export, delete.
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict
 from typing import Any
 
@@ -241,14 +242,37 @@ def get_job_importance_kinds_endpoint(
 def get_job_plot_endpoint(
     job_id: str,
     plot_type: str,
+    metrics: str | None = None,
     job_store: JobStore = Depends(get_job_store),
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, str]:
-    """Get a Plotly figure as JSON."""
+    """Get a Plotly figure as JSON.
+
+    For ``learning-curve``, pass ``?metrics=auc,f1`` to filter subplots.
+    """
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
+    kwargs: dict[str, Any] = {}
+    if metrics is not None and plot_type == "learning-curve":
+        parsed = [m.strip() for m in metrics.split(",") if m.strip()]
+        _MAX_METRICS = 20
+        _VALID_METRIC_RE = re.compile(r"^[a-zA-Z0-9_]+$")
+        if len(parsed) > _MAX_METRICS:
+            raise StudioError(
+                "INVALID_PARAM",
+                f"Too many metrics (max {_MAX_METRICS})",
+                400,
+            )
+        invalid = [m for m in parsed if not _VALID_METRIC_RE.match(m)]
+        if invalid:
+            raise StudioError(
+                "INVALID_PARAM",
+                f"Invalid metric name(s): {invalid}",
+                400,
+            )
+        kwargs["metrics"] = parsed
     try:
-        plot_data = get_job_plot(job, ws.backend, plot_type)
+        plot_data = get_job_plot(job, ws.backend, plot_type, **kwargs)
         return {"plotly_json": plot_data.plotly_json}
     except Exception as exc:
         raise BackendError(exc) from exc

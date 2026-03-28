@@ -380,6 +380,34 @@ class TestLizyMLAdapterUiSchema:
         catalog = {e["key"]: e for e in schema["search_space_catalog"]}
         assert catalog["auto_num_leaves"]["default"] is True
 
+    def test_eval_metrics_match_lizyml_registry(self) -> None:
+        """option_sets.metric must match the live LizyML _TASK_METRICS registry."""
+        from lizyml.metrics.registry import _TASK_METRICS
+
+        schema = LizyMLAdapter().get_ui_schema()
+        for task in ("binary", "regression", "multiclass"):
+            expected = sorted(_TASK_METRICS[task])
+            actual = sorted(schema["option_sets"]["metric"][task])
+            assert actual == expected, (
+                f"metric mismatch for {task}: expected={expected}, actual={actual}"
+            )
+
+    def test_model_metric_includes_feval_metrics(self) -> None:
+        """model_metric for binary should include feval metrics from v0.6.0+."""
+        schema = LizyMLAdapter().get_ui_schema()
+        binary_mm = schema["option_sets"]["model_metric"]["binary"]
+        # These became available as training metrics via metric bridge
+        for m in ("f1", "accuracy", "brier", "ece", "precision_at_k"):
+            assert m in binary_mm, f"binary model_metric missing feval metric: {m}"
+
+    def test_model_metric_multiclass_uses_lizyml_names(self) -> None:
+        """model_metric for multiclass should use LizyML canonical metric names."""
+        schema = LizyMLAdapter().get_ui_schema()
+        mc_mm = schema["option_sets"]["model_metric"]["multiclass"]
+        # v0.6.0+ translates these automatically via metric bridge
+        assert "logloss" in mc_mm
+        assert "auc" in mc_mm
+
 
 def _reset_ui_schema_caches() -> None:
     """Reset module-level caches to force re-evaluation."""

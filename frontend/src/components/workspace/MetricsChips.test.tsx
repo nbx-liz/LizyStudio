@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { MetricEntry } from "@/api/types";
 import { MetricsChips } from "./MetricsChips";
 
 describe("MetricsChips", () => {
@@ -154,14 +155,14 @@ describe("MetricsChips", () => {
     expect(screen.getByText("metric_b")).toBeInTheDocument();
   });
 
-  // --- conditional params (precision_at_k) ---
+  // --- conditional params (precision_at_k) with MetricEntry ---
 
   it("does not render NumberInput when no conditionalParams provided", () => {
     const metricsByTask = { ranking: ["precision_at_k", "ndcg"] };
     render(
       <MetricsChips
         task="ranking"
-        selectedMetrics={["precision_at_k"]}
+        selectedMetrics={[{ precision_at_k: { k: 10 } }]}
         onChange={vi.fn()}
         metricsByTask={metricsByTask}
       />,
@@ -177,12 +178,10 @@ describe("MetricsChips", () => {
     render(
       <MetricsChips
         task="ranking"
-        selectedMetrics={["precision_at_k"]}
+        selectedMetrics={[{ precision_at_k: { k: 10 } }]}
         onChange={vi.fn()}
         metricsByTask={metricsByTask}
         conditionalParams={conditionalParams}
-        paramValues={{ precision_at_k: 10 }}
-        onParamChange={vi.fn()}
       />,
     );
     expect(screen.getByLabelText("k")).toBeInTheDocument();
@@ -201,37 +200,33 @@ describe("MetricsChips", () => {
         onChange={vi.fn()}
         metricsByTask={metricsByTask}
         conditionalParams={conditionalParams}
-        paramValues={{ precision_at_k: 10 }}
-        onParamChange={vi.fn()}
       />,
     );
     expect(screen.queryByLabelText("k")).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 
-  it("calls onParamChange with correct metric and value", () => {
+  it("calls onChange with updated MetricEntry when k value changes", () => {
     const metricsByTask = { ranking: ["precision_at_k", "ndcg"] };
     const conditionalParams = {
       precision_at_k: { label: "k", min: 1, max: 100, default: 10 },
     };
-    const onParamChange = vi.fn();
+    const onChange = vi.fn();
     render(
       <MetricsChips
         task="ranking"
-        selectedMetrics={["precision_at_k"]}
-        onChange={vi.fn()}
+        selectedMetrics={[{ precision_at_k: { k: 10 } }] as MetricEntry[]}
+        onChange={onChange}
         metricsByTask={metricsByTask}
         conditionalParams={conditionalParams}
-        paramValues={{ precision_at_k: 10 }}
-        onParamChange={onParamChange}
       />,
     );
     const input = screen.getByRole("textbox");
     fireEvent.change(input, { target: { value: "20" } });
-    expect(onParamChange).toHaveBeenCalledWith("precision_at_k", 20);
+    expect(onChange).toHaveBeenCalledWith([{ precision_at_k: { k: 20 } }]);
   });
 
-  it("uses default param value when paramValues not provided for the metric", () => {
+  it("uses default param value when precision_at_k is a plain string entry", () => {
     const metricsByTask = { ranking: ["precision_at_k", "ndcg"] };
     const conditionalParams = {
       precision_at_k: { label: "k", min: 1, max: 100, default: 10 },
@@ -243,10 +238,35 @@ describe("MetricsChips", () => {
         onChange={vi.fn()}
         metricsByTask={metricsByTask}
         conditionalParams={conditionalParams}
-        onParamChange={vi.fn()}
       />,
     );
     const input = screen.getByRole("textbox") as HTMLInputElement;
     expect(input.value).toBe("10");
+  });
+
+  it("preserves MetricEntry params when toggling other chips", () => {
+    const metricsByTask = { ranking: ["precision_at_k", "ndcg", "map"] };
+    const conditionalParams = {
+      precision_at_k: { label: "k", min: 1, max: 100, default: 10 },
+    };
+    const onChange = vi.fn();
+    render(
+      <MetricsChips
+        task="ranking"
+        selectedMetrics={
+          [{ precision_at_k: { k: 20 } }, "ndcg"] as MetricEntry[]
+        }
+        onChange={onChange}
+        metricsByTask={metricsByTask}
+        conditionalParams={conditionalParams}
+      />,
+    );
+    // Click "map" to add it
+    fireEvent.click(screen.getByText("map").closest("button") as Element);
+    expect(onChange).toHaveBeenCalledWith([
+      { precision_at_k: { k: 20 } },
+      "ndcg",
+      "map",
+    ]);
   });
 });

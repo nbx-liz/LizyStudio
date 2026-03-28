@@ -84,14 +84,8 @@ export function ConfigForm({
   // Evaluation metrics
   const evalConfig = (config.evaluation as Record<string, unknown>) ?? {};
   const selectedMetrics = Array.isArray(evalConfig.metrics)
-    ? (evalConfig.metrics as string[])
+    ? (evalConfig.metrics as import("@/api/types").MetricEntry[])
     : [];
-
-  // Conditional evaluation params (e.g. precision_at_k → k value)
-  const evalParamValues = useMemo(() => {
-    const pak = evalConfig.precision_at_k;
-    return { precision_at_k: typeof pak === "number" ? pak : 10 };
-  }, [evalConfig]);
 
   // Training section — inner_valid
   const trainingConfig = (config.training as Record<string, unknown>) ?? {};
@@ -462,15 +456,6 @@ export function ConfigForm({
                       max: 100,
                       default: 10,
                     },
-                  }}
-                  paramValues={evalParamValues}
-                  onParamChange={(metric, value) => {
-                    const updated = setNestedValue(
-                      config,
-                      ["evaluation", metric],
-                      value,
-                    );
-                    onChange(updated);
                   }}
                 />
               </div>

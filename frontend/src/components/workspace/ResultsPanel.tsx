@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, Download, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   cancelJob,
@@ -13,7 +13,8 @@ import {
   fetchJobSplitSummary,
   fetchJobs,
 } from "@/api/jobs";
-import type { JobDetail, ProgressMessage } from "@/api/types";
+import type { JobDetail, MetricEntry, ProgressMessage } from "@/api/types";
+import { metricEntryName } from "@/api/types";
 import { connectJobProgress } from "@/api/websocket";
 import { Accordion } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
@@ -332,9 +333,15 @@ function CompletedView({
     retry: false,
   });
 
+  // Learning curve metrics filter (H-0034)
+  const [lcMetrics, setLcMetrics] = useState<string[] | null>(null);
+
   const { data: learningCurve } = useQuery({
-    queryKey: ["job-plot", job.job_id, "learning-curve"],
-    queryFn: () => fetchJobPlot(job.job_id, "learning-curve"),
+    queryKey: ["job-plot", job.job_id, "learning-curve", lcMetrics],
+    queryFn: () =>
+      fetchJobPlot(job.job_id, "learning-curve", {
+        metrics: lcMetrics ?? undefined,
+      }),
     enabled:
       selectedPlot === "learning-curve" &&
       (plots?.includes("learning-curve") ?? false),
@@ -397,10 +404,31 @@ function CompletedView({
     : undefined;
 
   const evalConfig = (job.config?.evaluation as Record<string, unknown>) ?? {};
+
+  // Extract plain metric names from evaluation.metrics (for LC filter chips)
+  const evalMetricNames = useMemo(() => {
+    const entries = Array.isArray(evalConfig.metrics)
+      ? (evalConfig.metrics as MetricEntry[])
+      : [];
+    return entries.map(metricEntryName);
+  }, [evalConfig.metrics]);
+
   const annotateMetric = (name: string): string => {
     if (name === "precision_at_k") {
-      const k = evalConfig.precision_at_k;
-      return typeof k === "number" ? `${name}@${k}` : name;
+      // Look for MetricEntry dict form in evaluation.metrics
+      const entries = Array.isArray(evalConfig.metrics)
+        ? (evalConfig.metrics as MetricEntry[])
+        : [];
+      for (const entry of entries) {
+        if (
+          typeof entry === "object" &&
+          entry !== null &&
+          "precision_at_k" in entry
+        ) {
+          const k = entry.precision_at_k?.k;
+          return typeof k === "number" ? `${name}@${k}` : name;
+        }
+      }
     }
     return name;
   };
@@ -473,6 +501,9 @@ function CompletedView({
           learningCurve={learningCurve}
           isLoading={isPlotLoading}
           isError={isPlotError}
+          lcMetrics={lcMetrics}
+          onLcMetricsChange={setLcMetrics}
+          availableEvalMetrics={evalMetricNames}
         />
       )}
 

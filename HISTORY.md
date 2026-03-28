@@ -715,3 +715,59 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   2. 選択した kind に応じてテーブルとプロットが更新される
   3. 既存テストが全パス
 - **Decision:** 2026-03-28 accepted
+
+---
+
+### H-0034: LizyML v0.7.0 対応 — MetricEntry / Training Metric / Learning Curve Filter
+- **Status:** accepted
+- **Scope:** Adapter, API, Frontend, Config
+- **Related:** BLUEPRINT.md §3.3 BackendAdapter Protocol、§4.2.1 Model Panel、§4.2.3 Tune Tab
+- **Context:** LizyML v0.5.0〜v0.7.0 で以下の機能が追加された:
+  1. `model.params.metric` のユーザー指定（v0.5.0 / H-0061）
+  2. `plot_learning_curve(metrics=[...])` フィルター（v0.5.0 / H-0062）
+  3. Metric Bridge — feval カスタムメトリクス対応（v0.6.0 / H-0064）
+  4. `MetricEntry` パラメータ付きメトリクス — `{"precision_at_k": {"k": 20}}`（v0.7.0 / H-0065）
+  現在 LizyStudio は `lizyml>=0.4.0,<0.5.0` に固定されており、これらの機能を利用できない。
+- **Proposal:**
+  **Phase 1: 依存更新 + Adapter 対応**
+  - `pyproject.toml` のバージョンピンを `>=0.7.0,<0.8.0` に更新
+  - `LizyMLAdapter.plot()` で `learning-curve` 呼び出し時に `metrics` パラメータを転送
+  - `BackendAdapter.plot()` の signature に `**kwargs` を追加（learning curve filter 用）
+  - `lizyml_ui_schema.py` のフォールバックメトリクス名を修正（`binary_logloss` → `logloss` 等）
+
+  **Phase 2: API 拡張**
+  - `GET /api/jobs/{job_id}/plot/learning-curve?metrics=auc,f1` — メトリクスフィルターパラメータ追加
+  - Config schema の `evaluation.metrics` が `list[str | dict]` に自然拡張される（Pydantic → JSON Schema）
+
+  **Phase 3: フロントエンド UI 更新**
+  - `MetricsChips` の `precision_at_k` パラメータを `MetricEntry` dict 形式で config に書き込み
+    - 現在: `config.evaluation.metrics = ["auc", "precision_at_k"]` + `config.evaluation.precision_at_k = 20`
+    - 変更後: `config.evaluation.metrics = ["auc", {"precision_at_k": {"k": 20}}]`
+  - Tune Evaluation セクションも同様に `MetricEntry` 対応
+  - Learning Curve プロットにメトリクスフィルター UI（チップ選択）追加
+  - `config.evaluation.precision_at_k` フィールドを廃止（`MetricEntry` dict に統合）
+
+- **Impact:**
+  - `pyproject.toml`, `uv.lock`
+  - `backends/base.py`（Protocol: plot kwargs）
+  - `backends/lizyml.py`（Adapter: learning curve filter 転送）
+  - `backends/lizyml_ui_schema.py`（フォールバック名修正）
+  - `backends/types.py`（変更なし — PlotData は plotly_json のみで MetricEntry の通過不要）
+  - `api/jobs.py`（learning curve filter query param）
+  - `frontend/src/components/workspace/MetricsChips.tsx`（MetricEntry 形式出力）
+  - `frontend/src/components/workspace/ConfigForm.tsx`（precision_at_k 統合）
+  - `frontend/src/components/workspace/TuneTab.tsx`（MetricEntry 対応）
+  - `frontend/src/components/workspace/PlotSection.tsx`（learning curve filter UI）
+  - `frontend/src/components/workspace/ResultsPanel.tsx`（annotateMetric 更新）
+  - `frontend/src/api/jobs.ts`（fetchJobPlot に metrics param 追加）
+- **Compatibility:** 非破壊的（バージョン更新、API は query param 追加のみ、Config は上位互換）
+- **Alternatives:**
+  - `precision_at_k` の k を引き続き `config.evaluation.precision_at_k` に分離保持する案 → LizyML 0.7.0 の `MetricEntry` 設計と不一致、config 変換ロジックが複雑化するため不採用
+  - Learning Curve フィルターをフロントエンドのみで実装（Plotly subplot 表示/非表示）する案 → サーバーサイドで不要なサブプロットを生成する無駄があるため不採用
+- **Acceptance Criteria:**
+  1. `lizyml>=0.7.0` でテストが全パス
+  2. `precision_at_k` 選択時に k 値を指定でき、config に `{"precision_at_k": {"k": N}}` 形式で保存される
+  3. Tune Evaluation でも同様に `MetricEntry` 形式が使用される
+  4. Learning Curve プロットで表示メトリクスをフィルター可能
+  5. 既存テストが全パス + 新機能のテストカバレッジ 80%+
+- **Decision:** 2026-03-28 accepted — 提案通り

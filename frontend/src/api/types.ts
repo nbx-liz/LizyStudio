@@ -119,6 +119,28 @@ export type ErrorMessage = {
 
 export type WsMessage = ProgressMessage | CompletedMessage | ErrorMessage;
 
+// --- MetricEntry (H-0034) ---
+
+/** Metric parameter values — always numeric, string, or boolean. */
+export type MetricParamValues = Record<string, number | string | boolean>;
+
+/**
+ * A metric entry is either a plain name ("auc") or a parameterised dict
+ * ({"precision_at_k": {"k": 20}}).
+ */
+export type MetricEntry = string | Record<string, MetricParamValues>;
+
+/**
+ * Extract the metric name from a MetricEntry.
+ * Throws if the entry is an empty object (should never happen with valid data).
+ */
+export function metricEntryName(entry: MetricEntry): string {
+  if (typeof entry === "string") return entry;
+  const key = Object.keys(entry)[0];
+  if (!key) throw new Error("MetricEntry object must have exactly one key");
+  return key;
+}
+
 // --- UI Schema (H-0026) ---
 
 export interface ParameterHint {
