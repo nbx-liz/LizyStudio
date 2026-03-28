@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UiSchema } from "@/api/types";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -331,5 +331,72 @@ describe("ConfigForm", () => {
     });
 
     expect(screen.getByTestId("dyn-param")).toBeInTheDocument();
+  });
+
+  describe("Progressive Disclosure (Essential / Advanced split)", () => {
+    const uiSchemaWithHints = {
+      parameter_hints: [
+        { key: "objective", kind: "objective", label: "Objective" },
+        { key: "learning_rate", kind: "number", label: "LR" },
+        { key: "n_estimators", kind: "integer", label: "N Est" },
+        { key: "max_depth", kind: "integer", label: "Depth" },
+        // Advanced params:
+        { key: "feature_fraction", kind: "number", label: "FF" },
+        { key: "lambda_l1", kind: "number", label: "L1" },
+        { key: "verbose", kind: "integer", label: "Verbose" },
+      ],
+    } as unknown as UiSchema;
+
+    it("shows 'Show advanced' toggle when advanced params exist", () => {
+      renderConfigForm({
+        schema: minimalSchema,
+        config: minimalConfig,
+        onChange: vi.fn(),
+        uiSchema: uiSchemaWithHints,
+      });
+
+      const toggle = screen.getByTestId("toggle-advanced-params");
+      expect(toggle).toBeInTheDocument();
+      expect(toggle.textContent).toContain("Show advanced");
+      expect(toggle.textContent).toContain("3");
+    });
+
+    it("hides advanced DynParam by default, shows on click", () => {
+      renderConfigForm({
+        schema: minimalSchema,
+        config: minimalConfig,
+        onChange: vi.fn(),
+        uiSchema: uiSchemaWithHints,
+      });
+
+      // Only essential params rendered initially (4 essential)
+      const initialParams = screen.getAllByTestId("dyn-param");
+      expect(initialParams.length).toBe(4);
+
+      // Click toggle
+      fireEvent.click(screen.getByTestId("toggle-advanced-params"));
+
+      // All params rendered (4 essential + 3 advanced = 7)
+      const allParams = screen.getAllByTestId("dyn-param");
+      expect(allParams.length).toBe(7);
+    });
+
+    it("does not show toggle when all params are essential", () => {
+      renderConfigForm({
+        schema: minimalSchema,
+        config: minimalConfig,
+        onChange: vi.fn(),
+        uiSchema: {
+          parameter_hints: [
+            { key: "objective", kind: "objective", label: "Obj" },
+            { key: "learning_rate", kind: "number", label: "LR" },
+          ],
+        } as unknown as UiSchema,
+      });
+
+      expect(
+        screen.queryByTestId("toggle-advanced-params"),
+      ).not.toBeInTheDocument();
+    });
   });
 });

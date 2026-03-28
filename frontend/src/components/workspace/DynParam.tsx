@@ -39,7 +39,7 @@ export function DynParam({
       const opts = options ?? [];
       if (opts.length === 0) return null;
       return (
-        <FormRow label={hint.label}>
+        <FormRow label={hint.label} description={hint.description}>
           <SegmentGroup
             options={opts}
             value={typeof value === "string" ? value : ""}
@@ -58,7 +58,7 @@ export function DynParam({
           ? [value]
           : [];
       return (
-        <FormRow label={hint.label}>
+        <FormRow label={hint.label} description={hint.description}>
           <ChipGroup
             options={opts}
             selected={selected}
@@ -80,7 +80,7 @@ export function DynParam({
       const numValue = rawValue ?? defaultNum;
       const step = hint.step ?? (hint.kind === "integer" ? 1 : 0.01);
       return (
-        <FormRow label={hint.label}>
+        <FormRow label={hint.label} description={hint.description}>
           <CompactStepper
             value={numValue}
             onChange={(v) => onChange(v)}
@@ -93,7 +93,7 @@ export function DynParam({
     case "boolean": {
       const boolValue = value === true;
       return (
-        <FormRow label={hint.label}>
+        <FormRow label={hint.label} description={hint.description}>
           <CompactToggle checked={boolValue} onChange={(v) => onChange(v)} />
         </FormRow>
       );
