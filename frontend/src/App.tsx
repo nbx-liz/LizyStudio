@@ -2,9 +2,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AppLayout } from "./components/layout/AppLayout";
+import { ErrorBoundary } from "./components/layout/ErrorBoundary";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { InferencePage } from "./pages/InferencePage";
 import { JobsPage } from "./pages/JobsPage";
+import { NotFoundPage } from "./pages/NotFoundPage";
 import { WorkspacePage } from "./pages/WorkspacePage";
 
 const queryClient = new QueryClient({
@@ -21,13 +23,16 @@ export function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider delayDuration={300}>
         <BrowserRouter>
-          <AppLayout>
-            <Routes>
-              <Route path="/" element={<WorkspacePage />} />
-              <Route path="/jobs" element={<JobsPage />} />
-              <Route path="/inference" element={<InferencePage />} />
-            </Routes>
-          </AppLayout>
+          <ErrorBoundary>
+            <AppLayout>
+              <Routes>
+                <Route path="/" element={<WorkspacePage />} />
+                <Route path="/jobs" element={<JobsPage />} />
+                <Route path="/inference" element={<InferencePage />} />
+                <Route path="*" element={<NotFoundPage />} />
+              </Routes>
+            </AppLayout>
+          </ErrorBoundary>
           <Toaster richColors position="bottom-right" />
         </BrowserRouter>
       </TooltipProvider>

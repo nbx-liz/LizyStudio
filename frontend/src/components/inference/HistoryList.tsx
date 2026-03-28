@@ -12,7 +12,13 @@ export function HistoryList({
   selectedInfId,
   onSelect,
 }: HistoryListProps) {
-  if (records.length === 0) return null;
+  if (records.length === 0) {
+    return (
+      <div className="px-1 py-3 text-center text-xs text-muted-foreground">
+        No inference history yet.
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-1">
