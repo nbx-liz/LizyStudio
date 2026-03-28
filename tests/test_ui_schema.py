@@ -22,6 +22,7 @@ UI_SCHEMA_KEYS = {
     "capabilities",
     "calibration_methods",
     "additional_params",
+    "special_search_space_fields",
 }
 
 
@@ -233,7 +234,7 @@ class TestLizyMLAdapterUiSchema:
     def test_search_space_catalog_has_group(self) -> None:
         """Each catalog entry has a valid 'group' key."""
         schema = LizyMLAdapter().get_ui_schema()
-        allowed_groups = {"model_params", "smart_params", "training"}
+        allowed_groups = {"model_params", "smart_params", "training", "additional"}
         for entry in schema["search_space_catalog"]:
             assert "group" in entry, f"Missing 'group' on catalog entry: {entry['key']}"
             assert entry["group"] in allowed_groups, (
@@ -401,12 +402,193 @@ class TestLizyMLAdapterUiSchema:
             assert m in binary_mm, f"binary model_metric missing feval metric: {m}"
 
     def test_model_metric_multiclass_uses_lizyml_names(self) -> None:
-        """model_metric for multiclass should use LizyML canonical metric names."""
+        """model_metric for multiclass should use LightGBM native metric names."""
         schema = LizyMLAdapter().get_ui_schema()
         mc_mm = schema["option_sets"]["model_metric"]["multiclass"]
-        # v0.6.0+ translates these automatically via metric bridge
-        assert "logloss" in mc_mm
-        assert "auc" in mc_mm
+        assert "multi_logloss" in mc_mm
+        assert "multi_error" in mc_mm
+        assert "auc_mu" in mc_mm
+
+    # --- Phase 1: Expanded parameter coverage (Widget parity) ---
+
+    def test_parameter_hints_include_balanced(self) -> None:
+        """balanced must be in parameter_hints as a boolean kind."""
+        schema = LizyMLAdapter().get_ui_schema()
+        hints = {h["key"]: h for h in schema["parameter_hints"]}
+        assert "balanced" in hints
+        assert hints["balanced"]["kind"] == "boolean"
+
+    def test_parameter_hints_include_num_leaves(self) -> None:
+        """num_leaves must be in parameter_hints as an integer kind."""
+        schema = LizyMLAdapter().get_ui_schema()
+        hints = {h["key"]: h for h in schema["parameter_hints"]}
+        assert "num_leaves" in hints
+        assert hints["num_leaves"]["kind"] == "integer"
+
+    def test_parameter_hints_include_verbose(self) -> None:
+        """verbose must be in parameter_hints as an integer kind."""
+        schema = LizyMLAdapter().get_ui_schema()
+        hints = {h["key"]: h for h in schema["parameter_hints"]}
+        assert "verbose" in hints
+        assert hints["verbose"]["kind"] == "integer"
+
+    def test_search_space_catalog_includes_balanced(self) -> None:
+        """balanced must be in search_space_catalog (smart_params group)."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        assert "balanced" in catalog
+        assert catalog["balanced"]["group"] == "smart_params"
+        assert catalog["balanced"]["paramType"] == "boolean"
+
+    def test_search_space_catalog_includes_feature_weights(self) -> None:
+        """feature_weights must be in search_space_catalog (smart_params group)."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        assert "feature_weights" in catalog
+        assert catalog["feature_weights"]["group"] == "smart_params"
+        assert catalog["feature_weights"]["paramType"] == "object"
+
+    def test_search_space_catalog_includes_num_leaves(self) -> None:
+        """num_leaves must be in search_space_catalog with range+choice modes."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        assert "num_leaves" in catalog
+        assert catalog["num_leaves"]["group"] == "smart_params"
+        assert "range" in catalog["num_leaves"]["modes"]
+
+    def test_search_space_catalog_includes_verbose(self) -> None:
+        """verbose must be in search_space_catalog (model_params group)."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        assert "verbose" in catalog
+        assert catalog["verbose"]["group"] == "model_params"
+
+    def test_additional_params_expanded(self) -> None:
+        """additional_params should include Widget-level LGBM params not in catalog."""
+        schema = LizyMLAdapter().get_ui_schema()
+        additional = set(schema["additional_params"])
+        # These should be in additional_params (not promoted to catalog)
+        # min_gain_to_split excluded: alias for min_split_gain (in catalog)
+        # is_unbalance excluded: use `balanced` smart param instead
+        expected_subset = {
+            "min_child_samples",
+            "min_data_in_leaf",
+            "min_data_in_bin",
+            "max_cat_to_onehot",
+            "top_k",
+            "min_sum_hessian_in_leaf",
+            "linear_tree",
+            "feature_pre_filter",
+            "force_col_wise",
+            "force_row_wise",
+            "histogram_pool_size",
+            "sigmoid",
+            "boost_from_average",
+            "bin_construct_sample_cnt",
+            "data_sample_strategy",
+            "interaction_constraints",
+        }
+        missing = expected_subset - additional
+        assert not missing, f"additional_params missing: {missing}"
+
+    def test_additional_params_not_in_hints_or_catalog(self) -> None:
+        """additional_params must not overlap with parameter_hints or catalog keys."""
+        schema = LizyMLAdapter().get_ui_schema()
+        hint_keys = {h["key"] for h in schema["parameter_hints"]}
+        catalog_keys = {e["key"] for e in schema["search_space_catalog"]}
+        known_keys = hint_keys | catalog_keys
+        for param in schema["additional_params"]:
+            assert param not in known_keys, (
+                f"additional_param '{param}' overlaps with hints/catalog"
+            )
+
+    def test_search_space_catalog_additional_group(self) -> None:
+        """Catalog has 'additional' group entries for tunable params."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = schema["search_space_catalog"]
+        additional_entries = [e for e in catalog if e.get("group") == "additional"]
+        # At least the commonly tuned additional params
+        additional_keys = {e["key"] for e in additional_entries}
+        # subsample/colsample_bytree/reg_alpha/reg_lambda excluded:
+        # XGBoost aliases for existing model_params entries
+        expected_tunable = {
+            "min_child_weight",
+            "min_split_gain",
+            "scale_pos_weight",
+        }
+        missing = expected_tunable - additional_keys
+        assert not missing, f"Tunable additional params missing from catalog: {missing}"
+
+    def test_model_metric_regression_includes_lgbm_native(self) -> None:
+        """model_metric regression should include LightGBM native metrics."""
+        schema = LizyMLAdapter().get_ui_schema()
+        reg_mm = schema["option_sets"]["model_metric"]["regression"]
+        for m in ("l1", "l2", "rmse", "huber", "mape", "quantile"):
+            assert m in reg_mm, f"regression model_metric missing LGB native: {m}"
+
+    def test_model_metric_binary_includes_lgbm_native(self) -> None:
+        """model_metric binary should include LightGBM native metrics."""
+        schema = LizyMLAdapter().get_ui_schema()
+        binary_mm = schema["option_sets"]["model_metric"]["binary"]
+        for m in ("binary_logloss", "binary_error", "average_precision", "auc"):
+            assert m in binary_mm, f"binary model_metric missing LGB native: {m}"
+
+    def test_model_metric_multiclass_includes_lgbm_native(self) -> None:
+        """model_metric multiclass should include LightGBM native metrics."""
+        schema = LizyMLAdapter().get_ui_schema()
+        mc_mm = schema["option_sets"]["model_metric"]["multiclass"]
+        for m in ("multi_logloss", "multi_error", "auc_mu"):
+            assert m in mc_mm, f"multiclass model_metric missing LGB native: {m}"
+
+    def test_capabilities_cv_strategy_fields(self) -> None:
+        """capabilities must include cv_strategy_fields mapping."""
+        schema = LizyMLAdapter().get_ui_schema()
+        caps = schema["capabilities"]
+        assert "cv_strategy_fields" in caps
+        fields = caps["cv_strategy_fields"]
+        assert isinstance(fields, dict)
+        # All 8 strategies must have field lists
+        for strategy in caps["cv_strategies"]:
+            assert strategy in fields, f"cv_strategy_fields missing: {strategy}"
+            assert isinstance(fields[strategy], list)
+
+    def test_capabilities_cv_defaults(self) -> None:
+        """capabilities must include cv_defaults with n_splits."""
+        schema = LizyMLAdapter().get_ui_schema()
+        caps = schema["capabilities"]
+        assert "cv_defaults" in caps
+        defaults = caps["cv_defaults"]
+        assert "n_splits" in defaults
+        assert defaults["n_splits"] == 5
+
+    def test_capabilities_cv_default_strategy(self) -> None:
+        """capabilities must include cv_default_strategy per task."""
+        schema = LizyMLAdapter().get_ui_schema()
+        caps = schema["capabilities"]
+        assert "cv_default_strategy" in caps
+        ds = caps["cv_default_strategy"]
+        assert ds["binary"] == "stratified_kfold"
+        assert ds["regression"] == "kfold"
+        assert ds["multiclass"] == "stratified_kfold"
+
+    def test_special_search_space_fields(self) -> None:
+        """special_search_space_fields maps keys to picker types."""
+        schema = LizyMLAdapter().get_ui_schema()
+        assert "special_search_space_fields" in schema
+        ssf = schema["special_search_space_fields"]
+        assert ssf["objective"] == "objective"
+        assert ssf["metric"] == "model_metric"
+
+    def test_step_map_includes_expanded_params(self) -> None:
+        """step_map should include entries for newly added params."""
+        schema = LizyMLAdapter().get_ui_schema()
+        step_map = schema["step_map"]
+        for key in (
+            "min_child_weight",
+            "min_split_gain",
+            "scale_pos_weight",
+        ):
+            assert key in step_map, f"step_map missing: {key}"
 
 
 def _reset_ui_schema_caches() -> None:

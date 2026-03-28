@@ -38,11 +38,11 @@ describe("HistoryList", () => {
     cleanup();
   });
 
-  it("renders nothing when records are empty", () => {
-    const { container } = render(
+  it("shows empty state message when records are empty", () => {
+    render(
       <HistoryList records={[]} selectedInfId={null} onSelect={mockOnSelect} />,
     );
-    expect(container.innerHTML).toBe("");
+    expect(screen.getByText("No inference history yet.")).toBeInTheDocument();
   });
 
   it("renders history heading when records exist", () => {

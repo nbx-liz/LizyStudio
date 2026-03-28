@@ -251,6 +251,37 @@ describe("DynParam", () => {
     });
   });
 
+  describe("description tooltip", () => {
+    it("passes description to FormRow as title attribute", () => {
+      render(
+        <DynParam
+          hint={hint({
+            kind: "integer",
+            key: "n",
+            label: "Estimators",
+            description: "Number of boosting rounds",
+          })}
+          value={100}
+          onChange={vi.fn()}
+        />,
+      );
+      const label = screen.getByText("Estimators");
+      expect(label).toHaveAttribute("title", "Number of boosting rounds");
+    });
+
+    it("falls back to label when no description", () => {
+      render(
+        <DynParam
+          hint={hint({ kind: "integer", key: "n", label: "Estimators" })}
+          value={100}
+          onChange={vi.fn()}
+        />,
+      );
+      const label = screen.getByText("Estimators");
+      expect(label).toHaveAttribute("title", "Estimators");
+    });
+  });
+
   describe("undefined value → hint.default used as actual value", () => {
     it("CompactStepper shows default value when value is undefined", () => {
       const onChange = vi.fn();

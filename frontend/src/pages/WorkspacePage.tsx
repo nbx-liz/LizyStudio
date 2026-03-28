@@ -10,6 +10,7 @@ import {
 import { DataPanel } from "@/components/workspace/DataPanel";
 import { ModelPanel } from "@/components/workspace/ModelPanel";
 import { ResultsPanel } from "@/components/workspace/ResultsPanel";
+import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 
 export function WorkspacePage() {
   const queryClient = useQueryClient();
@@ -17,6 +18,8 @@ export function WorkspacePage() {
   const [task, setTask] = useState<string | null>(null);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+
+  useDocumentTitle(running ? "Running..." : null);
 
   const { data: uiSchema } = useQuery({
     queryKey: ["ui-schema"],

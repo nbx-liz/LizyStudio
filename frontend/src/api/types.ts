@@ -149,6 +149,7 @@ export interface ParameterHint {
   kind: string;
   step?: number;
   default?: unknown;
+  description?: string;
 }
 
 export interface SearchSpaceCatalogEntry {
@@ -174,7 +175,11 @@ export interface UiSchema {
   capabilities?: {
     cv_strategies: string[];
     tune: { allow_empty_space: boolean };
+    cv_strategy_fields?: Record<string, string[]>;
+    cv_defaults?: Record<string, unknown>;
+    cv_default_strategy?: Record<string, string>;
   };
   calibration_methods?: string[];
   additional_params?: string[];
+  special_search_space_fields?: Record<string, string>;
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Accordion,
   AccordionContent,
@@ -329,16 +329,13 @@ export function ConfigForm({
                       <p className="text-xs text-muted-foreground font-medium mb-2">
                         Model Params
                       </p>
-                      {uiSchema?.parameter_hints?.map((hint) => (
-                        <DynParam
-                          key={hint.key}
-                          hint={hint}
-                          value={getValueForHint(hint)}
-                          onChange={(v) => handleHintChange(hint, v)}
-                          options={getOptionsForHint(hint)}
-                          visible={shouldShowField(hint.key)}
-                        />
-                      ))}
+                      <ModelParamsSection
+                        hints={uiSchema?.parameter_hints ?? []}
+                        getValueForHint={getValueForHint}
+                        handleHintChange={handleHintChange}
+                        getOptionsForHint={getOptionsForHint}
+                        shouldShowField={shouldShowField}
+                      />
 
                       {/* ── Additional Params ── */}
                       <div className="border-t my-3" />
@@ -485,5 +482,78 @@ export function ConfigForm({
         )}
       </Accordion>
     </div>
+  );
+}
+
+// --- Model Params with Essential / Advanced split ---
+
+const ESSENTIAL_PARAM_KEYS = new Set([
+  "objective",
+  "metric",
+  "n_estimators",
+  "learning_rate",
+  "max_depth",
+  "num_leaves",
+]);
+
+function ModelParamsSection({
+  hints,
+  getValueForHint,
+  handleHintChange,
+  getOptionsForHint,
+  shouldShowField,
+}: {
+  hints: import("@/api/types").ParameterHint[];
+  getValueForHint: (hint: import("@/api/types").ParameterHint) => unknown;
+  handleHintChange: (
+    hint: import("@/api/types").ParameterHint,
+    value: unknown,
+  ) => void;
+  getOptionsForHint: (hint: import("@/api/types").ParameterHint) => string[];
+  shouldShowField: (key: string) => boolean;
+}) {
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  const essential = hints.filter((h) => ESSENTIAL_PARAM_KEYS.has(h.key));
+  const advanced = hints.filter((h) => !ESSENTIAL_PARAM_KEYS.has(h.key));
+
+  return (
+    <>
+      {essential.map((hint) => (
+        <DynParam
+          key={hint.key}
+          hint={hint}
+          value={getValueForHint(hint)}
+          onChange={(v) => handleHintChange(hint, v)}
+          options={getOptionsForHint(hint)}
+          visible={shouldShowField(hint.key)}
+        />
+      ))}
+      {advanced.length > 0 && (
+        <>
+          <button
+            type="button"
+            className="mt-1 mb-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            onClick={() => setShowAdvanced((v) => !v)}
+            data-testid="toggle-advanced-params"
+          >
+            {showAdvanced
+              ? `▾ Hide advanced (${advanced.length})`
+              : `▸ Show advanced (${advanced.length})`}
+          </button>
+          {showAdvanced &&
+            advanced.map((hint) => (
+              <DynParam
+                key={hint.key}
+                hint={hint}
+                value={getValueForHint(hint)}
+                onChange={(v) => handleHintChange(hint, v)}
+                options={getOptionsForHint(hint)}
+                visible={shouldShowField(hint.key)}
+              />
+            ))}
+        </>
+      )}
+    </>
   );
 }
