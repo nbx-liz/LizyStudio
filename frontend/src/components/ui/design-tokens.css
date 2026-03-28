@@ -72,6 +72,7 @@
   white-space: nowrap;
 }
 .lzs-segment__btn:hover { background: hsl(207, 60%, 95%); border-color: hsl(207, 60%, 80%); }
+.dark .lzs-segment__btn:hover { background: hsl(217, 33%, 22%); border-color: hsl(217, 33%, 30%); }
 .lzs-segment__btn--active {
   background: var(--lzs-accent);
   border-color: var(--lzs-accent);
@@ -174,6 +175,9 @@
   scrollbar-width: thin;
   scrollbar-color: hsl(0, 0%, 75%) hsl(0, 0%, 95%);
 }
+.dark .lzs-scrollable {
+  scrollbar-color: hsl(0, 0%, 40%) hsl(0, 0%, 15%);
+}
 .lzs-scrollable::-webkit-scrollbar { width: 8px; height: 8px; }
 .lzs-scrollable::-webkit-scrollbar-thumb {
   background: hsl(0, 0%, 75%);
@@ -182,4 +186,10 @@
 .lzs-scrollable::-webkit-scrollbar-track {
   background: hsl(0, 0%, 95%);
   border-radius: 4px;
+}
+.dark .lzs-scrollable::-webkit-scrollbar-thumb {
+  background: hsl(0, 0%, 40%);
+}
+.dark .lzs-scrollable::-webkit-scrollbar-track {
+  background: hsl(0, 0%, 15%);
 }
