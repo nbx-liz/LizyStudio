@@ -6,6 +6,7 @@ import {
   cancelJob,
   fetchJob,
   fetchJobImportance,
+  fetchJobImportanceKinds,
   fetchJobLog,
   fetchJobPlot,
   fetchJobPlots,
@@ -339,11 +340,32 @@ function CompletedView({
       (plots?.includes("learning-curve") ?? false),
   });
 
-  const { data: importance } = useQuery({
-    queryKey: ["job-importance", job.job_id],
-    queryFn: () => fetchJobImportance(job.job_id),
+  const [importanceKind, setImportanceKind] = useState("split");
+
+  const { data: importanceKinds } = useQuery({
+    queryKey: ["job-importance-kinds", job.job_id],
+    queryFn: () => fetchJobImportanceKinds(job.job_id),
   });
 
+  // Sync initial kind with backend response when it differs
+  useEffect(() => {
+    if (
+      importanceKinds &&
+      importanceKinds.length > 0 &&
+      !importanceKinds.includes(importanceKind)
+    ) {
+      setImportanceKind(importanceKinds[0]);
+    }
+  }, [importanceKinds, importanceKind]);
+
+  const { data: importance } = useQuery({
+    queryKey: ["job-importance", job.job_id, importanceKind],
+    queryFn: () => fetchJobImportance(job.job_id, importanceKind),
+  });
+
+  // Importance plot is kind-independent (shows default split importance).
+  // The backend plot API does not accept a kind parameter; the plot is
+  // generated once using the default kind by LizyML's importance_plot().
   const { data: importancePlot } = useQuery({
     queryKey: ["job-plot", job.job_id, "importance"],
     queryFn: () => fetchJobPlot(job.job_id, "importance"),
@@ -465,6 +487,9 @@ function CompletedView({
             splitSummary={splitSummary}
             importance={importance}
             importancePlot={importancePlot}
+            importanceKinds={importanceKinds}
+            selectedKind={importanceKind}
+            onKindChange={setImportanceKind}
           />
         )}
       </Accordion>

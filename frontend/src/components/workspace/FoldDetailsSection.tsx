@@ -19,6 +19,13 @@ import {
 } from "@/components/ui/table";
 import { formatNum } from "@/lib/utils";
 import { PlotlyChart } from "./PlotlyChart";
+import { SegmentGroup } from "./SegmentGroup";
+
+const KIND_LABELS: Record<string, string> = {
+  split: "Split",
+  gain: "Gain",
+  shap: "SHAP",
+};
 
 interface FoldDetailsSectionProps {
   fitResult: FitResult;
@@ -26,6 +33,9 @@ interface FoldDetailsSectionProps {
   splitSummary: SplitSummaryRow[] | undefined;
   importance: ImportanceResponse | undefined;
   importancePlot: PlotResponse | undefined;
+  importanceKinds?: string[];
+  selectedKind?: string;
+  onKindChange?: (kind: string) => void;
 }
 
 /**
@@ -38,6 +48,9 @@ export function FoldDetailsSection({
   splitSummary,
   importance,
   importancePlot,
+  importanceKinds,
+  selectedKind,
+  onKindChange,
 }: FoldDetailsSectionProps) {
   return (
     <>
@@ -46,6 +59,19 @@ export function FoldDetailsSection({
         <AccordionItem value="importance">
           <AccordionTrigger>Feature Importance</AccordionTrigger>
           <AccordionContent>
+            {importanceKinds &&
+              importanceKinds.length > 1 &&
+              selectedKind &&
+              onKindChange && (
+                <div className="mb-3">
+                  <SegmentGroup
+                    options={importanceKinds}
+                    value={selectedKind}
+                    onChange={onKindChange}
+                    labels={KIND_LABELS}
+                  />
+                </div>
+              )}
             {importancePlot && (
               <div className="mb-4">
                 <PlotlyChart plotlyJson={importancePlot.plotly_json} />

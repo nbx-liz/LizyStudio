@@ -129,4 +129,36 @@ describe("PlotlyChart", () => {
     expect(layout.yaxis.title).toEqual({ text: "Y Label", standoff: 15 });
     expect(layout.yaxis2.title).toEqual({ text: "Y2 Label", standoff: 15 });
   });
+
+  it("applies transparent background in light mode", () => {
+    document.documentElement.classList.remove("dark");
+    const json = JSON.stringify({ data: [], layout: {} });
+    render(<PlotlyChart plotlyJson={json} />);
+    const { layout } = getPlotProps();
+    expect(layout.paper_bgcolor).toBe("transparent");
+    expect(layout.plot_bgcolor).toBe("transparent");
+  });
+
+  it("applies dark theme colors when dark class is present", () => {
+    document.documentElement.classList.add("dark");
+    const json = JSON.stringify({ data: [], layout: {} });
+    render(<PlotlyChart plotlyJson={json} />);
+    const { layout } = getPlotProps();
+    expect(layout.paper_bgcolor).toBe("transparent");
+    expect(layout.plot_bgcolor).toBe("transparent");
+    expect(layout.font.color).toContain("210");
+    document.documentElement.classList.remove("dark");
+  });
+
+  it("applies theme gridcolor to subplot axes", () => {
+    document.documentElement.classList.remove("dark");
+    const json = JSON.stringify({
+      data: [],
+      layout: { xaxis2: { anchor: "y2" }, yaxis2: { anchor: "x2" } },
+    });
+    render(<PlotlyChart plotlyJson={json} />);
+    const { layout } = getPlotProps();
+    expect(layout.xaxis2.gridcolor).toBeDefined();
+    expect(layout.yaxis2.gridcolor).toBeDefined();
+  });
 });

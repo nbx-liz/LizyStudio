@@ -23,6 +23,10 @@ export function fetchJobImportance(
   return apiFetch(`/jobs/${jobId}/importance?kind=${kind}`);
 }
 
+export function fetchJobImportanceKinds(jobId: string): Promise<string[]> {
+  return apiFetch(`/jobs/${jobId}/importance-kinds`);
+}
+
 export function fetchJobPlot(
   jobId: string,
   plotType: string,

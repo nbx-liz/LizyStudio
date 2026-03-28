@@ -262,6 +262,12 @@ def get_importance(
     return backend.importance(model, kind=kind)
 
 
+def get_importance_kinds(job: Job, backend: BackendAdapter) -> list[str]:
+    """Get the list of valid importance kind identifiers for a completed job."""
+    model = load_job_model(job, backend)
+    return backend.importance_kinds(model)
+
+
 def get_job_plot(job: Job, backend: BackendAdapter, plot_type: str) -> Any:
     """Get a plot for a completed job. Returns PlotData."""
     model = load_job_model(job, backend)

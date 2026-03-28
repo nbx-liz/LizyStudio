@@ -585,6 +585,57 @@ def test_get_job_importance_backend_error(
     assert res.json()["error"]["code"] == "BACKEND_ERROR"
 
 
+# --- Importance kinds ---
+
+
+def test_get_job_importance_kinds(
+    client: TestClient, sample_data_ref: DataRef, tmp_path: Path
+) -> None:
+    """GET /api/jobs/{job_id}/importance-kinds returns list of valid kinds."""
+    job_id = _create_completed_job_with_model(
+        client, sample_data_ref, str(tmp_path / "model")
+    )
+    mock_backend = _make_mock_backend()
+    mock_backend.importance_kinds.return_value = ["split", "gain", "shap"]  # type: ignore[union-attr]
+
+    app = client.app  # type: ignore[union-attr]
+    original = app.state.workspace.backend
+    app.state.workspace.backend = mock_backend
+    try:
+        res = client.get(f"/api/jobs/{job_id}/importance-kinds")
+    finally:
+        app.state.workspace.backend = original
+
+    assert res.status_code == 200
+    data = res.json()
+    assert isinstance(data, list)
+    assert "split" in data
+    assert "gain" in data
+    assert "shap" in data
+
+
+def test_get_job_importance_kinds_backend_error(
+    client: TestClient, sample_data_ref: DataRef, tmp_path: Path
+) -> None:
+    """GET importance-kinds propagates BackendError when the backend raises."""
+    job_id = _create_completed_job_with_model(
+        client, sample_data_ref, str(tmp_path / "model")
+    )
+    mock_backend = _make_mock_backend()
+    mock_backend.importance_kinds.side_effect = RuntimeError("no kinds")  # type: ignore[union-attr]
+
+    app = client.app  # type: ignore[union-attr]
+    original = app.state.workspace.backend
+    app.state.workspace.backend = mock_backend
+    try:
+        res = client.get(f"/api/jobs/{job_id}/importance-kinds")
+    finally:
+        app.state.workspace.backend = original
+
+    assert res.status_code == 500
+    assert res.json()["error"]["code"] == "BACKEND_ERROR"
+
+
 # --- Available plots ---
 
 

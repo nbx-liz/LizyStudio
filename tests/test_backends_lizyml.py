@@ -566,6 +566,22 @@ def test_importance_custom_kind() -> None:
     mock_model.importance.assert_called_once_with(kind="gain")
 
 
+# --- importance_kinds ---
+
+
+def test_importance_kinds_returns_list() -> None:
+    """importance_kinds() returns the list of valid importance kinds."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+
+    result = adapter.importance_kinds(mock_model)
+
+    assert isinstance(result, list)
+    assert "split" in result
+    assert "gain" in result
+    assert "shap" in result
+
+
 # --- confusion_matrix ---
 
 
