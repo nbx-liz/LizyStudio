@@ -9,6 +9,84 @@ from __future__ import annotations
 import threading
 from typing import Any
 
+# Keys already covered by parameter_hints or search_space_catalog.
+# additional_params must exclude these to avoid UI duplication.
+_KNOWN_PARAM_KEYS: frozenset[str] = frozenset(
+    {
+        "objective",
+        "metric",
+        "n_estimators",
+        "learning_rate",
+        "max_depth",
+        "max_bin",
+        "feature_fraction",
+        "bagging_fraction",
+        "bagging_freq",
+        "lambda_l1",
+        "lambda_l2",
+        "first_metric_only",
+        "verbose",
+        "num_threads",
+        "num_leaves",
+        # Smart params (in search_space_catalog)
+        "auto_num_leaves",
+        "num_leaves_ratio",
+        "min_data_in_leaf_ratio",
+        "min_data_in_bin_ratio",
+        "feature_weights",
+        "balanced",
+        # Additional params promoted to search_space_catalog
+        "min_child_weight",
+        "min_split_gain",
+        "subsample",
+        "colsample_bytree",
+        "scale_pos_weight",
+        "reg_alpha",
+        "reg_lambda",
+    }
+)
+
+# LightGBM parameters available as additional params (beyond hints/catalog).
+_LGBM_ADDITIONAL_PARAMS: list[str] = sorted(
+    [
+        "min_child_weight",
+        "min_child_samples",
+        "subsample",
+        "colsample_bytree",
+        "reg_alpha",
+        "reg_lambda",
+        "max_cat_threshold",
+        "cat_smooth",
+        "cat_l2",
+        "extra_trees",
+        "path_smooth",
+        "min_gain_to_split",
+        "min_data_in_leaf",
+        "min_data_in_bin",
+        "max_cat_to_onehot",
+        "top_k",
+        "min_sum_hessian_in_leaf",
+        "linear_tree",
+        "feature_pre_filter",
+        "force_col_wise",
+        "force_row_wise",
+        "histogram_pool_size",
+        "is_unbalance",
+        "scale_pos_weight",
+        "sigmoid",
+        "boost_from_average",
+        "bin_construct_sample_cnt",
+        "data_sample_strategy",
+        "interaction_constraints",
+    ]
+)
+
+
+def _build_additional_params() -> list[str]:
+    """Return LightGBM params not in parameter_hints or search_space_catalog."""
+    return [p for p in _LGBM_ADDITIONAL_PARAMS if p not in _KNOWN_PARAM_KEYS]
+
+
 # --- Eval metrics registry lookup (cached) ---
 
 _eval_metrics_cache: dict[str, list[str]] | None = None
@@ -134,17 +212,28 @@ def build_ui_schema(
             "metric": dict(all_metrics_by_task),
             "model_metric": {
                 "regression": [
-                    "huber",
-                    "mae",
-                    "mape",
+                    "l1",
+                    "l2",
                     "rmse",
+                    "quantile",
+                    "mape",
+                    "huber",
+                    "fair",
+                    "poisson",
+                    "gamma",
+                    "gamma_deviance",
+                    "tweedie",
                     "r2",
                     "rmsle",
                 ],
                 "binary": [
                     "auc",
-                    "logloss",
-                    "auc_pr",
+                    "binary_logloss",
+                    "binary_error",
+                    "average_precision",
+                    "cross_entropy",
+                    "cross_entropy_lambda",
+                    "kullback_leibler",
                     "f1",
                     "accuracy",
                     "brier",
@@ -152,9 +241,9 @@ def build_ui_schema(
                     "precision_at_k",
                 ],
                 "multiclass": [
-                    "logloss",
-                    "auc",
-                    "auc_pr",
+                    "multi_logloss",
+                    "multi_error",
+                    "auc_mu",
                     "f1",
                     "accuracy",
                     "brier",
@@ -252,6 +341,26 @@ def build_ui_schema(
                 "label": "First Metric Only",
                 "kind": "boolean",
                 "default": False,
+            },
+            {
+                "key": "verbose",
+                "label": "Log Output",
+                "kind": "integer",
+                "step": 1,
+                "default": -1,
+            },
+            {
+                "key": "balanced",
+                "label": "Balanced",
+                "kind": "boolean",
+                "default": False,
+            },
+            {
+                "key": "num_leaves",
+                "label": "Num Leaves",
+                "kind": "integer",
+                "step": 1,
+                "default": 256,
             },
         ],
         "search_space_catalog": [
@@ -360,6 +469,15 @@ def build_ui_schema(
                 "default": False,
             },
             {
+                "key": "verbose",
+                "title": "Log Output",
+                "paramType": "integer",
+                "modes": ["fixed", "range"],
+                "group": "model_params",
+                "default": -1,
+            },
+            # ── Smart Params group ──
+            {
                 "key": "auto_num_leaves",
                 "title": "Auto Num Leaves",
                 "paramType": "boolean",
@@ -390,6 +508,87 @@ def build_ui_schema(
                 "modes": ["fixed", "range"],
                 "group": "smart_params",
                 "default": 0.01,
+            },
+            {
+                "key": "num_leaves",
+                "title": "Num Leaves",
+                "paramType": "integer",
+                "modes": ["fixed", "range", "choice"],
+                "group": "smart_params",
+                "default": 256,
+            },
+            {
+                "key": "feature_weights",
+                "title": "Feature Weights",
+                "paramType": "object",
+                "modes": ["fixed"],
+                "group": "smart_params",
+                "default": None,
+            },
+            {
+                "key": "balanced",
+                "title": "Balanced",
+                "paramType": "boolean",
+                "modes": ["fixed", "choice"],
+                "group": "smart_params",
+                "default": False,
+            },
+            # ── Additional (commonly tuned LightGBM params) ──
+            {
+                "key": "min_child_weight",
+                "title": "Min Child Weight",
+                "paramType": "number",
+                "modes": ["fixed", "range"],
+                "group": "additional",
+                "default": 0.001,
+            },
+            {
+                "key": "min_split_gain",
+                "title": "Min Split Gain",
+                "paramType": "number",
+                "modes": ["fixed", "range"],
+                "group": "additional",
+                "default": 0.0,
+            },
+            {
+                "key": "subsample",
+                "title": "Subsample",
+                "paramType": "number",
+                "modes": ["fixed", "range"],
+                "group": "additional",
+                "default": 1.0,
+            },
+            {
+                "key": "colsample_bytree",
+                "title": "Col Sample By Tree",
+                "paramType": "number",
+                "modes": ["fixed", "range"],
+                "group": "additional",
+                "default": 1.0,
+            },
+            {
+                "key": "scale_pos_weight",
+                "title": "Scale Pos Weight",
+                "paramType": "number",
+                "modes": ["fixed", "range"],
+                "group": "additional",
+                "default": 1.0,
+            },
+            {
+                "key": "reg_alpha",
+                "title": "Reg Alpha (L1)",
+                "paramType": "number",
+                "modes": ["fixed", "range"],
+                "group": "additional",
+                "default": 0.0,
+            },
+            {
+                "key": "reg_lambda",
+                "title": "Reg Lambda (L2)",
+                "paramType": "number",
+                "modes": ["fixed", "range"],
+                "group": "additional",
+                "default": 0.0,
             },
             # ── Training group ──
             {
@@ -445,11 +644,19 @@ def build_ui_schema(
             "lambda_l2": 0.0001,
             "num_leaves_ratio": 0.05,
             "num_leaves": 1,
-            "min_data_in_leaf_ratio": 0.001,
-            "min_data_in_bin_ratio": 0.001,
+            "min_data_in_leaf_ratio": 0.01,
+            "min_data_in_bin_ratio": 0.01,
             "early_stopping.rounds": 50,
             "validation_ratio": 0.05,
             "seed": 1,
+            # Additional params step values
+            "min_child_weight": 0.001,
+            "min_split_gain": 0.001,
+            "subsample": 0.05,
+            "colsample_bytree": 0.05,
+            "scale_pos_weight": 0.1,
+            "reg_alpha": 0.0001,
+            "reg_lambda": 0.0001,
         },
         "conditional_visibility": {
             "calibration": {"task": ["binary"]},
@@ -483,20 +690,56 @@ def build_ui_schema(
                 "blocked_group_kfold",
             ],
             "tune": {"allow_empty_space": True},
+            "cv_strategy_fields": {
+                "kfold": ["n_splits", "shuffle", "random_state"],
+                "stratified_kfold": ["n_splits", "shuffle", "random_state"],
+                "group_kfold": ["n_splits", "group_col"],
+                "stratified_group_kfold": ["n_splits", "group_col"],
+                "time_series": [
+                    "n_splits",
+                    "gap",
+                    "max_train_size",
+                    "max_test_size",
+                ],
+                "purged_time_series": [
+                    "n_splits",
+                    "time_col",
+                    "purge_gap",
+                    "embargo",
+                ],
+                "group_time_series": [
+                    "n_splits",
+                    "group_col",
+                    "gap",
+                    "max_train_size",
+                    "max_test_size",
+                ],
+                "blocked_group_kfold": [
+                    "blocks_col",
+                    "groups_col",
+                    "mode",
+                    "train_window",
+                    "min_train_rows",
+                    "min_valid_rows",
+                ],
+            },
+            "cv_defaults": {
+                "n_splits": 5,
+                "shuffle": True,
+                "random_state": 42,
+                "gap": 0,
+            },
+            "cv_default_strategy": {
+                "binary": "stratified_kfold",
+                "multiclass": "stratified_kfold",
+                "regression": "kfold",
+            },
         },
         "calibration_methods": ["platt", "isotonic", "beta"],
-        "additional_params": [
-            "min_child_weight",
-            "min_split_gain",
-            "subsample",
-            "colsample_bytree",
-            "scale_pos_weight",
-            "cat_smooth",
-            "cat_l2",
-            "max_cat_threshold",
-            "path_smooth",
-            "extra_trees",
-            "num_leaves",
-            "log_output",
-        ],
+        "additional_params": _build_additional_params(),
+        "special_search_space_fields": {
+            "objective": "objective",
+            "metric": "model_metric",
+            "inner_valid": "inner_valid_picker",
+        },
     }
