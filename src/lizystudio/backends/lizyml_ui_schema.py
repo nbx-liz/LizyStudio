@@ -40,11 +40,14 @@ def get_eval_metrics_by_task() -> dict[str, list[str]]:
                         "auc_pr",
                         "f1",
                         "accuracy",
-                        "binary_logloss",
                         "brier",
+                        "ece",
+                        "precision_at_k",
                     ]
                 ),
-                "multiclass": sorted(["multi_logloss", "auc_mu", "multi_error"]),
+                "multiclass": sorted(
+                    ["logloss", "f1", "accuracy", "auc", "auc_pr", "brier"]
+                ),
             }
         _eval_metrics_cache = metrics
         return metrics
@@ -140,17 +143,21 @@ def build_ui_schema(
                 ],
                 "binary": [
                     "auc",
-                    "binary_logloss",
                     "logloss",
                     "auc_pr",
                     "f1",
                     "accuracy",
                     "brier",
+                    "ece",
+                    "precision_at_k",
                 ],
                 "multiclass": [
-                    "multi_logloss",
-                    "auc_mu",
-                    "multi_error",
+                    "logloss",
+                    "auc",
+                    "auc_pr",
+                    "f1",
+                    "accuracy",
+                    "brier",
                 ],
             },
         },

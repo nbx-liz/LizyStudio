@@ -1,4 +1,5 @@
 import type { PlotResponse } from "@/api/types";
+import { ChipGroup } from "./ChipGroup";
 import { PlotlyChart } from "./PlotlyChart";
 import { SegmentGroup } from "./SegmentGroup";
 
@@ -20,6 +21,11 @@ interface PlotSectionProps {
   learningCurve: PlotResponse | undefined;
   isLoading?: boolean;
   isError?: boolean;
+  /** Selected metrics for learning curve filter (null = show all). */
+  lcMetrics?: string[] | null;
+  onLcMetricsChange?: (metrics: string[] | null) => void;
+  /** Available evaluation metrics (for the filter chip list). */
+  availableEvalMetrics?: string[];
 }
 
 export function PlotSection({
@@ -30,6 +36,9 @@ export function PlotSection({
   learningCurve,
   isLoading = false,
   isError = false,
+  lcMetrics,
+  onLcMetricsChange,
+  availableEvalMetrics,
 }: PlotSectionProps) {
   // Include learning-curve in the button list, exclude tuning
   const availablePlots = plots.filter((p) => p !== "tuning");
@@ -38,6 +47,13 @@ export function PlotSection({
   const isLearningCurve = selectedPlot === "learning-curve";
   const activePlotData = isLearningCurve ? learningCurve : plotData;
   const chartHeight = isLearningCurve ? 500 : 350;
+
+  // Show LC filter when: on learning curve tab + more than 1 metric available
+  const showLcFilter =
+    isLearningCurve &&
+    availableEvalMetrics != null &&
+    availableEvalMetrics.length > 1 &&
+    onLcMetricsChange != null;
 
   if (availablePlots.length === 0) return null;
 
@@ -52,6 +68,29 @@ export function PlotSection({
           labels={PLOT_LABELS}
         />
       </div>
+
+      {showLcFilter && (
+        <div className="mb-3">
+          <p className="mb-1 text-xs text-muted-foreground">Filter metrics</p>
+          <ChipGroup
+            options={availableEvalMetrics}
+            selected={lcMetrics ?? availableEvalMetrics}
+            onChange={(selected) => {
+              // If all selected → null (show all, no filter)
+              if (selected.length === availableEvalMetrics.length) {
+                onLcMetricsChange(null);
+              } else if (selected.length === 0) {
+                // Prevent empty — reset to all
+                onLcMetricsChange(null);
+              } else {
+                onLcMetricsChange(selected);
+              }
+            }}
+            minSelected={1}
+          />
+        </div>
+      )}
+
       {isLoading && (
         <p className="py-8 text-center text-sm text-muted-foreground">
           Loading plot...

@@ -734,6 +734,67 @@ def test_get_job_plot_backend_error(
     assert res.json()["error"]["code"] == "BACKEND_ERROR"
 
 
+# --- Learning curve metrics filter (H-0034) ---
+
+
+def test_get_job_plot_learning_curve_with_metrics_filter(
+    client: TestClient, sample_data_ref: DataRef, tmp_path: Path
+) -> None:
+    """GET /api/jobs/{id}/plot/learning-curve?metrics=auc,f1 forwards filter."""
+    from unittest.mock import MagicMock
+
+    job_id = _create_completed_job_with_model(
+        client, sample_data_ref, str(tmp_path / "model")
+    )
+    mock_backend = _make_mock_backend()
+    fake_plot = MagicMock()
+    fake_plot.plotly_json = '{"data":[],"layout":{}}'
+    mock_backend.plot.return_value = fake_plot  # type: ignore[union-attr]
+
+    app = client.app  # type: ignore[union-attr]
+    original = app.state.workspace.backend
+    app.state.workspace.backend = mock_backend
+    try:
+        res = client.get(f"/api/jobs/{job_id}/plot/learning-curve?metrics=auc,f1")
+    finally:
+        app.state.workspace.backend = original
+
+    assert res.status_code == 200
+    mock_backend.plot.assert_called_once_with(  # type: ignore[union-attr]
+        mock_backend.plot.call_args[0][0],  # type: ignore[union-attr]
+        "learning-curve",
+        metrics=["auc", "f1"],
+    )
+
+
+def test_get_job_plot_non_learning_curve_ignores_metrics(
+    client: TestClient, sample_data_ref: DataRef, tmp_path: Path
+) -> None:
+    """GET /api/jobs/{id}/plot/roc?metrics=auc ignores metrics for non-LC."""
+    from unittest.mock import MagicMock
+
+    job_id = _create_completed_job_with_model(
+        client, sample_data_ref, str(tmp_path / "model")
+    )
+    mock_backend = _make_mock_backend()
+    fake_plot = MagicMock()
+    fake_plot.plotly_json = '{"data":[]}'
+    mock_backend.plot.return_value = fake_plot  # type: ignore[union-attr]
+
+    app = client.app  # type: ignore[union-attr]
+    original = app.state.workspace.backend
+    app.state.workspace.backend = mock_backend
+    try:
+        res = client.get(f"/api/jobs/{job_id}/plot/roc?metrics=auc")
+    finally:
+        app.state.workspace.backend = original
+
+    assert res.status_code == 200
+    # metrics kwarg should NOT be passed for non-learning-curve
+    _, kwargs = mock_backend.plot.call_args  # type: ignore[union-attr]
+    assert "metrics" not in kwargs
+
+
 # --- Log with content ---
 
 

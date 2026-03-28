@@ -1,4 +1,6 @@
 import { useCallback, useMemo } from "react";
+import type { MetricEntry } from "@/api/types";
+import { metricEntryName } from "@/api/types";
 import {
   Accordion,
   AccordionContent,
@@ -7,6 +9,7 @@ import {
 } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
+import { CompactStepper } from "./CompactStepper";
 import { SearchSpaceTable } from "./SearchSpaceTable";
 import { SegmentGroup } from "./SegmentGroup";
 import { TuneSettings } from "./TuneSettings";
@@ -54,7 +57,7 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
   );
 
   const evaluation = extractOptunaField<{
-    metrics?: string[];
+    metrics?: MetricEntry[];
   }>(config, "evaluation", {});
 
   const modelSection = (config.model as Record<string, unknown>) ?? {};
@@ -110,10 +113,12 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
     return result;
   }, [task, uiSchema]);
 
-  // Current evaluation metrics from config
+  // Current evaluation metrics from config (may contain MetricEntry dicts)
   const evalMetrics = evaluation.metrics ?? [];
-  const optimizationMetric = evalMetrics[0] ?? "";
-  const additionalMetrics = evalMetrics.slice(1);
+  const optimizationMetric = evalMetrics[0]
+    ? metricEntryName(evalMetrics[0])
+    : "";
+  const additionalMetricNames = evalMetrics.slice(1).map(metricEntryName);
 
   // Auto-determine direction from metric_direction mapping
   const autoDirection = useMemo(() => {
@@ -140,11 +145,39 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
     [config, modelParams, onChange],
   );
 
+  // Build a MetricEntry — use dict form for precision_at_k
+  const buildEntry = useCallback((name: string, k?: number): MetricEntry => {
+    if (name === "precision_at_k") {
+      return { precision_at_k: { k: k ?? 10 } };
+    }
+    return name;
+  }, []);
+
+  // Get precision_at_k k-value from current tune evaluation metrics
+  const tuneKValue = useMemo(() => {
+    for (const entry of evalMetrics) {
+      if (
+        typeof entry === "object" &&
+        entry !== null &&
+        "precision_at_k" in entry
+      ) {
+        const k = entry.precision_at_k?.k;
+        return typeof k === "number" ? k : 10;
+      }
+    }
+    return 10;
+  }, [evalMetrics]);
+
   const handleOptimizationMetricChange = useCallback(
     (metric: string) => {
       // Set as first metric, keep additional metrics that aren't the new optimization metric
-      const filtered = additionalMetrics.filter((m) => m !== metric);
-      const newEval = { ...evaluation, metrics: [metric, ...filtered] };
+      const filtered = evalMetrics
+        .slice(1)
+        .filter((e) => metricEntryName(e) !== metric);
+      const newEval = {
+        ...evaluation,
+        metrics: [buildEntry(metric), ...filtered],
+      };
       // Also set direction in params
       const dir = (() => {
         if (!task || !metricDirection) return "minimize";
@@ -163,8 +196,9 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
       });
     },
     [
-      additionalMetrics,
+      evalMetrics,
       evaluation,
+      buildEntry,
       config,
       task,
       metricDirection,
@@ -175,17 +209,43 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
 
   const handleAdditionalMetricsChange = useCallback(
     (metric: string) => {
-      const isSelected = additionalMetrics.includes(metric);
+      const isSelected = additionalMetricNames.includes(metric);
       const newAdditional = isSelected
-        ? additionalMetrics.filter((m) => m !== metric)
-        : [...additionalMetrics, metric];
+        ? evalMetrics.slice(1).filter((e) => metricEntryName(e) !== metric)
+        : [...evalMetrics.slice(1), buildEntry(metric)];
       const newEval = {
         ...evaluation,
-        metrics: [optimizationMetric, ...newAdditional].filter(Boolean),
+        metrics: [
+          evalMetrics[0] ?? optimizationMetric,
+          ...newAdditional,
+        ].filter(Boolean),
       };
       onChange(updateTuningConfig(config, "evaluation", newEval));
     },
-    [additionalMetrics, evaluation, optimizationMetric, config, onChange],
+    [
+      additionalMetricNames,
+      evalMetrics,
+      evaluation,
+      optimizationMetric,
+      buildEntry,
+      config,
+      onChange,
+    ],
+  );
+
+  // Handle k-value change for precision_at_k in tune evaluation
+  const handleTuneKChange = useCallback(
+    (k: number) => {
+      const newMetrics = evalMetrics.map((entry) => {
+        if (metricEntryName(entry) === "precision_at_k") {
+          return { precision_at_k: { k } };
+        }
+        return entry;
+      });
+      const newEval = { ...evaluation, metrics: newMetrics };
+      onChange(updateTuningConfig(config, "evaluation", newEval));
+    },
+    [evalMetrics, evaluation, config, onChange],
   );
 
   // Available metrics for Additional Metrics (exclude optimization metric)
@@ -266,7 +326,7 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
                   </Label>
                   <div className="flex flex-wrap gap-1.5">
                     {additionalMetricOptions.map((m) => {
-                      const selected = additionalMetrics.includes(m);
+                      const selected = additionalMetricNames.includes(m);
                       return (
                         <button
                           key={m}
@@ -285,6 +345,25 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
                   </div>
                 </div>
               )}
+
+            {/* precision_at_k k-value input (H-0034) */}
+            {evalMetrics.some(
+              (e) => metricEntryName(e) === "precision_at_k",
+            ) && (
+              <div className="flex items-center gap-2 mt-1.5">
+                <Label className="text-xs text-muted-foreground">k</Label>
+                <CompactStepper
+                  inputId="tune-precision-k"
+                  value={tuneKValue}
+                  onChange={(v) => {
+                    if (v !== undefined) handleTuneKChange(v);
+                  }}
+                  min={1}
+                  max={100}
+                  step={1}
+                />
+              </div>
+            )}
 
             {/* No task selected */}
             {!task && (

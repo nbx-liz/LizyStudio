@@ -268,10 +268,12 @@ def get_importance_kinds(job: Job, backend: BackendAdapter) -> list[str]:
     return backend.importance_kinds(model)
 
 
-def get_job_plot(job: Job, backend: BackendAdapter, plot_type: str) -> Any:
+def get_job_plot(
+    job: Job, backend: BackendAdapter, plot_type: str, **kwargs: Any
+) -> Any:
     """Get a plot for a completed job. Returns PlotData."""
     model = load_job_model(job, backend)
-    return backend.plot(model, plot_type)
+    return backend.plot(model, plot_type, **kwargs)
 
 
 def get_available_plots(job: Job, backend: BackendAdapter) -> list[str]:

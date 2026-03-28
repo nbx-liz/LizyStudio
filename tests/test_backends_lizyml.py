@@ -656,6 +656,49 @@ def test_plot_all_dispatch_keys() -> None:
         assert isinstance(result, PlotData)
 
 
+# --- plot() with kwargs (H-0034) ---
+
+
+def test_plot_learning_curve_forwards_metrics_filter() -> None:
+    """plot('learning-curve', metrics=[...]) forwards the metrics kwarg."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_fig = MagicMock()
+    mock_fig.to_json.return_value = '{"data": []}'
+    mock_model.plot_learning_curve.return_value = mock_fig
+
+    result = adapter.plot(mock_model, "learning-curve", metrics=["auc", "f1"])
+
+    mock_model.plot_learning_curve.assert_called_once_with(metrics=["auc", "f1"])
+    assert isinstance(result, PlotData)
+
+
+def test_plot_learning_curve_without_metrics_calls_no_kwargs() -> None:
+    """plot('learning-curve') without metrics passes no kwargs."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_fig = MagicMock()
+    mock_fig.to_json.return_value = '{"data": []}'
+    mock_model.plot_learning_curve.return_value = mock_fig
+
+    adapter.plot(mock_model, "learning-curve")
+
+    mock_model.plot_learning_curve.assert_called_once_with()
+
+
+def test_plot_non_learning_curve_ignores_metrics_kwarg() -> None:
+    """plot() ignores the metrics kwarg for non-learning-curve plot types."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_fig = MagicMock()
+    mock_fig.to_json.return_value = '{"data": []}'
+    mock_model.plot_oof_distribution.return_value = mock_fig
+
+    adapter.plot(mock_model, "oof-distribution", metrics=["auc"])
+
+    mock_model.plot_oof_distribution.assert_called_once_with()
+
+
 # --- export_model ---
 
 

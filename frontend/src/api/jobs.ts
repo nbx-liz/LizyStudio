@@ -30,8 +30,13 @@ export function fetchJobImportanceKinds(jobId: string): Promise<string[]> {
 export function fetchJobPlot(
   jobId: string,
   plotType: string,
+  options?: { metrics?: string[] },
 ): Promise<PlotResponse> {
-  return apiFetch(`/jobs/${jobId}/plot/${plotType}`);
+  let url = `/jobs/${jobId}/plot/${plotType}`;
+  if (options?.metrics && options.metrics.length > 0) {
+    url += `?metrics=${options.metrics.join(",")}`;
+  }
+  return apiFetch(url);
 }
 
 export function fetchJobPlots(jobId: string): Promise<string[]> {
