@@ -693,3 +693,25 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
 - **Compatibility:** 非破壊的（新フィールド追加のみ）
 - **Acceptance Criteria:** `GET /api/backends/ui-schema` が capabilities 等を含む
 - **Decision:** 2026-03-22 accepted — Widget 踏襲方針
+
+---
+
+### H-0033: Importance kind 選択機能の追加
+- **Status:** accepted
+- **Scope:** Adapter, API, Frontend
+- **Related:** BLUEPRINT.md §3.3 BackendAdapter Protocol
+- **Context:** Feature Importance が split のみ表示されている。LizyML は split / gain / shap の3種類をサポートするが、LizyStudio 側で kind を切り替える UI と API が不足。
+- **Proposal:**
+  1. `BackendAdapter` Protocol に `importance_kinds(model) -> list[str]` メソッド追加（デフォルト `["split"]`）
+  2. LizyML Adapter で `["split", "gain", "shap"]` を返す実装
+  3. API エンドポイント `GET /api/jobs/{job_id}/importance-kinds` 追加
+  4. フロントエンド FoldDetailsSection に kind セレクタ（SegmentGroup）追加
+  5. `fetchJobImportance(jobId, kind)` の kind パラメータを UI から制御
+- **Impact:** base.py（Protocol）、lizyml.py（Adapter）、api/jobs.py、FoldDetailsSection.tsx、ResultsPanel.tsx、api/jobs.ts
+- **Compatibility:** 非破壊的（Protocol にデフォルト実装付きメソッド追加、新 API エンドポイント追加のみ）
+- **Alternatives:** ハードコードで kind リストをフロントに持つ案 → バックエンド依存の種別なので動的取得が適切
+- **Acceptance Criteria:**
+  1. Importance セクションで split / gain / shap を切り替えられる
+  2. 選択した kind に応じてテーブルとプロットが更新される
+  3. 既存テストが全パス
+- **Decision:** 2026-03-28 accepted
