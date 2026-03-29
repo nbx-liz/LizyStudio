@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { fetchUiSchema, runFit, runTune, updateConfig } from "@/api/workspace";
 import {
@@ -11,6 +11,7 @@ import { DataPanel } from "@/components/workspace/DataPanel";
 import { ModelPanel } from "@/components/workspace/ModelPanel";
 import { ResultsPanel } from "@/components/workspace/ResultsPanel";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
+import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 
 export function WorkspacePage() {
   const queryClient = useQueryClient();
@@ -73,6 +74,15 @@ export function WorkspacePage() {
     },
     [queryClient],
   );
+
+  const shortcuts = useMemo(
+    () => [
+      { key: "Enter", ctrl: true, action: () => handleFit() },
+      { key: "Enter", ctrl: true, shift: true, action: () => handleTune() },
+    ],
+    [handleFit, handleTune],
+  );
+  useKeyboardShortcuts(shortcuts);
 
   return (
     <ResizablePanelGroup orientation="horizontal" className="h-full">
