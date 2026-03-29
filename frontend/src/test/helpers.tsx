@@ -9,18 +9,21 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { JobDetail, JobSummary } from "@/api/types";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
-/** Wrap component with QueryClientProvider (no routing). */
+/** Wrap component with QueryClientProvider + TooltipProvider (no routing). */
 export function renderWithQuery(ui: React.ReactElement) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   return render(
-    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>{ui}</TooltipProvider>
+    </QueryClientProvider>,
   );
 }
 
-/** Wrap component with QueryClientProvider + MemoryRouter. */
+/** Wrap component with QueryClientProvider + TooltipProvider + MemoryRouter. */
 export function renderWithProviders(
   ui: React.ReactElement,
   { initialEntries = ["/"] }: { initialEntries?: string[] } = {},
@@ -30,7 +33,9 @@ export function renderWithProviders(
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={initialEntries}>{ui}</MemoryRouter>
+      <TooltipProvider>
+        <MemoryRouter initialEntries={initialEntries}>{ui}</MemoryRouter>
+      </TooltipProvider>
     </QueryClientProvider>,
   );
 }

@@ -164,6 +164,20 @@ export function ResultsPanel({
   const typeLabel = job.job_type === "fit" ? "Fit" : "Tune";
   const headerLabel = `${typeLabel}${jobNumber ? ` #${jobNumber}` : ""}`;
 
+  if (job.status === "pending") {
+    return (
+      <div className="flex h-full flex-col items-center justify-center p-8 text-center text-muted-foreground">
+        <Badge
+          variant="secondary"
+          className="mb-3 bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200"
+        >
+          Queued
+        </Badge>
+        <p className="text-sm">Job queued, starting soon...</p>
+      </div>
+    );
+  }
+
   if (job.status === "running") {
     const pct = progress ? (progress.current / progress.total) * 100 : 0;
     return (
@@ -472,6 +486,29 @@ function CompletedView({
           </Button>
         </div>
       </div>
+
+      {/* KPI Summary Cards */}
+      {metrics && (
+        <div className="mb-4 flex flex-wrap gap-2" data-testid="kpi-cards">
+          {Object.entries(metrics).map(([name, vals]) => (
+            <div
+              key={name}
+              className="flex flex-col items-center rounded-md border bg-muted/30 px-3 py-1.5"
+            >
+              <span className="text-[10px] text-muted-foreground uppercase tracking-wide">
+                {annotateMetric(name)}
+              </span>
+              <span className="text-sm font-semibold tabular-nums">
+                {vals.oos != null
+                  ? Number(vals.oos).toFixed(4)
+                  : vals.is != null
+                    ? Number(vals.is).toFixed(4)
+                    : "—"}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {tuneResult && (
         <TuneTrialsSection

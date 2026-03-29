@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AppLayout } from "./components/layout/AppLayout";
+import { CommandPalette } from "./components/layout/CommandPalette";
 import { ErrorBoundary } from "./components/layout/ErrorBoundary";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { InferencePage } from "./pages/InferencePage";
@@ -33,6 +34,7 @@ export function App() {
               </Routes>
             </AppLayout>
           </ErrorBoundary>
+          <CommandPalette />
           <Toaster richColors position="bottom-right" />
         </BrowserRouter>
       </TooltipProvider>

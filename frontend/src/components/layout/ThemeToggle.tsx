@@ -37,6 +37,9 @@ export function ThemeToggle({ collapsed }: { collapsed?: boolean }) {
       className={
         collapsed ? "w-full justify-center" : "w-full justify-start gap-2"
       }
+      aria-label={
+        theme === "dark" ? "Switch to light mode" : "Switch to dark mode"
+      }
     >
       <Icon className="h-4 w-4" />
       {!collapsed && (theme === "dark" ? "Light mode" : "Dark mode")}
