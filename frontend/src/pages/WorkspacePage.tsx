@@ -10,6 +10,7 @@ import {
 import { DataPanel } from "@/components/workspace/DataPanel";
 import { ModelPanel } from "@/components/workspace/ModelPanel";
 import { ResultsPanel } from "@/components/workspace/ResultsPanel";
+import { useBackgroundNotification } from "@/hooks/useBackgroundNotification";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 
 export function WorkspacePage() {
@@ -20,6 +21,7 @@ export function WorkspacePage() {
   const [running, setRunning] = useState(false);
 
   useDocumentTitle(running ? "Running..." : null);
+  const notify = useBackgroundNotification();
 
   const { data: uiSchema } = useQuery({
     queryKey: ["ui-schema"],
@@ -98,7 +100,10 @@ export function WorkspacePage() {
         <ResultsPanel
           jobId={currentJobId}
           onApplyToFit={handleApplyToFit}
-          onJobDone={() => setRunning(false)}
+          onJobDone={() => {
+            setRunning(false);
+            notify("LizyStudio", "Job completed");
+          }}
         />
       </ResizablePanel>
     </ResizablePanelGroup>

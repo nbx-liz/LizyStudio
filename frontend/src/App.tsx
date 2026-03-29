@@ -3,6 +3,7 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AppLayout } from "./components/layout/AppLayout";
 import { ErrorBoundary } from "./components/layout/ErrorBoundary";
+import { Onboarding } from "./components/layout/Onboarding";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { InferencePage } from "./pages/InferencePage";
 import { JobsPage } from "./pages/JobsPage";
@@ -33,6 +34,7 @@ export function App() {
               </Routes>
             </AppLayout>
           </ErrorBoundary>
+          <Onboarding />
           <Toaster richColors position="bottom-right" />
         </BrowserRouter>
       </TooltipProvider>
