@@ -86,6 +86,7 @@ export function FeatureWeightsEditor({
                 className="h-6 w-6"
                 onClick={() => handleRemove(key)}
                 type="button"
+                aria-label={`Remove ${key}`}
               >
                 <X className="h-3 w-3" />
               </Button>

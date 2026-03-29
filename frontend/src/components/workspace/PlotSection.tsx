@@ -1,4 +1,13 @@
+import { Maximize2 } from "lucide-react";
+import { useState } from "react";
 import type { PlotResponse } from "@/api/types";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { ChipGroup } from "./ChipGroup";
 import { PlotlyChart } from "./PlotlyChart";
 import { SegmentGroup } from "./SegmentGroup";
@@ -55,11 +64,26 @@ export function PlotSection({
     availableEvalMetrics.length > 1 &&
     onLcMetricsChange != null;
 
+  const [fullscreen, setFullscreen] = useState(false);
+
   if (availablePlots.length === 0) return null;
 
   return (
     <section className="mb-6 min-w-0">
-      <h4 className="mb-2 text-sm font-medium">Plots</h4>
+      <div className="mb-2 flex items-center justify-between">
+        <h4 className="text-sm font-medium">Plots</h4>
+        {activePlotData && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2"
+            onClick={() => setFullscreen(true)}
+            aria-label="Fullscreen plot"
+          >
+            <Maximize2 className="h-3 w-3" />
+          </Button>
+        )}
+      </div>
       <div className="mb-3">
         <SegmentGroup
           options={availablePlots}
@@ -107,6 +131,19 @@ export function PlotSection({
           height={chartHeight}
         />
       )}
+
+      <Dialog open={fullscreen} onOpenChange={setFullscreen}>
+        <DialogContent className="max-h-[90vh] max-w-[90vw]">
+          <DialogHeader>
+            <DialogTitle>
+              {PLOT_LABELS[selectedPlot] ?? selectedPlot}
+            </DialogTitle>
+          </DialogHeader>
+          {activePlotData && (
+            <PlotlyChart plotlyJson={activePlotData.plotly_json} height={600} />
+          )}
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

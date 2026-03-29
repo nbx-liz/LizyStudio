@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, FileText, FileUp } from "lucide-react";
+import { Download, FileText, FileUp, Redo2, Save, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { ConfigError } from "@/api/types";
@@ -16,7 +16,22 @@ import {
 } from "@/api/workspace";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { useConfigHistory } from "@/hooks/useConfigHistory";
+import { useConfigPresets } from "@/hooks/useConfigPresets";
 import { ConfigForm } from "./ConfigForm";
 import { RawConfigDialog } from "./RawConfigDialog";
 import { TuneTab } from "./TuneTab";
@@ -40,6 +55,8 @@ export function ModelPanel({
   const [errors, setErrors] = useState<ConfigError[]>([]);
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const history = useConfigHistory();
+  const { presets, save: savePreset, load: loadPreset } = useConfigPresets();
 
   const { data: schema } = useQuery({
     queryKey: ["config-schema"],
@@ -89,6 +106,7 @@ export function ModelPanel({
       try {
         await updateConfig(newConfig);
         queryClient.setQueryData(["config"], newConfig);
+        history.push(newConfig);
       } catch {
         toast.error("Failed to update config");
         return;
@@ -104,7 +122,7 @@ export function ModelPanel({
         }
       }, 500);
     },
-    [queryClient, running],
+    [queryClient, running, history.push],
   );
 
   useEffect(() => {
@@ -131,6 +149,45 @@ export function ModelPanel({
     window.open(getConfigDownloadUrl(), "_blank");
   };
 
+  const handleUndo = useCallback(async () => {
+    const prev = history.undo();
+    if (!prev) return;
+    try {
+      await updateConfig(prev);
+      queryClient.setQueryData(["config"], prev);
+      toast.info("Config undone");
+    } catch {
+      toast.error("Undo failed");
+    }
+  }, [history, queryClient]);
+
+  const handleRedo = useCallback(async () => {
+    const next = history.redo();
+    if (!next) return;
+    try {
+      await updateConfig(next);
+      queryClient.setQueryData(["config"], next);
+      toast.info("Config redone");
+    } catch {
+      toast.error("Redo failed");
+    }
+  }, [history, queryClient]);
+
+  const handleSavePreset = () => {
+    if (!config) return;
+    const name = prompt("Preset name:");
+    if (!name?.trim()) return;
+    savePreset(name.trim(), config);
+    toast.success(`Preset "${name.trim()}" saved`);
+  };
+
+  const handleLoadPreset = (name: string) => {
+    const preset = loadPreset(name);
+    if (!preset) return;
+    handleConfigChange(preset);
+    toast.success(`Preset "${name}" loaded`);
+  };
+
   const fitEnabled = hasData && !!config && !running && errors.length === 0;
   // Tune enabled: allow empty space if capability flag is set
   const allowEmptySpace =
@@ -143,6 +200,16 @@ export function ModelPanel({
     )?.space as Record<string, unknown> | undefined) ?? {};
   const tuneEnabled =
     fitEnabled && (allowEmptySpace || Object.keys(tuningSpace).length > 0);
+
+  const disabledReason = (() => {
+    if (running) return "A job is currently running";
+    if (!hasData) return "Load data first";
+    if (!config) return "Loading configuration...";
+    if (errors.length > 0) return "Fix validation errors first";
+    if (activeTab === "tune" && !tuneEnabled)
+      return "Define a search space or enable empty space";
+    return null;
+  })();
 
   return (
     <div className="flex h-full flex-col">
@@ -162,14 +229,23 @@ export function ModelPanel({
               </TabsTrigger>
             </TabsList>
           </Tabs>
-          <Button
-            size="sm"
-            className="h-9"
-            onClick={activeTab === "fit" ? onFit : onTune}
-            disabled={activeTab === "fit" ? !fitEnabled : !tuneEnabled}
-          >
-            {activeTab === "fit" ? "Fit" : "Tune"}
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span>
+                <Button
+                  size="sm"
+                  className="h-9"
+                  onClick={activeTab === "fit" ? onFit : onTune}
+                  disabled={activeTab === "fit" ? !fitEnabled : !tuneEnabled}
+                >
+                  {activeTab === "fit" ? "Fit" : "Tune"}
+                </Button>
+              </span>
+            </TooltipTrigger>
+            {disabledReason && (
+              <TooltipContent>{disabledReason}</TooltipContent>
+            )}
+          </Tooltip>
         </div>
         {backend && (
           <Badge variant="secondary" className="mt-1.5 text-xs">
@@ -203,7 +279,13 @@ export function ModelPanel({
               columns={nonExcludedColumns}
             />
           ) : (
-            <p className="text-sm text-muted-foreground">Loading config...</p>
+            <div className="space-y-3" data-testid="config-skeleton">
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-4 w-32" />
+              <Skeleton className="h-8 w-full" />
+            </div>
           )
         ) : config ? (
           <TuneTab
@@ -237,6 +319,42 @@ export function ModelPanel({
             <Download className="mr-1 h-3 w-3" />
             Export YAML
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleUndo}
+            disabled={!history.canUndo}
+            aria-label="Undo"
+          >
+            <Undo2 className="h-3 w-3" />
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleRedo}
+            disabled={!history.canRedo}
+            aria-label="Redo"
+          >
+            <Redo2 className="h-3 w-3" />
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleSavePreset}>
+            <Save className="mr-1 h-3 w-3" />
+            Save Preset
+          </Button>
+          {presets.length > 0 && (
+            <Select onValueChange={handleLoadPreset}>
+              <SelectTrigger className="h-8 w-36 text-xs">
+                <SelectValue placeholder="Load Preset" />
+              </SelectTrigger>
+              <SelectContent>
+                {presets.map((p) => (
+                  <SelectItem key={p.name} value={p.name}>
+                    {p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           <RawConfigDialog
             config={config}
             trigger={

@@ -153,6 +153,7 @@ export function KeyValueEditor({
                     className="h-6 w-6"
                     onClick={() => handleCatalogRemove(key)}
                     type="button"
+                    aria-label={`Remove ${key}`}
                   >
                     <X className="h-3 w-3" />
                   </Button>
@@ -212,6 +213,7 @@ export function KeyValueEditor({
                     className="h-6 w-6"
                     onClick={() => removeCustomRow(i)}
                     type="button"
+                    aria-label="Remove row"
                   >
                     <X className="h-3 w-3" />
                   </Button>
