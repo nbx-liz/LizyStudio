@@ -26,9 +26,10 @@ describe("useDocumentTitle", () => {
   });
 
   it("updates title when value changes", () => {
+    const initial: { title: string | null } = { title: "Step 1" };
     const { rerender } = renderHook(
       ({ title }: { title: string | null }) => useDocumentTitle(title),
-      { initialProps: { title: "Step 1" } },
+      { initialProps: initial },
     );
     expect(document.title).toBe("Step 1 — LizyStudio");
 
