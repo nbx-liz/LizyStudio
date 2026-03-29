@@ -75,7 +75,11 @@ export function WorkspacePage() {
   );
 
   return (
-    <ResizablePanelGroup orientation="horizontal" className="h-full">
+    <ResizablePanelGroup
+      orientation="horizontal"
+      className="h-full"
+      id="workspace-panels"
+    >
       <ResizablePanel defaultSize="30%" minSize="20%" maxSize="45%">
         <DataPanel
           onDataChanged={handleDataChanged}

@@ -102,6 +102,7 @@ export function Sidebar() {
               "w-full",
               collapsed ? "justify-center" : "justify-start gap-2",
             )}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
             {collapsed ? (
               <PanelLeftOpen className="h-4 w-4" />

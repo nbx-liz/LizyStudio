@@ -16,7 +16,13 @@ import {
 } from "@/api/workspace";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { ConfigForm } from "./ConfigForm";
 import { RawConfigDialog } from "./RawConfigDialog";
 import { TuneTab } from "./TuneTab";
@@ -144,6 +150,16 @@ export function ModelPanel({
   const tuneEnabled =
     fitEnabled && (allowEmptySpace || Object.keys(tuningSpace).length > 0);
 
+  const disabledReason = (() => {
+    if (running) return "A job is currently running";
+    if (!hasData) return "Load data first";
+    if (!config) return "Loading configuration...";
+    if (errors.length > 0) return "Fix validation errors first";
+    if (activeTab === "tune" && !tuneEnabled)
+      return "Define a search space or enable empty space";
+    return null;
+  })();
+
   return (
     <div className="flex h-full flex-col">
       {/* Sticky Header */}
@@ -162,14 +178,23 @@ export function ModelPanel({
               </TabsTrigger>
             </TabsList>
           </Tabs>
-          <Button
-            size="sm"
-            className="h-9"
-            onClick={activeTab === "fit" ? onFit : onTune}
-            disabled={activeTab === "fit" ? !fitEnabled : !tuneEnabled}
-          >
-            {activeTab === "fit" ? "Fit" : "Tune"}
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span>
+                <Button
+                  size="sm"
+                  className="h-9"
+                  onClick={activeTab === "fit" ? onFit : onTune}
+                  disabled={activeTab === "fit" ? !fitEnabled : !tuneEnabled}
+                >
+                  {activeTab === "fit" ? "Fit" : "Tune"}
+                </Button>
+              </span>
+            </TooltipTrigger>
+            {disabledReason && (
+              <TooltipContent>{disabledReason}</TooltipContent>
+            )}
+          </Tooltip>
         </div>
         {backend && (
           <Badge variant="secondary" className="mt-1.5 text-xs">
@@ -203,7 +228,13 @@ export function ModelPanel({
               columns={nonExcludedColumns}
             />
           ) : (
-            <p className="text-sm text-muted-foreground">Loading config...</p>
+            <div className="space-y-3" data-testid="config-skeleton">
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-4 w-32" />
+              <Skeleton className="h-8 w-full" />
+            </div>
           )
         ) : config ? (
           <TuneTab

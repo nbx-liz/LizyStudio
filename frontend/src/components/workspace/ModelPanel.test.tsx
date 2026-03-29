@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { renderWithQuery } from "@/test/helpers";
 import { ModelPanel } from "./ModelPanel";
 
@@ -101,7 +102,7 @@ describe("ModelPanel", () => {
     expect(actionButtons[0]).toBeDisabled();
   });
 
-  it("shows Loading config... initially (before queries resolve)", () => {
+  it("shows loading skeleton initially (before queries resolve)", () => {
     // Use a QueryClient where queries will remain pending
     const queryClient = new QueryClient({
       defaultOptions: {
@@ -114,16 +115,18 @@ describe("ModelPanel", () => {
     });
     render(
       <QueryClientProvider client={queryClient}>
-        <ModelPanel
-          hasData={true}
-          task="binary"
-          onFit={vi.fn()}
-          onTune={vi.fn()}
-          running={false}
-        />
+        <TooltipProvider>
+          <ModelPanel
+            hasData={true}
+            task="binary"
+            onFit={vi.fn()}
+            onTune={vi.fn()}
+            running={false}
+          />
+        </TooltipProvider>
       </QueryClientProvider>,
     );
-    expect(screen.getByText("Loading config...")).toBeInTheDocument();
+    expect(screen.getByTestId("config-skeleton")).toBeInTheDocument();
   });
 
   it("Fit button is disabled when running is true", () => {
