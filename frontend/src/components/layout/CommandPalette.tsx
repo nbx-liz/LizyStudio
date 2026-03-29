@@ -64,7 +64,12 @@ export function CommandPalette({ onFit, onTune }: CommandPaletteProps) {
         id: "toggle-theme",
         label: "Toggle Dark Mode",
         action: () => {
-          document.documentElement.classList.toggle("dark");
+          const isDark = document.documentElement.classList.toggle("dark");
+          try {
+            localStorage.setItem("theme", isDark ? "dark" : "light");
+          } catch {
+            // localStorage unavailable
+          }
         },
       },
     ],
