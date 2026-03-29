@@ -136,7 +136,6 @@ export function DataPanel({
     } catch (err) {
       // Aborted requests are expected; only report real errors
       if (err instanceof DOMException && err.name === "AbortError") return;
-      console.warn("Config sync failed:", err);
       toast.error("Config sync failed — changes may not be saved");
     }
   }, [dataPath, target, task, overrides, cv, onDataChanged]);
