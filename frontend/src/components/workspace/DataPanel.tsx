@@ -89,6 +89,7 @@ export function DataPanel({
 
   const [cv, setCv] = useState<CvState>(INITIAL_CV_STATE);
   const [loading, setLoading] = useState(false);
+  const [columnFilter, setColumnFilter] = useState("");
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -493,99 +494,117 @@ export function DataPanel({
             <AccordionContent>
               <div className="pl-[18px]">
                 {columns.length > 0 && target ? (
-                  <div className="max-h-64 overflow-auto rounded border">
-                    <div className="grid grid-cols-[1fr_60px_60px_100px] gap-x-2 px-3 py-1.5 border-b bg-muted/30">
-                      <span className="text-xs font-medium text-muted-foreground">
-                        Name
-                      </span>
-                      <span className="text-xs font-medium text-muted-foreground">
-                        Unique
-                      </span>
-                      <span className="text-xs font-medium text-muted-foreground">
-                        Exclude
-                      </span>
-                      <span className="text-xs font-medium text-muted-foreground">
-                        Type
-                      </span>
+                  <>
+                    <Input
+                      className="mb-2 h-7 text-xs"
+                      placeholder="Search columns..."
+                      value={columnFilter}
+                      onChange={(e) => setColumnFilter(e.target.value)}
+                      data-testid="column-search"
+                    />
+                    <div className="max-h-64 overflow-auto rounded border">
+                      <div className="grid grid-cols-[1fr_60px_60px_100px] gap-x-2 px-3 py-1.5 border-b bg-muted/30">
+                        <span className="text-xs font-medium text-muted-foreground">
+                          Name
+                        </span>
+                        <span className="text-xs font-medium text-muted-foreground">
+                          Unique
+                        </span>
+                        <span className="text-xs font-medium text-muted-foreground">
+                          Exclude
+                        </span>
+                        <span className="text-xs font-medium text-muted-foreground">
+                          Type
+                        </span>
+                      </div>
+                      {columns
+                        .filter((c) => c.name !== target)
+                        .filter((c) =>
+                          columnFilter
+                            ? c.name
+                                .toLowerCase()
+                                .includes(columnFilter.toLowerCase())
+                            : true,
+                        )
+                        .map((col, idx) => {
+                          const o = overrides[col.name];
+                          const isExcluded = o?.excluded ?? false;
+                          const currentType = o?.type ?? col.suggested_type;
+                          return (
+                            <div
+                              key={col.name}
+                              className={`grid grid-cols-[1fr_60px_60px_100px] items-center gap-x-2 px-3 py-1.5 hover:bg-muted/40 ${idx % 2 === 1 ? "bg-muted/20" : ""}`}
+                            >
+                              <span className="text-xs truncate">
+                                {col.name}
+                                {col.exclude_reason === "id" && (
+                                  <Badge
+                                    variant="outline"
+                                    className="ml-1 text-[10px]"
+                                  >
+                                    ID
+                                  </Badge>
+                                )}
+                                {col.exclude_reason === "constant" && (
+                                  <Badge
+                                    variant="outline"
+                                    className="ml-1 text-[10px]"
+                                  >
+                                    Const
+                                  </Badge>
+                                )}
+                              </span>
+                              <span className="text-xs">
+                                {col.unique_count}
+                              </span>
+                              <div>
+                                <Checkbox
+                                  checked={isExcluded}
+                                  onCheckedChange={(checked) =>
+                                    handleExcludeToggle(
+                                      col.name,
+                                      checked === true,
+                                    )
+                                  }
+                                />
+                              </div>
+                              <div className="flex gap-0.5">
+                                <Button
+                                  variant={
+                                    currentType === "numeric"
+                                      ? "default"
+                                      : "outline"
+                                  }
+                                  size="sm"
+                                  className="h-6 text-[10px] px-2"
+                                  disabled={isExcluded}
+                                  onClick={() =>
+                                    handleTypeChange(col.name, "numeric")
+                                  }
+                                >
+                                  Num
+                                </Button>
+                                <Button
+                                  variant={
+                                    currentType === "categorical"
+                                      ? "default"
+                                      : "outline"
+                                  }
+                                  size="sm"
+                                  className="h-6 text-[10px] px-2"
+                                  disabled={isExcluded}
+                                  onClick={() =>
+                                    handleTypeChange(col.name, "categorical")
+                                  }
+                                >
+                                  Cat
+                                </Button>
+                              </div>
+                            </div>
+                          );
+                        })}
                     </div>
-                    {columns
-                      .filter((c) => c.name !== target)
-                      .map((col, idx) => {
-                        const o = overrides[col.name];
-                        const isExcluded = o?.excluded ?? false;
-                        const currentType = o?.type ?? col.suggested_type;
-                        return (
-                          <div
-                            key={col.name}
-                            className={`grid grid-cols-[1fr_60px_60px_100px] items-center gap-x-2 px-3 py-1.5 hover:bg-muted/40 ${idx % 2 === 1 ? "bg-muted/20" : ""}`}
-                          >
-                            <span className="text-xs truncate">
-                              {col.name}
-                              {col.exclude_reason === "id" && (
-                                <Badge
-                                  variant="outline"
-                                  className="ml-1 text-[10px]"
-                                >
-                                  ID
-                                </Badge>
-                              )}
-                              {col.exclude_reason === "constant" && (
-                                <Badge
-                                  variant="outline"
-                                  className="ml-1 text-[10px]"
-                                >
-                                  Const
-                                </Badge>
-                              )}
-                            </span>
-                            <span className="text-xs">{col.unique_count}</span>
-                            <div>
-                              <Checkbox
-                                checked={isExcluded}
-                                onCheckedChange={(checked) =>
-                                  handleExcludeToggle(
-                                    col.name,
-                                    checked === true,
-                                  )
-                                }
-                              />
-                            </div>
-                            <div className="flex gap-0.5">
-                              <Button
-                                variant={
-                                  currentType === "numeric"
-                                    ? "default"
-                                    : "outline"
-                                }
-                                size="sm"
-                                className="h-6 text-[10px] px-2"
-                                disabled={isExcluded}
-                                onClick={() =>
-                                  handleTypeChange(col.name, "numeric")
-                                }
-                              >
-                                Num
-                              </Button>
-                              <Button
-                                variant={
-                                  currentType === "categorical"
-                                    ? "default"
-                                    : "outline"
-                                }
-                                size="sm"
-                                className="h-6 text-[10px] px-2"
-                                disabled={isExcluded}
-                                onClick={() =>
-                                  handleTypeChange(col.name, "categorical")
-                                }
-                              >
-                                Cat
-                              </Button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                  </div>
+                  </>
                 ) : (
                   <p className="text-sm text-muted-foreground">
                     Load data and select a target first
