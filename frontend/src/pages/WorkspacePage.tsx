@@ -38,6 +38,8 @@ export function WorkspacePage() {
   const { data: config } = useQuery({
     queryKey: ["config"],
     queryFn: fetchConfig,
+    enabled: hasData,
+    retry: false,
   });
 
   const handleDataChanged = useCallback(() => {
