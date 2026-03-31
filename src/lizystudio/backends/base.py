@@ -17,7 +17,11 @@ from lizystudio.backends.types import (
 
 
 class ProgressCallback(Protocol):
-    """Callable invoked by long-running operations to report progress."""
+    """Callable invoked by long-running operations to report progress.
+
+    When *total* is ``0``, the operation length is unknown and the
+    UI should display an indeterminate indicator (e.g. a pulsing bar).
+    """
 
     def __call__(self, *, current: int, total: int, message: str) -> None: ...
 

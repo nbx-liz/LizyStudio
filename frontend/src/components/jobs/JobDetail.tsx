@@ -356,18 +356,25 @@ function RunningView({
   job: JobDetailType;
   progress: ProgressMessage | null;
 }) {
-  const pct = progress ? (progress.current / progress.total) * 100 : 0;
+  const indeterminate = progress != null && progress.total === 0;
+  const pct =
+    progress && progress.total > 0
+      ? (progress.current / progress.total) * 100
+      : 0;
   const isTune = job.job_type === "tune";
 
   return (
     <div>
       <h4 className="mb-2 text-sm font-medium">Progress</h4>
-      {isTune && progress && (
+      {isTune && progress && progress.total > 0 && (
         <p className="mb-1 text-sm">
           Trial {progress.current} / {progress.total}
         </p>
       )}
-      <Progress value={pct} className="mb-2" />
+      <Progress
+        value={indeterminate ? undefined : pct}
+        className={`mb-2${indeterminate ? " animate-pulse" : ""}`}
+      />
       {!isTune && (
         <p className="mb-1 text-sm">{progress?.message ?? "Fitting..."}</p>
       )}

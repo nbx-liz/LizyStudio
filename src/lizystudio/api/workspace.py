@@ -222,7 +222,7 @@ def config_validate(
     If no body is provided, validates the current workspace config.
     """
     config = body if body is not None else ws.config
-    if config is None:
+    if not config:
         raise WorkspaceNoConfigError()
     errors = validate_config(ws, config)
     return {"valid": len(errors) == 0, "errors": errors}
