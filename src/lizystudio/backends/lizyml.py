@@ -232,8 +232,8 @@ class LizyMLAdapter:
             plots.append("residuals")
         if task == "binary":
             plots.append("roc-curve")
-            plots.append("probability-histogram")
             if calibration_enabled:
+                plots.append("probability-histogram")
                 plots.append("calibration")
         try:
             model.tuning_plot()

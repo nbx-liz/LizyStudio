@@ -35,6 +35,15 @@ def test_data_load_path_not_found(client: TestClient) -> None:
     assert res.json()["error"]["code"] == "PATH_NOT_FOUND"
 
 
+def test_data_load_path_outside_root_shows_hint(client: TestClient) -> None:
+    """Error message should include the allowed root path for guidance."""
+    res = client.post("/api/workspace/data/path", json={"path": "/etc/passwd"})
+    assert res.status_code == 400
+    body = res.json()
+    assert body["error"]["code"] == "PATH_NOT_FOUND"
+    assert "allowed root" in body["error"]["message"].lower()
+
+
 def test_data_preview(client: TestClient, tmp_path: Path) -> None:
     csv_path = _create_csv(tmp_path)
     client.post("/api/workspace/data/path", json={"path": csv_path})

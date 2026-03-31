@@ -117,7 +117,7 @@ def test_available_plots_binary() -> None:
     plots = adapter.available_plots(model)
     assert "learning-curve" in plots
     assert "roc-curve" in plots
-    assert "probability-histogram" in plots
+    assert "probability-histogram" not in plots  # requires calibration
     assert "calibration" not in plots
     assert "residuals" not in plots
     assert "tuning" not in plots
@@ -128,6 +128,7 @@ def test_available_plots_binary_with_calibration() -> None:
     model = _make_mock_model(task="binary", calibration={"method": "isotonic"})
     plots = adapter.available_plots(model)
     assert "calibration" in plots
+    assert "probability-histogram" in plots
 
 
 def test_available_plots_regression() -> None:

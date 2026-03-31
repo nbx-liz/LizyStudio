@@ -138,6 +138,28 @@ def test_config_defaults_validates(client: TestClient) -> None:
     assert body["errors"] == []
 
 
+def test_config_validate_no_body_uses_workspace_config(client: TestClient) -> None:
+    """No-body validate should use current workspace config."""
+    # Set a valid config first
+    defaults = _get_valid_config(client)
+    client.put("/api/workspace/config", json=defaults)
+    # Validate without body
+    res = client.post("/api/workspace/config/validate")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["valid"] is True
+
+
+def test_config_validate_no_body_no_config(client: TestClient) -> None:
+    """No-body validate with empty config returns errors."""
+    # Workspace starts with empty dict config; validating it should return errors
+    res = client.post("/api/workspace/config/validate")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["valid"] is False
+    assert len(body["errors"]) > 0
+
+
 def test_config_defaults_missing_params(client: TestClient) -> None:
     res = client.get("/api/workspace/config/defaults")
     assert res.status_code == 422

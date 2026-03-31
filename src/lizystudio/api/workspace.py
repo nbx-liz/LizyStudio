@@ -214,11 +214,17 @@ def config_update(
 
 @router.post("/config/validate")
 def config_validate(
-    body: dict[str, Any],
+    body: dict[str, Any] | None = None,
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, Any]:
-    """Validate config without saving."""
-    errors = validate_config(ws, body)
+    """Validate config without saving.
+
+    If no body is provided, validates the current workspace config.
+    """
+    config = body if body is not None else ws.config
+    if config is None:
+        raise WorkspaceNoConfigError()
+    errors = validate_config(ws, config)
     return {"valid": len(errors) == 0, "errors": errors}
 
 
