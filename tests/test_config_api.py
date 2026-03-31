@@ -58,8 +58,19 @@ def test_config_get_after_put(client: TestClient) -> None:
     assert res.json()["task"] == "binary"
 
 
-def test_config_validate_invalid(client: TestClient) -> None:
+def test_config_validate_empty_body(client: TestClient) -> None:
+    """Empty dict body is treated as 'no config' since it has no fields."""
     res = client.post("/api/workspace/config/validate", json={})
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "WORKSPACE_NO_CONFIG"
+
+
+def test_config_validate_invalid_config(client: TestClient) -> None:
+    """Config with invalid fields should return validation errors."""
+    res = client.post(
+        "/api/workspace/config/validate",
+        json={"task": "invalid_task"},
+    )
     assert res.status_code == 200
     body = res.json()
     assert body["valid"] is False
@@ -136,6 +147,25 @@ def test_config_defaults_validates(client: TestClient) -> None:
     body = res2.json()
     assert body["valid"] is True
     assert body["errors"] == []
+
+
+def test_config_validate_no_body_uses_workspace_config(client: TestClient) -> None:
+    """No-body validate should use current workspace config."""
+    # Set a valid config first
+    defaults = _get_valid_config(client)
+    client.put("/api/workspace/config", json=defaults)
+    # Validate without body
+    res = client.post("/api/workspace/config/validate")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["valid"] is True
+
+
+def test_config_validate_no_body_no_config(client: TestClient) -> None:
+    """No-body validate with no config set returns error."""
+    res = client.post("/api/workspace/config/validate")
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "WORKSPACE_NO_CONFIG"
 
 
 def test_config_defaults_missing_params(client: TestClient) -> None:

@@ -103,7 +103,9 @@ class LizyMLAdapter:
         on_progress: ProgressCallback | None = None,
     ) -> FitSummary:
         if on_progress is not None:
-            on_progress(current=0, total=1, message="Fitting model...")
+            # total=0 signals indeterminate progress (lizyml fit
+            # does not provide intermediate progress callbacks).
+            on_progress(current=0, total=0, message="Fitting model...")
         fit_result = model.fit(params=params)
         if on_progress is not None:
             on_progress(current=1, total=1, message="Fit complete.")
@@ -132,7 +134,9 @@ class LizyMLAdapter:
                 )
 
             lizyml_callback = _bridge
-            on_progress(current=0, total=1, message="Starting tuning...")
+            # total=0 signals indeterminate until first trial callback
+            # provides the real total.
+            on_progress(current=0, total=0, message="Starting tuning...")
 
         tune_result = model.tune(progress_callback=lizyml_callback)
 
@@ -232,8 +236,8 @@ class LizyMLAdapter:
             plots.append("residuals")
         if task == "binary":
             plots.append("roc-curve")
-            plots.append("probability-histogram")
             if calibration_enabled:
+                plots.append("probability-histogram")
                 plots.append("calibration")
         try:
             model.tuning_plot()

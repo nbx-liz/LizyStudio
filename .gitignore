@@ -41,6 +41,13 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
+# Analysis data files (keep README.md and schema.json only)
+data/**/*.csv
+data/**/*.parquet
+data/**/*.pkl
+data/**/*.feather
+data/**/*.xlsx
+
 # AI & Automation (Abstra, Cursor, etc)
 .abstra/
 .ai_settings/

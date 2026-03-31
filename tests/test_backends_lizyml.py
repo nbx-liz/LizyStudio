@@ -117,7 +117,7 @@ def test_available_plots_binary() -> None:
     plots = adapter.available_plots(model)
     assert "learning-curve" in plots
     assert "roc-curve" in plots
-    assert "probability-histogram" in plots
+    assert "probability-histogram" not in plots  # requires calibration
     assert "calibration" not in plots
     assert "residuals" not in plots
     assert "tuning" not in plots
@@ -128,6 +128,7 @@ def test_available_plots_binary_with_calibration() -> None:
     model = _make_mock_model(task="binary", calibration={"method": "isotonic"})
     plots = adapter.available_plots(model)
     assert "calibration" in plots
+    assert "probability-histogram" in plots
 
 
 def test_available_plots_regression() -> None:
@@ -164,8 +165,10 @@ def test_fit_invokes_on_progress() -> None:
 
     adapter.fit(mock_model, on_progress=progress_cb)
     assert len(calls) == 2
-    assert calls[0]["current"] == 0
-    assert calls[1]["current"] == 1
+    # Fit sends indeterminate progress (total=0) because lizyml
+    # does not provide intermediate progress callbacks.
+    assert calls[0] == {"current": 0, "total": 0, "message": "Fitting model..."}
+    assert calls[1] == {"current": 1, "total": 1, "message": "Fit complete."}
 
 
 def test_tune_invokes_on_progress() -> None:
@@ -191,8 +194,13 @@ def test_tune_invokes_on_progress() -> None:
     assert callable(kwargs["progress_callback"])
     # Start + complete = 2 calls minimum (no trial callbacks fired by mock)
     assert len(calls) == 2
-    assert calls[0]["current"] == 0
-    assert calls[0]["message"] == "Starting tuning..."
+    # Tune initial message uses indeterminate (total=0) until
+    # first trial callback provides the real total.
+    assert calls[0] == {
+        "current": 0,
+        "total": 0,
+        "message": "Starting tuning...",
+    }
     # Completion sentinel uses trial count as total
     n_trials = len(mock_model.tune.return_value.trials)
     assert calls[1]["current"] == max(n_trials, 1)
