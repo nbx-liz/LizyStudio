@@ -179,7 +179,11 @@ export function ResultsPanel({
   }
 
   if (job.status === "running") {
-    const pct = progress ? (progress.current / progress.total) * 100 : 0;
+    const indeterminate = progress != null && progress.total === 0;
+    const pct =
+      progress && progress.total > 0
+        ? (progress.current / progress.total) * 100
+        : 0;
     return (
       <div className="flex h-full flex-col p-6">
         <div className="mb-4 flex items-center justify-between">
@@ -196,7 +200,10 @@ export function ResultsPanel({
           </Badge>
         </div>
 
-        <Progress value={pct} className="mb-2" />
+        <Progress
+          value={indeterminate ? undefined : pct}
+          className={`mb-2${indeterminate ? " animate-pulse" : ""}`}
+        />
         {progress && (
           <p className="mb-1 text-sm">
             {progress.message ?? `${progress.current} / ${progress.total}`}

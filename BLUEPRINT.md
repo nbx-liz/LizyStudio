@@ -2389,7 +2389,7 @@ Workspace の `workspace_result` は完了時に自動更新される。
 | `sections` | Fit タブの Accordion セクション定義 |
 | `option_sets` | Task 別の選択肢リスト（objective, metric, model_metric, metric_direction） |
 | `parameter_hints` | Model Params セクションに常時表示するパラメータ定義 |
-| `search_space_catalog` | Tune Search Space に表示するパラメータ定義（`group` でグループ分け） |
+| `search_space_catalog` | Tune Search Space に表示するパラメータ定義（`group` でグループ分け）。各エントリの詳細は下記参照 |
 | `step_map` | NumberInput のステップ値マップ |
 | `conditional_visibility` | 親フィールドの値に応じた子フィールドの表示/非表示ルール |
 | `defaults` | セクション有効化時の初期値 |
@@ -2397,6 +2397,28 @@ Workspace の `workspace_result` は完了時に自動更新される。
 | `inner_valid_options` | Inner Validation method の選択肢 |
 | `additional_params` | Additional Params セクションで追加可能なパラメータ名リスト |
 | `capabilities` | バックエンドの動的機能判定。`cv_strategies`: 利用可能な CV strategy、`tune.allow_empty_space`: 全 Fixed での Tune 可否 |
+
+**`search_space_catalog` エントリ仕様:**
+
+| フィールド | 型 | 説明 |
+|-----------|-----|------|
+| `key` | string | Config 内のパラメータキー（ドット記法対応: `early_stopping.rounds`） |
+| `title` | string | UI 表示名 |
+| `paramType` | `"string"` \| `"integer"` \| `"number"` \| `"boolean"` | パラメータの型 |
+| `modes` | string[] | 利用可能な探索モード。`"fixed"`: 固定値、`"range"`: 範囲探索（low/high）、`"choice"`: 選択肢探索 |
+| `group` | `"model_params"` \| `"smart_params"` \| `"training"` | UI グループ分類 |
+| `default` | any \| object | デフォルト値。Task 別の場合は `{"binary": val, "regression": val}` 形式 |
+
+**Tune config の `search_space` セクション記述形式:**
+
+```json
+{
+  "n_estimators": {"mode": "range", "low": 100, "high": 1000},
+  "learning_rate": {"mode": "range", "low": 0.001, "high": 0.3},
+  "objective": {"mode": "fixed", "value": "huber"},
+  "max_depth": {"mode": "choice", "values": [3, 5, 7, 9]}
+}
+```
 
 ---
 
