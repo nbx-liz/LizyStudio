@@ -37,12 +37,16 @@ import {
 
 interface ResultsPanelProps {
   jobId: string | null;
+  hasData?: boolean;
+  hasConfig?: boolean;
   onApplyToFit?: (params: Record<string, unknown>) => void;
   onJobDone?: () => void;
 }
 
 export function ResultsPanel({
   jobId,
+  hasData = false,
+  hasConfig = false,
   onApplyToFit,
   onJobDone,
 }: ResultsPanelProps) {
@@ -146,13 +150,46 @@ export function ResultsPanel({
 
   if (!jobId || !job) {
     return (
-      <div className="flex h-full flex-col items-center justify-center p-8 text-center text-muted-foreground">
+      <div className="flex h-full flex-col items-center justify-center p-8 pb-24 text-center text-muted-foreground">
         <Activity className="mb-3 h-10 w-10 text-muted-foreground/50" />
         <h3 className="mb-4 text-lg font-medium">Results</h3>
-        <ol className="space-y-2 text-sm">
-          <li>1. Load data in the Data Panel</li>
-          <li>2. Select a model in the Model Panel</li>
-          <li>3. Click Fit or Tune</li>
+        <ol className="space-y-2.5 text-sm text-left">
+          <li className="flex items-center gap-2">
+            <span
+              className={`flex h-5 w-5 items-center justify-center rounded-full text-xs font-medium ${hasData ? "bg-primary text-primary-foreground" : "border border-muted-foreground/40"}`}
+              role="img"
+              aria-label={hasData ? "Completed" : "Step 1"}
+            >
+              {hasData ? "✓" : "1"}
+            </span>
+            <span
+              className={hasData ? "text-muted-foreground/60 line-through" : ""}
+            >
+              Load data in the Data Panel
+            </span>
+          </li>
+          <li className="flex items-center gap-2">
+            <span
+              className={`flex h-5 w-5 items-center justify-center rounded-full text-xs font-medium ${hasConfig ? "bg-primary text-primary-foreground" : "border border-muted-foreground/40"}`}
+              role="img"
+              aria-label={hasConfig ? "Completed" : "Step 2"}
+            >
+              {hasConfig ? "✓" : "2"}
+            </span>
+            <span
+              className={
+                hasConfig ? "text-muted-foreground/60 line-through" : ""
+              }
+            >
+              Configure model settings
+            </span>
+          </li>
+          <li className="flex items-center gap-2">
+            <span className="flex h-5 w-5 items-center justify-center rounded-full border border-muted-foreground/40 text-xs font-medium">
+              3
+            </span>
+            <span>Click Fit or Tune</span>
+          </li>
         </ol>
         <p className="mt-4 text-xs">
           Results will appear here after running a job.

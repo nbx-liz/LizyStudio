@@ -19,7 +19,12 @@ const {
   mockToast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
 
+const { mockFetchConfig } = vi.hoisted(() => ({
+  mockFetchConfig: vi.fn().mockResolvedValue({ model: { name: "lgbm" } }),
+}));
+
 vi.mock("@/api/workspace", () => ({
+  fetchConfig: (...args: unknown[]) => mockFetchConfig(...args),
   fetchUiSchema: (...args: unknown[]) => mockFetchUiSchema(...args),
   runFit: (...args: unknown[]) => mockRunFit(...args),
   runTune: (...args: unknown[]) => mockRunTune(...args),

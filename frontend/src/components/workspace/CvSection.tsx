@@ -157,10 +157,12 @@ export function CvSection({
   );
 
   return (
-    <div className="lzs-form space-y-1.5">
+    <div className="lzs-form space-y-3">
       {/* Strategy segment buttons */}
       <div className="space-y-2">
-        <Label>Strategy</Label>
+        <Label className="text-xs font-medium text-muted-foreground">
+          Strategy
+        </Label>
         <SegmentGroup
           options={availableStrategies}
           value={cv.strategy}
@@ -172,7 +174,9 @@ export function CvSection({
       {/* Conditional fields */}
       {has("folds") && (
         <div className="space-y-1">
-          <Label>Folds</Label>
+          <Label className="text-xs font-medium text-muted-foreground">
+            Folds
+          </Label>
           <NumberInput
             value={cv.folds}
             onChange={(v) => update({ folds: v ?? 5 })}
@@ -185,7 +189,9 @@ export function CvSection({
 
       {has("random_state") && (
         <div className="space-y-1">
-          <Label>Random State</Label>
+          <Label className="text-xs font-medium text-muted-foreground">
+            Random State
+          </Label>
           <NumberInput
             value={cv.randomState}
             onChange={(v) => update({ randomState: v })}
@@ -197,7 +203,9 @@ export function CvSection({
 
       {has("shuffle") && (
         <div className="flex items-center gap-2">
-          <Label>Shuffle</Label>
+          <Label className="text-xs font-medium text-muted-foreground">
+            Shuffle
+          </Label>
           <Switch
             checked={cv.shuffle}
             onCheckedChange={(v) => update({ shuffle: v })}
@@ -207,7 +215,9 @@ export function CvSection({
 
       {has("group_col") && (
         <div>
-          <Label>Group column</Label>
+          <Label className="text-xs font-medium text-muted-foreground">
+            Group column
+          </Label>
           <Select
             value={cv.groupCol ?? ""}
             onValueChange={(v) => update({ groupCol: v })}
@@ -228,7 +238,9 @@ export function CvSection({
 
       {has("time_col") && (
         <div>
-          <Label>Time column</Label>
+          <Label className="text-xs font-medium text-muted-foreground">
+            Time column
+          </Label>
           <Select
             value={cv.timeCol ?? ""}
             onValueChange={(v) => update({ timeCol: v })}
@@ -332,7 +344,7 @@ function NullableNumberField({
 }) {
   return (
     <div className="space-y-1">
-      <Label>
+      <Label className="text-xs font-medium text-muted-foreground">
         {label}
         {autoHint && (
           <span className="text-muted-foreground text-[10px] ml-1">
