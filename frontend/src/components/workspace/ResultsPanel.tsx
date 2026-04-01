@@ -29,7 +29,6 @@ import { Progress } from "@/components/ui/progress";
 import { pivotMetrics } from "@/lib/metrics";
 import { FoldDetailsSection } from "./FoldDetailsSection";
 import { PlotSection } from "./PlotSection";
-import { ScoreSection } from "./ScoreSection";
 import {
   TrialResultsAccordionItem,
   TuneTrialsSection,
@@ -387,12 +386,17 @@ function CompletedView({
   } = useQuery({
     queryKey: ["job-plot", job.job_id, selectedPlot],
     queryFn: () => fetchJobPlot(job.job_id, selectedPlot),
-    enabled: !!selectedPlot && selectedPlot !== "learning-curve",
+    enabled:
+      !!selectedPlot &&
+      selectedPlot !== "learning-curve" &&
+      selectedPlot !== "importance",
     retry: false,
   });
 
   // Learning curve metrics filter (H-0034)
+  // Default to first metric only to avoid cramped subplots
   const [lcMetrics, setLcMetrics] = useState<string[] | null>(null);
+  const lcInitialized = useRef(false);
 
   const { data: learningCurve } = useQuery({
     queryKey: ["job-plot", job.job_id, "learning-curve", lcMetrics],
@@ -402,14 +406,17 @@ function CompletedView({
       }),
     enabled:
       selectedPlot === "learning-curve" &&
+      lcInitialized.current &&
       (plots?.includes("learning-curve") ?? false),
   });
 
   const [importanceKind, setImportanceKind] = useState("split");
+  const importanceEnabled = plots?.includes("importance") ?? false;
 
   const { data: importanceKinds } = useQuery({
     queryKey: ["job-importance-kinds", job.job_id],
     queryFn: () => fetchJobImportanceKinds(job.job_id),
+    enabled: importanceEnabled,
   });
 
   // Sync initial kind with backend response when it differs
@@ -426,16 +433,19 @@ function CompletedView({
   const { data: importance } = useQuery({
     queryKey: ["job-importance", job.job_id, importanceKind],
     queryFn: () => fetchJobImportance(job.job_id, importanceKind),
+    enabled: importanceEnabled,
   });
 
   // Importance plot is kind-independent (shows default split importance).
   // The backend plot API does not accept a kind parameter; the plot is
   // generated once using the default kind by LizyML's importance_plot().
-  const { data: importancePlot } = useQuery({
-    queryKey: ["job-plot", job.job_id, "importance"],
-    queryFn: () => fetchJobPlot(job.job_id, "importance"),
-    enabled: plots?.includes("importance") ?? false,
-  });
+  const { data: importancePlot, isLoading: isImportancePlotLoading } = useQuery(
+    {
+      queryKey: ["job-plot", job.job_id, "importance"],
+      queryFn: () => fetchJobPlot(job.job_id, "importance"),
+      enabled: importanceEnabled,
+    },
+  );
 
   const { data: splitSummary } = useQuery({
     queryKey: ["job-split-summary", job.job_id],
@@ -470,6 +480,14 @@ function CompletedView({
       : [];
     return entries.map(metricEntryName);
   }, [evalConfig.metrics]);
+
+  // Initialize LC filter to first metric only (avoid cramped subplot layout)
+  useEffect(() => {
+    if (!lcInitialized.current && evalMetricNames.length > 0) {
+      lcInitialized.current = true;
+      setLcMetrics([evalMetricNames[0]]);
+    }
+  }, [evalMetricNames]);
 
   const annotateMetric = (name: string): string => {
     if (name === "precision_at_k") {
@@ -531,24 +549,39 @@ function CompletedView({
         </div>
       </div>
 
-      {/* KPI Summary Cards */}
+      {/* KPI Summary Cards (IS + OOS + Std) */}
       {metrics && (
         <div className="mb-4 flex flex-wrap gap-2" data-testid="kpi-cards">
           {Object.entries(metrics).map(([name, vals]) => (
             <div
               key={name}
-              className="flex flex-col items-center rounded-md border bg-muted/30 px-3 py-1.5"
+              className="flex flex-col rounded-md border bg-muted/30 px-3 py-1.5 min-w-[100px]"
             >
-              <span className="text-[10px] text-muted-foreground uppercase tracking-wide">
+              <span className="text-[10px] text-muted-foreground uppercase tracking-wide text-center mb-0.5">
                 {annotateMetric(name)}
               </span>
-              <span className="text-sm font-semibold tabular-nums">
-                {vals.oos != null
-                  ? Number(vals.oos).toFixed(4)
-                  : vals.is != null
-                    ? Number(vals.is).toFixed(4)
-                    : "—"}
-              </span>
+              <div className="flex justify-between gap-3 text-xs tabular-nums">
+                <span className="text-muted-foreground">IS</span>
+                <span className="font-medium">
+                  {vals.is != null ? Number(vals.is).toFixed(4) : "—"}
+                </span>
+              </div>
+              <div className="flex justify-between gap-3 text-xs tabular-nums">
+                <span className="text-muted-foreground">OOS</span>
+                <span className="font-semibold">
+                  {vals.oos != null ? Number(vals.oos).toFixed(4) : "—"}
+                </span>
+              </div>
+              {hasFolds && (
+                <div className="flex justify-between gap-3 text-xs tabular-nums">
+                  <span className="text-muted-foreground">Std</span>
+                  <span>
+                    {vals.oos_std != null
+                      ? Number(vals.oos_std).toFixed(4)
+                      : "—"}
+                  </span>
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -563,15 +596,6 @@ function CompletedView({
         />
       )}
 
-      {/* Score */}
-      {metrics && (
-        <ScoreSection
-          metrics={metrics}
-          hasFolds={hasFolds}
-          annotateMetric={annotateMetric}
-        />
-      )}
-
       {/* Learning Curve + Plot selector */}
       {plots && plots.length > 0 && (
         <PlotSection
@@ -580,11 +604,20 @@ function CompletedView({
           onSelectPlot={onSelectPlot}
           plotData={plotData}
           learningCurve={learningCurve}
-          isLoading={isPlotLoading}
+          isLoading={
+            selectedPlot === "importance"
+              ? isImportancePlotLoading
+              : isPlotLoading
+          }
           isError={isPlotError}
           lcMetrics={lcMetrics}
           onLcMetricsChange={setLcMetrics}
           availableEvalMetrics={evalMetricNames}
+          importanceKinds={importanceKinds}
+          selectedImportanceKind={importanceKind}
+          onImportanceKindChange={setImportanceKind}
+          importanceData={importance}
+          importancePlot={importancePlot}
         />
       )}
 
@@ -597,11 +630,6 @@ function CompletedView({
             fitResult={fitResult}
             hasFolds={hasFolds}
             splitSummary={splitSummary}
-            importance={importance}
-            importancePlot={importancePlot}
-            importanceKinds={importanceKinds}
-            selectedKind={importanceKind}
-            onKindChange={setImportanceKind}
           />
         )}
       </Accordion>

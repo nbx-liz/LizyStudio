@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { MetricEntry } from "@/api/types";
 import { metricEntryName } from "@/api/types";
 import {
@@ -10,9 +10,18 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { CompactStepper } from "./CompactStepper";
+import { KNOWN_PARAMS, RANGE_DEFAULTS } from "./constants";
 import { SearchSpaceTable } from "./SearchSpaceTable";
 import { SegmentGroup } from "./SegmentGroup";
 import { TuneSettings } from "./TuneSettings";
+
+/** Default params to auto-populate in search space when empty. */
+const DEFAULT_TUNE_PARAMS = [
+  "learning_rate",
+  "num_leaves",
+  "n_estimators",
+  "max_depth",
+];
 
 interface TuneTabProps {
   config: Record<string, unknown>;
@@ -55,6 +64,34 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
     "space",
     {},
   );
+
+  // Auto-populate search space with default params when empty (initial load only)
+  const spaceInitialized = useRef(false);
+  useEffect(() => {
+    if (spaceInitialized.current) return;
+    if (Object.keys(searchSpace).length > 0) {
+      spaceInitialized.current = true;
+      return;
+    }
+    // Build default space from RANGE_DEFAULTS for the 4 key params
+    const defaultSpace: Record<string, unknown> = {};
+    for (const key of DEFAULT_TUNE_PARAMS) {
+      const defaults = RANGE_DEFAULTS[key];
+      if (!defaults) continue;
+      const param = KNOWN_PARAMS.find((p) => p.key === key);
+      defaultSpace[key] = {
+        type: param?.type === "integer" ? "int" : "float",
+        low: defaults.low,
+        high: defaults.high,
+        log: defaults.log,
+        step: defaults.step,
+      };
+    }
+    if (Object.keys(defaultSpace).length > 0) {
+      spaceInitialized.current = true;
+      onChange(updateTuningConfig(config, "space", defaultSpace));
+    }
+  }, [searchSpace, config, onChange]);
 
   const evaluation = extractOptunaField<{
     metrics?: MetricEntry[];

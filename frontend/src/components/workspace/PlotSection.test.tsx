@@ -121,7 +121,7 @@ describe("PlotSection", () => {
     expect(chart).toHaveAttribute("data-height", "350");
   });
 
-  it("calls onSelectPlot when a segment option is clicked", () => {
+  it("calls onSelectPlot when a tab is clicked", () => {
     const onSelectPlot = vi.fn();
     render(
       <PlotSection
@@ -133,5 +133,68 @@ describe("PlotSection", () => {
     const importanceButton = screen.getByText("Importance");
     fireEvent.click(importanceButton);
     expect(onSelectPlot).toHaveBeenCalledWith("importance");
+  });
+
+  it("uses importancePlot data when selectedPlot is importance", () => {
+    const importancePlot: PlotResponse = {
+      plotly_json: '{"importance":"plot"}',
+    };
+    render(
+      <PlotSection
+        {...defaultProps}
+        selectedPlot="importance"
+        importancePlot={importancePlot}
+      />,
+    );
+    const chart = screen.getByTestId("plotly-chart");
+    expect(chart).toHaveTextContent('{"importance":"plot"}');
+  });
+
+  it("renders importance kind selector when multiple kinds available", () => {
+    const onKindChange = vi.fn();
+    render(
+      <PlotSection
+        {...defaultProps}
+        selectedPlot="importance"
+        importanceKinds={["split", "gain", "shap"]}
+        selectedImportanceKind="split"
+        onImportanceKindChange={onKindChange}
+        importancePlot={{ plotly_json: "{}" }}
+      />,
+    );
+    expect(screen.getByRole("radio", { name: "Split" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Gain" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "SHAP" })).toBeInTheDocument();
+  });
+
+  it("renders importance table when importanceData is provided", () => {
+    render(
+      <PlotSection
+        {...defaultProps}
+        selectedPlot="importance"
+        importanceData={{ feature_a: 0.5, feature_b: 0.1, feature_c: 0.3 }}
+      />,
+    );
+    const cells = screen.getAllByRole("cell");
+    // Sorted descending: feature_a (0.5), feature_c (0.3), feature_b (0.1)
+    expect(cells[0]).toHaveTextContent("feature_a");
+    expect(cells[1]).toHaveTextContent("0.5000");
+    expect(cells[2]).toHaveTextContent("feature_c");
+  });
+
+  it("calls onImportanceKindChange when a different kind is clicked", () => {
+    const onKindChange = vi.fn();
+    render(
+      <PlotSection
+        {...defaultProps}
+        selectedPlot="importance"
+        importanceKinds={["split", "gain"]}
+        selectedImportanceKind="split"
+        onImportanceKindChange={onKindChange}
+        importancePlot={{ plotly_json: "{}" }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "Gain" }));
+    expect(onKindChange).toHaveBeenCalledWith("gain");
   });
 });

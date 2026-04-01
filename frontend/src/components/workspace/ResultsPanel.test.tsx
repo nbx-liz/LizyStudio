@@ -27,9 +27,7 @@ vi.mock("./PlotlyChart", () => ({
 vi.mock("./PlotSection", () => ({
   PlotSection: () => <div data-testid="plot-section" />,
 }));
-vi.mock("./ScoreSection", () => ({
-  ScoreSection: () => <div data-testid="score-section" />,
-}));
+// ScoreSection removed — KPI cards now show IS+OOS inline
 vi.mock("./FoldDetailsSection", () => ({
   FoldDetailsSection: () => <div data-testid="fold-details" />,
 }));
@@ -344,8 +342,8 @@ describe("ResultsPanel", () => {
 
     expect(await screen.findByText(/RandomForest/)).toBeInTheDocument();
     expect(screen.getByText("Completed")).toBeInTheDocument();
-    // Score section should render
-    expect(screen.getByTestId("score-section")).toBeInTheDocument();
+    // KPI cards should render with IS+OOS
+    expect(screen.getByTestId("kpi-cards")).toBeInTheDocument();
   });
 
   it("renders running state with onJobDone prop provided", async () => {
