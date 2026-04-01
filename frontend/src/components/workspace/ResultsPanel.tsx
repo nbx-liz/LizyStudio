@@ -398,7 +398,7 @@ function CompletedView({
   const [lcMetrics, setLcMetrics] = useState<string[] | null>(null);
   const lcInitialized = useRef(false);
 
-  const { data: learningCurve } = useQuery({
+  const { data: learningCurve, isError: isLcError } = useQuery({
     queryKey: ["job-plot", job.job_id, "learning-curve", lcMetrics],
     queryFn: () =>
       fetchJobPlot(job.job_id, "learning-curve", {
@@ -407,7 +407,15 @@ function CompletedView({
     enabled:
       selectedPlot === "learning-curve" &&
       (plots?.includes("learning-curve") ?? false),
+    retry: false,
   });
+
+  // If LC filter fails (e.g. feval-only metric), fall back to unfiltered view
+  useEffect(() => {
+    if (isLcError && lcMetrics !== null) {
+      setLcMetrics(null);
+    }
+  }, [isLcError, lcMetrics]);
 
   const [importanceKind, setImportanceKind] = useState("split");
   const importanceEnabled = plots?.includes("importance") ?? false;
