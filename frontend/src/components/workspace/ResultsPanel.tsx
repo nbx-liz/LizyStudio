@@ -394,7 +394,7 @@ function CompletedView({
   });
 
   // Learning curve metrics filter (H-0034)
-  // Default to first metric only to avoid cramped subplots
+  // Default to first metric only to avoid cramped subplots when multiple exist
   const [lcMetrics, setLcMetrics] = useState<string[] | null>(null);
   const lcInitialized = useRef(false);
 
@@ -406,7 +406,6 @@ function CompletedView({
       }),
     enabled:
       selectedPlot === "learning-curve" &&
-      lcInitialized.current &&
       (plots?.includes("learning-curve") ?? false),
   });
 
@@ -482,10 +481,14 @@ function CompletedView({
   }, [evalConfig.metrics]);
 
   // Initialize LC filter to first metric only (avoid cramped subplot layout)
+  // When only 1 metric exists, lcMetrics stays null (no filter needed)
   useEffect(() => {
-    if (!lcInitialized.current && evalMetricNames.length > 0) {
+    if (lcInitialized.current) return;
+    if (evalMetricNames.length > 1) {
       lcInitialized.current = true;
       setLcMetrics([evalMetricNames[0]]);
+    } else if (evalMetricNames.length === 1) {
+      lcInitialized.current = true;
     }
   }, [evalMetricNames]);
 
