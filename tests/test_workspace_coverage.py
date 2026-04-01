@@ -180,6 +180,40 @@ def test_fit_starts_job_when_data_and_config_present(
     _mock_start.assert_called_once()
 
 
+def test_fit_returns_409_when_job_active(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """POST /fit must return 409 JOB_CONFLICT when a job is already active."""
+    _load_data_and_config(client, tmp_path)
+
+    job_store = client.app.state.job_store  # type: ignore[union-attr]
+    job_store.claim_active("existing-job-123")
+    try:
+        res = client.post("/api/workspace/fit")
+        assert res.status_code == 409
+        assert res.json()["error"]["code"] == "JOB_CONFLICT"
+    finally:
+        job_store.release_active("existing-job-123")
+
+
+def test_tune_returns_409_when_job_active(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """POST /tune must return 409 JOB_CONFLICT when a job is already active."""
+    _load_data_and_config(client, tmp_path)
+
+    job_store = client.app.state.job_store  # type: ignore[union-attr]
+    job_store.claim_active("existing-job-456")
+    try:
+        res = client.post("/api/workspace/tune")
+        assert res.status_code == 409
+        assert res.json()["error"]["code"] == "JOB_CONFLICT"
+    finally:
+        job_store.release_active("existing-job-456")
+
+
 # ---------------------------------------------------------------------------
 # POST /workspace/tune — guard clauses + default tuning config injection
 # ---------------------------------------------------------------------------

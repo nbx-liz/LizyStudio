@@ -18,6 +18,7 @@ from fastapi.responses import Response
 import lizystudio.security as security
 from lizystudio.api.errors import (
     FileInvalidError,
+    JobConflictError,
     PathNotFoundError,
     ValidationError,
     WorkspaceNoConfigError,
@@ -281,6 +282,8 @@ def workspace_fit(
     job_store: JobStore = Depends(get_job_store),
 ) -> dict[str, Any]:
     """Create a fit job (thread managed by Service layer)."""
+    if job_store.has_active_job():
+        raise JobConflictError(job_store.active_job_id or "unknown")
     if not ws.config:
         raise WorkspaceNoConfigError()
     if ws.dataframe is None or ws.data_ref is None:
@@ -312,6 +315,8 @@ def workspace_tune(
     job_store: JobStore = Depends(get_job_store),
 ) -> dict[str, Any]:
     """Create a tune job (thread managed by Service layer)."""
+    if job_store.has_active_job():
+        raise JobConflictError(job_store.active_job_id or "unknown")
     if not ws.config:
         raise WorkspaceNoConfigError()
     if ws.dataframe is None or ws.data_ref is None:

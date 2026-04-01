@@ -472,13 +472,19 @@ function CompletedView({
 
   const evalConfig = (job.config?.evaluation as Record<string, unknown>) ?? {};
 
-  // Extract plain metric names from evaluation.metrics (for LC filter chips)
+  // Extract metric names for LC filter chips.
+  // Primary: from job config evaluation.metrics
+  // Fallback: from fit_result metrics (covers cases where evaluation.metrics
+  // is empty/unset — e.g. default config without explicit metric selection,
+  // or feval-only metrics added by LizyML internally).
   const evalMetricNames = useMemo(() => {
     const entries = Array.isArray(evalConfig.metrics)
       ? (evalConfig.metrics as MetricEntry[])
       : [];
-    return entries.map(metricEntryName);
-  }, [evalConfig.metrics]);
+    const names = entries.map(metricEntryName);
+    if (names.length > 0) return names;
+    return metrics ? Object.keys(metrics) : [];
+  }, [evalConfig.metrics, metrics]);
 
   // Initialize LC filter to first metric only (avoid cramped subplot layout)
   // When only 1 metric exists, lcMetrics stays null (no filter needed)
