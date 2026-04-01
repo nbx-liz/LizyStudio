@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   fetchJobImportance,
+  fetchJobImportanceKinds,
   fetchJobPlot,
   fetchJobPlots,
   fetchJobSplitSummary,
@@ -40,7 +41,10 @@ export function CompletedContent({
   } = useQuery({
     queryKey: ["job-plot", job.job_id, selectedPlot],
     queryFn: () => fetchJobPlot(job.job_id, selectedPlot),
-    enabled: !!selectedPlot && selectedPlot !== "learning-curve",
+    enabled:
+      !!selectedPlot &&
+      selectedPlot !== "learning-curve" &&
+      selectedPlot !== "importance",
     retry: false,
   });
 
@@ -52,16 +56,28 @@ export function CompletedContent({
       (plots?.includes("learning-curve") ?? false),
   });
 
-  const { data: importance } = useQuery({
-    queryKey: ["job-importance", job.job_id],
-    queryFn: () => fetchJobImportance(job.job_id),
+  const importanceEnabled = plots?.includes("importance") ?? false;
+  const [importanceKind, setImportanceKind] = useState("split");
+
+  const { data: importanceKinds } = useQuery({
+    queryKey: ["job-importance-kinds", job.job_id],
+    queryFn: () => fetchJobImportanceKinds(job.job_id),
+    enabled: importanceEnabled,
   });
 
-  const { data: importancePlot } = useQuery({
-    queryKey: ["job-plot", job.job_id, "importance"],
-    queryFn: () => fetchJobPlot(job.job_id, "importance"),
-    enabled: plots?.includes("importance") ?? false,
+  const { data: importance } = useQuery({
+    queryKey: ["job-importance", job.job_id, importanceKind],
+    queryFn: () => fetchJobImportance(job.job_id, importanceKind),
+    enabled: importanceEnabled,
   });
+
+  const { data: importancePlot, isLoading: isImportancePlotLoading } = useQuery(
+    {
+      queryKey: ["job-plot", job.job_id, "importance"],
+      queryFn: () => fetchJobPlot(job.job_id, "importance"),
+      enabled: importanceEnabled,
+    },
+  );
 
   const { data: splitSummary } = useQuery({
     queryKey: ["job-split-summary", job.job_id],
@@ -127,8 +143,17 @@ export function CompletedContent({
           onSelectPlot={onSelectPlot}
           plotData={plotData}
           learningCurve={learningCurve}
-          isLoading={isPlotLoading}
+          isLoading={
+            selectedPlot === "importance"
+              ? isImportancePlotLoading
+              : isPlotLoading
+          }
           isError={isPlotError}
+          importanceKinds={importanceKinds}
+          selectedImportanceKind={importanceKind}
+          onImportanceKindChange={setImportanceKind}
+          importanceData={importance}
+          importancePlot={importancePlot}
         />
       )}
 
@@ -141,8 +166,6 @@ export function CompletedContent({
             fitResult={fitResult}
             hasFolds={hasFolds}
             splitSummary={splitSummary}
-            importance={importance}
-            importancePlot={importancePlot}
           />
         )}
       </Accordion>
