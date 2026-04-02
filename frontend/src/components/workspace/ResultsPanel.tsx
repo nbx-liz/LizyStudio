@@ -29,7 +29,6 @@ import { Progress } from "@/components/ui/progress";
 import { pivotMetrics } from "@/lib/metrics";
 import { FoldDetailsSection } from "./FoldDetailsSection";
 import { PlotSection } from "./PlotSection";
-import { ScoreSection } from "./ScoreSection";
 import {
   TrialResultsAccordionItem,
   TuneTrialsSection,
@@ -37,12 +36,16 @@ import {
 
 interface ResultsPanelProps {
   jobId: string | null;
+  hasData?: boolean;
+  hasConfig?: boolean;
   onApplyToFit?: (params: Record<string, unknown>) => void;
   onJobDone?: () => void;
 }
 
 export function ResultsPanel({
   jobId,
+  hasData = false,
+  hasConfig = false,
   onApplyToFit,
   onJobDone,
 }: ResultsPanelProps) {
@@ -146,13 +149,46 @@ export function ResultsPanel({
 
   if (!jobId || !job) {
     return (
-      <div className="flex h-full flex-col items-center justify-center p-8 text-center text-muted-foreground">
+      <div className="flex h-full flex-col items-center justify-center p-8 pb-24 text-center text-muted-foreground">
         <Activity className="mb-3 h-10 w-10 text-muted-foreground/50" />
         <h3 className="mb-4 text-lg font-medium">Results</h3>
-        <ol className="space-y-2 text-sm">
-          <li>1. Load data in the Data Panel</li>
-          <li>2. Select a model in the Model Panel</li>
-          <li>3. Click Fit or Tune</li>
+        <ol className="space-y-2.5 text-sm text-left">
+          <li className="flex items-center gap-2">
+            <span
+              className={`flex h-5 w-5 items-center justify-center rounded-full text-xs font-medium ${hasData ? "bg-primary text-primary-foreground" : "border border-muted-foreground/40"}`}
+              role="img"
+              aria-label={hasData ? "Completed" : "Step 1"}
+            >
+              {hasData ? "✓" : "1"}
+            </span>
+            <span
+              className={hasData ? "text-muted-foreground/60 line-through" : ""}
+            >
+              Load data in the Data Panel
+            </span>
+          </li>
+          <li className="flex items-center gap-2">
+            <span
+              className={`flex h-5 w-5 items-center justify-center rounded-full text-xs font-medium ${hasConfig ? "bg-primary text-primary-foreground" : "border border-muted-foreground/40"}`}
+              role="img"
+              aria-label={hasConfig ? "Completed" : "Step 2"}
+            >
+              {hasConfig ? "✓" : "2"}
+            </span>
+            <span
+              className={
+                hasConfig ? "text-muted-foreground/60 line-through" : ""
+              }
+            >
+              Configure model settings
+            </span>
+          </li>
+          <li className="flex items-center gap-2">
+            <span className="flex h-5 w-5 items-center justify-center rounded-full border border-muted-foreground/40 text-xs font-medium">
+              3
+            </span>
+            <span>Click Fit or Tune</span>
+          </li>
         </ol>
         <p className="mt-4 text-xs">
           Results will appear here after running a job.
@@ -350,14 +386,19 @@ function CompletedView({
   } = useQuery({
     queryKey: ["job-plot", job.job_id, selectedPlot],
     queryFn: () => fetchJobPlot(job.job_id, selectedPlot),
-    enabled: !!selectedPlot && selectedPlot !== "learning-curve",
+    enabled:
+      !!selectedPlot &&
+      selectedPlot !== "learning-curve" &&
+      selectedPlot !== "importance",
     retry: false,
   });
 
   // Learning curve metrics filter (H-0034)
+  // Default to first metric only to avoid cramped subplots when multiple exist
   const [lcMetrics, setLcMetrics] = useState<string[] | null>(null);
+  const lcInitialized = useRef(false);
 
-  const { data: learningCurve } = useQuery({
+  const { data: learningCurve, isError: isLcError } = useQuery({
     queryKey: ["job-plot", job.job_id, "learning-curve", lcMetrics],
     queryFn: () =>
       fetchJobPlot(job.job_id, "learning-curve", {
@@ -366,13 +407,23 @@ function CompletedView({
     enabled:
       selectedPlot === "learning-curve" &&
       (plots?.includes("learning-curve") ?? false),
+    retry: false,
   });
 
+  // If LC filter fails (e.g. feval-only metric), fall back to unfiltered view
+  useEffect(() => {
+    if (isLcError && lcMetrics !== null) {
+      setLcMetrics(null);
+    }
+  }, [isLcError, lcMetrics]);
+
   const [importanceKind, setImportanceKind] = useState("split");
+  const importanceEnabled = plots?.includes("importance") ?? false;
 
   const { data: importanceKinds } = useQuery({
     queryKey: ["job-importance-kinds", job.job_id],
     queryFn: () => fetchJobImportanceKinds(job.job_id),
+    enabled: importanceEnabled,
   });
 
   // Sync initial kind with backend response when it differs
@@ -389,16 +440,19 @@ function CompletedView({
   const { data: importance } = useQuery({
     queryKey: ["job-importance", job.job_id, importanceKind],
     queryFn: () => fetchJobImportance(job.job_id, importanceKind),
+    enabled: importanceEnabled,
   });
 
   // Importance plot is kind-independent (shows default split importance).
   // The backend plot API does not accept a kind parameter; the plot is
   // generated once using the default kind by LizyML's importance_plot().
-  const { data: importancePlot } = useQuery({
-    queryKey: ["job-plot", job.job_id, "importance"],
-    queryFn: () => fetchJobPlot(job.job_id, "importance"),
-    enabled: plots?.includes("importance") ?? false,
-  });
+  const { data: importancePlot, isLoading: isImportancePlotLoading } = useQuery(
+    {
+      queryKey: ["job-plot", job.job_id, "importance"],
+      queryFn: () => fetchJobPlot(job.job_id, "importance"),
+      enabled: importanceEnabled,
+    },
+  );
 
   const { data: splitSummary } = useQuery({
     queryKey: ["job-split-summary", job.job_id],
@@ -426,13 +480,31 @@ function CompletedView({
 
   const evalConfig = (job.config?.evaluation as Record<string, unknown>) ?? {};
 
-  // Extract plain metric names from evaluation.metrics (for LC filter chips)
+  // Extract metric names for LC filter chips.
+  // Primary: from job config evaluation.metrics
+  // Fallback: from fit_result metrics (covers cases where evaluation.metrics
+  // is empty/unset — e.g. default config without explicit metric selection,
+  // or feval-only metrics added by LizyML internally).
   const evalMetricNames = useMemo(() => {
     const entries = Array.isArray(evalConfig.metrics)
       ? (evalConfig.metrics as MetricEntry[])
       : [];
-    return entries.map(metricEntryName);
-  }, [evalConfig.metrics]);
+    const names = entries.map(metricEntryName);
+    if (names.length > 0) return names;
+    return metrics ? Object.keys(metrics) : [];
+  }, [evalConfig.metrics, metrics]);
+
+  // Initialize LC filter to first metric only (avoid cramped subplot layout)
+  // When only 1 metric exists, lcMetrics stays null (no filter needed)
+  useEffect(() => {
+    if (lcInitialized.current) return;
+    if (evalMetricNames.length > 1) {
+      lcInitialized.current = true;
+      setLcMetrics([evalMetricNames[0]]);
+    } else if (evalMetricNames.length === 1) {
+      lcInitialized.current = true;
+    }
+  }, [evalMetricNames]);
 
   const annotateMetric = (name: string): string => {
     if (name === "precision_at_k") {
@@ -494,24 +566,39 @@ function CompletedView({
         </div>
       </div>
 
-      {/* KPI Summary Cards */}
+      {/* KPI Summary Cards (IS + OOS + Std) */}
       {metrics && (
         <div className="mb-4 flex flex-wrap gap-2" data-testid="kpi-cards">
           {Object.entries(metrics).map(([name, vals]) => (
             <div
               key={name}
-              className="flex flex-col items-center rounded-md border bg-muted/30 px-3 py-1.5"
+              className="flex flex-col rounded-md border bg-muted/30 px-3 py-1.5 min-w-[100px]"
             >
-              <span className="text-[10px] text-muted-foreground uppercase tracking-wide">
+              <span className="text-[10px] text-muted-foreground uppercase tracking-wide text-center mb-0.5">
                 {annotateMetric(name)}
               </span>
-              <span className="text-sm font-semibold tabular-nums">
-                {vals.oos != null
-                  ? Number(vals.oos).toFixed(4)
-                  : vals.is != null
-                    ? Number(vals.is).toFixed(4)
-                    : "—"}
-              </span>
+              <div className="flex justify-between gap-3 text-xs tabular-nums">
+                <span className="text-muted-foreground">IS</span>
+                <span className="font-medium">
+                  {vals.is != null ? Number(vals.is).toFixed(4) : "—"}
+                </span>
+              </div>
+              <div className="flex justify-between gap-3 text-xs tabular-nums">
+                <span className="text-muted-foreground">OOS</span>
+                <span className="font-semibold">
+                  {vals.oos != null ? Number(vals.oos).toFixed(4) : "—"}
+                </span>
+              </div>
+              {hasFolds && (
+                <div className="flex justify-between gap-3 text-xs tabular-nums">
+                  <span className="text-muted-foreground">Std</span>
+                  <span>
+                    {vals.oos_std != null
+                      ? Number(vals.oos_std).toFixed(4)
+                      : "—"}
+                  </span>
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -526,15 +613,6 @@ function CompletedView({
         />
       )}
 
-      {/* Score */}
-      {metrics && (
-        <ScoreSection
-          metrics={metrics}
-          hasFolds={hasFolds}
-          annotateMetric={annotateMetric}
-        />
-      )}
-
       {/* Learning Curve + Plot selector */}
       {plots && plots.length > 0 && (
         <PlotSection
@@ -543,11 +621,20 @@ function CompletedView({
           onSelectPlot={onSelectPlot}
           plotData={plotData}
           learningCurve={learningCurve}
-          isLoading={isPlotLoading}
+          isLoading={
+            selectedPlot === "importance"
+              ? isImportancePlotLoading
+              : isPlotLoading
+          }
           isError={isPlotError}
           lcMetrics={lcMetrics}
           onLcMetricsChange={setLcMetrics}
           availableEvalMetrics={evalMetricNames}
+          importanceKinds={importanceKinds}
+          selectedImportanceKind={importanceKind}
+          onImportanceKindChange={setImportanceKind}
+          importanceData={importance}
+          importancePlot={importancePlot}
         />
       )}
 
@@ -560,11 +647,6 @@ function CompletedView({
             fitResult={fitResult}
             hasFolds={hasFolds}
             splitSummary={splitSummary}
-            importance={importance}
-            importancePlot={importancePlot}
-            importanceKinds={importanceKinds}
-            selectedKind={importanceKind}
-            onKindChange={setImportanceKind}
           />
         )}
       </Accordion>

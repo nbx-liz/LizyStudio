@@ -1,9 +1,4 @@
-import type {
-  FitResult,
-  ImportanceResponse,
-  PlotResponse,
-  SplitSummaryRow,
-} from "@/api/types";
+import type { FitResult, SplitSummaryRow } from "@/api/types";
 import {
   AccordionContent,
   AccordionItem,
@@ -18,24 +13,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatNum } from "@/lib/utils";
-import { PlotlyChart } from "./PlotlyChart";
-import { SegmentGroup } from "./SegmentGroup";
-
-const KIND_LABELS: Record<string, string> = {
-  split: "Split",
-  gain: "Gain",
-  shap: "SHAP",
-};
 
 interface FoldDetailsSectionProps {
   fitResult: FitResult;
   hasFolds: boolean;
   splitSummary: SplitSummaryRow[] | undefined;
-  importance: ImportanceResponse | undefined;
-  importancePlot: PlotResponse | undefined;
-  importanceKinds?: string[];
-  selectedKind?: string;
-  onKindChange?: (kind: string) => void;
 }
 
 /**
@@ -46,68 +28,9 @@ export function FoldDetailsSection({
   fitResult,
   hasFolds,
   splitSummary,
-  importance,
-  importancePlot,
-  importanceKinds,
-  selectedKind,
-  onKindChange,
 }: FoldDetailsSectionProps) {
   return (
     <>
-      {/* Feature Importance */}
-      {(importancePlot || importance) && (
-        <AccordionItem value="importance">
-          <AccordionTrigger>Feature Importance</AccordionTrigger>
-          <AccordionContent>
-            {importanceKinds &&
-              importanceKinds.length > 1 &&
-              selectedKind &&
-              onKindChange && (
-                <div className="mb-3">
-                  <SegmentGroup
-                    options={importanceKinds}
-                    value={selectedKind}
-                    onChange={onKindChange}
-                    labels={KIND_LABELS}
-                  />
-                </div>
-              )}
-            {importancePlot && (
-              <div className="mb-4">
-                <PlotlyChart plotlyJson={importancePlot.plotly_json} />
-              </div>
-            )}
-            {importance && Object.keys(importance).length > 0 && (
-              <div className="lzs-scrollable max-h-64 overflow-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Feature</TableHead>
-                      <TableHead className="text-right">Importance</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {Object.entries(importance)
-                      .sort(([, a], [, b]) => b - a)
-                      .map(([name, val]) => (
-                        <TableRow
-                          key={name}
-                          className="hover:bg-muted/50 even:bg-muted/20"
-                        >
-                          <TableCell className="text-sm">{name}</TableCell>
-                          <TableCell className="text-right text-sm tabular-nums">
-                            {val.toFixed(4)}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
-          </AccordionContent>
-        </AccordionItem>
-      )}
-
       {/* Fold Details (CV only) */}
       {hasFolds && splitSummary && splitSummary.length > 0 && (
         <AccordionItem value="folds">

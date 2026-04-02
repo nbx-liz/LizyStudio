@@ -198,12 +198,14 @@ export function SearchSpaceTable({
         step: defaults.step ?? stepMap?.[key],
       };
       onChange({ ...space, [key]: entry });
+      setExpandedRows((prev) => new Set([...prev, key]));
     } else if (mode === "choice") {
       const entry: SpaceEntry = {
         type: "categorical",
         choices: [],
       };
       onChange({ ...space, [key]: entry });
+      setExpandedRows((prev) => new Set([...prev, key]));
     } else {
       const { [key]: _, ...rest } = space;
       onChange(rest);

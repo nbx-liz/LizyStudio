@@ -330,18 +330,18 @@ export function DataPanel({
 
   return (
     <div className="flex h-full flex-col overflow-auto">
-      <div className="p-4">
+      <div className="px-3 py-4">
         <Accordion
           type="multiple"
           defaultValue={["source", "target", "columns", "cv"]}
         >
           {/* Data Source */}
           <AccordionItem value="source" className="border-b">
-            <AccordionTrigger className="py-1.5 text-sm font-medium hover:bg-muted/50">
+            <AccordionTrigger className="py-1.5 text-sm font-semibold hover:bg-muted/50">
               Data Source
             </AccordionTrigger>
             <AccordionContent>
-              <div className="lzs-form space-y-1.5 pl-[18px]">
+              <div className="lzs-form space-y-1.5 pl-4">
                 <SegmentGroup
                   options={["path", "upload"] as const as string[]}
                   value={sourceType}
@@ -398,8 +398,8 @@ export function DataPanel({
                   </div>
                 )}
                 {shape && !loading && (
-                  <p className="text-sm text-muted-foreground">
-                    {shape[0]} rows x {shape[1]} columns
+                  <p className="text-xs text-muted-foreground">
+                    {shape[0]} rows × {shape[1]} columns
                   </p>
                 )}
                 {preview && preview.data.length > 0 && (
@@ -442,11 +442,11 @@ export function DataPanel({
 
           {/* Target / Task */}
           <AccordionItem value="target" className="border-b">
-            <AccordionTrigger className="py-1.5 text-sm font-medium hover:bg-muted/50">
+            <AccordionTrigger className="py-1.5 text-sm font-semibold hover:bg-muted/50">
               Target / Task
             </AccordionTrigger>
             <AccordionContent>
-              <div className="lzs-form space-y-3 pl-[18px]">
+              <div className="lzs-form space-y-3 pl-4">
                 <div className="flex items-center gap-2">
                   <Label className="min-w-[60px] text-xs">Target</Label>
                   <Select
@@ -488,11 +488,21 @@ export function DataPanel({
 
           {/* Column Settings */}
           <AccordionItem value="columns" className="border-b">
-            <AccordionTrigger className="py-1.5 text-sm font-medium hover:bg-muted/50">
-              Column Settings
+            <AccordionTrigger className="py-1.5 text-sm font-semibold hover:bg-muted/50">
+              <span className="flex items-center gap-2">
+                Column Settings
+                {target && columns.length > 0 && (
+                  <Badge
+                    variant="secondary"
+                    className="text-[10px] font-normal"
+                  >
+                    {summary.total - summary.excluded} features
+                  </Badge>
+                )}
+              </span>
             </AccordionTrigger>
             <AccordionContent>
-              <div className="pl-[18px]">
+              <div className="pl-4">
                 {columns.length > 0 && target ? (
                   <>
                     <Input
@@ -606,9 +616,24 @@ export function DataPanel({
                     </div>
                   </>
                 ) : (
-                  <p className="text-sm text-muted-foreground">
+                  <p className="text-xs text-muted-foreground">
                     Load data and select a target first
                   </p>
+                )}
+                {/* Feature Summary */}
+                {target && columns.length > 0 && (
+                  <div className="mt-3 rounded-md border bg-muted/50 p-2.5 text-xs">
+                    <p>
+                      Features: {summary.total - summary.excluded} columns
+                      (Numeric: {summary.numeric}, Categorical:{" "}
+                      {summary.categorical})
+                    </p>
+                    <p className="text-muted-foreground">
+                      Excluded: {summary.excluded} (ID: {summary.idCount},
+                      Const: {summary.constCount}, Manual: {summary.manualCount}
+                      )
+                    </p>
+                  </div>
                 )}
               </div>
             </AccordionContent>
@@ -616,11 +641,11 @@ export function DataPanel({
 
           {/* Cross Validation */}
           <AccordionItem value="cv" className="border-b">
-            <AccordionTrigger className="py-1.5 text-sm font-medium hover:bg-muted/50">
+            <AccordionTrigger className="py-1.5 text-sm font-semibold hover:bg-muted/50">
               Cross Validation
             </AccordionTrigger>
             <AccordionContent>
-              <div className="pl-[18px]">
+              <div className="pl-4">
                 <CvSection
                   cv={cv}
                   onChange={setCv}
@@ -631,20 +656,6 @@ export function DataPanel({
             </AccordionContent>
           </AccordionItem>
         </Accordion>
-
-        {/* Feature Summary */}
-        {target && columns.length > 0 && (
-          <div className="mt-4 rounded-md border bg-muted/50 p-3 text-sm">
-            <p>
-              Features: {summary.total - summary.excluded} columns (Numeric:{" "}
-              {summary.numeric}, Categorical: {summary.categorical})
-            </p>
-            <p className="text-muted-foreground">
-              Excluded: {summary.excluded} (ID: {summary.idCount}, Const:{" "}
-              {summary.constCount}, Manual: {summary.manualCount})
-            </p>
-          </div>
-        )}
       </div>
     </div>
   );

@@ -75,7 +75,7 @@ export function NumberInput({
         onChange={handleChange}
         placeholder={placeholder}
         disabled={disabled}
-        className="h-8 w-20 text-center text-xs tabular-nums [appearance:textfield]"
+        className="h-7 w-20 text-center text-xs tabular-nums [appearance:textfield]"
       />
       <Button
         variant="outline"

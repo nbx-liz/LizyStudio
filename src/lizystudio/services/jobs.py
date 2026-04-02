@@ -51,6 +51,8 @@ class JobStore:
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         self._cancel_requested: set[str] = set()
         self._cancel_lock = threading.Lock()
+        self._active_job_id: str | None = None
+        self._active_lock = threading.Lock()
 
     def _job_dir(self, job_id: str) -> Path:
         """Resolve job directory with traversal guard."""
@@ -155,6 +157,33 @@ class JobStore:
         """Clear cancellation flag after processing."""
         with self._cancel_lock:
             self._cancel_requested.discard(job_id)
+
+    # --- Active job tracking (concurrency control) ---
+
+    def claim_active(self, job_id: str) -> bool:
+        """Attempt to claim the active slot. Returns False if another job is active."""
+        with self._active_lock:
+            if self._active_job_id is not None:
+                return False
+            self._active_job_id = job_id
+            return True
+
+    def release_active(self, job_id: str) -> None:
+        """Release the active slot."""
+        with self._active_lock:
+            if self._active_job_id == job_id:
+                self._active_job_id = None
+
+    def has_active_job(self) -> bool:
+        """Check if a job is currently active (running or pending)."""
+        with self._active_lock:
+            return self._active_job_id is not None
+
+    @property
+    def active_job_id(self) -> str | None:
+        """Return the currently active job ID, or None."""
+        with self._active_lock:
+            return self._active_job_id
 
     def get_log(self, job_id: str) -> str:
         """Read execution log for a job. Returns empty string if not found."""

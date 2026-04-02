@@ -63,6 +63,17 @@ def _run_job_core(
 
     Handles status transitions, log capture, error handling, and persistence.
     """
+    if not job_store.claim_active(job.job_id):
+        job.status = "failed"
+        job.error = "Another job is already running"
+        job.completed_at = datetime.now(timezone.utc).isoformat()
+        job_store.update(job)
+        if broadcaster is not None:
+            broadcaster.send_error(
+                job.job_id, "Another job is already running", code="JOB_CONFLICT"
+            )
+        return job
+
     job.status = "running"
     job_store.update(job)
 
@@ -102,6 +113,7 @@ def _run_job_core(
             safe_msg = f"{type(exc).__name__}: {exc}"
             broadcaster.send_error(job.job_id, safe_msg)
     finally:
+        job_store.release_active(job.job_id)
         job_store.clear_cancel(job.job_id)
         job_logger.removeHandler(handler)
         handler.close()

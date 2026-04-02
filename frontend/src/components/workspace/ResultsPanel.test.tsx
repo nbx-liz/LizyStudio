@@ -27,9 +27,7 @@ vi.mock("./PlotlyChart", () => ({
 vi.mock("./PlotSection", () => ({
   PlotSection: () => <div data-testid="plot-section" />,
 }));
-vi.mock("./ScoreSection", () => ({
-  ScoreSection: () => <div data-testid="score-section" />,
-}));
+// ScoreSection removed — KPI cards now show IS+OOS inline
 vi.mock("./FoldDetailsSection", () => ({
   FoldDetailsSection: () => <div data-testid="fold-details" />,
 }));
@@ -49,16 +47,34 @@ describe("ResultsPanel", () => {
   it("shows placeholder when jobId is null", () => {
     renderWithQuery(<ResultsPanel jobId={null} />);
     expect(screen.getByText("Results")).toBeInTheDocument();
-    expect(
-      screen.getByText("1. Load data in the Data Panel"),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText("2. Select a model in the Model Panel"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("3. Click Fit or Tune")).toBeInTheDocument();
+    expect(screen.getByText("Load data in the Data Panel")).toBeInTheDocument();
+    expect(screen.getByText("Configure model settings")).toBeInTheDocument();
+    expect(screen.getByText("Click Fit or Tune")).toBeInTheDocument();
     expect(
       screen.getByText("Results will appear here after running a job."),
     ).toBeInTheDocument();
+  });
+
+  it("shows step 1 as completed when hasData is true", () => {
+    renderWithQuery(<ResultsPanel jobId={null} hasData hasConfig={false} />);
+    const step1 = screen.getByLabelText("Completed");
+    expect(step1).toHaveTextContent("✓");
+    expect(step1).toHaveClass("bg-primary");
+    // Step 1 text has line-through
+    expect(screen.getByText("Load data in the Data Panel")).toHaveClass(
+      "line-through",
+    );
+    // Step 2 is still pending
+    expect(screen.getByLabelText("Step 2")).toHaveTextContent("2");
+  });
+
+  it("shows steps 1 and 2 as completed when both hasData and hasConfig", () => {
+    renderWithQuery(<ResultsPanel jobId={null} hasData hasConfig />);
+    const completed = screen.getAllByLabelText("Completed");
+    expect(completed).toHaveLength(2);
+    expect(screen.getByText("Configure model settings")).toHaveClass(
+      "line-through",
+    );
   });
 
   it("shows placeholder when job is not yet loaded", () => {
@@ -326,8 +342,8 @@ describe("ResultsPanel", () => {
 
     expect(await screen.findByText(/RandomForest/)).toBeInTheDocument();
     expect(screen.getByText("Completed")).toBeInTheDocument();
-    // Score section should render
-    expect(screen.getByTestId("score-section")).toBeInTheDocument();
+    // KPI cards should render with IS+OOS
+    expect(screen.getByTestId("kpi-cards")).toBeInTheDocument();
   });
 
   it("renders running state with onJobDone prop provided", async () => {

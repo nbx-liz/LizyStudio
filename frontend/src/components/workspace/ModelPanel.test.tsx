@@ -126,7 +126,7 @@ describe("ModelPanel", () => {
         </TooltipProvider>
       </QueryClientProvider>,
     );
-    expect(screen.getByTestId("config-skeleton")).toBeInTheDocument();
+    expect(screen.getByTestId("config-guidance")).toBeInTheDocument();
   });
 
   it("Fit button is disabled when running is true", () => {

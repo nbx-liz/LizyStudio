@@ -637,3 +637,70 @@ def test_run_tune_cancelled_via_cancel_flag(
     )
 
     assert result.status == "cancelled"
+
+
+# ---------------------------------------------------------------------------
+# Active job tracking (concurrency control)
+# ---------------------------------------------------------------------------
+
+
+def test_claim_active_prevents_second_job(
+    job_store: JobStore,
+    sample_data_ref: DataRef,
+) -> None:
+    """Second job should fail when another job already holds the active slot."""
+    job1 = job_store.create(
+        backend_name="lizyml",
+        config={},
+        data_ref=sample_data_ref,
+        job_type="fit",
+    )
+    job2 = job_store.create(
+        backend_name="lizyml",
+        config={},
+        data_ref=sample_data_ref,
+        job_type="fit",
+    )
+
+    assert job_store.claim_active(job1.job_id) is True
+    assert job_store.has_active_job() is True
+    assert job_store.active_job_id == job1.job_id
+
+    assert job_store.claim_active(job2.job_id) is False
+
+    job_store.release_active(job1.job_id)
+    assert job_store.has_active_job() is False
+    assert job_store.claim_active(job2.job_id) is True
+    job_store.release_active(job2.job_id)
+
+
+def test_run_job_core_fails_when_active_slot_taken(
+    job_store: JobStore,
+    sample_data_ref: DataRef,
+) -> None:
+    """_run_job_core should fail the job if claim_active returns False."""
+    from lizystudio.services.training import _run_job_core
+
+    job_store.claim_active("blocker-job")
+
+    job = job_store.create(
+        backend_name="lizyml",
+        config={},
+        data_ref=sample_data_ref,
+        job_type="fit",
+    )
+
+    def never_called(cb: Any) -> tuple[FitSummary, None, str]:
+        raise AssertionError("Should not be called")
+
+    result = _run_job_core(
+        job=job,
+        job_store=job_store,
+        broadcaster=None,
+        execute_fn=never_called,
+    )
+
+    assert result.status == "failed"
+    assert "already running" in (result.error or "")
+    assert job_store.active_job_id == "blocker-job"
+    job_store.release_active("blocker-job")

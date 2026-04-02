@@ -60,6 +60,15 @@ class JobRunningError(StudioError):
         )
 
 
+class JobConflictError(StudioError):
+    def __init__(self, job_id: str) -> None:
+        super().__init__(
+            "JOB_CONFLICT",
+            f"A job is already running: {job_id}",
+            409,
+        )
+
+
 class ValidationError(StudioError):
     def __init__(self, errors: list[dict[str, Any]]) -> None:
         super().__init__(

@@ -164,7 +164,7 @@ describe("DataPanel", () => {
     await userEvent.click(screen.getByText("Load"));
 
     await waitFor(() => {
-      expect(screen.getByText("100 rows x 5 columns")).toBeInTheDocument();
+      expect(screen.getByText("100 rows × 5 columns")).toBeInTheDocument();
     });
   });
 

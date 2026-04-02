@@ -1,7 +1,13 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { fetchUiSchema, runFit, runTune, updateConfig } from "@/api/workspace";
+import {
+  fetchConfig,
+  fetchUiSchema,
+  runFit,
+  runTune,
+  updateConfig,
+} from "@/api/workspace";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -27,6 +33,13 @@ export function WorkspacePage() {
   const { data: uiSchema } = useQuery({
     queryKey: ["ui-schema"],
     queryFn: fetchUiSchema,
+  });
+
+  const { data: config } = useQuery({
+    queryKey: ["config"],
+    queryFn: fetchConfig,
+    enabled: hasData,
+    retry: false,
   });
 
   const handleDataChanged = useCallback(() => {
@@ -113,6 +126,8 @@ export function WorkspacePage() {
       <ResizablePanel defaultSize="35%" minSize="20%">
         <ResultsPanel
           jobId={currentJobId}
+          hasData={hasData}
+          hasConfig={hasData && config != null}
           onApplyToFit={handleApplyToFit}
           onJobDone={() => {
             setRunning(false);

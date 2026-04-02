@@ -14,7 +14,6 @@ import {
   uploadConfig,
   validateConfig,
 } from "@/api/workspace";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -23,7 +22,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Tooltip,
@@ -216,11 +214,23 @@ export function ModelPanel({
       {/* Sticky Header */}
       <div className="sticky top-0 z-10 border-b bg-background p-3">
         <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Model
+            </span>
+            {backend && (
+              <span className="text-[10px] text-muted-foreground">
+                {backend.name} v{backend.version}
+              </span>
+            )}
+          </div>
+        </div>
+        <div className="mt-2 flex items-center justify-between gap-2">
           <Tabs
             value={activeTab}
             onValueChange={(v) => setActiveTab(v as "fit" | "tune")}
           >
-            <TabsList className="w-auto">
+            <TabsList className="h-9 w-auto">
               <TabsTrigger value="fit" className="px-6">
                 Fit
               </TabsTrigger>
@@ -229,29 +239,22 @@ export function ModelPanel({
               </TabsTrigger>
             </TabsList>
           </Tabs>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span>
-                <Button
-                  size="sm"
-                  className="h-9"
-                  onClick={activeTab === "fit" ? onFit : onTune}
-                  disabled={activeTab === "fit" ? !fitEnabled : !tuneEnabled}
-                >
-                  {activeTab === "fit" ? "Fit" : "Tune"}
-                </Button>
-              </span>
-            </TooltipTrigger>
+          <div className="flex items-center gap-2 min-w-0">
             {disabledReason && (
-              <TooltipContent>{disabledReason}</TooltipContent>
+              <span className="truncate text-[11px] text-muted-foreground max-w-[180px]">
+                {disabledReason}
+              </span>
             )}
-          </Tooltip>
+            <Button
+              size="sm"
+              className="h-9 shrink-0"
+              onClick={activeTab === "fit" ? onFit : onTune}
+              disabled={activeTab === "fit" ? !fitEnabled : !tuneEnabled}
+            >
+              {activeTab === "fit" ? "Fit" : "Tune"}
+            </Button>
+          </div>
         </div>
-        {backend && (
-          <Badge variant="secondary" className="mt-1.5 text-xs">
-            {backend.name} v{backend.version}
-          </Badge>
-        )}
       </div>
 
       {/* Scrollable Content */}
@@ -279,12 +282,15 @@ export function ModelPanel({
               columns={nonExcludedColumns}
             />
           ) : (
-            <div className="space-y-3" data-testid="config-skeleton">
-              <Skeleton className="h-4 w-24" />
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-4 w-32" />
-              <Skeleton className="h-8 w-full" />
+            <div
+              className="flex flex-col items-center justify-center py-12 text-center text-muted-foreground"
+              data-testid="config-guidance"
+            >
+              <p className="text-sm">
+                {hasData
+                  ? "Loading configuration..."
+                  : "Load data in the Data Panel to configure your model."}
+              </p>
             </div>
           )
         ) : config ? (
@@ -297,9 +303,11 @@ export function ModelPanel({
         ) : (
           <p className="text-sm text-muted-foreground">Loading config...</p>
         )}
+      </div>
 
-        {/* Config Actions */}
-        <div className="mt-6 flex flex-wrap gap-2">
+      {/* Config Actions — sticky footer */}
+      <div className="shrink-0 border-t bg-background px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="outline"
             size="sm"
@@ -319,24 +327,40 @@ export function ModelPanel({
             <Download className="mr-1 h-3 w-3" />
             Export YAML
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleUndo}
-            disabled={!history.canUndo}
-            aria-label="Undo"
-          >
-            <Undo2 className="h-3 w-3" />
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleRedo}
-            disabled={!history.canRedo}
-            aria-label="Redo"
-          >
-            <Redo2 className="h-3 w-3" />
-          </Button>
+
+          <div className="h-4 w-px bg-border" />
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleUndo}
+                disabled={!history.canUndo}
+                aria-label="Undo"
+              >
+                <Undo2 className="h-3 w-3" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Undo</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleRedo}
+                disabled={!history.canRedo}
+                aria-label="Redo"
+              >
+                <Redo2 className="h-3 w-3" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Redo</TooltipContent>
+          </Tooltip>
+
+          <div className="h-4 w-px bg-border" />
+
           <Button variant="outline" size="sm" onClick={handleSavePreset}>
             <Save className="mr-1 h-3 w-3" />
             Save Preset
