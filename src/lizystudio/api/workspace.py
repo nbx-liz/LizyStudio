@@ -24,7 +24,11 @@ from lizystudio.api.errors import (
     WorkspaceNoConfigError,
     WorkspaceNoDataError,
 )
-from lizystudio.security import read_upload_checked, validate_path_within
+from lizystudio.security import (
+    check_dataframe_memory,
+    read_upload_checked,
+    validate_path_within,
+)
 from lizystudio.services.data import (
     analyze_columns,
     get_describe,
@@ -102,11 +106,12 @@ def data_load_path(
         df = load_dataframe(path)
     except Exception as exc:
         raise FileInvalidError(str(exc)) from exc
+    memory_usage_bytes = check_dataframe_memory(df)
     data_ref = make_data_ref(
         df, source_type="path", path=path, filename=Path(path).name
     )
     ws.set_data(df, data_ref)
-    return {"data_ref": asdict(data_ref)}
+    return {"data_ref": asdict(data_ref), "memory_usage_bytes": memory_usage_bytes}
 
 
 @router.post("/data/upload")
@@ -133,10 +138,15 @@ async def data_upload(
     except Exception as exc:
         Path(tmp_name).unlink(missing_ok=True)
         raise FileInvalidError(str(exc)) from exc
+    try:
+        memory_usage_bytes = check_dataframe_memory(df)
+    except FileInvalidError:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
     data_ref = make_data_ref(df, source_type="upload", path=tmp_name, filename=filename)
     ws.set_data(df, data_ref)
     ws.track_temp_file(tmp_name)
-    return {"data_ref": asdict(data_ref)}
+    return {"data_ref": asdict(data_ref), "memory_usage_bytes": memory_usage_bytes}
 
 
 @router.get("/data/preview")
