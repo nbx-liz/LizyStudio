@@ -495,7 +495,7 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
 - **Decision:** 2026-03-10 accepted — 提案通り
 
 ### H-0026: BackendAdapter に `get_ui_schema()` メソッドを追加（Backend Contract パターン）
-- **Status:** proposed
+- **Status:** accepted
 - **Scope:** Adapter, API, Frontend
 - **Related:** BLUEPRINT.md §3.3.2, §4.2.2, §5.2
 
@@ -574,7 +574,7 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
 ---
 
 ### H-0027: LizyML v0.4.0 対応 — export_code() API の追加
-- **Status:** proposed
+- **Status:** accepted
 - **Scope:** API, Adapter, Frontend
 - **Related:** BLUEPRINT.md §5.3（Jobs API）、§3.2（Adapter 層）
 - **Context:** LizyML v0.3.0 で `Model.export_code(path)` が追加された。学習済みモデルから LizyML 非依存の Python スクリプト（`train.py`, `predict.py`, `test_equivalence.py`, `config.json`, `requirements.txt`, `artifacts/`）を生成する機能。LizyStudio ユーザーが GUI から利用できるようにする。
@@ -602,7 +602,7 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
 ---
 
 ### H-0028: LizyML v0.4.0 対応 — Tune 進捗コールバック統合（TuneProgressInfo）
-- **Status:** proposed
+- **Status:** accepted
 - **Scope:** Adapter, Backend
 - **Related:** BLUEPRINT.md §3.2（Adapter 層）、§5.2（Workspace API）
 - **Context:** LizyML v0.1.3 で `TuneProgressInfo` / `TuneProgressCallback` が追加された。`Model.tune(progress_callback=fn)` で Trial 単位の進捗（current_trial, total_trials, best_score, latest_score, latest_state）を受け取れる。現在の LizyStudio Adapter は tune 開始/完了の2ポイントしか報告しておらず、長時間の Tune でユーザーに進捗が伝わらない。
@@ -775,7 +775,7 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
 ---
 
 ### H-0035: WebSocket 再接続プロトコルの実装
-- **Status:** proposed
+- **Status:** accepted
 - **Scope:** Frontend
 - **Related:** BLUEPRINT.md §3.1、frontend/src/api/websocket.ts
 - **Context:** 現在の `connectJobProgress` は WebSocket 切断時の再接続ロジックを持たない。ネットワーク不安定やブラウザのスリープ復帰時に接続が切れると、ジョブ進捗が消失しユーザーに完了通知が届かない。LizyML-Widget では Colab 環境でのコネクション不安定に対処するためポーリングフォールバックと再接続パターンを実装しており、その知見を活用する。
@@ -793,11 +793,12 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   2. 再接続成功後にジョブ状態が正しく復元される
   3. 最大リトライ超過時にユーザー通知が表示される
   4. 既存テストが全パス
+- **Decision:** 2026-04-04 accepted — 提案通り
 
 ---
 
 ### H-0036: OpenMP デーモンスレッド劣化対策（サブプロセスフォールバック）
-- **Status:** proposed
+- **Status:** accepted
 - **Scope:** Backend
 - **Related:** BLUEPRINT.md §3.2（Service レイヤー）、services/training.py
 - **Context:** `start_fit_async` / `start_tune_async` はデーモンスレッドで ML バックエンドを実行する。LizyML-Widget の本番運用で、libgomp (OpenMP) がスレッドプールを最初の利用スレッドにバインドする仕様により、デーモンスレッドから LightGBM を実行すると 50x の性能劣化が発生することが判明した（Widget learned skill: `openmp-daemon-thread-degradation`）。Widget では `subprocess_runner.py` でプロセス分離フォールバックを実装済み。
@@ -819,11 +820,12 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   3. `LIZYSTUDIO_FORCE_SUBPROCESS=1` でサブプロセスモードが強制される
   4. 前回ジョブのスレッド/プロセスが新ジョブ開始前に join される
   5. 既存テストが全パス + サブプロセスモードのテスト追加
+- **Decision:** 2026-04-04 accepted — 提案通り
 
 ---
 
 ### H-0037: PATCH /api/workspace/config — Config パッチプロトコルの導入
-- **Status:** proposed
+- **Status:** accepted
 - **Scope:** API
 - **Related:** BLUEPRINT.md §5.2（Workspace API）、api/workspace.py
 - **Context:** 現在の `PUT /api/workspace/config` は Config 全体を置換する。フロントエンドが単一フィールドを変更する場合でも Config 全体を送信する必要があり、ネットワーク効率が悪い。また、全体置換では並行編集での意図しない上書きリスクがある。LizyML-Widget では `ConfigPatchOp` による細粒度パッチプロトコルを実装しており、パスバリデーション（正規表現 `/^[a-zA-Z_]\w*(\.[a-zA-Z_]\w*)*$/`）と dunder (`__`) パス拒否により安全性を確保している。
@@ -856,11 +858,12 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   3. 不正な op で 422 が返る
   4. 既存 `PUT /api/workspace/config` が引き続き動作する
   5. フロントエンドが PATCH を使用するように更新される
+- **Decision:** 2026-04-04 accepted — 提案通り
 
 ---
 
 ### H-0038: DataFrame メモリ上限チェックの追加
-- **Status:** proposed
+- **Status:** accepted
 - **Scope:** Backend
 - **Related:** BLUEPRINT.md §4.2.1（Data Source）、security.py
 - **Context:** 現在のアップロードサイズ制限（`MAX_UPLOAD_BYTES = 100MB`）はファイルサイズのみをチェックする。Parquet ファイルは高圧縮されるため、100MB のファイルが展開後に数 GB のメモリを消費する可能性がある。LizyML-Widget の移植計画では `df.memory_usage(deep=True).sum()` による展開後チェックと環境変数による上限設定を定義している。
@@ -879,11 +882,12 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   2. 環境変数でメモリ上限をカスタマイズ可能
   3. エラーメッセージにファイルサイズとメモリ使用量が含まれる
   4. 正常なデータで既存動作に影響がない
+- **Decision:** 2026-04-04 accepted — 提案通り
 
 ---
 
 ### H-0039: Content Security Policy (CSP) ヘッダーの追加
-- **Status:** proposed
+- **Status:** accepted
 - **Scope:** Backend
 - **Related:** BLUEPRINT.md §3.1（全体構成）、server.py
 - **Context:** 現在のサーバーには CSP ヘッダーが設定されていない。localhost 専用のため即座の脅威は低いが、将来のリモートアクセス対応やセキュリティ監査に備え、XSS 防御を強化すべきである。LizyML-Widget 移植計画でも CSP を明示的に定義している。
@@ -910,11 +914,12 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   2. `X-Content-Type-Options`, `X-Frame-Options` も付与される
   3. 開発モードで HMR が正常動作する
   4. Plotly のレンダリングが CSP でブロックされない
+- **Decision:** 2026-04-04 accepted — 提案通り
 
 ---
 
 ### H-0040: ワーカースレッド join 漏れ対策
-- **Status:** proposed
+- **Status:** accepted
 - **Scope:** Backend
 - **Related:** services/training.py
 - **Context:** `start_fit_async` / `start_tune_async` で作成されたワーカースレッドは `WorkspaceState` に保持されず、新ジョブ開始前に前回スレッドの `join()` が行われない。LizyML-Widget では `openmp-thread-pool-accumulation` として、unjoin'd ワーカースレッドが OpenMP スレッドプールを蓄積し OS リソースを圧迫する問題が学習済み。H-0036 の前提条件となる。
@@ -933,11 +938,12 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   2. スレッドリソースが蓄積しない（`threading.active_count()` が安定）
   3. join タイムアウト時にデッドロックしない
   4. 既存テストが全パス
+- **Decision:** 2026-04-04 accepted — 提案通り
 
 ---
 
 ### H-0041: エラーコードの拡充
-- **Status:** proposed
+- **Status:** accepted
 - **Scope:** API
 - **Related:** BLUEPRINT.md §6.1（エラーレスポンス）、api/errors.py
 - **Context:** 現在のエラー体系は 12 種類で、一部のエラーが汎用コードに統合されている。LizyML-Widget は 17 種類のエラーコードを持ち、フロントエンドでのエラーメッセージ出し分けに活用している。特に Config ビルド失敗と YAML パースエラーが `VALIDATION_ERROR` / `FILE_INVALID` に統合されており、ユーザーへのガイダンスが不明確。
@@ -956,11 +962,12 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   2. YAML インポート失敗時に `CONFIG_IMPORT_ERROR` が返る
   3. エクスポート失敗時に `EXPORT_ERROR` が返る
   4. 既存エラーコードの動作が変わらない
+- **Decision:** 2026-04-04 accepted — 提案通り
 
 ---
 
 ### H-0042: セキュリティ方針の文書化
-- **Status:** proposed
+- **Status:** accepted
 - **Scope:** Config
 - **Related:** BLUEPRINT.md、CLAUDE.md §7-8
 - **Context:** Studio の実装はセキュリティ上安全だが（`yaml.safe_load` 使用、パストラバーサル防止、アップロードサイズ制限）、セキュリティ方針としては文書化されていない。LizyML-Widget 移植計画では YAML パース方針、ファイルアップロードのサニタイズ手順、入力バリデーションルールを明文化しており、ガバナンスとして参考にすべきである。
@@ -984,11 +991,12 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
 - **Acceptance Criteria:**
   1. BLUEPRINT.md にセキュリティ方針セクションが存在する
   2. 上記 5 項目がすべて記載されている
+- **Decision:** 2026-04-04 accepted — 提案通り
 
 ---
 
 ### H-0043: openapi-typescript 生成型の実活用（手書き型からの段階的移行）
-- **Status:** proposed
+- **Status:** accepted
 - **Scope:** Frontend
 - **Related:** CLAUDE.md §3（API型生成: openapi-typescript）、frontend/src/api/
 - **Context:** CLAUDE.md §7 で「フロントエンドで API 型を手書きすること」は禁止されているが、現在 `frontend/src/api/types.ts` に手書き型が存在し、API 関数は自動生成型 (`generated/schema.d.ts`) ではなく手書き型を参照している。型のズレが生じるリスクがあり、CLAUDE.md の方針と矛盾する。
@@ -1007,11 +1015,12 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   2. `types.ts` に手書きの API レスポンス型が存在しない
   3. CI で型生成チェックが自動実行される
   4. `pnpm check` が全パス
+- **Decision:** 2026-04-04 accepted — 提案通り
 
 ---
 
 ### H-0044: CV Fold Preview の視覚化コンポーネント追加
-- **Status:** proposed
+- **Status:** accepted
 - **Scope:** Frontend
 - **Related:** BLUEPRINT.md §4.2.1（Cross Validation）、frontend/src/components/workspace/CvSection.tsx
 - **Context:** 現在の CV セクションは Strategy 選択とパラメータ入力のみで、設定した CV がどのようにデータを分割するかの視覚的フィードバックがない。LizyML-Widget では `FoldPreview.tsx` で以下の視覚化を実装しており、特に BlockedGroupKFold のような複雑な CV 戦略の理解に有効であることが実証されている:
@@ -1039,11 +1048,12 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   3. Fold 数、各 Fold の Train/Valid サイズが確認できる
   4. 設定変更時にプレビューが更新される
   5. Storybook にストーリーが追加されている
+- **Decision:** 2026-04-04 accepted — 提案通り
 
 ---
 
 ### H-0045: BlockedGroupKFold 専用 2軸エディタの追加
-- **Status:** proposed
+- **Status:** accepted
 - **Scope:** Frontend
 - **Related:** BLUEPRINT.md §4.2.1（Cross Validation — Blocks/Groups フィールド）、frontend/src/components/workspace/CvSection.tsx
 - **Context:** BlockedGroupKFold は時間軸（Blocks）× エンティティ軸（Groups）の2軸で CV 分割を定義する複雑な戦略であり、汎用フォームフィールドでは設定が困難。LizyML-Widget では `BlockedGroupKFold.tsx` で専用の2軸エディタを実装しており、以下の要素で直感的な設定を実現している:
@@ -1081,11 +1091,12 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   5. Groups カラム選択で Blocks カラムが除外される
   6. H-0044 の FoldPreview と統合されている
   7. Storybook にストーリーが追加されている
+- **Decision:** 2026-04-04 accepted — 提案通り
 
 ---
 
 ### H-0046: カラム値分布バーコンポーネントの追加
-- **Status:** proposed
+- **Status:** accepted
 - **Scope:** Frontend
 - **Related:** BLUEPRINT.md §4.2.1（Column Settings）、frontend/src/components/workspace/DataPanel.tsx
 - **Context:** 現在の Column Settings テーブルはカラム名・ユニーク数・Type・除外状態のみを表示する。LizyML-Widget ではカラム統計取得時にユニーク値のヒストグラム/分布バー（`DistributionBar`）を表示しており、カテゴリカラムの値分布把握や CV カットオフ設定に有効。また、数値カラムの分布の偏りを視覚的に確認できることで、前処理の必要性判断に役立つ。
@@ -1112,11 +1123,12 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   3. カテゴリ/数値カラムで適切な表示が切り替わる
   4. API が `value_counts` を返す
   5. Storybook にストーリーが追加されている
+- **Decision:** 2026-04-04 accepted — 提案通り
 
 ---
 
 ### H-0047: Fold 進捗のリアルタイムスコア表示
-- **Status:** proposed
+- **Status:** accepted
 - **Scope:** Frontend
 - **Related:** BLUEPRINT.md §4.2.3（Results Panel — Running 状態）、frontend/src/components/workspace/ResultsPanel.tsx
 - **Context:** 現在の進捗表示は WebSocket 経由のテキストメッセージを蓄積表示するのみ。LizyML-Widget では `ProgressView.tsx` で Fold ごとの評価スコアを逐次表示しており、学習の進行状況と品質を早期に把握できる:
@@ -1156,11 +1168,12 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   3. スコアの劣化が視覚的に判別できる
   4. 既存の進捗表示（メッセージ、プログレスバー）が維持される
   5. Storybook にストーリーが追加されている
+- **Decision:** 2026-04-04 accepted — 提案通り
 
 ---
 
 ### H-0048: Search Space Fixed モードのセグメントボタン表示
-- **Status:** proposed
+- **Status:** accepted
 - **Scope:** Frontend
 - **Related:** BLUEPRINT.md §4.2.2（Tune タブ — Search Space）、frontend/src/components/workspace/SearchSpaceTable.tsx
 - **Context:** 現在の `FixedValueEditor` は boolean と少数 enum（2-4個）の値に対して Select ドロップダウンを使用している。LizyML-Widget では `SearchSpace.tsx` で boolean と少数 enum をセグメントボタン（SegmentGroup）で表示しており、1クリックで値を切り替え可能。探索空間の設定は反復的に行う操作であり、クリック数の削減が UX 向上に直結する。
@@ -1183,11 +1196,12 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   3. 5個以上の enum は従来の Select ドロップダウンのまま
   4. 値の選択が1クリックで完了する
   5. Storybook にストーリーが追加されている
+- **Decision:** 2026-04-04 accepted — 提案通り
 
 ---
 
 ### H-0049: Running 中の Config 編集ロック
-- **Status:** proposed
+- **Status:** accepted
 - **Scope:** Frontend
 - **Related:** BLUEPRINT.md §4.2.2（Model Panel）、frontend/src/components/workspace/ModelPanel.tsx、TuneTab.tsx
 - **Context:** 現在の Studio では Fit/Tune 実行中（Running 状態）でも Model Panel と Tune タブの Config 編集が可能。ユーザーが実行中に Config を変更すると、表示中の結果と Config の対応関係が不明確になり混乱を招く。LizyML-Widget では Running 中に `pointer-events: none` + `opacity: 0.6` で Config 編集を物理的にブロックしており（ConfigTab.tsx L198）、実行中の Config 変更による混乱を防止している。
@@ -1210,11 +1224,12 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   3. Cancel ボタンは操作可能
   4. 完了後にロックが解除される
   5. Fit/Tune ボタンが Running 中に disabled になる
+- **Decision:** 2026-04-04 accepted — 提案通り
 
 ---
 
 ### H-0050: Jobs 詳細画面の KPI カード表示統一
-- **Status:** proposed
+- **Status:** accepted
 - **Scope:** Frontend
 - **Related:** BLUEPRINT.md §4.3.2（Jobs 詳細画面）、frontend/src/components/jobs/CompletedContent.tsx
 - **Context:** Workspace の ResultsPanel ではメトリクスを **KPI カード形式**（metric name + IS / OOS / Std の3値カード）で表示しているが、Jobs 詳細画面の CompletedContent では **テーブル形式**（ScoreSection）で表示している。同じ Fit 結果を見ているのに表示形式が異なり、ユーザー体験の一貫性が損なわれている。
@@ -1232,11 +1247,12 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   2. ResultsPanel と同じコンポーネントを使用している
   3. テーブル形式はアコーディオン内で引き続き利用可能
   4. Storybook にストーリーが追加されている
+- **Decision:** 2026-04-04 accepted — 提案通り
 
 ---
 
 ### H-0051: Jobs 詳細画面の Learning Curve メトリクスフィルター追加
-- **Status:** proposed
+- **Status:** accepted
 - **Scope:** Frontend
 - **Related:** BLUEPRINT.md §4.3.2（Jobs 詳細画面 — Plots）、frontend/src/components/jobs/CompletedContent.tsx
 - **Context:** Workspace の ResultsPanel では Learning Curve プロットのメトリクスフィルター（chip 選択で表示メトリクスを切替）が実装されているが、Jobs 詳細画面の CompletedContent では Learning Curve フィルターが未実装。複数メトリクスを使用する場合、全メトリクスの Learning Curve が重なって表示され見づらい。LizyML-Widget でも Learning Curve のメトリクスフィルターは Results 画面の重要機能として実装されている。
@@ -1253,11 +1269,12 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   1. Jobs 詳細画面の Learning Curve にメトリクスフィルターが表示される
   2. chip 選択でプロットが更新される
   3. Workspace ResultsPanel と同じ UI
+- **Decision:** 2026-04-04 accepted — 提案通り
 
 ---
 
 ### H-0052: Jobs 詳細画面の Importance Kind セレクター追加
-- **Status:** proposed
+- **Status:** accepted
 - **Scope:** Frontend
 - **Related:** BLUEPRINT.md §4.3.2（Jobs 詳細画面 — Plots）、frontend/src/components/jobs/CompletedContent.tsx
 - **Context:** Workspace の ResultsPanel には Feature Importance の Kind セレクター（Split / Gain / SHAP の切替）が Segment group で実装されている（PlotSection.tsx）が、Jobs 詳細画面の CompletedContent ではデフォルトの kind のみ表示され、Kind を切り替える UI がない。H-0033 で追加された Importance Kind 選択機能が Jobs 画面に反映されていない。
@@ -1273,11 +1290,12 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   1. Jobs 詳細画面の Importance プロットに Kind セレクターが表示される
   2. Kind 切替でプロットが更新される
   3. Workspace ResultsPanel と同じ UI
+- **Decision:** 2026-04-04 accepted — 提案通り
 
 ---
 
 ### H-0053: Tune Tab — Search Space デフォルト Range 自動ポピュレートの Widget 側への逆輸入提案
-- **Status:** proposed
+- **Status:** accepted
 - **Scope:** Frontend
 - **Related:** BLUEPRINT.md §4.2.2（Tune タブ — Search Space）
 - **Context:** LizyStudio の SearchSpaceTable は初回表示時に主要パラメータ（`learning_rate`, `num_leaves`, `n_estimators`, `max_depth`）を Range モードで自動ポピュレートする（`RANGE_DEFAULTS` + `KNOWN_PARAMS` 定数）。これにより、初心者が Tune を始める際の「全パラメータが Fixed で何も探索されない」問題を回避している。LizyML-Widget ではこの機能がなく、ユーザーが手動で Range に切り替える必要がある。
@@ -1303,6 +1321,7 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   3. Widget の SearchSpace が `default_mode: "range"` のパラメータを Range モードで初期表示する
   4. Studio の `RANGE_DEFAULTS` ハードコードが削除されている
   5. 既存テストが全パス
+- **Decision:** 2026-04-04 accepted — 提案通り
 
 ---
 
