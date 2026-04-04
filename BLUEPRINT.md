@@ -675,7 +675,7 @@ step 値は `ui_schema.step_map` から取得。値が未設定の場合は plac
 
 **Evaluation セクション（config.evaluation）:**
 
-`evaluation.metrics` は `string[]` 型。選択肢は `ui_schema.option_sets.metric[task]` から動的取得する（フロントエンドにハードコードしない）。
+`evaluation.metrics` は `MetricEntry[]` 型（`MetricEntry = string | { metric_name: { param: value } }`）。選択肢は `ui_schema.option_sets.metric[task]` から動的取得する（フロントエンドにハードコードしない）。パラメータ付きメトリクス（例: `{"precision_at_k": {"k": 20}}`）は dict 形式で格納する（LizyML v0.7.0 / H-0065）。
 
 | 要素 | コンポーネント | 説明 |
 |------|-------------|------|
@@ -877,7 +877,7 @@ Fit タブのフォームフィールドは Backend の Config JSON Schema か�
 | `boolean` | Switch | |
 | `string` + `enum` | Select | enum 値をドロップダウンに |
 | `string`（enum なし） | TextInput | |
-| `array` of `string` | TagInput（カンマ区切り入力 + タグ表示） | `evaluation.metrics` 等 |
+| `array` of `string \| object` | TagInput / Chip グループ | `evaluation.metrics` 等。LizyML v0.7.0 以降 MetricEntry（`string \| { name: { params } }`）をサポート |
 | `anyOf: [T, null]` | T のコンポーネント + 「Auto」チップ | null = Backend デフォルト使用。チップ ON → null を送信 |
 | `object` + named properties | Accordion（入れ子） | `training.early_stopping` 等 |
 | `object` + `additionalProperties` のみ | Key-Value エディタ | `model.params` 等。後述 |
@@ -923,7 +923,7 @@ Model Panel 全体のコンポーネントスタイルを定義する。shadcn/u
 ┌──────────────────────────────────────────────┐
 │ ┌──────────────────┐              [━ Fit ━]  │
 │ │ ▶ Fit  │  Tune   │  ┌─────────────────┐   │
-│ └──────────────────┘  │lizyml v0.5.2    │   │
+│ └──────────────────┘  │lizyml v0.7.1    │   │
 │                       └─────────────────┘   │
 └──────────────────────────────────────────────┘
   ← TabsList (w-full)     Badge(secondary)
@@ -2299,7 +2299,7 @@ Workspace の `workspace_result` は完了時に自動更新される。
 [
   {
     "name": "lizyml",
-    "version": "0.4.0"
+    "version": "0.7.1"
   }
 ]
 ```
