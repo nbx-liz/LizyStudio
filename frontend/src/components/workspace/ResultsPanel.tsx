@@ -28,6 +28,7 @@ import {
 import { Progress } from "@/components/ui/progress";
 import { pivotMetrics } from "@/lib/metrics";
 import { FoldDetailsSection } from "./FoldDetailsSection";
+import { FoldProgressList } from "./FoldProgressList";
 import { PlotSection } from "./PlotSection";
 import {
   TrialResultsAccordionItem,
@@ -251,12 +252,20 @@ export function ResultsPanel({
           </p>
         )}
 
+        {progress?.fold_results && progress.fold_results.length > 0 && (
+          <FoldProgressList
+            currentFold={progress.current}
+            totalFolds={progress.total}
+            foldResults={progress.fold_results}
+          />
+        )}
+
         {foldLog.length > 0 && (
           <div className="mt-3 max-h-32 overflow-auto rounded border bg-muted/30 p-2">
             {foldLog.map((msg, i) => (
               <p
                 key={`log-${i}`}
-                className="text-xs font-mono text-muted-foreground"
+                className="font-mono text-xs text-muted-foreground"
               >
                 {msg}
               </p>
