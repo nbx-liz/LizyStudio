@@ -2615,3 +2615,45 @@ LizyStudio/
     ├── dev-environment/
     └── release/
 ```
+
+## 11. セキュリティ方針
+
+LizyStudio は localhost 専用のデスクトップツールであるが、以下のセキュリティ方針を適用する。
+
+### 11.1 YAML パース
+
+- `yaml.safe_load` のみ使用する。`yaml.load` は**禁止**
+- ユーザー提供の YAML/JSON はバックエンド（Pydantic）でバリデーション後に使用する
+
+### 11.2 ファイルアップロード
+
+- **拡張子��ェック**: `.csv`, `.tsv`, `.parquet` のみ許可
+- **アップロードサイズ上限**: `MAX_UPLOAD_BYTES`（デフォルト 100MB）
+- **メモリ使用量上限**: `LIZYSTUDIO_MAX_DF_MEMORY`（デフォルト 2GB）— Parquet 等の圧縮ファイルが展開後に大量メモリを消費するケースを防止（H-0038）
+- **ファイル名サニタイズ**: `os.path.basename` + パストラ���ーサル防止（`validate_path_within`）
+- pandas の `engine='c'` を推奨（eval 系の脆弱性回避）
+
+### 11.3 入力バリデーション
+
+- Config パッチのパスバリデー���ョン: 正規表現 `/^[a-zA-Z_]\w*(\.[a-zA-Z_]\w*)*$/`（H-0037）
+- dunder (`__`) インジェクション防止: パッチパスに `__` を含む場合は拒否
+- サーバーサイドファイルブラウザのパストラバーサル防止: `validate_path_within` による解決パスの検証
+
+### 11.4 HTTP ヘッダー
+
+本番モードで以下のヘッダーを付与する（H-0039）:
+
+- `Content-Security-Policy`: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://localhost:*; img-src 'self' data: blob:; font-src 'self'`
+- `X-Content-Type-Options: nosniff`
+- `X-Frame-Options: DENY`
+
+開発モード（`LIZYSTUDIO_RELOAD=1`）では CSP を緩和し、HMR（Hot Module Replacement）を許可する。
+
+### 11.5 localhost 前提での制限緩和
+
+以下はリモートアクセスが不要なため省略する。将来リモート対応時に追加すること:
+
+- 認証・認可（Authentication / Authorization）
+- CSRF トークン
+- Rate limiting
+- HTTPS 強制
