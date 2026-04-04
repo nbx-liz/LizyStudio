@@ -47,4 +47,21 @@ describe("FoldProgressList", () => {
     // Fold 1 should show score
     expect(screen.getByText("auc = 0.8500")).toBeInTheDocument();
   });
+
+  it("handles currentFold=0 with empty results (initial state)", () => {
+    render(
+      <FoldProgressList currentFold={0} totalFolds={5} foldResults={[]} />,
+    );
+    // Fold 1 should be the running fold (currentFold=0 → fold 1 is next)
+    expect(screen.getByText("Fold 1/5")).toBeInTheDocument();
+    // No scores should be displayed
+    expect(screen.queryByText(/=/)).toBeNull();
+  });
+
+  it("handles negative totalFolds gracefully", () => {
+    const { container } = render(
+      <FoldProgressList currentFold={0} totalFolds={-1} foldResults={[]} />,
+    );
+    expect(container.firstChild).toBeNull();
+  });
 });

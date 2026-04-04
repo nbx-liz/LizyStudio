@@ -21,6 +21,8 @@ export function connectJobProgress(
   let retryCount = 0;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let closed = false;
+  // Suppress reconnection after terminal messages (completed/error)
+  let jobDone = false;
 
   function connect() {
     if (closed) return;
@@ -40,9 +42,11 @@ export function connectJobProgress(
             callbacks.onProgress?.(msg);
             break;
           case "completed":
+            jobDone = true;
             callbacks.onCompleted?.(msg);
             break;
           case "error":
+            jobDone = true;
             callbacks.onError?.(msg);
             break;
         }
@@ -52,7 +56,7 @@ export function connectJobProgress(
     };
 
     ws.onclose = () => {
-      if (closed) return;
+      if (closed || jobDone) return;
       scheduleReconnect();
     };
 
