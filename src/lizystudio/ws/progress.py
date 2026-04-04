@@ -61,19 +61,25 @@ class ProgressBroadcaster:
             self._loop.call_soon_threadsafe(q.put_nowait, message)
 
     def send_progress(
-        self, job_id: str, *, current: int, total: int, message: str
+        self,
+        job_id: str,
+        *,
+        current: int,
+        total: int,
+        message: str,
+        fold_results: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Convenience: send a progress message."""
-        self.send(
-            job_id,
-            {
-                "type": "progress",
-                "job_id": job_id,
-                "current": current,
-                "total": total,
-                "message": message,
-            },
-        )
+        """Convenience: send a progress message (H-0047)."""
+        msg: dict[str, Any] = {
+            "type": "progress",
+            "job_id": job_id,
+            "current": current,
+            "total": total,
+            "message": message,
+        }
+        if fold_results is not None:
+            msg["fold_results"] = fold_results
+        self.send(job_id, msg)
 
     def send_completed(self, job_id: str, message: str = "Completed.") -> None:
         """Convenience: send a completion message."""

@@ -149,12 +149,15 @@ def _forward_progress(
 
     msg_type = msg.get("type", "")
     if msg_type == "progress":
-        broadcaster.send_progress(
-            job_id,
-            current=msg.get("current", 0),
-            total=msg.get("total", 0),
-            message=msg.get("message", ""),
-        )
+        kwargs: dict[str, Any] = {
+            "current": msg.get("current", 0),
+            "total": msg.get("total", 0),
+            "message": msg.get("message", ""),
+        }
+        fold_results = msg.get("fold_results")
+        if fold_results is not None:
+            kwargs["fold_results"] = fold_results
+        broadcaster.send_progress(job_id, **kwargs)
     elif msg_type == "completed":
         broadcaster.send_completed(job_id)
     elif msg_type == "error":
@@ -247,16 +250,17 @@ class _FileBroadcaster:
         current: int,
         total: int,
         message: str,
+        fold_results: list[dict[str, Any]] | None = None,
     ) -> None:
-        _write_progress(
-            self._path,
-            {
-                "type": "progress",
-                "current": current,
-                "total": total,
-                "message": message,
-            },
-        )
+        msg: dict[str, Any] = {
+            "type": "progress",
+            "current": current,
+            "total": total,
+            "message": message,
+        }
+        if fold_results is not None:
+            msg["fold_results"] = fold_results
+        _write_progress(self._path, msg)
 
     def send_completed(self, job_id: str, message: str = "Completed.") -> None:
         _write_progress(
