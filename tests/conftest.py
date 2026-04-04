@@ -11,6 +11,18 @@ from fastapi.testclient import TestClient
 from lizystudio.server import create_app
 
 
+@pytest.fixture(autouse=True)
+def _disable_subprocess_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default all tests to thread mode (H-0036).
+
+    Subprocess-specific tests override this by patching directly.
+    """
+    monkeypatch.setattr(
+        "lizystudio.services.openmp_detect.should_use_subprocess",
+        lambda: False,
+    )
+
+
 @pytest.fixture()
 def tmp_jobs_dir(tmp_path: Path) -> Path:
     """Return a temporary directory for job storage."""

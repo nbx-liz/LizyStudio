@@ -203,6 +203,42 @@ def _join_previous_thread(ws: WorkspaceState) -> None:
             )
 
 
+def _run_subprocess_job(
+    ws: WorkspaceState,
+    job: Job,
+    job_store: JobStore,
+    broadcaster: ProgressBroadcaster,
+) -> None:
+    """Run a job via subprocess and update workspace state (H-0036)."""
+    from lizystudio.services.subprocess_runner import run_job_in_subprocess
+    from lizystudio.services.workspace import get_backend_name
+
+    if ws.data_ref is None or not ws.data_ref.path:
+        job.status = "failed"
+        job.error = "No data loaded — cannot run subprocess job"
+        from datetime import datetime, timezone
+
+        job.completed_at = datetime.now(timezone.utc).isoformat()
+        job_store.update(job)
+        if broadcaster is not None:
+            broadcaster.send_error(job.job_id, job.error)
+        with ws._lock:
+            ws.current_job_id = job.job_id
+        return
+    data_path = ws.data_ref.path
+    finished = run_job_in_subprocess(
+        job=job,
+        job_store=job_store,
+        broadcaster=broadcaster,
+        backend_name=get_backend_name(ws),
+        data_path=data_path,
+    )
+    with ws._lock:
+        ws.workspace_fit_result = finished.fit_result
+        ws.workspace_tune_result = finished.tune_result
+        ws.current_job_id = finished.job_id
+
+
 def start_fit_async(
     *,
     ws: WorkspaceState,
@@ -215,19 +251,26 @@ def start_fit_async(
     """Spawn a background thread for fit; update workspace state on completion."""
     _join_previous_thread(ws)
 
+    from lizystudio.services.openmp_detect import should_use_subprocess
+
+    use_subprocess = should_use_subprocess()
+
     def _run() -> None:
-        finished = run_fit(
-            job=job,
-            job_store=job_store,
-            backend=ws.backend,
-            config=config,
-            dataframe=dataframe,
-            broadcaster=broadcaster,
-        )
-        with ws._lock:
-            ws.workspace_fit_result = finished.fit_result
-            ws.workspace_tune_result = None
-            ws.current_job_id = finished.job_id
+        if use_subprocess:
+            _run_subprocess_job(ws, job, job_store, broadcaster)
+        else:
+            finished = run_fit(
+                job=job,
+                job_store=job_store,
+                backend=ws.backend,
+                config=config,
+                dataframe=dataframe,
+                broadcaster=broadcaster,
+            )
+            with ws._lock:
+                ws.workspace_fit_result = finished.fit_result
+                ws.workspace_tune_result = None
+                ws.current_job_id = finished.job_id
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
@@ -248,19 +291,26 @@ def start_tune_async(
     """Spawn a background thread for tune; update workspace state on completion."""
     _join_previous_thread(ws)
 
+    from lizystudio.services.openmp_detect import should_use_subprocess
+
+    use_subprocess = should_use_subprocess()
+
     def _run() -> None:
-        finished = run_tune(
-            job=job,
-            job_store=job_store,
-            backend=ws.backend,
-            config=config,
-            dataframe=dataframe,
-            broadcaster=broadcaster,
-        )
-        with ws._lock:
-            ws.workspace_fit_result = finished.fit_result
-            ws.workspace_tune_result = finished.tune_result
-            ws.current_job_id = finished.job_id
+        if use_subprocess:
+            _run_subprocess_job(ws, job, job_store, broadcaster)
+        else:
+            finished = run_tune(
+                job=job,
+                job_store=job_store,
+                backend=ws.backend,
+                config=config,
+                dataframe=dataframe,
+                broadcaster=broadcaster,
+            )
+            with ws._lock:
+                ws.workspace_fit_result = finished.fit_result
+                ws.workspace_tune_result = finished.tune_result
+                ws.current_job_id = finished.job_id
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
