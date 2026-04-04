@@ -98,6 +98,12 @@ export interface SplitSummaryRow {
   [metric: string]: unknown;
 }
 
+export type FoldResult = {
+  fold: number;
+  metric: string;
+  score: number;
+};
+
 export type ProgressMessage = {
   type: "progress";
   current: number;
@@ -105,6 +111,7 @@ export type ProgressMessage = {
   message?: string;
   elapsed?: number;
   metrics?: Record<string, unknown>;
+  fold_results?: FoldResult[];
 };
 
 export type CompletedMessage = {
