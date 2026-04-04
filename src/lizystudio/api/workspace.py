@@ -18,6 +18,7 @@ from fastapi.responses import Response
 import lizystudio.security as security
 from lizystudio.api.errors import (
     FileInvalidError,
+    InvalidPatchError,
     JobConflictError,
     PathNotFoundError,
     ValidationError,
@@ -40,6 +41,7 @@ from lizystudio.services.jobs import JobStore, get_job_store
 from lizystudio.services.training import start_fit_async, start_tune_async
 from lizystudio.services.workspace import (
     WorkspaceState,
+    apply_config_patch,
     get_backend_name,
     get_config_schema,
     get_default_config,
@@ -223,6 +225,25 @@ def config_update(
     return {"config": body, "errors": errors, "saved": len(errors) == 0}
 
 
+@router.patch("/config")
+def config_patch(
+    body: dict[str, Any],
+    ws: WorkspaceState = Depends(get_workspace),
+) -> dict[str, Any]:
+    """Partially update config via patch operations (H-0037)."""
+    if not ws.config:
+        raise WorkspaceNoConfigError()
+    ops = body.get("ops", [])
+    if not isinstance(ops, list):
+        raise InvalidPatchError("'ops' must be a list")
+    try:
+        patched = apply_config_patch(ws.config, ops)
+    except ValueError as exc:
+        raise InvalidPatchError(str(exc)) from exc
+    ws.set_config(patched)
+    return {"config": patched}
+
+
 @router.post("/config/validate")
 def config_validate(
     body: dict[str, Any] | None = None,
@@ -253,7 +274,9 @@ async def config_upload(
     try:
         config = load_config_from_file(ws, content, filename)
     except Exception as exc:
-        raise FileInvalidError(str(exc)) from exc
+        from lizystudio.api.errors import ConfigImportError
+
+        raise ConfigImportError(str(exc)) from exc
     errors = validate_config(ws, config)
     if not errors:
         ws.set_config(config)

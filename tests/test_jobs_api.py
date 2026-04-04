@@ -918,7 +918,7 @@ def test_export_job_backend_error(
         )
 
     assert res.status_code == 500
-    assert res.json()["error"]["code"] == "BACKEND_ERROR"
+    assert res.json()["error"]["code"] == "EXPORT_ERROR"
 
 
 def test_export_code_backend_error(

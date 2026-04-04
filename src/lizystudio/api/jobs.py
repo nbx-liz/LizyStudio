@@ -328,7 +328,9 @@ def export_job(
             )
         return {"exported_path": path, "export_type": body.export_type}
     except Exception as exc:
-        raise BackendError(exc) from exc
+        from lizystudio.api.errors import ExportError
+
+        raise ExportError(str(exc)) from exc
 
 
 @router.post("/{job_id}/export-code")
