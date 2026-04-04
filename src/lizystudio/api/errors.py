@@ -105,6 +105,34 @@ class InferenceNotFoundError(StudioError):
         super().__init__("INFERENCE_NOT_FOUND", f"Inference not found: {inf_id}", 404)
 
 
+class ConfigBuildError(StudioError):
+    """Config assembly failed (e.g. missing required fields) (H-0041)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__("CONFIG_BUILD_ERROR", f"Config build failed: {reason}", 400)
+
+
+class ConfigImportError(StudioError):
+    """YAML/JSON parsing or structural error during config import (H-0041)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__("CONFIG_IMPORT_ERROR", f"Config import failed: {reason}", 400)
+
+
+class ExportError(StudioError):
+    """Model or report export failure (H-0041)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__("EXPORT_ERROR", f"Export failed: {reason}", 500)
+
+
+class InvalidPatchError(StudioError):
+    """Invalid config patch operation (H-0037)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__("INVALID_PATCH", f"Invalid patch: {reason}", 422)
+
+
 # --- FastAPI exception handlers ---
 
 
