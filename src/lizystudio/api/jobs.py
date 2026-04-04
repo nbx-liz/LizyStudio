@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from lizystudio.api.errors import (
     BackendError,
+    ExportError,
     JobNotCompletedError,
     JobNotFoundError,
     JobRunningError,
@@ -328,8 +329,6 @@ def export_job(
             )
         return {"exported_path": path, "export_type": body.export_type}
     except Exception as exc:
-        from lizystudio.api.errors import ExportError
-
         raise ExportError(str(exc)) from exc
 
 

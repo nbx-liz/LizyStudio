@@ -117,6 +117,7 @@ def get_backend_name(ws: WorkspaceState) -> str:
 # --- Config patch operations (H-0037) ---
 
 
+# Allows letters, digits, underscores (single _ OK, __ rejected separately).
 _PATH_RE = re.compile(r"^[a-zA-Z_]\w*(\.[a-zA-Z_]\w*)*$")
 _ALLOWED_OPS = frozenset({"set", "unset", "merge"})
 
@@ -127,11 +128,15 @@ def apply_config_patch(
 ) -> dict[str, Any]:
     """Apply patch operations to a config dict and return a new copy.
 
-    Each op is ``{"op": "set"|"unset"|"merge", "path": "...", "value": ...}``.
+    Each op is ``{"op": "set"|"unset"|"merge", ...}``.
+    ``merge`` performs a **shallow** (1-level) merge.
     Raises ``ValueError`` on invalid path or op.
     """
     result = copy.deepcopy(config)
     for op_dict in ops:
+        if not isinstance(op_dict, dict):
+            msg = "Each op must be a dict"
+            raise ValueError(msg)
         op = op_dict.get("op", "")
         path = op_dict.get("path", "")
         value = op_dict.get("value")

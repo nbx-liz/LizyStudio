@@ -17,6 +17,7 @@ from fastapi.responses import Response
 
 import lizystudio.security as security
 from lizystudio.api.errors import (
+    ConfigImportError,
     FileInvalidError,
     InvalidPatchError,
     JobConflictError,
@@ -274,8 +275,6 @@ async def config_upload(
     try:
         config = load_config_from_file(ws, content, filename)
     except Exception as exc:
-        from lizystudio.api.errors import ConfigImportError
-
         raise ConfigImportError(str(exc)) from exc
     errors = validate_config(ws, config)
     if not errors:

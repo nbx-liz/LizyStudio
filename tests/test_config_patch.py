@@ -123,6 +123,12 @@ class TestApplyConfigPatch:
                 [{"op": "delete", "path": "key"}],
             )
 
+    def test_non_dict_op_element_rejected(self) -> None:
+        """Non-dict elements in ops list should be rejected."""
+        config: dict[str, Any] = {"a": 1}
+        with pytest.raises(ValueError, match="dict"):
+            apply_config_patch(config, [None])  # type: ignore[list-item]
+
     def test_original_config_not_mutated(self) -> None:
         """apply_config_patch should return a new dict."""
         config: dict[str, Any] = {"a": {"b": 1}}
