@@ -23,6 +23,8 @@ if TYPE_CHECKING:
     from lizystudio.services.workspace import WorkspaceState
     from lizystudio.ws.progress import ProgressBroadcaster
 
+_logger = logging.getLogger(__name__)
+
 
 class CancelledError(Exception):
     """Raised when a job's cancellation flag is detected."""
@@ -181,6 +183,25 @@ def run_tune(
 
 # --- Async launchers (Phase 29: thread ownership in Service, not Router) ---
 
+_JOIN_TIMEOUT = 5  # seconds
+
+
+def _join_previous_thread(ws: WorkspaceState) -> None:
+    """Join the previous job thread if it exists (H-0040).
+
+    Prevents thread/OpenMP thread-pool accumulation by ensuring the prior
+    worker is cleaned up before spawning a new one.
+    """
+    with ws._lock:
+        prev = ws._job_thread
+    if prev is not None and prev.is_alive():
+        prev.join(timeout=_JOIN_TIMEOUT)
+        if prev.is_alive():
+            _logger.warning(
+                "Previous job thread did not finish within %ds — proceeding anyway",
+                _JOIN_TIMEOUT,
+            )
+
 
 def start_fit_async(
     *,
@@ -192,6 +213,7 @@ def start_fit_async(
     job: Job,
 ) -> str:
     """Spawn a background thread for fit; update workspace state on completion."""
+    _join_previous_thread(ws)
 
     def _run() -> None:
         finished = run_fit(
@@ -209,6 +231,8 @@ def start_fit_async(
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
+    with ws._lock:
+        ws._job_thread = t
     return job.job_id
 
 
@@ -222,6 +246,7 @@ def start_tune_async(
     job: Job,
 ) -> str:
     """Spawn a background thread for tune; update workspace state on completion."""
+    _join_previous_thread(ws)
 
     def _run() -> None:
         finished = run_tune(
@@ -239,4 +264,6 @@ def start_tune_async(
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
+    with ws._lock:
+        ws._job_thread = t
     return job.job_id

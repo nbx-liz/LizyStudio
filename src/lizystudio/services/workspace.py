@@ -29,6 +29,8 @@ class WorkspaceState:
     current_job_id: str | None = None
     # Thread safety for background thread writes
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    # Background job thread tracking (H-0040)
+    _job_thread: threading.Thread | None = field(default=None, repr=False)
     # Temp files to clean up on reset
     _temp_files: list[str] = field(default_factory=list, repr=False)
 
@@ -42,6 +44,7 @@ class WorkspaceState:
             self.workspace_fit_result = None
             self.workspace_tune_result = None
             self.current_job_id = None
+            self._job_thread = None
             # Clean up tracked temp files
             for tmp in self._temp_files:
                 Path(tmp).unlink(missing_ok=True)
