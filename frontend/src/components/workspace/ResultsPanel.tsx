@@ -16,6 +16,7 @@ import {
 import type { JobDetail, MetricEntry, ProgressMessage } from "@/api/types";
 import { metricEntryName } from "@/api/types";
 import { connectJobProgress } from "@/api/websocket";
+import { MetricCards } from "@/components/shared/MetricCards";
 import { Accordion } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -577,40 +578,11 @@ function CompletedView({
 
       {/* KPI Summary Cards (IS + OOS + Std) */}
       {metrics && (
-        <div className="mb-4 flex flex-wrap gap-2" data-testid="kpi-cards">
-          {Object.entries(metrics).map(([name, vals]) => (
-            <div
-              key={name}
-              className="flex flex-col rounded-md border bg-muted/30 px-3 py-1.5 min-w-[100px]"
-            >
-              <span className="text-[10px] text-muted-foreground uppercase tracking-wide text-center mb-0.5">
-                {annotateMetric(name)}
-              </span>
-              <div className="flex justify-between gap-3 text-xs tabular-nums">
-                <span className="text-muted-foreground">IS</span>
-                <span className="font-medium">
-                  {vals.is != null ? Number(vals.is).toFixed(4) : "—"}
-                </span>
-              </div>
-              <div className="flex justify-between gap-3 text-xs tabular-nums">
-                <span className="text-muted-foreground">OOS</span>
-                <span className="font-semibold">
-                  {vals.oos != null ? Number(vals.oos).toFixed(4) : "—"}
-                </span>
-              </div>
-              {hasFolds && (
-                <div className="flex justify-between gap-3 text-xs tabular-nums">
-                  <span className="text-muted-foreground">Std</span>
-                  <span>
-                    {vals.oos_std != null
-                      ? Number(vals.oos_std).toFixed(4)
-                      : "—"}
-                  </span>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
+        <MetricCards
+          metrics={metrics}
+          hasFolds={hasFolds}
+          annotateMetric={annotateMetric}
+        />
       )}
 
       {tuneResult && (
