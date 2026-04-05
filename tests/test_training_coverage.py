@@ -704,3 +704,385 @@ def test_run_job_core_fails_when_active_slot_taken(
     assert "already running" in (result.error or "")
     assert job_store.active_job_id == "blocker-job"
     job_store.release_active("blocker-job")
+
+
+def test_run_job_core_job_conflict_notifies_broadcaster(
+    job_store: JobStore,
+    sample_data_ref: DataRef,
+    mock_broadcaster: MagicMock,
+) -> None:
+    """_run_job_core: send_error with JOB_CONFLICT when slot taken."""
+    job_store.claim_active("blocker-job")
+
+    job = job_store.create(
+        backend_name="lizyml",
+        config={},
+        data_ref=sample_data_ref,
+        job_type="fit",
+    )
+
+    def never_called(cb: Any) -> tuple[FitSummary, None, str]:
+        raise AssertionError("Should not be called")
+
+    result = _run_job_core(
+        job=job,
+        job_store=job_store,
+        broadcaster=mock_broadcaster,
+        execute_fn=never_called,
+    )
+
+    assert result.status == "failed"
+    mock_broadcaster.send_error.assert_called_once()
+    call_args = mock_broadcaster.send_error.call_args
+    assert call_args.kwargs.get("code") == "JOB_CONFLICT"
+    job_store.release_active("blocker-job")
+
+
+# ---------------------------------------------------------------------------
+# _run_subprocess_job — no data_ref path
+# ---------------------------------------------------------------------------
+
+
+def test_run_subprocess_job_no_data_ref_sets_failed_status(
+    job_store: JobStore,
+    sample_data_ref: DataRef,
+    mock_backend: MagicMock,
+    mock_broadcaster: MagicMock,
+) -> None:
+    """_run_subprocess_job must set job status=failed when ws.data_ref is None."""
+    from lizystudio.services.training import _run_subprocess_job
+    from lizystudio.services.workspace import WorkspaceState
+
+    ws = WorkspaceState(backend=mock_backend)
+    assert ws.data_ref is None  # no data loaded
+
+    job = job_store.create(
+        backend_name="lizyml",
+        config={},
+        data_ref=sample_data_ref,
+        job_type="fit",
+    )
+
+    _run_subprocess_job(ws, job, job_store, mock_broadcaster)
+
+    assert job.status == "failed"
+    assert "No data loaded" in (job.error or "")
+    assert ws.current_job_id == job.job_id
+    mock_broadcaster.send_error.assert_called_once_with(job.job_id, job.error)
+
+
+# ---------------------------------------------------------------------------
+# start_fit_async / start_tune_async — subprocess path
+# ---------------------------------------------------------------------------
+
+
+def test_start_fit_async_subprocess_path(
+    job_store: JobStore,
+    sample_data_ref: DataRef,
+    sample_df: pd.DataFrame,
+    mock_backend: MagicMock,
+    mock_broadcaster: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """start_fit_async calls _run_subprocess_job in subprocess mode."""
+    import lizystudio.services.training as training_mod
+    from lizystudio.services.workspace import WorkspaceState
+
+    ws = WorkspaceState(backend=mock_backend)
+    ws.data_ref = sample_data_ref  # provide data ref so subprocess path succeeds
+
+    called = {}
+
+    def fake_subprocess_job(
+        ws2: Any,
+        job2: Any,
+        job_store2: Any,
+        broadcaster2: Any,
+    ) -> None:
+        called["invoked"] = True
+        with ws2._lock:
+            ws2.current_job_id = job2.job_id
+
+    import lizystudio.services.openmp_detect as openmp_detect_mod
+
+    monkeypatch.setattr(openmp_detect_mod, "should_use_subprocess", lambda: True)
+    monkeypatch.setattr(training_mod, "_run_subprocess_job", fake_subprocess_job)
+
+    job = job_store.create(
+        backend_name="lizyml",
+        config={},
+        data_ref=sample_data_ref,
+        job_type="fit",
+    )
+
+    start_fit_async(
+        ws=ws,
+        job_store=job_store,
+        broadcaster=mock_broadcaster,
+        config={},
+        dataframe=sample_df,
+        job=job,
+    )
+
+    if ws._job_thread:
+        ws._job_thread.join(timeout=5)
+
+    assert called.get("invoked") is True
+
+
+def test_start_tune_async_subprocess_path(
+    job_store: JobStore,
+    sample_data_ref: DataRef,
+    sample_df: pd.DataFrame,
+    mock_backend: MagicMock,
+    mock_broadcaster: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """start_tune_async calls _run_subprocess_job in subprocess mode."""
+    import lizystudio.services.training as training_mod
+    from lizystudio.services.workspace import WorkspaceState
+
+    ws = WorkspaceState(backend=mock_backend)
+    ws.data_ref = sample_data_ref
+
+    called = {}
+
+    def fake_subprocess_job(
+        ws2: Any,
+        job2: Any,
+        job_store2: Any,
+        broadcaster2: Any,
+    ) -> None:
+        called["invoked"] = True
+        with ws2._lock:
+            ws2.current_job_id = job2.job_id
+
+    import lizystudio.services.openmp_detect as openmp_detect_mod
+
+    monkeypatch.setattr(openmp_detect_mod, "should_use_subprocess", lambda: True)
+    monkeypatch.setattr(training_mod, "_run_subprocess_job", fake_subprocess_job)
+
+    job = job_store.create(
+        backend_name="lizyml",
+        config={},
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )
+
+    start_tune_async(
+        ws=ws,
+        job_store=job_store,
+        broadcaster=mock_broadcaster,
+        config={},
+        dataframe=sample_df,
+        job=job,
+    )
+
+    if ws._job_thread:
+        ws._job_thread.join(timeout=5)
+
+    assert called.get("invoked") is True
+
+
+# ---------------------------------------------------------------------------
+# _run_subprocess_job — success path (lines 234-245)
+# ---------------------------------------------------------------------------
+
+
+def test_run_subprocess_job_success_updates_workspace(
+    job_store: JobStore,
+    sample_data_ref: DataRef,
+    mock_backend: MagicMock,
+    mock_broadcaster: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_run_subprocess_job success updates workspace state."""
+    from lizystudio.services.training import _run_subprocess_job
+    from lizystudio.services.workspace import WorkspaceState
+
+    ws = WorkspaceState(backend=mock_backend)
+    ws.data_ref = sample_data_ref  # data_ref with path set
+
+    job = job_store.create(
+        backend_name="lizyml",
+        config={},
+        data_ref=sample_data_ref,
+        job_type="fit",
+    )
+
+    fit_result = FitSummary(metrics={"auc": 0.88}, fold_count=3, params=[])
+    finished_job = job_store.create(
+        backend_name="lizyml",
+        config={},
+        data_ref=sample_data_ref,
+        job_type="fit",
+    )
+    finished_job.fit_result = fit_result
+    finished_job.tune_result = None
+    finished_job.status = "completed"
+
+    import lizystudio.services.subprocess_runner as subprocess_runner_mod
+
+    monkeypatch.setattr(
+        subprocess_runner_mod,
+        "run_job_in_subprocess",
+        lambda **_kwargs: finished_job,
+    )
+
+    _run_subprocess_job(ws, job, job_store, mock_broadcaster)
+
+    assert ws.workspace_fit_result is fit_result
+    assert ws.workspace_tune_result is None
+    assert ws.current_job_id == finished_job.job_id
+
+
+# --- _prepare_tune_config tests ---
+
+
+class TestPrepareTuneConfig:
+    """Unit tests for _prepare_tune_config."""
+
+    def test_merges_tuning_evaluation_to_top_level(self) -> None:
+        from lizystudio.services.training import _prepare_tune_config
+
+        config: dict[str, Any] = {
+            "task": "binary",
+            "evaluation": {"metrics": ["rmse"]},
+            "tuning": {
+                "optuna": {"params": {"n_trials": 50}, "space": {}},
+                "evaluation": {"metrics": ["auc", "f1"]},
+            },
+        }
+        result = _prepare_tune_config(config)
+        assert result["evaluation"] == {"metrics": ["auc", "f1"]}
+
+    def test_merges_tuning_model_params(self) -> None:
+        from lizystudio.services.training import _prepare_tune_config
+
+        config: dict[str, Any] = {
+            "task": "binary",
+            "model": {"params": {"n_estimators": 1000}},
+            "tuning": {
+                "optuna": {"params": {}, "space": {}},
+                "model_params": {"learning_rate": 0.01},
+            },
+        }
+        result = _prepare_tune_config(config)
+        assert result["model"]["params"]["n_estimators"] == 1000
+        assert result["model"]["params"]["learning_rate"] == 0.01
+
+    def test_strips_internal_keys_from_model_params(self) -> None:
+        from lizystudio.services.training import _prepare_tune_config
+
+        config: dict[str, Any] = {
+            "task": "binary",
+            "tuning": {
+                "optuna": {"params": {}, "space": {}},
+                "model_params": {"lr": 0.01, "_precision_at_k_k": 10},
+            },
+        }
+        result = _prepare_tune_config(config)
+        assert "_precision_at_k_k" not in result.get("model", {}).get("params", {})
+
+    def test_merges_tuning_training(self) -> None:
+        from lizystudio.services.training import _prepare_tune_config
+
+        config: dict[str, Any] = {
+            "task": "binary",
+            "training": {"seed": 42},
+            "tuning": {
+                "optuna": {"params": {}, "space": {}},
+                "training": {"validation_ratio": 0.2},
+            },
+        }
+        result = _prepare_tune_config(config)
+        assert result["training"]["seed"] == 42
+        assert result["training"]["validation_ratio"] == 0.2
+
+    def test_injects_default_metric_when_evaluation_empty(self) -> None:
+        from lizystudio.services.training import _prepare_tune_config
+
+        config: dict[str, Any] = {
+            "task": "binary",
+            "tuning": {"optuna": {"params": {"n_trials": 50}, "space": {}}},
+        }
+        result = _prepare_tune_config(config)
+        assert result["evaluation"]["metrics"] == ["auc"]
+
+    def test_injects_default_metric_regression(self) -> None:
+        from lizystudio.services.training import _prepare_tune_config
+
+        config: dict[str, Any] = {
+            "task": "regression",
+            "tuning": {"optuna": {"params": {}, "space": {}}},
+        }
+        result = _prepare_tune_config(config)
+        assert result["evaluation"]["metrics"] == ["rmse"]
+
+    def test_resolves_direction_maximize_for_auc(self) -> None:
+        from lizystudio.services.training import _prepare_tune_config
+
+        config: dict[str, Any] = {
+            "task": "binary",
+            "tuning": {
+                "optuna": {"params": {"n_trials": 50}, "space": {}},
+                "evaluation": {"metrics": ["auc"]},
+            },
+        }
+        result = _prepare_tune_config(config)
+        assert result["tuning"]["optuna"]["params"]["direction"] == "maximize"
+
+    def test_resolves_direction_minimize_for_rmse(self) -> None:
+        from lizystudio.services.training import _prepare_tune_config
+
+        config: dict[str, Any] = {
+            "task": "regression",
+            "tuning": {
+                "optuna": {"params": {}, "space": {}},
+                "evaluation": {"metrics": ["rmse"]},
+            },
+        }
+        result = _prepare_tune_config(config)
+        assert result["tuning"]["optuna"]["params"]["direction"] == "minimize"
+
+    def test_preserves_explicit_direction(self) -> None:
+        """User-set direction must NOT be overwritten."""
+        from lizystudio.services.training import _prepare_tune_config
+
+        config: dict[str, Any] = {
+            "task": "regression",
+            "tuning": {
+                "optuna": {
+                    "params": {"n_trials": 50, "direction": "maximize"},
+                    "space": {},
+                },
+                "evaluation": {"metrics": ["rmse"]},
+            },
+        }
+        result = _prepare_tune_config(config)
+        # rmse is normally minimize, but user explicitly set maximize
+        assert result["tuning"]["optuna"]["params"]["direction"] == "maximize"
+
+    def test_cleans_tuning_section(self) -> None:
+        from lizystudio.services.training import _prepare_tune_config
+
+        config: dict[str, Any] = {
+            "task": "binary",
+            "tuning": {
+                "optuna": {"params": {}, "space": {}},
+                "evaluation": {"metrics": ["auc"]},
+                "model_params": {"lr": 0.01},
+                "training": {"seed": 1},
+            },
+        }
+        result = _prepare_tune_config(config)
+        # Only optuna should remain in tuning
+        assert set(result["tuning"].keys()) == {"optuna"}
+
+    def test_no_tuning_section(self) -> None:
+        from lizystudio.services.training import _prepare_tune_config
+
+        config: dict[str, Any] = {"task": "binary"}
+        result = _prepare_tune_config(config)
+        # Should not crash; evaluation should get default metric
+        assert result["evaluation"]["metrics"] == ["auc"]

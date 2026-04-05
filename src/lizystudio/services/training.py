@@ -153,6 +153,96 @@ def run_fit(
     )
 
 
+def _prepare_tune_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Merge tuning-specific overrides into the top-level config for LizyML.
+
+    The frontend stores tune-specific values at:
+    - tuning.evaluation → merged into config.evaluation
+    - tuning.model_params → merged into config.model.params
+    - tuning.training → merged into config.training
+
+    This mirrors LizyML-Widget's ``prepare_tune_overrides``.
+    """
+    import copy
+
+    result = copy.deepcopy(config)
+    tune_section = result.get("tuning", {})
+
+    # Merge tuning.evaluation → top-level evaluation
+    tune_eval = tune_section.get("evaluation")
+    if isinstance(tune_eval, dict) and tune_eval:
+        result["evaluation"] = dict(tune_eval)
+
+    # Merge tuning.model_params → model.params
+    tune_model_params = tune_section.get("model_params")
+    if isinstance(tune_model_params, dict) and tune_model_params:
+        model = dict(result.get("model", {}))
+        existing_params = dict(model.get("params", {}))
+        # Filter out internal keys (prefixed with _)
+        clean_params = {
+            k: v for k, v in tune_model_params.items() if not k.startswith("_")
+        }
+        model["params"] = {**existing_params, **clean_params}
+        result["model"] = model
+
+    # Merge tuning.training → training
+    tune_training = tune_section.get("training")
+    if isinstance(tune_training, dict) and tune_training:
+        existing_training = dict(result.get("training", {}))
+        result["training"] = {**existing_training, **tune_training}
+
+    # Ensure evaluation.metrics is non-empty so LizyML knows what to optimize.
+    # If the user didn't explicitly select a metric, use the preferred default.
+    eval_section = result.get("evaluation")
+    eval_metrics = (
+        (eval_section or {}).get("metrics", [])
+        if isinstance(eval_section, dict)
+        else []
+    )
+    if not eval_metrics:
+        task = result.get("task", "")
+        preferred: dict[str, str] = {
+            "binary": "auc",
+            "regression": "rmse",
+            "multiclass": "auc",
+        }
+        default_metric = preferred.get(task, "")
+        if default_metric:
+            result["evaluation"] = {"metrics": [default_metric]}
+
+    # Resolve direction from evaluation metrics if not explicitly set
+    if "tuning" in result:
+        optuna = result["tuning"].get("optuna", {})
+        params = optuna.get("params", {})
+        if "direction" not in params:
+            final_metrics = (result.get("evaluation") or {}).get("metrics", [])
+            if final_metrics:
+                first_metric = (
+                    final_metrics[0]
+                    if isinstance(final_metrics[0], str)
+                    else next(iter(final_metrics[0]), "")
+                )
+                maximize_metrics = {
+                    "auc",
+                    "auc_pr",
+                    "r2",
+                    "accuracy",
+                    "f1",
+                    "auc_mu",
+                }
+                direction = (
+                    "maximize" if first_metric in maximize_metrics else "minimize"
+                )
+                optuna["params"] = {**params, "direction": direction}
+                result["tuning"]["optuna"] = optuna
+
+    # Clean tuning section: keep only optuna (params + space)
+    if "tuning" in result:
+        result["tuning"] = {"optuna": result["tuning"].get("optuna", {})}
+
+    return result
+
+
 def run_tune(
     *,
     job: Job,
@@ -163,11 +253,12 @@ def run_tune(
     broadcaster: ProgressBroadcaster | None = None,
 ) -> Job:
     """Execute a tune job: tune -> auto-fit with best params (H-0002 B)."""
+    tune_config = _prepare_tune_config(config)
 
     def execute(cb: ProgressCallback) -> tuple[FitSummary, TuningSummary | None, str]:
-        model = backend.create_model(config, dataframe)
+        model = backend.create_model(tune_config, dataframe)
         tune_result: TuningSummary = backend.tune(model, on_progress=cb)
-        model2 = backend.create_model(config, dataframe)
+        model2 = backend.create_model(tune_config, dataframe)
         fit_result: FitSummary = backend.fit(model2, params=tune_result.best_params)
         model_dir = str(job_store.jobs_dir / job.job_id / "model")
         backend.export_model(model2, model_dir)
@@ -183,7 +274,11 @@ def run_tune(
 
 # --- Async launchers (Phase 29: thread ownership in Service, not Router) ---
 
-_JOIN_TIMEOUT = 5  # seconds
+_JOIN_TIMEOUT = 30  # seconds — generous to allow subprocess cleanup
+
+
+class PreviousJobStillRunningError(Exception):
+    """Raised when a previous job thread is still alive after join timeout."""
 
 
 def _join_previous_thread(ws: WorkspaceState) -> None:
@@ -191,15 +286,17 @@ def _join_previous_thread(ws: WorkspaceState) -> None:
 
     Prevents thread/OpenMP thread-pool accumulation by ensuring the prior
     worker is cleaned up before spawning a new one.
+
+    Raises PreviousJobStillRunningError if the thread does not finish
+    within _JOIN_TIMEOUT seconds (prevents concurrent tune execution).
     """
     with ws._lock:
         prev = ws._job_thread
     if prev is not None and prev.is_alive():
         prev.join(timeout=_JOIN_TIMEOUT)
         if prev.is_alive():
-            _logger.warning(
-                "Previous job thread did not finish within %ds — proceeding anyway",
-                _JOIN_TIMEOUT,
+            raise PreviousJobStillRunningError(
+                f"Previous job thread did not finish within {_JOIN_TIMEOUT}s"
             )
 
 

@@ -41,6 +41,9 @@ from lizystudio.services.jobs import (
 )
 from lizystudio.services.workspace import WorkspaceState, get_workspace
 
+_MAX_METRICS = 20
+_VALID_PARAM_RE = re.compile(r"^[a-zA-Z0-9_]+$")
+
 router = APIRouter()
 
 
@@ -122,6 +125,7 @@ def get_job(
     """Get job details."""
     job = _get_job_or_404(job_id, job_store)
     result: dict[str, Any] = _job_summary(job)
+    result["config"] = job.config
     if job.fit_result is not None:
         result["fit_result"] = asdict(job.fit_result)
     if job.tune_result is not None:
@@ -249,27 +253,27 @@ def get_job_plot_endpoint(
     job_id: str,
     plot_type: str,
     metrics: str | None = None,
+    kind: str | None = None,
     job_store: JobStore = Depends(get_job_store),
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, str]:
     """Get a Plotly figure as JSON.
 
     For ``learning-curve``, pass ``?metrics=auc,f1`` to filter subplots.
+    For ``importance``, pass ``?kind=split|gain|shap`` to select kind.
     """
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
     kwargs: dict[str, Any] = {}
     if metrics is not None and plot_type == "learning-curve":
         parsed = [m.strip() for m in metrics.split(",") if m.strip()]
-        _MAX_METRICS = 20
-        _VALID_METRIC_RE = re.compile(r"^[a-zA-Z0-9_]+$")
         if len(parsed) > _MAX_METRICS:
             raise StudioError(
                 "INVALID_PARAM",
                 f"Too many metrics (max {_MAX_METRICS})",
                 400,
             )
-        invalid = [m for m in parsed if not _VALID_METRIC_RE.match(m)]
+        invalid = [m for m in parsed if not _VALID_PARAM_RE.match(m)]
         if invalid:
             raise StudioError(
                 "INVALID_PARAM",
@@ -277,6 +281,10 @@ def get_job_plot_endpoint(
                 400,
             )
         kwargs["metrics"] = parsed
+    if kind is not None and plot_type == "importance":
+        if not _VALID_PARAM_RE.match(kind):
+            raise StudioError("INVALID_PARAM", f"Invalid kind: {kind!r}", 400)
+        kwargs["kind"] = kind
     try:
         plot_data = get_job_plot(job, ws.backend, plot_type, **kwargs)
         return {"plotly_json": plot_data.plotly_json}

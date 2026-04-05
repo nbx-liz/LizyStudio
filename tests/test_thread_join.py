@@ -206,7 +206,7 @@ class TestThreadJoinOnNewJob:
         assert not thread1.is_alive()
         thread2.join(timeout=5)
 
-    def test_join_timeout_does_not_deadlock(
+    def test_join_timeout_raises_error(
         self,
         ws: WorkspaceState,
         job_store: JobStore,
@@ -214,36 +214,42 @@ class TestThreadJoinOnNewJob:
         sample_data_ref: DataRef,
         sample_df: pd.DataFrame,
     ) -> None:
-        """If a previous thread is stuck, join with timeout should not block forever."""
-        # Simulate a stuck thread
+        """If a previous thread is stuck, starting a new job should raise an error."""
+        import lizystudio.services.training as training_mod
+        from lizystudio.services.training import PreviousJobStillRunningError
+
+        # Use a very short timeout for testing
+        original_timeout = training_mod._JOIN_TIMEOUT
+        training_mod._JOIN_TIMEOUT = 0.1
+
         stuck_event = threading.Event()
 
         def stuck_target() -> None:
-            stuck_event.wait(timeout=10)  # Will block until set or timeout
+            stuck_event.wait(timeout=10)
 
         stuck_thread = threading.Thread(target=stuck_target, daemon=True)
         stuck_thread.start()
         ws._job_thread = stuck_thread
 
-        # Starting a new job should not deadlock (join has timeout)
-        job = job_store.create(
-            backend_name="lizyml",
-            config={},
-            data_ref=sample_data_ref,
-            job_type="fit",
-        )
-        start_fit_async(
-            ws=ws,
-            job_store=job_store,
-            broadcaster=broadcaster,
-            config={},
-            dataframe=sample_df,
-            job=job,
-        )
-        # If we got here, join didn't deadlock
-        assert ws._job_thread is not None
-        ws._job_thread.join(timeout=5)
-        stuck_event.set()  # Clean up stuck thread
+        try:
+            job = job_store.create(
+                backend_name="lizyml",
+                config={},
+                data_ref=sample_data_ref,
+                job_type="fit",
+            )
+            with pytest.raises(PreviousJobStillRunningError):
+                start_fit_async(
+                    ws=ws,
+                    job_store=job_store,
+                    broadcaster=broadcaster,
+                    config={},
+                    dataframe=sample_df,
+                    job=job,
+                )
+        finally:
+            training_mod._JOIN_TIMEOUT = original_timeout
+            stuck_event.set()
 
     def test_thread_count_stable_after_multiple_jobs(
         self,

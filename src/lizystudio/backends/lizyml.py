@@ -65,11 +65,31 @@ class LizyMLAdapter:
         from lizyml.config.schema import LizyMLConfig
         from pydantic import ValidationError
 
+        clean = self._strip_internal_keys(config)
         try:
-            LizyMLConfig.model_validate(config)
+            LizyMLConfig.model_validate(clean)
             return []
         except ValidationError as exc:
             return exc.errors()  # type: ignore[return-value]
+
+    @staticmethod
+    def _strip_internal_keys(config: dict[str, Any]) -> dict[str, Any]:
+        """Remove UI-internal keys (prefixed with _) and tune-only sections
+        that LizyML's Pydantic schema doesn't accept."""
+        import copy
+
+        result = copy.deepcopy(config)
+        # Strip _ keys from model.params
+        model_params = (result.get("model") or {}).get("params")
+        if isinstance(model_params, dict):
+            result["model"]["params"] = {
+                k: v for k, v in model_params.items() if not k.startswith("_")
+            }
+        # Strip tune-only keys from tuning (evaluation, model_params, training)
+        tuning = result.get("tuning")
+        if isinstance(tuning, dict):
+            result["tuning"] = {k: v for k, v in tuning.items() if k in ("optuna",)}
+        return result
 
     def load_config_from_file(self, content: bytes, filename: str) -> dict[str, Any]:
         text = content.decode("utf-8")
@@ -93,7 +113,8 @@ class LizyMLAdapter:
     def create_model(self, config: dict[str, Any], dataframe: pd.DataFrame) -> Any:
         from lizyml import Model
 
-        return Model(config, data=dataframe)
+        clean = self._strip_internal_keys(config)
+        return Model(clean, data=dataframe)
 
     def fit(
         self,
@@ -224,6 +245,8 @@ class LizyMLAdapter:
         call_kwargs: dict[str, Any] = {}
         if plot_type == "learning-curve" and "metrics" in kwargs:
             call_kwargs["metrics"] = kwargs["metrics"]
+        if plot_type == "importance" and "kind" in kwargs:
+            call_kwargs["kind"] = kwargs["kind"]
         fig = getattr(model, method_name)(**call_kwargs)
         return PlotData(plotly_json=fig.to_json())
 
@@ -231,14 +254,16 @@ class LizyMLAdapter:
         cfg = model.fit_result.run_meta.config_normalized
         task: str = str(cfg["task"])
         calibration_enabled = cfg.get("calibration") is not None
-        plots = ["learning-curve", "oof-distribution", "importance"]
-        if task == "regression":
-            plots.append("residuals")
+        plots: list[str] = ["learning-curve"]
         if task == "binary":
             plots.append("roc-curve")
-            if calibration_enabled:
-                plots.append("probability-histogram")
-                plots.append("calibration")
+        if task == "regression":
+            plots.append("residuals")
+        plots.append("importance")
+        plots.append("oof-distribution")
+        if task == "binary" and calibration_enabled:
+            plots.append("probability-histogram")
+            plots.append("calibration")
         try:
             model.tuning_plot()
             plots.append("tuning")

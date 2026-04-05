@@ -52,7 +52,11 @@ from lizystudio.services.data import (
     make_data_ref,
 )
 from lizystudio.services.jobs import JobStore, get_job_store
-from lizystudio.services.training import start_fit_async, start_tune_async
+from lizystudio.services.training import (
+    PreviousJobStillRunningError,
+    start_fit_async,
+    start_tune_async,
+)
 from lizystudio.services.workspace import (
     WorkspaceState,
     apply_config_patch,
@@ -390,14 +394,20 @@ def workspace_fit(
         data_ref=ws.data_ref,
         job_type="fit",
     )
-    job_id = start_fit_async(
-        ws=ws,
-        job_store=job_store,
-        broadcaster=_get_broadcaster(request),
-        config=ws.config,
-        dataframe=ws.dataframe,
-        job=job,
-    )
+    try:
+        job_id = start_fit_async(
+            ws=ws,
+            job_store=job_store,
+            broadcaster=_get_broadcaster(request),
+            config=ws.config,
+            dataframe=ws.dataframe,
+            job=job,
+        )
+    except PreviousJobStillRunningError:
+        job.status = "failed"
+        job.error = "Previous job still running"
+        job_store.update(job)
+        raise JobConflictError(job.job_id) from None
     return {"job_id": job_id}
 
 
@@ -433,12 +443,18 @@ def workspace_tune(
         data_ref=ws.data_ref,
         job_type="tune",
     )
-    job_id = start_tune_async(
-        ws=ws,
-        job_store=job_store,
-        broadcaster=_get_broadcaster(request),
-        config=ws.config,
-        dataframe=ws.dataframe,
-        job=job,
-    )
+    try:
+        job_id = start_tune_async(
+            ws=ws,
+            job_store=job_store,
+            broadcaster=_get_broadcaster(request),
+            config=ws.config,
+            dataframe=ws.dataframe,
+            job=job,
+        )
+    except PreviousJobStillRunningError:
+        job.status = "failed"
+        job.error = "Previous job still running"
+        job_store.update(job)
+        raise JobConflictError(job.job_id) from None
     return {"job_id": job_id}
