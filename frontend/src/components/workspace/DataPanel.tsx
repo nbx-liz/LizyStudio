@@ -41,9 +41,11 @@ import {
 } from "@/components/ui/table";
 import {
   applyCvDataFields,
+  type BlockedGroupKFoldState,
   buildSplitConfig,
   CvSection,
   type CvState,
+  INITIAL_BLOCKED_STATE,
   INITIAL_CV_STATE,
   resetCvState,
 } from "./CvSection";
@@ -91,6 +93,9 @@ export function DataPanel({
   );
 
   const [cv, setCv] = useState<CvState>(INITIAL_CV_STATE);
+  const [blocked, setBlocked] = useState<BlockedGroupKFoldState>(
+    INITIAL_BLOCKED_STATE,
+  );
   const [loading, setLoading] = useState(false);
   const [columnFilter, setColumnFilter] = useState("");
   const [expandedCol, setExpandedCol] = useState<string | null>(null);
@@ -704,6 +709,8 @@ export function DataPanel({
                   onChange={setCv}
                   uiSchema={uiSchema}
                   nonExcludedCols={nonExcludedCols}
+                  blocked={blocked}
+                  onBlockedChange={setBlocked}
                 />
                 <FoldPreview
                   enabled={!!target && !!task && shape !== null}
