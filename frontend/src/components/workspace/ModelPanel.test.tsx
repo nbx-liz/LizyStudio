@@ -142,9 +142,84 @@ describe("ModelPanel", () => {
     const actionButtons = screen
       .getAllByRole("button")
       .filter(
-        (btn) => btn.textContent === "Fit" && !btn.closest('[role="tablist"]'),
+        (btn) =>
+          btn.textContent === "Running..." && !btn.closest('[role="tablist"]'),
       );
     expect(actionButtons[0]).toBeDisabled();
+  });
+
+  it("shows Running... button text when running", () => {
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={true}
+      />,
+    );
+    const runningButtons = screen
+      .getAllByRole("button")
+      .filter(
+        (btn) =>
+          btn.textContent === "Running..." && !btn.closest('[role="tablist"]'),
+      );
+    expect(runningButtons.length).toBe(1);
+  });
+
+  it("shows info bar when running", () => {
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={true}
+      />,
+    );
+    expect(screen.getByTestId("running-info-bar")).toBeInTheDocument();
+    expect(screen.getByText(/Configuration is locked/)).toBeInTheDocument();
+  });
+
+  it("does not show info bar when not running", () => {
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+    expect(screen.queryByTestId("running-info-bar")).not.toBeInTheDocument();
+  });
+
+  it("config form area is locked (aria-disabled) when running", () => {
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={true}
+      />,
+    );
+    const formArea = screen.getByTestId("config-form-area");
+    expect(formArea).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("config form area is not locked when not running", () => {
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+    const formArea = screen.getByTestId("config-form-area");
+    expect(formArea).toHaveAttribute("aria-disabled", "false");
   });
 
   it("renders backend badge when backends are loaded", async () => {

@@ -129,8 +129,8 @@ describe("FixedValueEditor — boolean type", () => {
   });
 });
 
-describe("FixedValueEditor — string type with options", () => {
-  it("renders a Select trigger (combobox) when options are provided", () => {
+describe("FixedValueEditor — string type with ≤4 options (segment)", () => {
+  it("renders a SegmentGroup (radiogroup) when options count ≤ 4", () => {
     render(
       <FixedValueEditor
         paramType="string"
@@ -139,43 +139,110 @@ describe("FixedValueEditor — string type with options", () => {
         options={["binary", "multiclass", "regression"]}
       />,
     );
+    expect(screen.getByRole("radiogroup")).toBeInTheDocument();
+    // Should NOT render a Select combobox
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+  });
+
+  it("renders segment buttons for exactly 4 options (boundary)", () => {
+    render(
+      <FixedValueEditor
+        paramType="string"
+        value="cpu"
+        onChange={vi.fn()}
+        options={["cpu", "gpu", "tpu", "auto"]}
+      />,
+    );
+    expect(screen.getByRole("radiogroup")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "cpu" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "gpu" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "tpu" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "auto" })).toBeInTheDocument();
+  });
+
+  it("calls onChange when a segment option is clicked", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <FixedValueEditor
+        paramType="string"
+        value="binary"
+        onChange={onChange}
+        options={["binary", "multiclass", "regression"]}
+      />,
+    );
+    await user.click(screen.getByRole("radio", { name: "regression" }));
+    expect(onChange).toHaveBeenCalledWith("regression");
+  });
+
+  it("marks the current value as active (aria-checked)", () => {
+    render(
+      <FixedValueEditor
+        paramType="string"
+        value="binary"
+        onChange={vi.fn()}
+        options={["binary", "multiclass"]}
+      />,
+    );
+    expect(screen.getByRole("radio", { name: "binary" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(screen.getByRole("radio", { name: "multiclass" })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+  });
+});
+
+describe("FixedValueEditor — string type with >4 options (select)", () => {
+  it("renders a Select trigger (combobox) when options count > 4", () => {
+    render(
+      <FixedValueEditor
+        paramType="string"
+        value="auc"
+        onChange={vi.fn()}
+        options={["auc", "f1", "accuracy", "logloss", "mse"]}
+      />,
+    );
     expect(screen.getByRole("combobox")).toBeInTheDocument();
+    // Should NOT render a radiogroup
+    expect(screen.queryByRole("radiogroup")).not.toBeInTheDocument();
   });
 
   it("displays the current value in the Select", () => {
     render(
       <FixedValueEditor
         paramType="string"
-        value="binary"
+        value="auc"
         onChange={vi.fn()}
-        options={["binary", "multiclass", "regression"]}
+        options={["auc", "f1", "accuracy", "logloss", "mse"]}
       />,
     );
-    expect(screen.getByText("binary")).toBeInTheDocument();
+    expect(screen.getByText("auc")).toBeInTheDocument();
   });
 
   it("wires onValueChange to onChange prop (verified via re-render with new value)", () => {
     const onChange = vi.fn();
+    const options = ["auc", "f1", "accuracy", "logloss", "mse"];
     const { rerender } = render(
       <FixedValueEditor
         paramType="string"
-        value="binary"
+        value="auc"
         onChange={onChange}
-        options={["binary", "multiclass"]}
+        options={options}
       />,
     );
-    // Verify initial value shown
-    expect(screen.getByText("binary")).toBeInTheDocument();
-    // Re-render with new value — simulates parent updating after onChange fires
+    expect(screen.getByText("auc")).toBeInTheDocument();
     rerender(
       <FixedValueEditor
         paramType="string"
-        value="multiclass"
+        value="f1"
         onChange={onChange}
-        options={["binary", "multiclass"]}
+        options={options}
       />,
     );
-    expect(screen.getByText("multiclass")).toBeInTheDocument();
+    expect(screen.getByText("f1")).toBeInTheDocument();
   });
 });
 
