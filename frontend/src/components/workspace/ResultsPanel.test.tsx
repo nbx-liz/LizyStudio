@@ -4,19 +4,21 @@ import { makeJob, renderWithQuery } from "@/test/helpers";
 
 const mockFetchJob = vi.fn();
 const mockFetchJobs = vi.fn().mockResolvedValue([]);
+const mockConnectJobProgress = vi.fn().mockReturnValue(() => {});
 
 vi.mock("@/api/jobs", () => ({
   fetchJob: (...args: unknown[]) => mockFetchJob(...args),
   fetchJobPlots: vi.fn().mockResolvedValue([]),
   fetchJobPlot: vi.fn(),
   fetchJobImportance: vi.fn(),
+  fetchJobImportanceKinds: vi.fn().mockResolvedValue([]),
   fetchJobSplitSummary: vi.fn(),
   fetchJobLog: vi.fn().mockResolvedValue({ log: "test log content" }),
   fetchJobs: (...args: unknown[]) => mockFetchJobs(...args),
   cancelJob: vi.fn(),
 }));
 vi.mock("@/api/websocket", () => ({
-  connectJobProgress: vi.fn().mockReturnValue(() => {}),
+  connectJobProgress: (...args: unknown[]) => mockConnectJobProgress(...args),
 }));
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
@@ -358,5 +360,33 @@ describe("ResultsPanel", () => {
     expect(screen.getByRole("progressbar")).toBeInTheDocument();
     // onJobDone is triggered via WebSocket onCompleted callback,
     // not testable without mocking connectJobProgress internals.
+  });
+
+  it("connects WebSocket when job status is pending", async () => {
+    const pendingJob = makeJob({ status: "pending" });
+    mockFetchJob.mockResolvedValue(pendingJob);
+    mockFetchJobs.mockResolvedValue([pendingJob]);
+    mockConnectJobProgress.mockReturnValue(() => {});
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+
+    expect(await screen.findByText("Queued")).toBeInTheDocument();
+    expect(mockConnectJobProgress).toHaveBeenCalledWith(
+      "test-job-1",
+      expect.any(Object),
+    );
+  });
+
+  it("renders Queued badge for pending job", async () => {
+    const pendingJob = makeJob({ status: "pending" });
+    mockFetchJob.mockResolvedValue(pendingJob);
+    mockFetchJobs.mockResolvedValue([pendingJob]);
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+
+    expect(await screen.findByText("Queued")).toBeInTheDocument();
+    expect(
+      screen.getByText("Job queued, starting soon..."),
+    ).toBeInTheDocument();
   });
 });

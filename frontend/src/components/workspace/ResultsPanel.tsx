@@ -14,7 +14,6 @@ import {
   fetchJobs,
 } from "@/api/jobs";
 import type { JobDetail, MetricEntry, ProgressMessage } from "@/api/types";
-import { metricEntryName } from "@/api/types";
 import { connectJobProgress } from "@/api/websocket";
 import { MetricCards } from "@/components/shared/MetricCards";
 import { Accordion } from "@/components/ui/accordion";
@@ -64,7 +63,8 @@ export function ResultsPanel({
     enabled: !!jobId,
     refetchInterval: (query) => {
       const data = query.state.data as JobDetail | undefined;
-      return data?.status === "running" ? 2000 : false;
+      const s = data?.status;
+      return s === "running" || s === "pending" ? 2000 : false;
     },
   });
 
@@ -85,7 +85,8 @@ export function ResultsPanel({
     | undefined;
 
   useEffect(() => {
-    if (!jobId || job?.status !== "running") return;
+    if (!jobId || (job?.status !== "running" && job?.status !== "pending"))
+      return;
 
     const disconnect = connectJobProgress(jobId, {
       onProgress: (msg) => {
@@ -123,16 +124,15 @@ export function ResultsPanel({
     const prev = prevStatusRef.current;
     prevStatusRef.current = job?.status;
     if (
-      prev === "running" &&
+      (prev === "running" || prev === "pending") &&
       job?.status &&
       job.status !== "running" &&
-      job.status !== "pending" &&
-      progress !== null
+      job.status !== "pending"
     ) {
       setProgress(null);
       onJobDone?.();
     }
-  }, [job?.status, onJobDone, progress]);
+  }, [job?.status, onJobDone]);
 
   const handleCancel = useCallback(async () => {
     if (!jobId) return;
@@ -405,14 +405,14 @@ function CompletedView({
 
   // Learning curve metrics filter (H-0034)
   // Default to first metric only to avoid cramped subplots when multiple exist
-  const [lcMetrics, setLcMetrics] = useState<string[] | null>(null);
+  const [lcMetric, setLcMetric] = useState<string | null>(null);
   const lcInitialized = useRef(false);
 
   const { data: learningCurve, isError: isLcError } = useQuery({
-    queryKey: ["job-plot", job.job_id, "learning-curve", lcMetrics],
+    queryKey: ["job-plot", job.job_id, "learning-curve", lcMetric],
     queryFn: () =>
       fetchJobPlot(job.job_id, "learning-curve", {
-        metrics: lcMetrics ?? undefined,
+        metrics: lcMetric ?? undefined,
       }),
     enabled:
       selectedPlot === "learning-curve" &&
@@ -422,10 +422,10 @@ function CompletedView({
 
   // If LC filter fails (e.g. feval-only metric), fall back to unfiltered view
   useEffect(() => {
-    if (isLcError && lcMetrics !== null) {
-      setLcMetrics(null);
+    if (isLcError && lcMetric !== null) {
+      setLcMetric(null);
     }
-  }, [isLcError, lcMetrics]);
+  }, [isLcError, lcMetric]);
 
   const [importanceKind, setImportanceKind] = useState("split");
   const importanceEnabled = plots?.includes("importance") ?? false;
@@ -453,13 +453,11 @@ function CompletedView({
     enabled: importanceEnabled,
   });
 
-  // Importance plot is kind-independent (shows default split importance).
-  // The backend plot API does not accept a kind parameter; the plot is
-  // generated once using the default kind by LizyML's importance_plot().
   const { data: importancePlot, isLoading: isImportancePlotLoading } = useQuery(
     {
-      queryKey: ["job-plot", job.job_id, "importance"],
-      queryFn: () => fetchJobPlot(job.job_id, "importance"),
+      queryKey: ["job-plot", job.job_id, "importance", importanceKind],
+      queryFn: () =>
+        fetchJobPlot(job.job_id, "importance", { kind: importanceKind }),
       enabled: importanceEnabled,
     },
   );
@@ -488,33 +486,32 @@ function CompletedView({
     ? pivotMetrics(fitResult.metrics as Record<string, unknown>)
     : undefined;
 
+  // evalConfig is used by annotateMetric() for precision_at_k k-value display.
   const evalConfig = (job.config?.evaluation as Record<string, unknown>) ?? {};
 
-  // Extract metric names for LC filter chips.
-  // Primary: from job config evaluation.metrics
-  // Fallback: from fit_result metrics (covers cases where evaluation.metrics
-  // is empty/unset — e.g. default config without explicit metric selection,
-  // or feval-only metrics added by LizyML internally).
-  const evalMetricNames = useMemo(() => {
-    const entries = Array.isArray(evalConfig.metrics)
-      ? (evalConfig.metrics as MetricEntry[])
-      : [];
-    const names = entries.map(metricEntryName);
-    if (names.length > 0) return names;
-    return metrics ? Object.keys(metrics) : [];
-  }, [evalConfig.metrics, metrics]);
+  // LC filter uses model.params.metric (LightGBM internal metric names)
+  // which match the subplot titles in the learning curve plot.
+  // If metric is unset in job config (e.g. legacy jobs), lcAvailableMetrics
+  // is empty and the filter is hidden — all subplots are shown unfiltered.
+  const modelConfig = (job.config?.model as Record<string, unknown>) ?? {};
+  const lcAvailableMetrics = useMemo(() => {
+    const m = (modelConfig.params as Record<string, unknown>)?.metric;
+    if (Array.isArray(m)) return m as string[];
+    if (typeof m === "string") return [m];
+    return [];
+  }, [modelConfig.params]);
 
-  // Initialize LC filter to first metric only (avoid cramped subplot layout)
-  // When only 1 metric exists, lcMetrics stays null (no filter needed)
+  // Initialize LC filter to first metric (avoid cramped subplots).
+  // When only 1 metric exists, lcMetric stays null (no filter needed).
   useEffect(() => {
     if (lcInitialized.current) return;
-    if (evalMetricNames.length > 1) {
+    if (lcAvailableMetrics.length > 1) {
       lcInitialized.current = true;
-      setLcMetrics([evalMetricNames[0]]);
-    } else if (evalMetricNames.length === 1) {
+      setLcMetric(lcAvailableMetrics[0]);
+    } else if (lcAvailableMetrics.length >= 1) {
       lcInitialized.current = true;
     }
-  }, [evalMetricNames]);
+  }, [lcAvailableMetrics]);
 
   const annotateMetric = (name: string): string => {
     if (name === "precision_at_k") {
@@ -608,9 +605,9 @@ function CompletedView({
               : isPlotLoading
           }
           isError={isPlotError}
-          lcMetrics={lcMetrics}
-          onLcMetricsChange={setLcMetrics}
-          availableEvalMetrics={evalMetricNames}
+          lcMetric={lcMetric}
+          onLcMetricChange={setLcMetric}
+          availableEvalMetrics={lcAvailableMetrics}
           importanceKinds={importanceKinds}
           selectedImportanceKind={importanceKind}
           onImportanceKindChange={setImportanceKind}

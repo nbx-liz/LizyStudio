@@ -1,4 +1,5 @@
 import { Minus, Plus } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -25,12 +26,29 @@ export function NumberInput({
   className,
   id,
 }: NumberInputProps) {
-  const clamp = (v: number) => {
-    let clamped = v;
-    if (min !== undefined) clamped = Math.max(clamped, min);
-    if (max !== undefined) clamped = Math.min(clamped, max);
-    return clamped;
-  };
+  // Track raw text to allow intermediate input like "0." or "1.0"
+  const [raw, setRaw] = useState(value == null ? "" : String(value));
+
+  // Sync raw text when external value changes (e.g. stepper buttons)
+  useEffect(() => {
+    const externalStr = value == null ? "" : String(value);
+    setRaw((prev) => {
+      // Don't overwrite if the user is mid-edit and the parsed value matches
+      const parsed = Number(prev);
+      if (prev !== "" && !Number.isNaN(parsed) && parsed === value) return prev;
+      return externalStr;
+    });
+  }, [value]);
+
+  const clamp = useCallback(
+    (v: number) => {
+      let clamped = v;
+      if (min !== undefined) clamped = Math.max(clamped, min);
+      if (max !== undefined) clamped = Math.min(clamped, max);
+      return clamped;
+    },
+    [min, max],
+  );
 
   const handleIncrement = () => {
     const next = clamp((value ?? 0) + step);
@@ -43,14 +61,35 @@ export function NumberInput({
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const raw = e.target.value;
-    if (raw === "") {
+    const text = e.target.value;
+    setRaw(text);
+    if (text === "" || text === "-") {
+      onChange(undefined);
+      return;
+    }
+    // Allow intermediate states: "0.", "1.", ".5", "-0."
+    if (/^-?\d*\.?\d*$/.test(text)) {
+      const parsed = Number(text);
+      if (!Number.isNaN(parsed)) {
+        onChange(clamp(parsed));
+      }
+    }
+  };
+
+  const handleBlur = () => {
+    // Finalize on blur: parse and clamp, or clear
+    if (raw === "" || raw === "-" || raw === ".") {
+      setRaw("");
       onChange(undefined);
       return;
     }
     const parsed = Number(raw);
     if (!Number.isNaN(parsed)) {
-      onChange(clamp(parsed));
+      const clamped = clamp(parsed);
+      onChange(clamped);
+      setRaw(String(clamped));
+    } else {
+      setRaw(value == null ? "" : String(value));
     }
   };
 
@@ -71,8 +110,9 @@ export function NumberInput({
         id={id}
         type="text"
         inputMode="decimal"
-        value={value ?? ""}
+        value={raw}
         onChange={handleChange}
+        onBlur={handleBlur}
         placeholder={placeholder}
         disabled={disabled}
         className="h-7 w-20 text-center text-xs tabular-nums [appearance:textfield]"

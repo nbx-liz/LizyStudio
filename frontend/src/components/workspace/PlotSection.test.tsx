@@ -44,7 +44,7 @@ describe("PlotSection", () => {
     expect(screen.getByText("Plots")).toBeInTheDocument();
   });
 
-  it('filters out "tuning" from plot options', () => {
+  it('filters out "tuning" from plot tabs (shown in TuneTrialsSection)', () => {
     render(
       <PlotSection
         {...defaultProps}

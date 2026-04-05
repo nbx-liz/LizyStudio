@@ -238,7 +238,7 @@ export function ModelPanel({
             value={activeTab}
             onValueChange={(v) => setActiveTab(v as "fit" | "tune")}
           >
-            <TabsList className="h-9 w-auto">
+            <TabsList variant="line" className="h-9 w-auto">
               <TabsTrigger value="fit" className="px-6">
                 Fit
               </TabsTrigger>
@@ -324,6 +324,7 @@ export function ModelPanel({
               onChange={handleConfigChange}
               task={task}
               uiSchema={uiSchema}
+              columns={nonExcludedColumns}
             />
           ) : (
             <p className="text-sm text-muted-foreground">Loading config...</p>
