@@ -43,11 +43,11 @@ Phase 0〜30 は v1 で完了済み。バックエンド（Python / FastAPI / Ad
 | v3-3 | API 拡張（Config パッチ + エラーコード） | H-0037, H-0041 | v3-1 | ✅ |
 | v3-4 | WebSocket 再接続 + Fold 進捗表示 | H-0035, H-0047 | v3-1 | ✅ |
 | v3-5 | openapi-typescript 生成型の実活用 | H-0043 | v3-3 | 🔶 部分完了 |
-| v3-6 | Workspace UX 改善（Config ロック + セグメントボタン） | H-0048, H-0049 | v3-4 | 🔲 |
-| v3-7 | カラム値分布バー + CV Fold Preview | H-0044, H-0046 | v3-5 | 🔲 |
-| v3-8 | BlockedGroupKFold 専用 2軸エディタ | H-0045 | v3-7 | 🔲 |
-| v3-9 | Jobs 詳細画面の統一（KPI + LC フィルター + Importance） | H-0050, H-0051, H-0052 | v3-5 | 🔲 |
-| v3-10 | Search Space デフォルト Range 自動ポピュレート | H-0053 | v3-3 | 🔲 |
+| v3-6 | Workspace UX 改善（Config ロック + セグメントボタン） | H-0048, H-0049 | v3-4 | ✅ |
+| v3-7 | カラム値分布バー + CV Fold Preview | H-0044, H-0046 | v3-5 | ✅ |
+| v3-8 | BlockedGroupKFold 専用 2軸エディタ | H-0045 | v3-7 | ✅ |
+| v3-9 | Jobs 詳細画面の統一（KPI + LC フィルター + Importance） | H-0050, H-0051, H-0052 | v3-5 | ✅ |
+| v3-10 | Search Space デフォルト Range 自動ポピュレート | H-0053 | v3-3 | ✅ |
 
 ---
 
