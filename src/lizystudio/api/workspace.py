@@ -33,6 +33,8 @@ from lizystudio.security import (
 )
 from lizystudio.services.data import (
     analyze_columns,
+    compute_split_preview,
+    get_column_value_counts,
     get_describe,
     get_preview,
     load_dataframe,
@@ -183,6 +185,54 @@ def data_describe(
     if ws.dataframe is None:
         raise WorkspaceNoDataError()
     return get_describe(ws.dataframe)
+
+
+@router.get("/data/column-stats/{col}")
+def data_column_stats(
+    col: str,
+    top_n: int = 20,
+    ws: WorkspaceState = Depends(get_workspace),
+) -> dict[str, Any]:
+    """Return value distribution for a single column (H-0046)."""
+    if ws.dataframe is None:
+        raise WorkspaceNoDataError()
+    try:
+        stats = get_column_value_counts(ws.dataframe, col, top_n=top_n)
+    except KeyError as exc:
+        raise PathNotFoundError(str(exc)) from exc
+    return asdict(stats)
+
+
+@router.get("/data/split-preview")
+def data_split_preview(
+    ws: WorkspaceState = Depends(get_workspace),
+) -> dict[str, Any]:
+    """Return approximate fold sizes for the current CV split config.
+
+    Computes sizes arithmetically from n_rows and config — no sklearn needed.
+    Requires both data and config (with ``split.method`` and ``split.n_splits``)
+    to be set in the workspace.
+    """
+    if ws.dataframe is None:
+        raise WorkspaceNoDataError()
+    if not ws.config:
+        raise WorkspaceNoConfigError()
+    split_cfg = ws.config.get("split", {})
+    strategy = split_cfg.get("method", "")
+    n_splits = split_cfg.get("n_splits", 5)
+    gap = split_cfg.get("gap", 0)
+    max_train_size = split_cfg.get("max_train_size")
+    max_test_size = split_cfg.get("max_test_size")
+    n_rows = len(ws.dataframe)
+    preview = compute_split_preview(
+        n_rows,
+        strategy,
+        n_splits,
+        gap=gap,
+        max_train_size=max_train_size,
+        max_test_size=max_test_size,
+    )
+    return asdict(preview)
 
 
 # --- Config endpoints (BLUEPRINT §5.2 Config) ---

@@ -9,6 +9,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import {
+  BlockedGroupKFoldEditor,
+  type BlockedGroupKFoldState,
+  INITIAL_BLOCKED_STATE,
+} from "./BlockedGroupKFoldEditor";
+export { type BlockedGroupKFoldState, INITIAL_BLOCKED_STATE };
+
 import { CV_STRATEGY_FIELDS, CV_STRATEGY_LABELS } from "./constants";
 import { NumberInput } from "./NumberInput";
 import { SegmentGroup } from "./SegmentGroup";
@@ -122,6 +129,8 @@ interface CvSectionProps {
   onChange: (next: CvState) => void;
   uiSchema?: UiSchema;
   nonExcludedCols: ColumnInfo[];
+  blocked?: BlockedGroupKFoldState;
+  onBlockedChange?: (next: BlockedGroupKFoldState) => void;
 }
 
 export function CvSection({
@@ -129,6 +138,8 @@ export function CvSection({
   onChange,
   uiSchema,
   nonExcludedCols,
+  blocked,
+  onBlockedChange,
 }: CvSectionProps) {
   const availableStrategies = useMemo(
     () =>
@@ -171,8 +182,19 @@ export function CvSection({
         />
       </div>
 
-      {/* Conditional fields */}
-      {has("folds") && (
+      {/* BlockedGroupKFold: dedicated 2-axis editor */}
+      {cv.strategy === "blocked_group_kfold" && blocked && onBlockedChange && (
+        <BlockedGroupKFoldEditor
+          cv={cv}
+          onChange={onChange}
+          blocked={blocked}
+          onBlockedChange={onBlockedChange}
+          nonExcludedCols={nonExcludedCols}
+        />
+      )}
+
+      {/* Generic conditional fields (hidden when blocked_group_kfold editor is active) */}
+      {cv.strategy !== "blocked_group_kfold" && has("folds") && (
         <div className="space-y-1">
           <Label className="text-xs font-medium text-muted-foreground">
             Folds
@@ -187,7 +209,7 @@ export function CvSection({
         </div>
       )}
 
-      {has("random_state") && (
+      {cv.strategy !== "blocked_group_kfold" && has("random_state") && (
         <div className="space-y-1">
           <Label className="text-xs font-medium text-muted-foreground">
             Random State
@@ -201,7 +223,7 @@ export function CvSection({
         </div>
       )}
 
-      {has("shuffle") && (
+      {cv.strategy !== "blocked_group_kfold" && has("shuffle") && (
         <div className="flex items-center gap-2">
           <Label className="text-xs font-medium text-muted-foreground">
             Shuffle
@@ -213,7 +235,7 @@ export function CvSection({
         </div>
       )}
 
-      {has("group_col") && (
+      {cv.strategy !== "blocked_group_kfold" && has("group_col") && (
         <div>
           <Label className="text-xs font-medium text-muted-foreground">
             Group column
@@ -236,7 +258,7 @@ export function CvSection({
         </div>
       )}
 
-      {has("time_col") && (
+      {cv.strategy !== "blocked_group_kfold" && has("time_col") && (
         <div>
           <Label className="text-xs font-medium text-muted-foreground">
             Time column
@@ -259,7 +281,7 @@ export function CvSection({
         </div>
       )}
 
-      {has("gap") && (
+      {cv.strategy !== "blocked_group_kfold" && has("gap") && (
         <NullableNumberField
           label="Gap"
           value={cv.gap}
@@ -268,7 +290,7 @@ export function CvSection({
         />
       )}
 
-      {has("purge_gap") && (
+      {cv.strategy !== "blocked_group_kfold" && has("purge_gap") && (
         <NullableNumberField
           label="Purge Gap"
           value={cv.purgeGap}
@@ -277,7 +299,7 @@ export function CvSection({
         />
       )}
 
-      {has("embargo") && (
+      {cv.strategy !== "blocked_group_kfold" && has("embargo") && (
         <NullableNumberField
           label="Embargo"
           value={cv.embargo}
@@ -286,7 +308,7 @@ export function CvSection({
         />
       )}
 
-      {has("train_size_max") && (
+      {cv.strategy !== "blocked_group_kfold" && has("train_size_max") && (
         <NullableNumberField
           label="Train Size Max"
           value={cv.trainSizeMax}
@@ -295,7 +317,7 @@ export function CvSection({
         />
       )}
 
-      {has("test_size_max") && (
+      {cv.strategy !== "blocked_group_kfold" && has("test_size_max") && (
         <NullableNumberField
           label="Test Size Max"
           value={cv.testSizeMax}
@@ -304,7 +326,7 @@ export function CvSection({
         />
       )}
 
-      {has("min_train_rows") && (
+      {cv.strategy !== "blocked_group_kfold" && has("min_train_rows") && (
         <NullableNumberField
           label="Min Train Rows"
           value={cv.minTrainRows}
@@ -313,7 +335,7 @@ export function CvSection({
         />
       )}
 
-      {has("min_valid_rows") && (
+      {cv.strategy !== "blocked_group_kfold" && has("min_valid_rows") && (
         <NullableNumberField
           label="Min Valid Rows"
           value={cv.minValidRows}
