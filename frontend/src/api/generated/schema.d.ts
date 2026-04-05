@@ -148,6 +148,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workspace/data/column-stats/{col}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Data Column Stats
+         * @description Return value distribution for a single column (H-0046).
+         */
+        get: operations["data_column_stats_api_workspace_data_column_stats__col__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workspace/data/split-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Data Split Preview
+         * @description Return approximate fold sizes for the current CV split config.
+         *
+         *     Computes sizes arithmetically from n_rows and config — no sklearn needed.
+         *     Requires both data and config (with ``split.method`` and ``split.n_splits``)
+         *     to be set in the workspace.
+         */
+        get: operations["data_split_preview_api_workspace_data_split_preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workspace/config/schema": {
         parameters: {
             query?: never;
@@ -209,7 +253,11 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Config Patch
+         * @description Partially update config via patch operations (H-0037).
+         */
+        patch: operations["config_patch_api_workspace_config_patch"];
         trace?: never;
     };
     "/api/workspace/config/validate": {
@@ -844,6 +892,13 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** BackendInfoResponse */
+        BackendInfoResponse: {
+            /** Name */
+            name: string;
+            /** Version */
+            version: string;
+        };
         /** Body_config_upload_api_workspace_config_upload_post */
         Body_config_upload_api_workspace_config_upload_post: {
             /** File */
@@ -858,6 +913,75 @@ export interface components {
         Body_inference_upload_api_inference_upload_post: {
             /** File */
             file: string;
+        };
+        /** ColumnInfoResponse */
+        ColumnInfoResponse: {
+            /** Name */
+            name: string;
+            /** Dtype */
+            dtype: string;
+            /** Unique Count */
+            unique_count: number;
+            /** Suggested Type */
+            suggested_type: string;
+            /** Suggested Excluded */
+            suggested_excluded: boolean;
+            /** Exclude Reason */
+            exclude_reason?: string | null;
+        };
+        /** ColumnsResponseModel */
+        ColumnsResponseModel: {
+            /** Target */
+            target: string | null;
+            /** Suggested Task */
+            suggested_task?: string | null;
+            /** Columns */
+            columns: components["schemas"]["ColumnInfoResponse"][];
+        };
+        /** ConfigPatchResponse */
+        ConfigPatchResponse: {
+            /** Config */
+            config: {
+                [key: string]: unknown;
+            };
+        };
+        /** ConfigUpdateResponse */
+        ConfigUpdateResponse: {
+            /** Config */
+            config: {
+                [key: string]: unknown;
+            };
+            /** Errors */
+            errors: {
+                [key: string]: unknown;
+            }[];
+            /** Saved */
+            saved: boolean;
+        } & {
+            [key: string]: unknown;
+        };
+        /** DataLoadResponse */
+        DataLoadResponse: {
+            data_ref: components["schemas"]["DataRefResponse"];
+            /** Memory Usage Bytes */
+            memory_usage_bytes: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /** DataRefResponse */
+        DataRefResponse: {
+            /** Source Type */
+            source_type: string;
+            /** Path */
+            path: string;
+            /** Filename */
+            filename: string;
+            /** Fingerprint */
+            fingerprint: string;
+            /** Shape */
+            shape: number[];
+        } & {
+            [key: string]: unknown;
         };
         /** DataSource */
         DataSource: {
@@ -893,10 +1017,100 @@ export interface components {
             /** Extension */
             extension: string | null;
         };
+        /** FoldInfoResponse */
+        FoldInfoResponse: {
+            /** Fold */
+            fold: number;
+            /** Train Size */
+            train_size: number;
+            /** Valid Size */
+            valid_size: number;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** JobDetailResponse */
+        JobDetailResponse: {
+            /** Job Id */
+            job_id: string;
+            /** Status */
+            status: string;
+            /** Backend Name */
+            backend_name: string;
+            /** Job Type */
+            job_type: string;
+            /** Created At */
+            created_at: string;
+            /** Completed At */
+            completed_at?: string | null;
+            /** Error */
+            error?: string | null;
+            /** Model Name */
+            model_name?: string | null;
+            /** Primary Score */
+            primary_score?: number | null;
+            /** Fit Result */
+            fit_result?: {
+                [key: string]: unknown;
+            } | null;
+            /** Tune Result */
+            tune_result?: {
+                [key: string]: unknown;
+            } | null;
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            } | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** JobStartResponse */
+        JobStartResponse: {
+            /** Job Id */
+            job_id: string;
+        };
+        /** JobSummaryResponse */
+        JobSummaryResponse: {
+            /** Job Id */
+            job_id: string;
+            /** Status */
+            status: string;
+            /** Backend Name */
+            backend_name: string;
+            /** Job Type */
+            job_type: string;
+            /** Created At */
+            created_at: string;
+            /** Completed At */
+            completed_at?: string | null;
+            /** Error */
+            error?: string | null;
+            /** Model Name */
+            model_name?: string | null;
+            /** Primary Score */
+            primary_score?: number | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** PlotResponseModel */
+        PlotResponseModel: {
+            /** Plotly Json */
+            plotly_json: string;
+        };
+        /** PreviewResponseModel */
+        PreviewResponseModel: {
+            /** Columns */
+            columns: string[];
+            /** Data */
+            data: {
+                [key: string]: unknown;
+            }[];
+            /** Total Rows */
+            total_rows: number;
+            /** Total Cols */
+            total_cols: number;
         };
         /** RunRequest */
         RunRequest: {
@@ -914,6 +1128,25 @@ export interface components {
              */
             evaluate: boolean;
         };
+        /** SplitPreviewResponseModel */
+        SplitPreviewResponseModel: {
+            /** Strategy */
+            strategy: string;
+            /** N Splits */
+            n_splits: number;
+            /** Folds */
+            folds: components["schemas"]["FoldInfoResponse"][];
+        };
+        /**
+         * StatusDataRef
+         * @description Subset of DataRef returned by GET /status.
+         */
+        StatusDataRef: {
+            /** Filename */
+            filename: string;
+            /** Shape */
+            shape: number[];
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -926,6 +1159,27 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** ValidationResponse */
+        ValidationResponse: {
+            /** Valid */
+            valid: boolean;
+            /** Errors */
+            errors: {
+                [key: string]: unknown;
+            }[];
+        };
+        /** WorkspaceStatusResponse */
+        WorkspaceStatusResponse: {
+            /** Has Data */
+            has_data: boolean;
+            /** Has Config */
+            has_config: boolean;
+            /** Has Result */
+            has_result: boolean;
+            data_ref?: components["schemas"]["StatusDataRef"] | null;
+            /** Current Job Id */
+            current_job_id?: string | null;
         };
     };
     responses: never;
@@ -951,9 +1205,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["WorkspaceStatusResponse"];
                 };
             };
         };
@@ -1001,9 +1253,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["DataLoadResponse"];
                 };
             };
             /** @description Validation Error */
@@ -1036,9 +1286,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["DataLoadResponse"];
                 };
             };
             /** @description Validation Error */
@@ -1069,9 +1317,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["PreviewResponseModel"];
                 };
             };
             /** @description Validation Error */
@@ -1102,9 +1348,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ColumnsResponseModel"];
                 };
             };
             /** @description Validation Error */
@@ -1136,6 +1380,61 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     }[];
+                };
+            };
+        };
+    };
+    data_column_stats_api_workspace_data_column_stats__col__get: {
+        parameters: {
+            query?: {
+                top_n?: number;
+            };
+            header?: never;
+            path: {
+                col: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    data_split_preview_api_workspace_data_split_preview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SplitPreviewResponseModel"];
                 };
             };
         };
@@ -1239,9 +1538,42 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ConfigUpdateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    config_patch_api_workspace_config_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigPatchResponse"];
                 };
             };
             /** @description Validation Error */
@@ -1276,9 +1608,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ValidationResponse"];
                 };
             };
             /** @description Validation Error */
@@ -1311,9 +1641,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ConfigUpdateResponse"];
                 };
             };
             /** @description Validation Error */
@@ -1362,9 +1690,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["JobStartResponse"];
                 };
             };
         };
@@ -1384,9 +1710,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["JobStartResponse"];
                 };
             };
         };
@@ -1409,9 +1733,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": components["schemas"]["JobSummaryResponse"][];
                 };
             };
             /** @description Validation Error */
@@ -1442,9 +1764,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["JobDetailResponse"];
                 };
             };
             /** @description Validation Error */
@@ -1742,9 +2062,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["PlotResponseModel"];
                 };
             };
             /** @description Validation Error */
@@ -2187,9 +2505,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": components["schemas"]["BackendInfoResponse"][];
                 };
             };
         };

@@ -1,18 +1,55 @@
 /**
- * Frontend types derived from BLUEPRINT and backend API responses.
+ * Frontend API types — hybrid approach.
  *
- * NOTE (H-0043 / v3-5): These types are hand-written because the backend
- * FastAPI endpoints do not yet declare `response_model`, so the auto-generated
- * `generated/schema.d.ts` has all responses typed as `{[key: string]: unknown}`.
+ * ## Pattern
+ * 1. **Re-exported from generated schema** — types where the generated OpenAPI
+ *    schema exactly matches (or is a safe superset of) what the frontend needs.
+ *    These are imported from `./generated/schema` and re-exported with friendly
+ *    names so consumers keep importing from `@/api/types`.
  *
- * Once the backend adds Pydantic response models to each endpoint, these
- * hand-written types should be replaced by re-exports from the generated schema.
- * See PLAN.md Phase v3-5 for the full migration plan.
+ * 2. **Hand-written** — types where:
+ *    - The generated schema uses `string` but the frontend needs literal unions
+ *      (e.g. `"fit" | "tune"`, `"numeric" | "categorical"`).
+ *    - The generated schema lacks the type entirely (endpoint has no
+ *      `response_model`, or it's a frontend-only / WebSocket type).
+ *    - The shape differs (e.g. `shape: [number, number]` vs `number[]`).
  *
- * In the meantime, a CI check (`pnpm check:api-types`) ensures the generated
- * schema stays in sync with the backend OpenAPI spec.
+ * When the backend Pydantic models gain `Literal[...]` annotations, re-run
+ * `pnpm generate:api` and replace the corresponding hand-written types.
  */
 
+import type { components } from "./generated/schema";
+
+// ---------------------------------------------------------------------------
+// Re-exported generated types (1:1 match)
+// ---------------------------------------------------------------------------
+
+/** GET /api/backends */
+export type BackendInfo = components["schemas"]["BackendInfoResponse"];
+
+/** GET /api/workspace/data/split-preview */
+export type FoldInfo = components["schemas"]["FoldInfoResponse"];
+
+/** GET /api/jobs/:id/plot/:kind */
+export type PlotResponse = components["schemas"]["PlotResponseModel"];
+
+/** GET /api/workspace/data/preview */
+export type PreviewResponse = components["schemas"]["PreviewResponseModel"];
+
+/** GET /api/workspace/data/split-preview */
+export type SplitPreviewResponse =
+  components["schemas"]["SplitPreviewResponseModel"];
+
+// ---------------------------------------------------------------------------
+// Hand-written types — generated schema uses `string` where we need literals,
+// or the type is absent from the schema entirely.
+// ---------------------------------------------------------------------------
+
+/**
+ * DataRef — hand-written because generated `DataRefResponse` types
+ * `source_type` as `string` and `shape` as `number[]` instead of the
+ * stricter `"path" | "upload"` and `[number, number]`.
+ */
 export interface DataRef {
   source_type: "path" | "upload";
   path: string;
@@ -21,6 +58,11 @@ export interface DataRef {
   shape: [number, number];
 }
 
+/**
+ * WorkspaceStatus — hand-written because the generated
+ * `WorkspaceStatusResponse` references `StatusDataRef` with `shape: number[]`
+ * instead of `[number, number]`.
+ */
 export interface WorkspaceStatus {
   has_data: boolean;
   has_config: boolean;
@@ -29,6 +71,11 @@ export interface WorkspaceStatus {
   current_job_id: string | null;
 }
 
+/**
+ * ColumnInfo — hand-written because generated `ColumnInfoResponse` types
+ * `suggested_type` and `exclude_reason` as plain `string` instead of
+ * literal unions used throughout the UI.
+ */
 export interface ColumnInfo {
   name: string;
   dtype: string;
@@ -44,37 +91,11 @@ export interface ColumnsResponse {
   columns: ColumnInfo[];
 }
 
-export interface PreviewResponse {
-  columns: string[];
-  data: Record<string, unknown>[];
-}
-
-export interface ValueCount {
-  value: string;
-  count: number;
-}
-
-export interface ColumnStatsResponse {
-  name: string;
-  dtype: string;
-  unique_count: number;
-  total_count: number;
-  null_count: number;
-  value_counts: ValueCount[];
-}
-
-export interface FoldInfo {
-  fold: number;
-  train_size: number;
-  valid_size: number;
-}
-
-export interface SplitPreviewResponse {
-  strategy: string;
-  n_splits: number;
-  folds: FoldInfo[];
-}
-
+/**
+ * ConfigUpdateResponse — hand-written because generated type has
+ * `errors: {[key: string]: unknown}[]` whereas we use the structured
+ * `ConfigError` type, and the generated type includes an index signature.
+ */
 export interface ConfigUpdateResponse {
   config: Record<string, unknown>;
   errors: ConfigError[];
@@ -85,10 +106,7 @@ export interface ConfigError {
   message: string;
 }
 
-export interface BackendInfo {
-  name: string;
-  version: string;
-}
+// --- Job types — hand-written for literal unions on status / job_type ---
 
 export interface JobSummary {
   job_id: string;
@@ -124,18 +142,34 @@ export interface TuneResult {
   direction: string;
 }
 
-export interface ImportanceResponse {
-  [feature: string]: number;
+// --- Types absent from the generated schema ---
+
+export interface ValueCount {
+  value: string;
+  count: number;
 }
 
-export interface PlotResponse {
-  plotly_json: string;
+export interface ColumnStatsResponse {
+  name: string;
+  dtype: string;
+  unique_count: number;
+  total_count: number;
+  null_count: number;
+  value_counts: ValueCount[];
+}
+
+export interface ImportanceResponse {
+  [feature: string]: number;
 }
 
 export interface SplitSummaryRow {
   fold: number;
   [metric: string]: unknown;
 }
+
+// ---------------------------------------------------------------------------
+// Frontend-only types (WebSocket messages, UI helpers)
+// ---------------------------------------------------------------------------
 
 export type FoldResult = {
   fold: number;
