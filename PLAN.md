@@ -42,7 +42,7 @@ Phase 0〜30 は v1 で完了済み。バックエンド（Python / FastAPI / Ad
 | v3-2 | OpenMP デーモンスレッド劣化対策 | H-0036 | v3-1 | ✅ |
 | v3-3 | API 拡張（Config パッチ + エラーコード） | H-0037, H-0041 | v3-1 | ✅ |
 | v3-4 | WebSocket 再接続 + Fold 進捗表示 | H-0035, H-0047 | v3-1 | ✅ |
-| v3-5 | openapi-typescript 生成型の実活用 | H-0043 | v3-3 | 🔲 |
+| v3-5 | openapi-typescript 生成型の実活用 | H-0043 | v3-3 | 🔶 部分完了 |
 | v3-6 | Workspace UX 改善（Config ロック + セグメントボタン） | H-0048, H-0049 | v3-4 | 🔲 |
 | v3-7 | カラム値分布バー + CV Fold Preview | H-0044, H-0046 | v3-5 | 🔲 |
 | v3-8 | BlockedGroupKFold 専用 2軸エディタ | H-0045 | v3-7 | 🔲 |
@@ -785,22 +785,25 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 
 **方針:** 手書き型（`types.ts`）から `generated/schema.d.ts` への段階的移行。API 関数の import 先を変更し、手書き型を削減する。
 
-**成果物:**
-- API 関数が `generated/schema.d.ts` を直接参照
-- `types.ts` が re-export のみに
-- CI に型生成一致チェック追加
+**現状（部分完了）:** バックエンドの FastAPI エンドポイントが `response_model` を宣言していないため、生成される `schema.d.ts` のレスポンス型はすべて `{[key: string]: unknown}` となっている。型移行は backend に `response_model` を追加した後に実施する。現時点では CI チェック（スキーマ同期確認）のみ完了。
 
-**タスク:**
-1. `pnpm generate:api` で最新の `generated/schema.d.ts` を生成
-2. `frontend/src/api/workspace.ts` の型を `generated/schema.d.ts` に移行
-3. `frontend/src/api/jobs.ts` の型を移行
-4. `frontend/src/api/inference.ts` の型を移行
-5. `frontend/src/api/types.ts` から手書き API レスポンス型を削除（re-export のみ残す）
-6. コンポーネント側の import パスを必要に応じて調整
-7. CI に `pnpm generate:api && git diff --exit-code frontend/src/api/generated/` チェックを追加
-8. `pnpm check` + `pnpm test` 通過確認
+**完了済み:**
+- [x] `pnpm generate:api` で最新スキーマ生成・コミット
+- [x] CI チェックスクリプト `frontend/scripts/check-api-types.sh` 追加
+- [x] `package.json` に `check:api-types` スクリプト追加
+- [x] `types.ts` に状況説明ドキュメントコメント追加
+- [x] PLAN.md 更新
 
-**DoD:**
+**残タスク（backend response_model 追加後）:**
+- [ ] バックエンド各エンドポイントに Pydantic `response_model` を追加
+- [ ] `pnpm generate:api` で型付きスキーマを再生成
+- [ ] `frontend/src/api/workspace.ts` の型を `generated/schema.d.ts` に移行
+- [ ] `frontend/src/api/jobs.ts` の型を移行
+- [ ] `frontend/src/api/inference.ts` の型を移行
+- [ ] `frontend/src/api/types.ts` から手書き API レスポンス型を削除（re-export のみ残す）
+- [ ] コンポーネント側の import パスを必要に応じて調整
+
+**DoD（完全完了時）:**
 - [ ] API 関数が `generated/schema.d.ts` の型を直接参照している
 - [ ] `types.ts` に手書きの API レスポンス型が存在しない
 - [ ] `pnpm check` が全パス

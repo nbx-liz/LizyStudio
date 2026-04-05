@@ -15,8 +15,9 @@ export interface paths {
          * Workspace Status
          * @description Return current workspace state summary.
          *
-         *     If current_job_id is set, attempt to restore results from JobStore
-         *     so the frontend can recover state after a page refresh.
+         *     Per BLUEPRINT §4.2.3: browser close = Results empty. Results are only
+         *     available from volatile memory (set by the background job thread), never
+         *     restored from disk.
          */
         get: operations["workspace_status_api_workspace_status_get"];
         put?: never;
@@ -167,6 +168,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/workspace/config/defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Config Defaults
+         * @description Return a complete default config for the given task and target.
+         */
+        get: operations["config_defaults_api_workspace_config_defaults_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workspace/config": {
         parameters: {
             query?: never;
@@ -203,6 +224,8 @@ export interface paths {
         /**
          * Config Validate
          * @description Validate config without saving.
+         *
+         *     If no body is provided, validates the current workspace config.
          */
         post: operations["config_validate_api_workspace_config_validate_post"];
         delete?: never;
@@ -327,7 +350,7 @@ export interface paths {
         post?: never;
         /**
          * Delete Job
-         * @description Delete a job.
+         * @description Delete a job. Running jobs cannot be deleted (v2-13 task 2).
          */
         delete: operations["delete_job_api_jobs__job_id__delete"];
         options?: never;
@@ -455,6 +478,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/importance-kinds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job Importance Kinds Endpoint
+         * @description Get the list of valid importance kind identifiers.
+         */
+        get: operations["get_job_importance_kinds_endpoint_api_jobs__job_id__importance_kinds_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/plot/{plot_type}": {
         parameters: {
             query?: never;
@@ -465,6 +508,8 @@ export interface paths {
         /**
          * Get Job Plot Endpoint
          * @description Get a Plotly figure as JSON.
+         *
+         *     For ``learning-curve``, pass ``?metrics=auc,f1`` to filter subplots.
          */
         get: operations["get_job_plot_endpoint_api_jobs__job_id__plot__plot_type__get"];
         put?: never;
@@ -509,6 +554,26 @@ export interface paths {
          * @description Export model or report to the given path (H-0005).
          */
         post: operations["export_job_api_jobs__job_id__export_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/export-code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Export Code
+         * @description Generate standalone Python code and return it as a ZIP download (H-0027).
+         */
+        post: operations["export_code_api_jobs__job_id__export_code_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -715,6 +780,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/backends/ui-schema": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Ui Schema
+         * @description Return UI metadata for the current backend (H-0026).
+         */
+        get: operations["get_ui_schema_api_backends_ui_schema_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Directory
+         * @description List directory contents, filtered to supported data file types.
+         */
+        get: operations["list_directory_api_files_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/{full_path}": {
         parameters: {
             query?: never;
@@ -761,12 +866,32 @@ export interface components {
             /** Path */
             path: string;
         };
+        /** DirectoryListing */
+        DirectoryListing: {
+            /** Path */
+            path: string;
+            /** Parent */
+            parent: string | null;
+            /** Entries */
+            entries: components["schemas"]["FileEntry"][];
+        };
         /** ExportRequest */
         ExportRequest: {
             /** Export Type */
             export_type: string;
             /** Output Path */
             output_path: string;
+        };
+        /** FileEntry */
+        FileEntry: {
+            /** Name */
+            name: string;
+            /** Type */
+            type: string;
+            /** Size */
+            size: number | null;
+            /** Extension */
+            extension: string | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1037,6 +1162,40 @@ export interface operations {
             };
         };
     };
+    config_defaults_api_workspace_config_defaults_get: {
+        parameters: {
+            query: {
+                task: string;
+                target: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     config_get_api_workspace_config_get: {
         parameters: {
             query?: never;
@@ -1103,11 +1262,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
+        requestBody?: {
             content: {
                 "application/json": {
                     [key: string]: unknown;
-                };
+                } | null;
             };
         };
         responses: {
@@ -1532,9 +1691,42 @@ export interface operations {
             };
         };
     };
-    get_job_plot_endpoint_api_jobs__job_id__plot__plot_type__get: {
+    get_job_importance_kinds_endpoint_api_jobs__job_id__importance_kinds_get: {
         parameters: {
             query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_job_plot_endpoint_api_jobs__job_id__plot__plot_type__get: {
+        parameters: {
+            query?: {
+                metrics?: string | null;
+            };
             header?: never;
             path: {
                 job_id: string;
@@ -1621,6 +1813,37 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_code_api_jobs__job_id__export_code_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -1967,6 +2190,60 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     }[];
+                };
+            };
+        };
+    };
+    get_ui_schema_api_backends_ui_schema_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    list_directory_api_files_get: {
+        parameters: {
+            query?: {
+                /** @description Directory path to list */
+                path?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DirectoryListing"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

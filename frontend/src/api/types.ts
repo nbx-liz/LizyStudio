@@ -1,4 +1,17 @@
-/** Frontend types derived from BLUEPRINT and backend API responses. */
+/**
+ * Frontend types derived from BLUEPRINT and backend API responses.
+ *
+ * NOTE (H-0043 / v3-5): These types are hand-written because the backend
+ * FastAPI endpoints do not yet declare `response_model`, so the auto-generated
+ * `generated/schema.d.ts` has all responses typed as `{[key: string]: unknown}`.
+ *
+ * Once the backend adds Pydantic response models to each endpoint, these
+ * hand-written types should be replaced by re-exports from the generated schema.
+ * See PLAN.md Phase v3-5 for the full migration plan.
+ *
+ * In the meantime, a CI check (`pnpm check:api-types`) ensures the generated
+ * schema stays in sync with the backend OpenAPI spec.
+ */
 
 export interface DataRef {
   source_type: "path" | "upload";
@@ -166,6 +179,10 @@ export interface SearchSpaceCatalogEntry {
   modes: string[];
   group?: string;
   default?: unknown;
+  /** Initial mode for the parameter: "fixed" (default), "range", or "choice". */
+  default_mode?: "fixed" | "range" | "choice";
+  /** Default range values when switching to range mode. */
+  default_range?: { low: number; high: number; log: boolean };
 }
 
 export interface UiSchema {
