@@ -6,10 +6,12 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 
+from lizystudio.api.models import BackendInfoResponse
+
 router = APIRouter()
 
 
-@router.get("")
+@router.get("", response_model=list[BackendInfoResponse])
 def list_backends(request: Request) -> list[dict[str, Any]]:
     """Return available backends."""
     backend = request.app.state.workspace.backend

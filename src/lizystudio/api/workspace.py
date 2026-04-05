@@ -26,6 +26,17 @@ from lizystudio.api.errors import (
     WorkspaceNoConfigError,
     WorkspaceNoDataError,
 )
+from lizystudio.api.models import (
+    ColumnsResponseModel,
+    ConfigPatchResponse,
+    ConfigUpdateResponse,
+    DataLoadResponse,
+    JobStartResponse,
+    PreviewResponseModel,
+    SplitPreviewResponseModel,
+    ValidationResponse,
+    WorkspaceStatusResponse,
+)
 from lizystudio.security import (
     check_dataframe_memory,
     read_upload_checked,
@@ -60,7 +71,7 @@ router = APIRouter()
 # --- Status / Reset ---
 
 
-@router.get("/status")
+@router.get("/status", response_model=WorkspaceStatusResponse)
 def workspace_status(
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, Any]:
@@ -94,7 +105,7 @@ def workspace_reset(ws: WorkspaceState = Depends(get_workspace)) -> dict[str, st
 # --- Data endpoints (BLUEPRINT §5.2 Data) ---
 
 
-@router.post("/data/path")
+@router.post("/data/path", response_model=DataLoadResponse)
 def data_load_path(
     body: dict[str, Any],
     ws: WorkspaceState = Depends(get_workspace),
@@ -119,7 +130,7 @@ def data_load_path(
     return {"data_ref": asdict(data_ref), "memory_usage_bytes": memory_usage_bytes}
 
 
-@router.post("/data/upload")
+@router.post("/data/upload", response_model=DataLoadResponse)
 async def data_upload(
     file: UploadFile,
     ws: WorkspaceState = Depends(get_workspace),
@@ -154,7 +165,7 @@ async def data_upload(
     return {"data_ref": asdict(data_ref), "memory_usage_bytes": memory_usage_bytes}
 
 
-@router.get("/data/preview")
+@router.get("/data/preview", response_model=PreviewResponseModel)
 def data_preview(
     rows: int = 50,
     ws: WorkspaceState = Depends(get_workspace),
@@ -165,7 +176,7 @@ def data_preview(
     return get_preview(ws.dataframe, rows=rows)
 
 
-@router.get("/data/columns")
+@router.get("/data/columns", response_model=ColumnsResponseModel)
 def data_columns(
     target: str | None = None,
     ws: WorkspaceState = Depends(get_workspace),
@@ -203,7 +214,7 @@ def data_column_stats(
     return asdict(stats)
 
 
-@router.get("/data/split-preview")
+@router.get("/data/split-preview", response_model=SplitPreviewResponseModel)
 def data_split_preview(
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, Any]:
@@ -264,7 +275,7 @@ def config_get(
     return ws.config
 
 
-@router.put("/config")
+@router.put("/config", response_model=ConfigUpdateResponse)
 def config_update(
     body: dict[str, Any],
     ws: WorkspaceState = Depends(get_workspace),
@@ -276,7 +287,7 @@ def config_update(
     return {"config": body, "errors": errors, "saved": len(errors) == 0}
 
 
-@router.patch("/config")
+@router.patch("/config", response_model=ConfigPatchResponse)
 def config_patch(
     body: dict[str, Any],
     ws: WorkspaceState = Depends(get_workspace),
@@ -295,7 +306,7 @@ def config_patch(
     return {"config": patched}
 
 
-@router.post("/config/validate")
+@router.post("/config/validate", response_model=ValidationResponse)
 def config_validate(
     body: dict[str, Any] | None = None,
     ws: WorkspaceState = Depends(get_workspace),
@@ -311,7 +322,7 @@ def config_validate(
     return {"valid": len(errors) == 0, "errors": errors}
 
 
-@router.post("/config/upload")
+@router.post("/config/upload", response_model=ConfigUpdateResponse)
 async def config_upload(
     file: UploadFile,
     ws: WorkspaceState = Depends(get_workspace),
@@ -357,7 +368,7 @@ def _get_broadcaster(request: Request) -> ProgressBroadcaster:
 # --- Fit / Tune endpoints (BLUEPRINT §5.2 Fit/Tune) ---
 
 
-@router.post("/fit")
+@router.post("/fit", response_model=JobStartResponse)
 def workspace_fit(
     request: Request,
     ws: WorkspaceState = Depends(get_workspace),
@@ -390,7 +401,7 @@ def workspace_fit(
     return {"job_id": job_id}
 
 
-@router.post("/tune")
+@router.post("/tune", response_model=JobStartResponse)
 def workspace_tune(
     request: Request,
     ws: WorkspaceState = Depends(get_workspace),

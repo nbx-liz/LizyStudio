@@ -22,6 +22,11 @@ from lizystudio.api.errors import (
     JobRunningError,
     StudioError,
 )
+from lizystudio.api.models import (
+    JobDetailResponse,
+    JobSummaryResponse,
+    PlotResponseModel,
+)
 from lizystudio.services.export import export_code_as_zip, export_model, export_report
 from lizystudio.services.jobs import (
     Job,
@@ -97,7 +102,7 @@ def _job_summary(job: Job) -> dict[str, Any]:
 # --- CRUD ---
 
 
-@router.get("/")
+@router.get("/", response_model=list[JobSummaryResponse])
 @router.get("", include_in_schema=False)
 def list_jobs(
     status: str | None = None,
@@ -109,7 +114,7 @@ def list_jobs(
     return [_job_summary(j) for j in jobs]
 
 
-@router.get("/{job_id}")
+@router.get("/{job_id}", response_model=JobDetailResponse)
 def get_job(
     job_id: str,
     job_store: JobStore = Depends(get_job_store),
@@ -239,7 +244,7 @@ def get_job_importance_kinds_endpoint(
         raise BackendError(exc) from exc
 
 
-@router.get("/{job_id}/plot/{plot_type}")
+@router.get("/{job_id}/plot/{plot_type}", response_model=PlotResponseModel)
 def get_job_plot_endpoint(
     job_id: str,
     plot_type: str,
