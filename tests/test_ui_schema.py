@@ -579,6 +579,56 @@ class TestLizyMLAdapterUiSchema:
         assert ssf["objective"] == "objective"
         assert ssf["metric"] == "model_metric"
 
+    def test_search_space_catalog_learning_rate_default_mode_range(self) -> None:
+        """learning_rate must have default_mode='range' and default_range (H-0053)."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        lr = catalog["learning_rate"]
+        assert lr["default_mode"] == "range"
+        assert lr["default_range"] == {"low": 0.01, "high": 0.3, "log": True}
+
+    def test_search_space_catalog_num_leaves_default_mode_range(self) -> None:
+        """num_leaves must have default_mode='range' and default_range (H-0053)."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        nl = catalog["num_leaves"]
+        assert nl["default_mode"] == "range"
+        assert nl["default_range"] == {"low": 15, "high": 127, "log": False}
+
+    def test_search_space_catalog_n_estimators_default_mode_range(self) -> None:
+        """n_estimators must have default_mode='range' and default_range (H-0053)."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        ne = catalog["n_estimators"]
+        assert ne["default_mode"] == "range"
+        assert ne["default_range"] == {"low": 50, "high": 500, "log": False}
+
+    def test_search_space_catalog_max_depth_default_mode_range(self) -> None:
+        """max_depth must have default_mode='range' and default_range (H-0053)."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        md = catalog["max_depth"]
+        assert md["default_mode"] == "range"
+        assert md["default_range"] == {"low": 3, "high": 12, "log": False}
+
+    def test_search_space_catalog_default_mode_absent_means_fixed(self) -> None:
+        """Entries without default_mode omit it (implicit fixed, H-0053)."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        # max_bin should NOT have default_mode
+        assert "default_mode" not in catalog["max_bin"]
+        assert "default_range" not in catalog["max_bin"]
+
+    def test_search_space_catalog_default_range_low_lt_high(self) -> None:
+        """All default_range entries must have low < high (H-0053)."""
+        schema = LizyMLAdapter().get_ui_schema()
+        for entry in schema["search_space_catalog"]:
+            dr = entry.get("default_range")
+            if dr is not None:
+                assert dr["low"] < dr["high"], (
+                    f"default_range low >= high for '{entry['key']}': {dr}"
+                )
+
     def test_step_map_includes_expanded_params(self) -> None:
         """step_map should include entries for newly added params."""
         schema = LizyMLAdapter().get_ui_schema()

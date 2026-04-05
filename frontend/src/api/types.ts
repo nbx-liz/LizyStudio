@@ -49,6 +49,32 @@ export interface PreviewResponse {
   data: Record<string, unknown>[];
 }
 
+export interface ValueCount {
+  value: string;
+  count: number;
+}
+
+export interface ColumnStatsResponse {
+  name: string;
+  dtype: string;
+  unique_count: number;
+  total_count: number;
+  null_count: number;
+  value_counts: ValueCount[];
+}
+
+export interface FoldInfo {
+  fold: number;
+  train_size: number;
+  valid_size: number;
+}
+
+export interface SplitPreviewResponse {
+  strategy: string;
+  n_splits: number;
+  folds: FoldInfo[];
+}
+
 export interface ConfigUpdateResponse {
   config: Record<string, unknown>;
   errors: ConfigError[];

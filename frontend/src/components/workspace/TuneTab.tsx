@@ -10,18 +10,9 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { CompactStepper } from "./CompactStepper";
-import { KNOWN_PARAMS, RANGE_DEFAULTS } from "./constants";
 import { SearchSpaceTable } from "./SearchSpaceTable";
 import { SegmentGroup } from "./SegmentGroup";
 import { TuneSettings } from "./TuneSettings";
-
-/** Default params to auto-populate in search space when empty. */
-const DEFAULT_TUNE_PARAMS = [
-  "learning_rate",
-  "num_leaves",
-  "n_estimators",
-  "max_depth",
-];
 
 interface TuneTabProps {
   config: Record<string, unknown>;
@@ -65,7 +56,7 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
     {},
   );
 
-  // Auto-populate search space with default params when empty (initial load only)
+  // Auto-populate search space with catalog entries that have default_mode: "range"
   const spaceInitialized = useRef(false);
   useEffect(() => {
     if (spaceInitialized.current) return;
@@ -73,25 +64,23 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
       spaceInitialized.current = true;
       return;
     }
-    // Build default space from RANGE_DEFAULTS for the 4 key params
+    const catalogEntries = uiSchema?.search_space_catalog;
+    if (!catalogEntries) return;
     const defaultSpace: Record<string, unknown> = {};
-    for (const key of DEFAULT_TUNE_PARAMS) {
-      const defaults = RANGE_DEFAULTS[key];
-      if (!defaults) continue;
-      const param = KNOWN_PARAMS.find((p) => p.key === key);
-      defaultSpace[key] = {
-        type: param?.type === "integer" ? "int" : "float",
-        low: defaults.low,
-        high: defaults.high,
-        log: defaults.log,
-        step: defaults.step,
+    for (const entry of catalogEntries) {
+      if (entry.default_mode !== "range" || !entry.default_range) continue;
+      defaultSpace[entry.key] = {
+        type: entry.paramType === "integer" ? "int" : "float",
+        low: entry.default_range.low,
+        high: entry.default_range.high,
+        log: entry.default_range.log,
       };
     }
     if (Object.keys(defaultSpace).length > 0) {
       spaceInitialized.current = true;
       onChange(updateTuningConfig(config, "space", defaultSpace));
     }
-  }, [searchSpace, config, onChange]);
+  }, [searchSpace, config, onChange, uiSchema]);
 
   const evaluation = extractOptunaField<{
     metrics?: MetricEntry[];

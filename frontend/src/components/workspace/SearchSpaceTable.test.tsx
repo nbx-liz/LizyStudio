@@ -90,12 +90,11 @@ describe("SearchSpaceTable", () => {
     expect(screen.getByText("0 ~ 1")).toBeInTheDocument();
   });
 
-  it("falls back to KNOWN_PARAMS when no catalog provided", () => {
+  it("renders nothing when no catalog provided", () => {
     render(<SearchSpaceTable space={{}} modelParams={{}} onChange={vi.fn()} />);
-    // KNOWN_PARAMS includes learning_rate, num_leaves, n_estimators, etc.
-    expect(screen.getByText("learning_rate")).toBeInTheDocument();
-    expect(screen.getByText("num_leaves")).toBeInTheDocument();
-    expect(screen.getByText("n_estimators")).toBeInTheDocument();
+    // Without a catalog, no parameter rows are rendered
+    expect(screen.queryByText("learning_rate")).not.toBeInTheDocument();
+    expect(screen.queryByText("n_estimators")).not.toBeInTheDocument();
   });
 
   it('fixed mode shows default value or "default" text', () => {
@@ -255,6 +254,71 @@ describe("SearchSpaceTable", () => {
     expect(
       screen.getByText("binary:logistic, multi:softmax"),
     ).toBeInTheDocument();
+  });
+
+  it("uses catalog default_range when switching to range mode", () => {
+    const catalogWithRange: SearchSpaceCatalogEntry[] = [
+      {
+        key: "learning_rate",
+        title: "Learning Rate",
+        paramType: "number",
+        modes: ["fixed", "range"],
+        group: "model_params",
+        default_mode: "range",
+        default_range: { low: 0.01, high: 0.3, log: true },
+      },
+    ];
+    const onChange = vi.fn();
+    render(
+      <SearchSpaceTable
+        space={{}}
+        modelParams={{}}
+        onChange={onChange}
+        catalog={catalogWithRange}
+      />,
+    );
+    const rangeBtn = screen.getByRole("radio", { name: /range/i });
+    fireEvent.click(rangeBtn);
+
+    expect(onChange).toHaveBeenCalled();
+    const spaceArg = onChange.mock.calls[0][0];
+    expect(spaceArg.learning_rate).toEqual({
+      type: "float",
+      low: 0.01,
+      high: 0.3,
+      log: true,
+      step: undefined,
+    });
+  });
+
+  it("uses generic defaults when catalog entry has no default_range", () => {
+    const catalogNoRange: SearchSpaceCatalogEntry[] = [
+      {
+        key: "max_bin",
+        title: "Max Bin",
+        paramType: "integer",
+        modes: ["fixed", "range"],
+        group: "model_params",
+      },
+    ];
+    const onChange = vi.fn();
+    render(
+      <SearchSpaceTable
+        space={{}}
+        modelParams={{}}
+        onChange={onChange}
+        catalog={catalogNoRange}
+      />,
+    );
+    const rangeBtn = screen.getByRole("radio", { name: /range/i });
+    fireEvent.click(rangeBtn);
+
+    expect(onChange).toHaveBeenCalled();
+    const spaceArg = onChange.mock.calls[0][0];
+    // Falls back to generic {low: 0, high: 1, log: false}
+    expect(spaceArg.max_bin.low).toBe(0);
+    expect(spaceArg.max_bin.high).toBe(1);
+    expect(spaceArg.max_bin.log).toBe(false);
   });
 
   it("renders FixedValueEditor when onModelParamChange is provided", () => {

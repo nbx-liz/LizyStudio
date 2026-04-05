@@ -10,7 +10,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ChoiceInput } from "./ChoiceInput";
-import { KNOWN_PARAMS, RANGE_DEFAULTS } from "./constants";
 import { FixedValueEditor } from "./FixedValueEditor";
 import { NumberInput } from "./NumberInput";
 import { SegmentGroup } from "./SegmentGroup";
@@ -95,27 +94,21 @@ export function SearchSpaceTable({
   });
 
   const effectiveCatalog = useMemo(() => {
-    if (catalog) {
-      return catalog.map((c) => ({
-        key: c.key,
-        type:
-          c.paramType === "integer"
-            ? ("integer" as const)
-            : c.paramType === "boolean"
-              ? ("boolean" as const)
-              : ("float" as const),
-        default: 0,
-        description: c.title,
-        modes: c.modes,
-        paramType: c.paramType,
-        group: c.group ?? "model_params",
-      }));
-    }
-    return KNOWN_PARAMS.map((kp) => ({
-      ...kp,
-      modes: ["fixed", "range"],
-      paramType: kp.type === "integer" ? "integer" : "number",
-      group: "model_params",
+    if (!catalog) return [];
+    return catalog.map((c) => ({
+      key: c.key,
+      type:
+        c.paramType === "integer"
+          ? ("integer" as const)
+          : c.paramType === "boolean"
+            ? ("boolean" as const)
+            : ("float" as const),
+      default: 0,
+      description: c.title,
+      modes: c.modes,
+      paramType: c.paramType,
+      group: c.group ?? "model_params",
+      defaultRange: c.default_range,
     }));
   }, [catalog]);
 
@@ -130,6 +123,9 @@ export function SearchSpaceTable({
         modes: ["fixed", "range"] as string[],
         paramType: "number",
         group: "additional",
+        defaultRange: undefined as
+          | { low: number; high: number; log: boolean }
+          | undefined,
       }));
     return [...effectiveCatalog, ...extraEntries];
   }, [effectiveCatalog, addedParams]);
@@ -188,14 +184,14 @@ export function SearchSpaceTable({
 
   const handleModeChange = (key: string, mode: string) => {
     if (mode === "range") {
-      const defaults = RANGE_DEFAULTS[key] ?? { low: 0, high: 1, log: false };
       const param = fullCatalog.find((p) => p.key === key);
+      const defaults = param?.defaultRange ?? { low: 0, high: 1, log: false };
       const entry: SpaceEntry = {
         type: param?.type === "integer" ? "int" : "float",
         low: defaults.low,
         high: defaults.high,
         log: defaults.log,
-        step: defaults.step ?? stepMap?.[key],
+        step: stepMap?.[key],
       };
       onChange({ ...space, [key]: entry });
       setExpandedRows((prev) => new Set([...prev, key]));
@@ -315,6 +311,7 @@ export function SearchSpaceTable({
                         value={modelParams[param.key]}
                         onChange={(v) => onModelParamChange(param.key, v)}
                         step={stepMap?.[param.key]}
+                        options={getChoiceOptions(param.key)}
                       />
                     ) : (
                       String(modelParams[param.key] ?? "default")

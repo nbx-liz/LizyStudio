@@ -393,6 +393,8 @@ def build_ui_schema(
                 "modes": ["fixed", "range"],
                 "group": "model_params",
                 "default": 1000,
+                "default_mode": "range",
+                "default_range": {"low": 50, "high": 500, "log": False},
             },
             {
                 "key": "learning_rate",
@@ -401,6 +403,8 @@ def build_ui_schema(
                 "modes": ["fixed", "range"],
                 "group": "model_params",
                 "default": 0.1,
+                "default_mode": "range",
+                "default_range": {"low": 0.01, "high": 0.3, "log": True},
             },
             {
                 "key": "max_depth",
@@ -409,6 +413,8 @@ def build_ui_schema(
                 "modes": ["fixed", "range"],
                 "group": "model_params",
                 "default": -1,
+                "default_mode": "range",
+                "default_range": {"low": 3, "high": 12, "log": False},
             },
             {
                 "key": "max_bin",
@@ -514,6 +520,8 @@ def build_ui_schema(
                 "modes": ["fixed", "range", "choice"],
                 "group": "smart_params",
                 "default": 256,
+                "default_mode": "range",
+                "default_range": {"low": 15, "high": 127, "log": False},
             },
             {
                 "key": "feature_weights",
