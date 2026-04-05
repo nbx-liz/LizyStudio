@@ -55,15 +55,15 @@ export function CompletedContent({
     retry: false,
   });
 
-  // Learning curve metrics filter (H-0051)
-  const [lcMetrics, setLcMetrics] = useState<string[] | null>(null);
+  // Learning curve metric filter (H-0051) — single-select
+  const [lcMetric, setLcMetric] = useState<string | null>(null);
   const lcInitialized = useRef(false);
 
   const { data: learningCurve, isError: isLcError } = useQuery({
-    queryKey: ["job-plot", job.job_id, "learning-curve", lcMetrics],
+    queryKey: ["job-plot", job.job_id, "learning-curve", lcMetric],
     queryFn: () =>
       fetchJobPlot(job.job_id, "learning-curve", {
-        metrics: lcMetrics ?? undefined,
+        metrics: lcMetric ?? undefined,
       }),
     enabled:
       selectedPlot === "learning-curve" &&
@@ -73,10 +73,10 @@ export function CompletedContent({
 
   // If LC filter fails (e.g. feval-only metric), fall back to unfiltered view
   useEffect(() => {
-    if (isLcError && lcMetrics !== null) {
-      setLcMetrics(null);
+    if (isLcError && lcMetric !== null) {
+      setLcMetric(null);
     }
-  }, [isLcError, lcMetrics]);
+  }, [isLcError, lcMetric]);
 
   // Importance kind selector (H-0052)
   const importanceEnabled = plots?.includes("importance") ?? false;
@@ -151,12 +151,12 @@ export function CompletedContent({
     return metrics ? Object.keys(metrics) : [];
   }, [evalConfig.metrics, metrics]);
 
-  // Initialize LC filter to first metric only (avoid cramped subplot layout)
+  // Initialize LC filter to first metric (single-select)
   useEffect(() => {
     if (lcInitialized.current) return;
     if (evalMetricNames.length > 1) {
       lcInitialized.current = true;
-      setLcMetrics([evalMetricNames[0]]);
+      setLcMetric(evalMetricNames[0]);
     } else if (evalMetricNames.length === 1) {
       lcInitialized.current = true;
     }
@@ -219,8 +219,8 @@ export function CompletedContent({
               : isPlotLoading
           }
           isError={isPlotError}
-          lcMetrics={lcMetrics}
-          onLcMetricsChange={setLcMetrics}
+          lcMetric={lcMetric}
+          onLcMetricChange={setLcMetric}
           availableEvalMetrics={evalMetricNames}
           importanceKinds={importanceKinds}
           selectedImportanceKind={importanceKind}

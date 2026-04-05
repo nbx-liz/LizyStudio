@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { dismissOnboarding } from "./helpers/onboarding";
 
 const API = "http://localhost:8501/api";
 
@@ -76,12 +77,13 @@ test.describe("Workspace core flow", () => {
   test("UI: 3-panel layout renders with Data/Model/Results", async ({
     page,
   }) => {
+    await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
 
     // Sidebar
-    await expect(page.getByText("LizyStudio")).toBeVisible();
-    await expect(page.getByText("Workspace")).toBeVisible();
+    await expect(page.getByText("LizyStudio").first()).toBeVisible();
+    await expect(page.getByRole("link", { name: "Workspace" })).toBeVisible();
 
     // Data Panel sections
     await expect(page.getByText("Data Source")).toBeVisible();
@@ -99,19 +101,20 @@ test.describe("Workspace core flow", () => {
   });
 
   test("UI: navigate between pages", async ({ page }) => {
+    await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
 
     // Navigate to Jobs
-    await page.getByText("Jobs").click();
+    await page.getByRole("link", { name: "Jobs" }).click();
     await expect(page).toHaveURL(/\/jobs/);
 
     // Navigate to Inference
-    await page.getByText("Inference").click();
+    await page.getByRole("link", { name: "Inference" }).click();
     await expect(page).toHaveURL(/\/inference/);
 
     // Navigate back to Workspace
-    await page.getByText("Workspace").click();
+    await page.getByRole("link", { name: "Workspace" }).click();
     await expect(page).toHaveURL(/\/$/);
   });
 });

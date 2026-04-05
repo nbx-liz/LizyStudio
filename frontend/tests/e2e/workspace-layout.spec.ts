@@ -1,6 +1,11 @@
 import { expect, test } from "@playwright/test";
+import { dismissOnboarding } from "./helpers/onboarding";
 
 test.describe("Workspace layout", () => {
+  test.beforeEach(async ({ page }) => {
+    await dismissOnboarding(page);
+  });
+
   test("3-panel layout renders correctly", async ({ page }) => {
     await page.goto("/");
     await page.waitForLoadState("networkidle");
@@ -8,8 +13,8 @@ test.describe("Workspace layout", () => {
     await expect(page).toHaveScreenshot("workspace-layout.png");
 
     // Verify sidebar and main content exist
-    await expect(page.getByText("LizyStudio")).toBeVisible();
-    await expect(page.getByText("Workspace")).toBeVisible();
+    await expect(page.getByText("LizyStudio").first()).toBeVisible();
+    await expect(page.getByRole("link", { name: "Workspace" })).toBeVisible();
 
     // Verify Fit/Tune tabs are visible (Model panel)
     await expect(page.getByRole("tab", { name: "Fit" })).toBeVisible();

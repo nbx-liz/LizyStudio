@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
+import { dismissOnboarding } from "../helpers/onboarding";
 
 /**
  * Known a11y violations to exclude temporarily.
@@ -24,6 +25,10 @@ function createScanner(page: import("@playwright/test").Page) {
 }
 
 test.describe("Accessibility scan @a11y", () => {
+  test.beforeEach(async ({ page }) => {
+    await dismissOnboarding(page);
+  });
+
   test("Workspace page has no critical a11y violations", async ({ page }) => {
     await page.goto("/");
     await page.waitForLoadState("networkidle");
