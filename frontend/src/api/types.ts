@@ -177,6 +177,13 @@ export type FoldResult = {
   score: number;
 };
 
+export type TrialResult = {
+  number: number;
+  score: number | null;
+  state: string;
+  best_score: number | null;
+};
+
 export type ProgressMessage = {
   type: "progress";
   current: number;
@@ -185,6 +192,7 @@ export type ProgressMessage = {
   elapsed?: number;
   metrics?: Record<string, unknown>;
   fold_results?: FoldResult[];
+  trial_results?: TrialResult[];
 };
 
 export type CompletedMessage = {

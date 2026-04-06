@@ -13,7 +13,12 @@ import {
   fetchJobSplitSummary,
   fetchJobs,
 } from "@/api/jobs";
-import type { JobDetail, MetricEntry, ProgressMessage } from "@/api/types";
+import type {
+  JobDetail,
+  MetricEntry,
+  ProgressMessage,
+  TrialResult,
+} from "@/api/types";
 import { connectJobProgress } from "@/api/websocket";
 import { MetricCards } from "@/components/shared/MetricCards";
 import { Accordion } from "@/components/ui/accordion";
@@ -30,6 +35,7 @@ import { pivotMetrics } from "@/lib/metrics";
 import { formatElapsed } from "@/lib/utils";
 import { FoldDetailsSection } from "./FoldDetailsSection";
 import { FoldProgressList } from "./FoldProgressList";
+import { PlotlyChart } from "./PlotlyChart";
 import { PlotSection } from "./PlotSection";
 import {
   TrialResultsAccordionItem,
@@ -103,7 +109,7 @@ export function ResultsPanel({
       onCompleted: () => {
         setProgress(null);
         setFoldLog([]);
-        refetchJob();
+        queryClient.invalidateQueries({ queryKey: ["job", jobId] });
         queryClient.invalidateQueries({ queryKey: ["jobs"] });
         onJobDone?.();
       },
@@ -111,13 +117,14 @@ export function ResultsPanel({
         setProgress(null);
         setFoldLog([]);
         toast.error(msg.message);
-        refetchJob();
+        queryClient.invalidateQueries({ queryKey: ["job", jobId] });
+        queryClient.invalidateQueries({ queryKey: ["jobs"] });
         onJobDone?.();
       },
     });
 
     return () => disconnect();
-  }, [jobId, job?.status, refetchJob, queryClient, onJobDone]);
+  }, [jobId, job?.status, queryClient, onJobDone]);
 
   // Polling fallback: detect completion if WebSocket misses it
   const prevStatusRef = useRef<string | undefined>(undefined);
@@ -262,8 +269,47 @@ export function ResultsPanel({
           />
         )}
 
+        {progress?.trial_results && progress.trial_results.length > 1 && (
+          <LiveTrialChart trials={progress.trial_results} />
+        )}
+
+        {progress?.trial_results && progress.trial_results.length > 0 && (
+          <div className="mt-3 max-h-48 overflow-auto rounded border bg-muted/30">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-muted">
+                <tr>
+                  <th className="px-2 py-1 text-left font-medium">#</th>
+                  <th className="px-2 py-1 text-left font-medium">Score</th>
+                  <th className="px-2 py-1 text-left font-medium">Best</th>
+                  <th className="px-2 py-1 text-left font-medium">State</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...progress.trial_results].reverse().map((t) => (
+                  <tr
+                    key={t.number}
+                    className="border-t border-muted hover:bg-muted/50"
+                  >
+                    <td className="px-2 py-0.5 font-mono">{t.number}</td>
+                    <td className="px-2 py-0.5 font-mono">
+                      {t.score != null ? t.score.toFixed(4) : "—"}
+                    </td>
+                    <td className="px-2 py-0.5 font-mono">
+                      {t.best_score?.toFixed(4) ?? "—"}
+                    </td>
+                    <td className="px-2 py-0.5">{t.state}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
         {foldLog.length > 0 && (
-          <div className="mt-3 max-h-32 overflow-auto rounded border bg-muted/30 p-2">
+          <div
+            className="mt-3 min-h-16 max-h-[50vh] overflow-auto rounded border bg-muted/30 p-2 resize-y"
+            style={{ height: "8rem" }}
+          >
             {foldLog.map((msg, i) => (
               <p
                 key={`log-${i}`}
@@ -360,6 +406,7 @@ export function ResultsPanel({
 
   return (
     <CompletedView
+      key={job.job_id}
       job={job}
       headerLabel={headerLabel}
       modelName={modelName}
@@ -660,5 +707,57 @@ function LogDialog({
         </pre>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Live Trial Chart — Optimization History during tuning
+// ---------------------------------------------------------------------------
+
+function LiveTrialChart({ trials }: { trials: TrialResult[] }) {
+  const plotlyJson = useMemo(() => {
+    const valid = trials.filter((t) => t.score != null);
+    if (valid.length < 2) return null;
+    const x = valid.map((t) => t.number);
+    const scores = valid.map((t) => t.score);
+    const best = valid.map((t) => t.best_score ?? t.score);
+    return JSON.stringify({
+      data: [
+        {
+          x,
+          y: scores,
+          mode: "markers",
+          type: "scatter",
+          name: "Score",
+          marker: { size: 5, opacity: 0.6 },
+        },
+        {
+          x,
+          y: best,
+          mode: "lines",
+          type: "scatter",
+          name: "Best",
+          line: { width: 2 },
+        },
+      ],
+      layout: {
+        height: 180,
+        margin: { t: 10, r: 10, b: 30, l: 50 },
+        xaxis: { title: "Trial" },
+        yaxis: { title: "Score" },
+        showlegend: false,
+      },
+    });
+  }, [trials]);
+
+  if (!plotlyJson) return null;
+
+  return (
+    <div className="mt-3 rounded border bg-muted/30 p-1">
+      <p className="px-2 pt-1 text-xs font-medium text-muted-foreground">
+        Optimization History
+      </p>
+      <PlotlyChart plotlyJson={plotlyJson} height={180} />
+    </div>
   );
 }

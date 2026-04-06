@@ -310,6 +310,37 @@ def get_job_available_plots_endpoint(
 # --- Export ---
 
 
+def _build_export_filename(job: Job, job_store: JobStore) -> str:
+    """Build a descriptive ZIP filename from job metadata.
+
+    Format: {data_stem}_{task}_{model}_job{N}_code.zip
+    Example: train_binary_lightgbm_job3_code.zip
+    """
+    from pathlib import PurePosixPath
+
+    parts: list[str] = []
+    # Data source name (stem of the original filename)
+    if job.data_ref and job.data_ref.filename:
+        stem = PurePosixPath(job.data_ref.filename).stem
+        parts.append(stem)
+    # Task type
+    task = job.config.get("task")
+    if task:
+        parts.append(str(task))
+    # Model name
+    model_cfg = job.config.get("model")
+    if isinstance(model_cfg, dict) and model_cfg.get("name"):
+        parts.append(str(model_cfg["name"]))
+    # Job number (same as Jobs list #N display)
+    all_jobs = job_store.list()
+    idx = next((i for i, j in enumerate(all_jobs) if j.job_id == job.job_id), -1)
+    job_number = len(all_jobs) - idx if idx >= 0 else 0
+    parts.append(f"job{job_number}")
+    # Sanitize: keep only alphanumeric, hyphens, underscores
+    safe = "_".join(re.sub(r"[^\w\-]", "_", p) for p in parts)
+    return f"{safe}_code.zip"
+
+
 class ExportRequest(BaseModel):
     export_type: str  # "model" or "report"
     output_path: str
@@ -345,7 +376,7 @@ def export_job(
         raise ExportError(str(exc)) from exc
 
 
-@router.post("/{job_id}/export-code")
+@router.get("/{job_id}/export-code")
 def export_code(
     job_id: str,
     background_tasks: BackgroundTasks,
@@ -364,8 +395,9 @@ def export_code(
         raise BackendError(exc) from exc
     # Schedule cleanup of the temporary ZIP file after the response is sent
     background_tasks.add_task(os.unlink, str(zip_path))
+    filename = _build_export_filename(job, job_store)
     return FileResponse(
         path=str(zip_path),
         media_type="application/zip",
-        filename=f"job_{job_id}_code.zip",
+        filename=filename,
     )

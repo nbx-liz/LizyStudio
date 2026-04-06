@@ -161,8 +161,8 @@ def test_fit_invokes_on_progress() -> None:
     )
     calls: list[dict] = []
 
-    def progress_cb(*, current: int, total: int, message: str) -> None:
-        calls.append({"current": current, "total": total, "message": message})
+    def progress_cb(*, current: int, total: int, message: str, **extra: Any) -> None:
+        calls.append({"current": current, "total": total, "message": message, **extra})
 
     adapter.fit(mock_model, on_progress=progress_cb)
     assert len(calls) == 2
@@ -184,8 +184,8 @@ def test_tune_invokes_on_progress() -> None:
     )
     calls: list[dict] = []
 
-    def progress_cb(*, current: int, total: int, message: str) -> None:
-        calls.append({"current": current, "total": total, "message": message})
+    def progress_cb(*, current: int, total: int, message: str, **extra: Any) -> None:
+        calls.append({"current": current, "total": total, "message": message, **extra})
 
     adapter.tune(mock_model, on_progress=progress_cb)
     # Must pass progress_callback kwarg to model.tune()
@@ -215,8 +215,8 @@ def test_tune_bridge_callback_maps_fields() -> None:
 
     calls: list[dict] = []
 
-    def progress_cb(*, current: int, total: int, message: str) -> None:
-        calls.append({"current": current, "total": total, "message": message})
+    def progress_cb(*, current: int, total: int, message: str, **extra: Any) -> None:
+        calls.append({"current": current, "total": total, "message": message, **extra})
 
     # We need to capture the bridge callback and invoke it manually
     def fake_tune(*, progress_callback: Any = None) -> MagicMock:

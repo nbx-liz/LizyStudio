@@ -39,7 +39,13 @@ def _make_cancel_aware_cb(
 ) -> ProgressCallback:
     """Create a progress callback that checks for cancellation (H-0011)."""
 
-    def callback(*, current: int, total: int, message: str) -> None:
+    def callback(
+        *,
+        current: int,
+        total: int,
+        message: str,
+        **extra: Any,
+    ) -> None:
         if job_store.is_cancel_requested(job_id):
             raise CancelledError
         if broadcaster is not None:
@@ -48,6 +54,8 @@ def _make_cancel_aware_cb(
                 current=current,
                 total=total,
                 message=message,
+                fold_results=extra.get("fold_results"),
+                trial_results=extra.get("trial_results"),
             )
 
     return callback
@@ -101,7 +109,7 @@ def _run_job_core(
         job_store.update(job)
         if broadcaster is not None:
             broadcaster.send_completed(job.job_id)
-    except CancelledError:
+    except (CancelledError, KeyboardInterrupt):
         job.status = "cancelled"
         job.completed_at = datetime.now(timezone.utc).isoformat()
         job_store.update(job)

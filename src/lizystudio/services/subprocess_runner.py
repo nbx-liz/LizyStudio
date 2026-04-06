@@ -157,6 +157,9 @@ def _forward_progress(
         fold_results = msg.get("fold_results")
         if fold_results is not None:
             kwargs["fold_results"] = fold_results
+        trial_results = msg.get("trial_results")
+        if trial_results is not None:
+            kwargs["trial_results"] = trial_results
         broadcaster.send_progress(job_id, **kwargs)
     elif msg_type == "completed":
         broadcaster.send_completed(job_id)
@@ -251,6 +254,7 @@ class _FileBroadcaster:
         total: int,
         message: str,
         fold_results: list[dict[str, Any]] | None = None,
+        trial_results: list[dict[str, Any]] | None = None,
     ) -> None:
         msg: dict[str, Any] = {
             "type": "progress",
@@ -260,6 +264,8 @@ class _FileBroadcaster:
         }
         if fold_results is not None:
             msg["fold_results"] = fold_results
+        if trial_results is not None:
+            msg["trial_results"] = trial_results
         _write_progress(self._path, msg)
 
     def send_completed(self, job_id: str, message: str = "Completed.") -> None:

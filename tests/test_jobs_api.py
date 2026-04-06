@@ -285,7 +285,7 @@ def test_export_code_returns_zip(
     sample_data_ref: DataRef,
     tmp_path: Path,
 ) -> None:
-    """POST /api/jobs/{job_id}/export-code returns a ZIP file for a completed job."""
+    """GET /api/jobs/{job_id}/export-code returns a ZIP file for a completed job."""
     from pathlib import Path
     from unittest.mock import MagicMock
 
@@ -307,7 +307,7 @@ def test_export_code_returns_zip(
     original_backend = app.state.workspace.backend
     app.state.workspace.backend = mock_backend
     try:
-        res = client.post(f"/api/jobs/{job_id}/export-code")
+        res = client.get(f"/api/jobs/{job_id}/export-code")
     finally:
         app.state.workspace.backend = original_backend
 
@@ -317,15 +317,15 @@ def test_export_code_returns_zip(
 
 
 def test_export_code_not_found(client: TestClient) -> None:
-    """POST /api/jobs/nonexistent/export-code returns 404."""
-    res = client.post("/api/jobs/nonexistent/export-code")
+    """GET /api/jobs/nonexistent/export-code returns 404."""
+    res = client.get("/api/jobs/nonexistent/export-code")
     assert res.status_code == 404
 
 
 def test_export_code_job_not_completed(
     client: TestClient, sample_data_ref: DataRef
 ) -> None:
-    """POST /api/jobs/{job_id}/export-code returns 400 when job is not completed."""
+    """GET /api/jobs/{job_id}/export-code returns 400 when job is not completed."""
     app = client.app  # type: ignore[union-attr]
     job_store: JobStore = app.state.job_store
     job = job_store.create(
@@ -335,7 +335,7 @@ def test_export_code_job_not_completed(
         job_type="fit",
     )
     # Job remains in pending status — no model_path
-    res = client.post(f"/api/jobs/{job.job_id}/export-code")
+    res = client.get(f"/api/jobs/{job.job_id}/export-code")
     assert res.status_code == 400
     body = res.json()
     assert body["error"]["code"] == "JOB_NOT_COMPLETED"
@@ -344,7 +344,7 @@ def test_export_code_job_not_completed(
 def test_export_code_no_model_path(
     client: TestClient, sample_data_ref: DataRef
 ) -> None:
-    """POST /api/jobs/{job_id}/export-code returns 400 when job has no model_path."""
+    """GET /api/jobs/{job_id}/export-code returns 400 when job has no model_path."""
     app = client.app  # type: ignore[union-attr]
     job_store: JobStore = app.state.job_store
     job = job_store.create(
@@ -358,7 +358,7 @@ def test_export_code_no_model_path(
     # Intentionally NOT setting model_path
     job_store.update(job)
 
-    res = client.post(f"/api/jobs/{job.job_id}/export-code")
+    res = client.get(f"/api/jobs/{job.job_id}/export-code")
     assert res.status_code == 400
     body = res.json()
     assert body["error"]["code"] == "JOB_NOT_COMPLETED"
@@ -952,7 +952,7 @@ def test_job_config_snapshot_isolation(
 def test_export_code_backend_error(
     client: TestClient, sample_data_ref: DataRef, tmp_path: Path
 ) -> None:
-    """POST export-code propagates BackendError when export_code_as_zip raises."""
+    """GET export-code propagates BackendError when export_code_as_zip raises."""
     from unittest.mock import patch
 
     model_dir = str(tmp_path / "model")
@@ -962,7 +962,7 @@ def test_export_code_backend_error(
         "lizystudio.api.jobs.export_code_as_zip",
         side_effect=RuntimeError("zip failed"),
     ):
-        res = client.post(f"/api/jobs/{job_id}/export-code")
+        res = client.get(f"/api/jobs/{job_id}/export-code")
 
     assert res.status_code == 500
     assert res.json()["error"]["code"] == "BACKEND_ERROR"

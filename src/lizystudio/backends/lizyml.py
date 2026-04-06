@@ -142,17 +142,39 @@ class LizyMLAdapter:
         if on_progress is not None:
             from lizyml import TuneProgressInfo
 
+            accumulated_trials: list[dict[str, Any]] = []
+
             def _bridge(info: TuneProgressInfo) -> None:
                 msg = f"Trial {info.current_trial}/{info.total_trials}"
                 if info.best_score is not None:
                     msg += f" | Best: {info.best_score:.4f}"
                 if info.latest_score is not None:
                     msg += f" | Latest: {info.latest_score:.4f} ({info.latest_state})"
-                on_progress(
-                    current=info.current_trial,
-                    total=info.total_trials,
-                    message=msg,
+                # Accumulate all trial results (including pruned/failed)
+                accumulated_trials.append(
+                    {
+                        "number": info.current_trial - 1,
+                        "score": float(info.latest_score)
+                        if info.latest_score is not None
+                        else None,
+                        "state": info.latest_state,
+                        "best_score": float(info.best_score)
+                        if info.best_score is not None
+                        else None,
+                    }
                 )
+                try:
+                    on_progress(
+                        current=info.current_trial,
+                        total=info.total_trials,
+                        message=msg,
+                        trial_results=list(accumulated_trials),
+                    )
+                except Exception:
+                    # CancelledError from _make_cancel_aware_cb is caught by
+                    # Optuna internally.  Re-raise as KeyboardInterrupt which
+                    # Optuna honours to abort the study gracefully.
+                    raise KeyboardInterrupt from None
 
             lizyml_callback = _bridge
             # total=0 signals indeterminate until first trial callback

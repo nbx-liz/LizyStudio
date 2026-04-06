@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ColumnInfo, ColumnStatsResponse, ValueCount } from "@/api/types";
 import { fetchColumnStats } from "@/api/workspace";
 import { Label } from "@/components/ui/label";
@@ -85,6 +85,10 @@ export function BlockedGroupKFoldEditor({
     [blocked, onBlockedChange],
   );
 
+  // Stable ref for onBlockedChange to avoid re-triggering the effect
+  const onBlockedChangeRef = useRef(onBlockedChange);
+  onBlockedChangeRef.current = onBlockedChange;
+
   // Fetch column stats when block column changes
   useEffect(() => {
     if (!cv.timeCol) {
@@ -104,7 +108,10 @@ export function BlockedGroupKFoldEditor({
           if (data.value_counts.length > 0) {
             const lastVal =
               data.value_counts[data.value_counts.length - 1].value;
-            onBlockedChange({ ...blocked, cutoffs: [lastVal] });
+            onBlockedChangeRef.current({
+              ...INITIAL_BLOCKED_STATE,
+              cutoffs: [lastVal],
+            });
           }
         }
       })
@@ -121,8 +128,7 @@ export function BlockedGroupKFoldEditor({
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only refetch on column change
-  }, [cv.timeCol, blocked, onBlockedChange]);
+  }, [cv.timeCol]);
 
   // Unique values from block column stats
   const blockValues = useMemo(
@@ -234,13 +240,23 @@ export function BlockedGroupKFoldEditor({
                   <button
                     key={vc.value}
                     type="button"
-                    className={`lzs-chip${isActive ? " lzs-chip--active" : ""}`}
+                    className={`lzs-chip${isActive ? " lzs-chip--active" : ""}${isLast ? " cursor-not-allowed opacity-70" : ""}`}
                     aria-pressed={isActive}
                     disabled={isLast}
                     onClick={() => handleCutoffToggle(vc.value)}
+                    title={
+                      isLast
+                        ? "Last value is always required as a cutoff"
+                        : undefined
+                    }
                     data-testid={`cutoff-${vc.value}`}
                   >
                     {vc.value}
+                    {isLast && (
+                      <span className="ml-0.5 text-[10px] opacity-60">
+                        (fixed)
+                      </span>
+                    )}
                   </button>
                 );
               })}

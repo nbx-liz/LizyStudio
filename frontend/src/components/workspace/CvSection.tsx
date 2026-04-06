@@ -67,8 +67,27 @@ export function resetCvState(strategy: string): CvState {
   return { ...INITIAL_CV_STATE, strategy };
 }
 
+/** Recommend the inner validation method based on outer CV strategy. */
+export function recommendedInnerValid(strategy: string): string {
+  switch (strategy) {
+    case "group_kfold":
+    case "stratified_group_kfold":
+    case "blocked_group_kfold":
+      return "group_holdout";
+    case "time_series":
+    case "purged_time_series":
+    case "group_time_series":
+      return "time_holdout";
+    default:
+      return "holdout";
+  }
+}
+
 /** Build a split config object containing only strategy-relevant fields. */
-export function buildSplitConfig(cv: CvState): Record<string, unknown> {
+export function buildSplitConfig(
+  cv: CvState,
+  blocked?: BlockedGroupKFoldState,
+): Record<string, unknown> {
   const fields = CV_STRATEGY_FIELDS[cv.strategy] ?? ["folds"];
   const split: Record<string, unknown> = {
     method: cv.strategy,
@@ -101,6 +120,18 @@ export function buildSplitConfig(cv: CvState): Record<string, unknown> {
   if (fields.includes("min_valid_rows") && cv.minValidRows !== undefined) {
     split.min_valid_rows = cv.minValidRows;
   }
+  // blocked_group_kfold-specific fields from the dedicated editor state
+  if (cv.strategy === "blocked_group_kfold") {
+    const b = blocked ?? INITIAL_BLOCKED_STATE;
+    split.mode = b.blockMode;
+    split.train_window = b.trainWindow;
+    if (b.cutoffs.length > 0) {
+      split.cutoffs = b.cutoffs;
+    }
+    if (b.stratify !== "auto") {
+      split.stratify = b.stratify === "on";
+    }
+  }
   return split;
 }
 
@@ -111,6 +142,16 @@ export function applyCvDataFields(
 ): Record<string, unknown> {
   const fields = CV_STRATEGY_FIELDS[cv.strategy] ?? [];
   const result = { ...data };
+  // blocked_group_kfold uses blocks_col/groups_col instead of time_col/group_col
+  if (cv.strategy === "blocked_group_kfold") {
+    if (cv.timeCol) {
+      result.blocks_col = cv.timeCol;
+    }
+    if (cv.groupCol) {
+      result.groups_col = cv.groupCol;
+    }
+    return result;
+  }
   if (fields.includes("group_col") && cv.groupCol) {
     result.group_col = cv.groupCol;
   }

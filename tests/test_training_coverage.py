@@ -124,7 +124,12 @@ def test_cancel_aware_cb_forwards_progress_when_no_cancel(
     cb(current=3, total=10, message="training")
 
     mock_broadcaster.send_progress.assert_called_once_with(
-        job.job_id, current=3, total=10, message="training"
+        job.job_id,
+        current=3,
+        total=10,
+        message="training",
+        fold_results=None,
+        trial_results=None,
     )
 
 

@@ -558,6 +558,7 @@ export interface paths {
          * @description Get a Plotly figure as JSON.
          *
          *     For ``learning-curve``, pass ``?metrics=auc,f1`` to filter subplots.
+         *     For ``importance``, pass ``?kind=split|gain|shap`` to select kind.
          */
         get: operations["get_job_plot_endpoint_api_jobs__job_id__plot__plot_type__get"];
         put?: never;
@@ -615,13 +616,13 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
         /**
          * Export Code
          * @description Generate standalone Python code and return it as a ZIP download (H-0027).
          */
-        post: operations["export_code_api_jobs__job_id__export_code_post"];
+        get: operations["export_code_api_jobs__job_id__export_code_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2046,6 +2047,7 @@ export interface operations {
         parameters: {
             query?: {
                 metrics?: string | null;
+                kind?: string | null;
             };
             header?: never;
             path: {
@@ -2144,7 +2146,7 @@ export interface operations {
             };
         };
     };
-    export_code_api_jobs__job_id__export_code_post: {
+    export_code_api_jobs__job_id__export_code_get: {
         parameters: {
             query?: never;
             header?: never;

@@ -4,8 +4,10 @@
 import { describe, expect, it } from "vitest";
 import {
   applyCvDataFields,
+  type BlockedGroupKFoldState,
   buildSplitConfig,
   type CvState,
+  INITIAL_BLOCKED_STATE,
   INITIAL_CV_STATE,
   resetCvState,
 } from "./CvSection";
@@ -205,15 +207,11 @@ describe("buildSplitConfig", () => {
         minValidRows: 50,
       };
       const result = buildSplitConfig(cv);
-      expect(result).toEqual({
-        method: "blocked_group_kfold",
-        n_splits: 5,
-        min_train_rows: 100,
-        min_valid_rows: 50,
-      });
+      expect(result.min_train_rows).toBe(100);
+      expect(result.min_valid_rows).toBe(50);
     });
 
-    it("omits undefined optional fields", () => {
+    it("omits undefined optional cv fields but includes blocked defaults", () => {
       const cv: CvState = {
         ...INITIAL_CV_STATE,
         strategy: "blocked_group_kfold",
@@ -225,7 +223,106 @@ describe("buildSplitConfig", () => {
       expect(result).toEqual({
         method: "blocked_group_kfold",
         n_splits: 3,
+        mode: "expanding",
+        train_window: 1,
       });
+    });
+
+    it("includes blocked state fields (mode, train_window, cutoffs, stratify)", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "blocked_group_kfold",
+        folds: 5,
+        minTrainRows: 100,
+      };
+      const blocked: BlockedGroupKFoldState = {
+        cutoffs: ["2023-01", "2023-06"],
+        blockMode: "sliding",
+        trainWindow: 3,
+        stratify: "on",
+      };
+      const result = buildSplitConfig(cv, blocked);
+      expect(result.mode).toBe("sliding");
+      expect(result.train_window).toBe(3);
+      expect(result.cutoffs).toEqual(["2023-01", "2023-06"]);
+      expect(result.stratify).toBe(true);
+      expect(result.min_train_rows).toBe(100);
+    });
+
+    it("omits cutoffs when empty", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "blocked_group_kfold",
+        folds: 4,
+      };
+      const blocked: BlockedGroupKFoldState = {
+        ...INITIAL_BLOCKED_STATE,
+        cutoffs: [],
+      };
+      const result = buildSplitConfig(cv, blocked);
+      expect(result).not.toHaveProperty("cutoffs");
+      expect(result.mode).toBe("expanding");
+    });
+
+    it("omits stratify when set to auto", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "blocked_group_kfold",
+        folds: 4,
+      };
+      const blocked: BlockedGroupKFoldState = {
+        ...INITIAL_BLOCKED_STATE,
+        stratify: "auto",
+      };
+      const result = buildSplitConfig(cv, blocked);
+      expect(result).not.toHaveProperty("stratify");
+    });
+
+    it("sets stratify=false when off", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "blocked_group_kfold",
+        folds: 4,
+      };
+      const blocked: BlockedGroupKFoldState = {
+        ...INITIAL_BLOCKED_STATE,
+        stratify: "off",
+      };
+      const result = buildSplitConfig(cv, blocked);
+      expect(result.stratify).toBe(false);
+    });
+
+    it("falls back to INITIAL_BLOCKED_STATE when blocked is undefined", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "blocked_group_kfold",
+        folds: 5,
+      };
+      const result = buildSplitConfig(cv);
+      expect(result.mode).toBe("expanding");
+      expect(result.train_window).toBe(1);
+      expect(result).not.toHaveProperty("cutoffs");
+      expect(result).not.toHaveProperty("stratify");
+    });
+
+    it("ignores blocked state for non-blocked strategies", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "kfold",
+        folds: 5,
+        randomState: 42,
+        shuffle: true,
+      };
+      const blocked: BlockedGroupKFoldState = {
+        cutoffs: ["2023-01"],
+        blockMode: "sliding",
+        trainWindow: 3,
+        stratify: "on",
+      };
+      const result = buildSplitConfig(cv, blocked);
+      expect(result).not.toHaveProperty("mode");
+      expect(result).not.toHaveProperty("train_window");
+      expect(result).not.toHaveProperty("cutoffs");
     });
   });
 
@@ -355,5 +452,33 @@ describe("applyCvDataFields", () => {
     // Unknown strategy has no fields defined, so nothing injected
     expect(result).not.toHaveProperty("group_col");
     expect(result).not.toHaveProperty("time_col");
+  });
+
+  it("injects blocks_col and groups_col for blocked_group_kfold (not time_col/group_col)", () => {
+    const data = { path: "/data.csv", target: "y" };
+    const cv: CvState = {
+      ...INITIAL_CV_STATE,
+      strategy: "blocked_group_kfold",
+      timeCol: "period",
+      groupCol: "entity",
+    };
+    const result = applyCvDataFields(data, cv);
+    expect(result.blocks_col).toBe("period");
+    expect(result.groups_col).toBe("entity");
+    expect(result).not.toHaveProperty("time_col");
+    expect(result).not.toHaveProperty("group_col");
+  });
+
+  it("does not inject blocks_col/groups_col when null", () => {
+    const data = { path: "/data.csv" };
+    const cv: CvState = {
+      ...INITIAL_CV_STATE,
+      strategy: "blocked_group_kfold",
+      timeCol: null,
+      groupCol: null,
+    };
+    const result = applyCvDataFields(data, cv);
+    expect(result).not.toHaveProperty("blocks_col");
+    expect(result).not.toHaveProperty("groups_col");
   });
 });

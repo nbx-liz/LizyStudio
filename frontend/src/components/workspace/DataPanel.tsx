@@ -47,6 +47,7 @@ import {
   type CvState,
   INITIAL_BLOCKED_STATE,
   INITIAL_CV_STATE,
+  recommendedInnerValid,
   resetCvState,
 } from "./CvSection";
 import { getDefaultCvStrategy } from "./constants";
@@ -104,6 +105,7 @@ export function DataPanel({
   );
 
   const abortRef = useRef<AbortController | null>(null);
+  const prevCvStrategyRef = useRef<string>(cv.strategy);
 
   const syncConfig = useCallback(async () => {
     abortRef.current?.abort();
@@ -141,8 +143,20 @@ export function DataPanel({
           categorical,
           exclude: excluded,
         },
-        split: buildSplitConfig(cv),
+        split: buildSplitConfig(cv, blocked),
       };
+      // Auto-set inner validation method when CV strategy changes
+      const baseTraining = (merged.training as Record<string, unknown>) ?? {};
+      const innerValid =
+        (baseTraining.inner_valid as Record<string, unknown>) ?? {};
+      if (prevCvStrategyRef.current !== cv.strategy) {
+        const recommended = recommendedInnerValid(cv.strategy);
+        merged.training = {
+          ...baseTraining,
+          inner_valid: { ...innerValid, method: recommended },
+        };
+        prevCvStrategyRef.current = cv.strategy;
+      }
       await updateConfig(merged, { signal: controller.signal });
       if (controller.signal.aborted) return;
       onDataChanged();
@@ -151,16 +165,16 @@ export function DataPanel({
       if (err instanceof DOMException && err.name === "AbortError") return;
       toast.error("Config sync failed — changes may not be saved");
     }
-  }, [dataPath, target, task, overrides, cv, onDataChanged]);
+  }, [dataPath, target, task, overrides, cv, blocked, onDataChanged]);
 
   const prevSyncKey = useRef("");
   useEffect(() => {
     if (!target) return;
-    const key = JSON.stringify({ target, task, overrides, cv });
+    const key = JSON.stringify({ target, task, overrides, cv, blocked });
     if (key === prevSyncKey.current) return;
     prevSyncKey.current = key;
     syncConfig();
-  }, [target, task, overrides, cv, syncConfig]);
+  }, [target, task, overrides, cv, blocked, syncConfig]);
 
   const handleLoadPathByValue = async (path: string) => {
     if (!path.trim()) return;

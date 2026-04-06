@@ -68,6 +68,7 @@ class ProgressBroadcaster:
         total: int,
         message: str,
         fold_results: list[dict[str, Any]] | None = None,
+        trial_results: list[dict[str, Any]] | None = None,
     ) -> None:
         """Convenience: send a progress message (H-0047)."""
         msg: dict[str, Any] = {
@@ -79,6 +80,8 @@ class ProgressBroadcaster:
         }
         if fold_results is not None:
             msg["fold_results"] = fold_results
+        if trial_results is not None:
+            msg["trial_results"] = trial_results
         self.send(job_id, msg)
 
     def send_completed(self, job_id: str, message: str = "Completed.") -> None:
