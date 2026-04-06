@@ -88,6 +88,77 @@ def test_data_describe(client: TestClient, tmp_path: Path) -> None:
     assert "column" in body[0]
 
 
+# ---------------------------------------------------------------------------
+# Edge cases: corrupted/malformed data files (#1), duplicate columns (#17)
+# ---------------------------------------------------------------------------
+
+
+def test_data_load_csv_malformed_rows(client: TestClient, tmp_path: Path) -> None:
+    """CSV with inconsistent column counts should be handled."""
+    csv_path = tmp_path / "bad.csv"
+    csv_path.write_text("a,b,c\n1,2,3\n4,5\n6,7,8,9\n", encoding="utf-8")
+    res = client.post("/api/workspace/data/path", json={"path": str(csv_path)})
+    # pandas handles ragged CSVs; verify it either loads or rejects
+    assert res.status_code in (200, 400)
+
+
+def test_data_load_invalid_parquet(client: TestClient, tmp_path: Path) -> None:
+    """Random bytes with .parquet extension should fail."""
+    bad_path = tmp_path / "corrupt.parquet"
+    bad_path.write_bytes(b"\x00\x01\x02random garbage")
+    res = client.post("/api/workspace/data/path", json={"path": str(bad_path)})
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] in (
+        "FILE_INVALID",
+        "PATH_NOT_FOUND",
+    )
+
+
+def test_data_upload_corrupted_csv(client: TestClient) -> None:
+    """Upload endpoint with non-parseable bytes should fail."""
+    res = client.post(
+        "/api/workspace/data/upload",
+        files={
+            "file": (
+                "bad.csv",
+                b"\xff\xfe\x00\x01binary",
+                "text/csv",
+            )
+        },
+    )
+    assert res.status_code >= 400
+
+
+def test_data_load_csv_encoding_latin1(client: TestClient, tmp_path: Path) -> None:
+    """Latin-1 encoded CSV should either load or return clear error."""
+    csv_path = tmp_path / "latin1.csv"
+    csv_path.write_bytes("name,value\nCaf\xe9,1\n".encode("latin-1"))
+    res = client.post("/api/workspace/data/path", json={"path": str(csv_path)})
+    # pandas may auto-detect encoding or fail
+    assert res.status_code in (200, 400)
+
+
+def test_data_load_duplicate_columns(client: TestClient, tmp_path: Path) -> None:
+    """CSV with duplicate column names should load (pandas renames)."""
+    csv_path = tmp_path / "dupcols.csv"
+    csv_path.write_text("a,a,b\n1,2,3\n4,5,6\n", encoding="utf-8")
+    res = client.post("/api/workspace/data/path", json={"path": str(csv_path)})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["data_ref"]["shape"] == [2, 3]
+
+
+def test_data_upload_duplicate_columns(client: TestClient) -> None:
+    """Upload with duplicate column names should load."""
+    content = b"x,x,y\n1,2,3\n4,5,6\n"
+    res = client.post(
+        "/api/workspace/data/upload",
+        files={"file": ("dup.csv", content, "text/csv")},
+    )
+    assert res.status_code == 200
+    assert res.json()["data_ref"]["shape"] == [2, 3]
+
+
 def test_data_upload(client: TestClient) -> None:
     with tempfile.NamedTemporaryFile(suffix=".csv", mode="w", delete=False) as f:
         writer = csv.writer(f)

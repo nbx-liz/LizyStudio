@@ -117,4 +117,61 @@ test.describe("Workspace core flow", () => {
     await page.getByRole("link", { name: "Workspace" }).click();
     await expect(page).toHaveURL(/\/$/);
   });
+
+  test("API: PATCH config updates saved config", async ({ request }) => {
+    const csvPath = createTestCsv();
+
+    // 1. Load data
+    await request.post(`${API}/workspace/data/path`, {
+      data: { path: csvPath },
+    });
+
+    // 2. Get defaults and save config
+    const defaultsRes = await request.get(
+      `${API}/workspace/config/defaults?task=binary&target=target`,
+    );
+    const defaults = await defaultsRes.json();
+    await request.put(`${API}/workspace/config`, { data: defaults });
+
+    // 3. PATCH: set a new value
+    const patchRes = await request.patch(`${API}/workspace/config`, {
+      data: {
+        ops: [{ op: "set", path: "training.seed", value: 123 }],
+      },
+    });
+    expect(patchRes.status()).toBe(200);
+    const patchBody = await patchRes.json();
+    expect(patchBody.config.training.seed).toBe(123);
+
+    // 4. Verify via GET
+    const getRes = await request.get(`${API}/workspace/config`);
+    expect(getRes.status()).toBe(200);
+    const savedConfig = await getRes.json();
+    expect(savedConfig.training.seed).toBe(123);
+
+    // 5. PATCH: unset the value
+    const unsetRes = await request.patch(`${API}/workspace/config`, {
+      data: {
+        ops: [{ op: "unset", path: "training.seed" }],
+      },
+    });
+    expect(unsetRes.status()).toBe(200);
+    const unsetBody = await unsetRes.json();
+    expect(unsetBody.config.training?.seed).toBeUndefined();
+
+    // 6. Verify unset via GET
+    const getRes2 = await request.get(`${API}/workspace/config`);
+    const savedConfig2 = await getRes2.json();
+    expect(savedConfig2.training?.seed).toBeUndefined();
+  });
+
+  test("API: PATCH without config returns error", async ({ request }) => {
+    // No config saved — PATCH should fail
+    const patchRes = await request.patch(`${API}/workspace/config`, {
+      data: {
+        ops: [{ op: "set", path: "training.seed", value: 42 }],
+      },
+    });
+    expect(patchRes.status()).toBe(400);
+  });
 });

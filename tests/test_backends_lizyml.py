@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from lizystudio.backends.lizyml import LizyMLAdapter
 from lizystudio.backends.registry import get_adapter
@@ -733,3 +734,61 @@ def test_load_model_calls_lizyml_model_load() -> None:
         result = adapter.load_model("/tmp/saved_model")
         mock_model_cls.load.assert_called_once_with("/tmp/saved_model")
         assert result is mock_loaded
+
+
+# ---------------------------------------------------------------------------
+# load_config_from_file edge cases (#11)
+# ---------------------------------------------------------------------------
+
+
+class TestLoadConfigEdgeCases:
+    """Edge cases for load_config_from_file."""
+
+    def test_invalid_yaml(self) -> None:
+        """Malformed YAML raises an error."""
+        import yaml
+
+        adapter = LizyMLAdapter()
+        with pytest.raises((yaml.YAMLError, ValueError)):
+            adapter.load_config_from_file(b":\n  :\n  : [bad", "bad.yaml")
+
+    def test_invalid_json(self) -> None:
+        """Malformed JSON raises json.JSONDecodeError."""
+        import json
+
+        adapter = LizyMLAdapter()
+        with pytest.raises(json.JSONDecodeError):
+            adapter.load_config_from_file(b"{{not json", "bad.json")
+
+    def test_non_mapping_yaml(self) -> None:
+        """YAML that parses to a list raises ValueError."""
+        adapter = LizyMLAdapter()
+        with pytest.raises(ValueError, match="Expected a mapping"):
+            adapter.load_config_from_file(b"- item1\n- item2\n", "list.yaml")
+
+    def test_non_mapping_json(self) -> None:
+        """JSON that parses to an array raises ValueError."""
+        adapter = LizyMLAdapter()
+        with pytest.raises(ValueError, match="Expected a mapping"):
+            adapter.load_config_from_file(b"[1, 2, 3]", "array.json")
+
+    def test_empty_content_yaml(self) -> None:
+        """Empty bytes with .yaml extension raises ValueError."""
+        adapter = LizyMLAdapter()
+        # yaml.safe_load("") returns None → not a dict
+        with pytest.raises(ValueError, match="Expected a mapping"):
+            adapter.load_config_from_file(b"", "empty.yaml")
+
+    def test_ambiguous_extension_yaml_fallback(self) -> None:
+        """Non-yaml/json extension tries YAML first."""
+        adapter = LizyMLAdapter()
+        result = adapter.load_config_from_file(
+            b"task: binary\nmodel:\n  name: lgbm\n", "config.txt"
+        )
+        assert result["task"] == "binary"
+
+    def test_ambiguous_extension_json_fallback(self) -> None:
+        """Non-yaml/json extension falls back to JSON."""
+        adapter = LizyMLAdapter()
+        result = adapter.load_config_from_file(b'{"task": "binary"}', "config.txt")
+        assert result["task"] == "binary"

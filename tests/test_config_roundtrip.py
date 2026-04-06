@@ -99,3 +99,50 @@ class TestConfigRoundTrip:
         else:
             # If save fails, the test should tell us why
             pytest.fail(f"Config save failed: {body.get('errors')}")
+
+    def test_validate_config_is_data_independent(
+        self, client: TestClient, test_csv: Path
+    ) -> None:
+        """Validate config does not depend on loaded data columns.
+
+        Currently validate_config delegates to backend.validate_config(config)
+        which validates schema structure only, not column references.
+        This test documents that behaviour — if data-aware validation is added
+        later, this test will need updating.
+        """
+        # 1. Load data with columns: id, age, gender, target
+        client.post("/api/workspace/data/path", json={"path": str(test_csv)})
+
+        # 2. Get valid defaults
+        defaults = client.get(
+            "/api/workspace/config/defaults?task=binary&target=target"
+        ).json()
+
+        # 3. Change target to a non-existent column
+        defaults["data"]["target"] = "nonexistent_column"
+
+        # 4. Validate — currently passes because validation is schema-only
+        val_res = client.post("/api/workspace/config/validate", json=defaults)
+        assert val_res.status_code == 200
+        body = val_res.json()
+        # Document: validation does not check column existence
+        assert body["valid"] is True
+
+    def test_config_saved_with_wrong_target_still_saves(
+        self, client: TestClient, test_csv: Path
+    ) -> None:
+        """Config with a target column not in data can still be saved.
+
+        This documents current behaviour — config save relies on schema
+        validation, not data-aware validation.
+        """
+        client.post("/api/workspace/data/path", json={"path": str(test_csv)})
+        defaults = client.get(
+            "/api/workspace/config/defaults?task=binary&target=target"
+        ).json()
+
+        defaults["data"]["target"] = "column_that_does_not_exist"
+        put_res = client.put("/api/workspace/config", json=defaults)
+        body = put_res.json()
+        # Document: save succeeds even with invalid column reference
+        assert body["saved"] is True

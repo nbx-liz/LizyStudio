@@ -239,9 +239,9 @@ describe("ModelPanel", () => {
     });
   });
 
-  it("shows validation errors when present", async () => {
-    const { validateConfig } = await import("@/api/workspace");
-    (validateConfig as ReturnType<typeof vi.fn>).mockResolvedValue({
+  it("shows validation errors after import with errors", async () => {
+    const { uploadConfig } = await import("@/api/workspace");
+    (uploadConfig as ReturnType<typeof vi.fn>).mockResolvedValue({
       errors: [{ path: "model.name", message: "Invalid model" }],
     });
 
@@ -255,12 +255,106 @@ describe("ModelPanel", () => {
       />,
     );
 
-    // Errors would be shown after a config change triggers validation
-    // For now, just verify the component renders without errors initially
-    const { waitFor } = await import("@testing-library/react");
+    const { fireEvent, waitFor } = await import("@testing-library/react");
+    const fileInput = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    const file = new File(["model: bad"], "config.yaml", {
+      type: "text/yaml",
+    });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
     await waitFor(() => {
-      const fitTabs = screen.getAllByRole("tab");
-      expect(fitTabs.length).toBeGreaterThan(0);
+      expect(
+        screen.getByText(/model\.name: Invalid model/),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("disables Fit button when validation errors exist", async () => {
+    const { uploadConfig } = await import("@/api/workspace");
+    (uploadConfig as ReturnType<typeof vi.fn>).mockResolvedValue({
+      errors: [{ path: "model.name", message: "Invalid model" }],
+    });
+
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    const { fireEvent, waitFor } = await import("@testing-library/react");
+    const fileInput = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    const file = new File(["model: bad"], "config.yaml", {
+      type: "text/yaml",
+    });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Fix validation errors first"),
+      ).toBeInTheDocument();
+      const actionButtons = screen
+        .getAllByRole("button")
+        .filter(
+          (btn) =>
+            btn.textContent === "Fit" && !btn.closest('[role="tablist"]'),
+        );
+      expect(actionButtons[0]).toBeDisabled();
+    });
+  });
+
+  it("clears validation errors after successful import", async () => {
+    const { uploadConfig } = await import("@/api/workspace");
+    const mockUpload = uploadConfig as ReturnType<typeof vi.fn>;
+
+    // First import: has errors
+    mockUpload.mockResolvedValueOnce({
+      errors: [{ path: "model.name", message: "Invalid model" }],
+    });
+
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    const { fireEvent, waitFor } = await import("@testing-library/react");
+    const fileInput = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    const badFile = new File(["model: bad"], "bad.yaml", {
+      type: "text/yaml",
+    });
+    fireEvent.change(fileInput, { target: { files: [badFile] } });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/model\.name: Invalid model/),
+      ).toBeInTheDocument();
+    });
+
+    // Second import: no errors
+    mockUpload.mockResolvedValueOnce({ errors: [] });
+    const goodFile = new File(["model: lgbm"], "good.yaml", {
+      type: "text/yaml",
+    });
+    fireEvent.change(fileInput, { target: { files: [goodFile] } });
+
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/model\.name: Invalid model/),
+      ).not.toBeInTheDocument();
     });
   });
 

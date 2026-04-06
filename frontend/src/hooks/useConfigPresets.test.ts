@@ -1,5 +1,5 @@
 import { act, renderHook } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useConfigPresets } from "./useConfigPresets";
 
 const STORAGE_KEY = "lizystudio-config-presets";
@@ -72,5 +72,43 @@ describe("useConfigPresets", () => {
     const { result } = renderHook(() => useConfigPresets());
     expect(result.current.presets).toHaveLength(1);
     expect(result.current.load("existing")).toEqual({ x: 1 });
+  });
+
+  // --- localStorage edge cases (#16) ---
+
+  it("save gracefully handles QuotaExceededError", () => {
+    const spy = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(() => {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      });
+
+    const { result } = renderHook(() => useConfigPresets());
+    // Should not throw
+    act(() => result.current.save("test", { v: 1 }));
+    // State should still be updated in memory
+    expect(result.current.presets).toHaveLength(1);
+
+    spy.mockRestore();
+  });
+
+  it("load gracefully handles getItem throwing", () => {
+    const spy = vi
+      .spyOn(Storage.prototype, "getItem")
+      .mockImplementation(() => {
+        throw new DOMException("storage unavailable");
+      });
+
+    const { result } = renderHook(() => useConfigPresets());
+    expect(result.current.presets).toEqual([]);
+
+    spy.mockRestore();
+  });
+
+  it("load gracefully handles invalid JSON in storage", () => {
+    localStorage.setItem(STORAGE_KEY, "not valid json {{{");
+
+    const { result } = renderHook(() => useConfigPresets());
+    expect(result.current.presets).toEqual([]);
   });
 });

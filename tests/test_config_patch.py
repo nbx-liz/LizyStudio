@@ -216,3 +216,38 @@ class TestPatchEndpoint:
         resp = client.get("/api/workspace/config")
         assert resp.status_code == 200
         assert resp.json()["task"] == config["task"]
+
+
+# --- Deeply nested config (#14) ---
+
+
+class TestDeepNesting:
+    """Config patch with deeply nested paths."""
+
+    def test_set_deeply_nested_path(self) -> None:
+        """Set operation on 5+ level nested path."""
+        config: dict[str, Any] = {"a": {"b": {"c": {"d": {}}}}}
+        result = apply_config_patch(
+            config,
+            [{"op": "set", "path": "a.b.c.d.e", "value": 42}],
+        )
+        assert result["a"]["b"]["c"]["d"]["e"] == 42
+
+    def test_set_creates_intermediate_keys(self) -> None:
+        """Set on non-existent intermediate keys creates them."""
+        config: dict[str, Any] = {}
+        result = apply_config_patch(
+            config,
+            [{"op": "set", "path": "x.y.z", "value": "deep"}],
+        )
+        assert result["x"]["y"]["z"] == "deep"
+
+    def test_unset_deeply_nested(self) -> None:
+        """Unset on a deep key removes only the leaf."""
+        config: dict[str, Any] = {"a": {"b": {"c": 1, "d": 2}}}
+        result = apply_config_patch(
+            config,
+            [{"op": "unset", "path": "a.b.c"}],
+        )
+        assert "c" not in result["a"]["b"]
+        assert result["a"]["b"]["d"] == 2

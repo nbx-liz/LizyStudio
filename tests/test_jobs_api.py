@@ -921,6 +921,34 @@ def test_export_job_backend_error(
     assert res.json()["error"]["code"] == "EXPORT_ERROR"
 
 
+def test_job_config_snapshot_isolation(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    """Job config is an isolated snapshot; post-creation mutations don't affect it."""
+    app = client.app  # type: ignore[union-attr]
+    job_store: JobStore = app.state.job_store
+    original_config = {
+        "task": "binary",
+        "model": {"name": "lgbm", "params": {"lr": 0.1}},
+    }
+    job = job_store.create(
+        backend_name="lizyml",
+        config=original_config,
+        data_ref=sample_data_ref,
+        job_type="fit",
+    )
+
+    # Mutate the original dict after job creation
+    original_config["model"]["params"]["lr"] = 999
+    original_config["task"] = "regression"
+
+    # Reload from disk and verify isolation
+    loaded = job_store.get(job.job_id)
+    assert loaded is not None
+    assert loaded.config["task"] == "binary"
+    assert loaded.config["model"]["params"]["lr"] == 0.1
+
+
 def test_export_code_backend_error(
     client: TestClient, sample_data_ref: DataRef, tmp_path: Path
 ) -> None:
@@ -938,3 +966,57 @@ def test_export_code_backend_error(
 
     assert res.status_code == 500
     assert res.json()["error"]["code"] == "BACKEND_ERROR"
+
+
+# ---------------------------------------------------------------------------
+# Metric name / kind injection prevention (#18)
+# ---------------------------------------------------------------------------
+
+
+def test_plot_rejects_invalid_metric_name(
+    client: TestClient, sample_data_ref: DataRef, tmp_path: Path
+) -> None:
+    """Invalid metric names in learning-curve query are rejected."""
+    job_id = _create_completed_job_with_model(
+        client, sample_data_ref, str(tmp_path / "model")
+    )
+    for bad in ("../../etc", "<script>alert(1)</script>", "a;DROP"):
+        res = client.get(f"/api/jobs/{job_id}/plot/learning-curve?metrics={bad}")
+        assert res.status_code == 400, f"Expected 400 for {bad!r}"
+        assert res.json()["error"]["code"] == "INVALID_PARAM"
+
+
+def test_plot_accepts_valid_metric_name(
+    client: TestClient, sample_data_ref: DataRef, tmp_path: Path
+) -> None:
+    """Valid metric names pass validation (backend may still error)."""
+    from unittest.mock import MagicMock
+
+    job_id = _create_completed_job_with_model(
+        client, sample_data_ref, str(tmp_path / "model")
+    )
+    mock_backend = _make_mock_backend()
+    fake_plot = MagicMock()
+    fake_plot.plotly_json = '{"data":[]}'
+    mock_backend.plot.return_value = fake_plot  # type: ignore[union-attr]
+
+    app = client.app  # type: ignore[union-attr]
+    original = app.state.workspace.backend
+    app.state.workspace.backend = mock_backend
+    try:
+        res = client.get(f"/api/jobs/{job_id}/plot/learning-curve?metrics=auc,rmse")
+    finally:
+        app.state.workspace.backend = original
+    assert res.status_code == 200
+
+
+def test_importance_rejects_invalid_kind(
+    client: TestClient, sample_data_ref: DataRef, tmp_path: Path
+) -> None:
+    """Invalid kind parameter in importance is rejected."""
+    job_id = _create_completed_job_with_model(
+        client, sample_data_ref, str(tmp_path / "model")
+    )
+    res = client.get(f"/api/jobs/{job_id}/plot/importance?kind=../escape")
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "INVALID_PARAM"

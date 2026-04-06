@@ -420,3 +420,128 @@ def test_get_available_plots_no_tuning_when_file_absent(
 
     result = get_available_plots(job, backend)
     assert "tuning" not in result
+
+
+# ---------------------------------------------------------------------------
+# Job state management (#4)
+# ---------------------------------------------------------------------------
+
+
+def test_claim_active_blocks_second_job(
+    job_store: JobStore,
+) -> None:
+    """claim_active returns False for a second caller."""
+    assert job_store.claim_active("job_a") is True
+    assert job_store.claim_active("job_b") is False
+    job_store.release_active("job_a")
+
+
+def test_release_active_allows_next(job_store: JobStore) -> None:
+    """After release, next claim_active succeeds."""
+    job_store.claim_active("job_a")
+    job_store.release_active("job_a")
+    assert job_store.claim_active("job_b") is True
+    job_store.release_active("job_b")
+
+
+def test_cancel_request_on_pending_job(
+    job_store: JobStore, sample_data_ref: DataRef
+) -> None:
+    """Cancel can be requested on a pending job."""
+    job = job_store.create(
+        backend_name="lizyml",
+        config={},
+        data_ref=sample_data_ref,
+        job_type="fit",
+    )
+    job_store.request_cancel(job.job_id)
+    assert job_store.is_cancel_requested(job.job_id) is True
+    job_store.clear_cancel(job.job_id)
+    assert job_store.is_cancel_requested(job.job_id) is False
+
+
+def test_has_active_job(job_store: JobStore) -> None:
+    """has_active_job reflects active state."""
+    assert job_store.has_active_job() is False
+    job_store.claim_active("job_x")
+    assert job_store.has_active_job() is True
+    job_store.release_active("job_x")
+    assert job_store.has_active_job() is False
+
+
+# ---------------------------------------------------------------------------
+# Job directory corruption (#13)
+# ---------------------------------------------------------------------------
+
+
+def test_get_returns_none_for_missing_meta(
+    job_store: JobStore,
+) -> None:
+    """get() returns None when job dir exists but meta.json is absent."""
+    (job_store.jobs_dir / "job_orphan").mkdir(parents=True)
+    assert job_store.get("job_orphan") is None
+
+
+def test_load_job_corrupt_meta_raises(
+    job_store: JobStore,
+) -> None:
+    """_load_job raises on corrupt meta.json."""
+    import json
+
+    job_dir = job_store.jobs_dir / "job_corrupt"
+    job_dir.mkdir(parents=True)
+    (job_dir / "meta.json").write_text("not json{{{", encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError):
+        job_store._load_job("job_corrupt")
+
+
+def test_load_job_missing_field_raises(
+    job_store: JobStore,
+) -> None:
+    """_load_job raises KeyError when required fields are missing."""
+    import json
+
+    job_dir = job_store.jobs_dir / "job_partial"
+    job_dir.mkdir(parents=True)
+    (job_dir / "meta.json").write_text(
+        json.dumps({"job_id": "job_partial", "status": "pending"}),
+        encoding="utf-8",
+    )
+    with pytest.raises(KeyError):
+        job_store._load_job("job_partial")
+
+
+def test_list_skips_dirs_without_meta(
+    job_store: JobStore, sample_data_ref: DataRef
+) -> None:
+    """list() should skip subdirs that lack meta.json."""
+    # Create a valid job
+    job = job_store.create(
+        backend_name="lizyml",
+        config={},
+        data_ref=sample_data_ref,
+        job_type="fit",
+    )
+    # Create an orphan dir (no meta.json)
+    (job_store.jobs_dir / "orphan_dir").mkdir(parents=True)
+    jobs = job_store.list()
+    assert len(jobs) == 1
+    assert jobs[0].job_id == job.job_id
+
+
+def test_load_job_corrupt_fit_result(
+    job_store: JobStore, sample_data_ref: DataRef
+) -> None:
+    """Corrupt fit_result.json should raise on load."""
+    import json
+
+    job = job_store.create(
+        backend_name="lizyml",
+        config={},
+        data_ref=sample_data_ref,
+        job_type="fit",
+    )
+    fit_path = job_store.jobs_dir / job.job_id / "fit_result.json"
+    fit_path.write_text("not valid json", encoding="utf-8")
+    with pytest.raises(json.JSONDecodeError):
+        job_store.get(job.job_id)
