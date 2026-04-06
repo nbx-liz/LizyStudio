@@ -20,7 +20,9 @@ export function fetchJobImportance(
   jobId: string,
   kind = "default",
 ): Promise<ImportanceResponse> {
-  return apiFetch(`/jobs/${jobId}/importance?kind=${kind}`);
+  return apiFetch(
+    `/jobs/${encodeURIComponent(jobId)}/importance?kind=${encodeURIComponent(kind)}`,
+  );
 }
 
 export function fetchJobImportanceKinds(jobId: string): Promise<string[]> {
@@ -43,7 +45,7 @@ export function fetchJobPlot(
     params.set("kind", options.kind);
   }
   const qs = params.toString();
-  const url = `/jobs/${jobId}/plot/${plotType}${qs ? `?${qs}` : ""}`;
+  const url = `/jobs/${encodeURIComponent(jobId)}/plot/${encodeURIComponent(plotType)}${qs ? `?${qs}` : ""}`;
   return apiFetch(url);
 }
 

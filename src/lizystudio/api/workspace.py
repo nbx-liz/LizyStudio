@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 from fastapi import APIRouter, Depends, Request, UploadFile
 from fastapi.responses import Response
+from pydantic import BaseModel  # noqa: F401
 
 import lizystudio.security as security
 from lizystudio.api.errors import (
@@ -109,13 +110,17 @@ def workspace_reset(ws: WorkspaceState = Depends(get_workspace)) -> dict[str, st
 # --- Data endpoints (BLUEPRINT §5.2 Data) ---
 
 
+class DataPathRequest(BaseModel):
+    path: str
+
+
 @router.post("/data/path", response_model=DataLoadResponse)
 def data_load_path(
-    body: dict[str, Any],
+    body: DataPathRequest,
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, Any]:
     """Load data from a local file path."""
-    path = body.get("path", "")
+    path = body.path
     try:
         validate_path_within(Path(path), security.ALLOWED_FILES_ROOT)
     except ValueError as exc:

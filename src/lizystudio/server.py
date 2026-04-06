@@ -128,20 +128,6 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Security headers middleware
-    from collections.abc import Awaitable, Callable
-
-    @application.middleware("http")
-    async def add_security_headers(
-        request: Request,
-        call_next: Callable[[Request], Awaitable[Response]],
-    ) -> Response:
-        response: Response = await call_next(request)
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        return response
-
     # Exception handlers
     application.add_exception_handler(StudioError, studio_error_handler)  # type: ignore[arg-type]
     application.add_exception_handler(RequestValidationError, validation_error_handler)
