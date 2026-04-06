@@ -1,8 +1,9 @@
 import { Upload } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import type { ColumnInfo, UiSchema } from "@/api/types";
+import type { ColumnInfo, ColumnStatsResponse, UiSchema } from "@/api/types";
 import {
+  fetchColumnStats,
   fetchColumns,
   fetchConfig,
   fetchConfigDefaults,
@@ -40,14 +41,19 @@ import {
 } from "@/components/ui/table";
 import {
   applyCvDataFields,
+  type BlockedGroupKFoldState,
   buildSplitConfig,
   CvSection,
   type CvState,
+  INITIAL_BLOCKED_STATE,
   INITIAL_CV_STATE,
+  recommendedInnerValid,
   resetCvState,
 } from "./CvSection";
 import { getDefaultCvStrategy } from "./constants";
+import { DistributionBar } from "./DistributionBar";
 import { FileBrowser } from "./FileBrowser";
+import { FoldPreview } from "./FoldPreview";
 import { SegmentGroup } from "./SegmentGroup";
 
 type SourceType = "path" | "upload";
@@ -88,10 +94,18 @@ export function DataPanel({
   );
 
   const [cv, setCv] = useState<CvState>(INITIAL_CV_STATE);
+  const [blocked, setBlocked] = useState<BlockedGroupKFoldState>(
+    INITIAL_BLOCKED_STATE,
+  );
   const [loading, setLoading] = useState(false);
   const [columnFilter, setColumnFilter] = useState("");
+  const [expandedCol, setExpandedCol] = useState<string | null>(null);
+  const [colStats, setColStats] = useState<Record<string, ColumnStatsResponse>>(
+    {},
+  );
 
   const abortRef = useRef<AbortController | null>(null);
+  const prevCvStrategyRef = useRef<string>(cv.strategy);
 
   const syncConfig = useCallback(async () => {
     abortRef.current?.abort();
@@ -129,8 +143,20 @@ export function DataPanel({
           categorical,
           exclude: excluded,
         },
-        split: buildSplitConfig(cv),
+        split: buildSplitConfig(cv, blocked),
       };
+      // Auto-set inner validation method when CV strategy changes
+      const baseTraining = (merged.training as Record<string, unknown>) ?? {};
+      const innerValid =
+        (baseTraining.inner_valid as Record<string, unknown>) ?? {};
+      if (prevCvStrategyRef.current !== cv.strategy) {
+        const recommended = recommendedInnerValid(cv.strategy);
+        merged.training = {
+          ...baseTraining,
+          inner_valid: { ...innerValid, method: recommended },
+        };
+        prevCvStrategyRef.current = cv.strategy;
+      }
       await updateConfig(merged, { signal: controller.signal });
       if (controller.signal.aborted) return;
       onDataChanged();
@@ -139,16 +165,16 @@ export function DataPanel({
       if (err instanceof DOMException && err.name === "AbortError") return;
       toast.error("Config sync failed — changes may not be saved");
     }
-  }, [dataPath, target, task, overrides, cv, onDataChanged]);
+  }, [dataPath, target, task, overrides, cv, blocked, onDataChanged]);
 
   const prevSyncKey = useRef("");
   useEffect(() => {
     if (!target) return;
-    const key = JSON.stringify({ target, task, overrides, cv });
+    const key = JSON.stringify({ target, task, overrides, cv, blocked });
     if (key === prevSyncKey.current) return;
     prevSyncKey.current = key;
     syncConfig();
-  }, [target, task, overrides, cv, syncConfig]);
+  }, [target, task, overrides, cv, blocked, syncConfig]);
 
   const handleLoadPathByValue = async (path: string) => {
     if (!path.trim()) return;
@@ -293,6 +319,25 @@ export function DataPanel({
       [colName]: { ...prev[colName], type },
     }));
   };
+
+  const handleColumnExpand = useCallback(
+    async (colName: string) => {
+      if (expandedCol === colName) {
+        setExpandedCol(null);
+        return;
+      }
+      setExpandedCol(colName);
+      if (!colStats[colName]) {
+        try {
+          const stats = await fetchColumnStats(colName);
+          setColStats((prev) => ({ ...prev, [colName]: stats }));
+        } catch {
+          // Silently fail — bar just won't show
+        }
+      }
+    },
+    [expandedCol, colStats],
+  );
 
   const summary = useMemo(() => {
     const nonTarget = columns.filter((c) => c.name !== target);
@@ -540,76 +585,103 @@ export function DataPanel({
                           const o = overrides[col.name];
                           const isExcluded = o?.excluded ?? false;
                           const currentType = o?.type ?? col.suggested_type;
+                          const isExpanded = expandedCol === col.name;
+                          const stats = colStats[col.name];
                           return (
-                            <div
-                              key={col.name}
-                              className={`grid grid-cols-[1fr_60px_60px_100px] items-center gap-x-2 px-3 py-1.5 hover:bg-muted/40 ${idx % 2 === 1 ? "bg-muted/20" : ""}`}
-                            >
-                              <span className="text-xs truncate">
-                                {col.name}
-                                {col.exclude_reason === "id" && (
-                                  <Badge
-                                    variant="outline"
-                                    className="ml-1 text-[10px]"
-                                  >
-                                    ID
-                                  </Badge>
-                                )}
-                                {col.exclude_reason === "constant" && (
-                                  <Badge
-                                    variant="outline"
-                                    className="ml-1 text-[10px]"
-                                  >
-                                    Const
-                                  </Badge>
-                                )}
-                              </span>
-                              <span className="text-xs">
-                                {col.unique_count}
-                              </span>
-                              <div>
-                                <Checkbox
-                                  checked={isExcluded}
-                                  onCheckedChange={(checked) =>
-                                    handleExcludeToggle(
-                                      col.name,
-                                      checked === true,
-                                    )
-                                  }
-                                />
-                              </div>
-                              <div className="flex gap-0.5">
-                                <Button
-                                  variant={
-                                    currentType === "numeric"
-                                      ? "default"
-                                      : "outline"
-                                  }
-                                  size="sm"
-                                  className="h-6 text-[10px] px-2"
-                                  disabled={isExcluded}
-                                  onClick={() =>
-                                    handleTypeChange(col.name, "numeric")
-                                  }
+                            <div key={col.name}>
+                              <button
+                                type="button"
+                                className={`grid w-full grid-cols-[1fr_60px_60px_100px] items-center gap-x-2 px-3 py-1.5 text-left hover:bg-muted/40 cursor-pointer ${idx % 2 === 1 ? "bg-muted/20" : ""}`}
+                                onClick={() => handleColumnExpand(col.name)}
+                                data-testid={`column-row-${col.name}`}
+                              >
+                                <span className="text-xs truncate">
+                                  {col.name}
+                                  {col.exclude_reason === "id" && (
+                                    <Badge
+                                      variant="outline"
+                                      className="ml-1 text-[10px]"
+                                    >
+                                      ID
+                                    </Badge>
+                                  )}
+                                  {col.exclude_reason === "constant" && (
+                                    <Badge
+                                      variant="outline"
+                                      className="ml-1 text-[10px]"
+                                    >
+                                      Const
+                                    </Badge>
+                                  )}
+                                </span>
+                                <span className="text-xs">
+                                  {col.unique_count}
+                                </span>
+                                <div>
+                                  <Checkbox
+                                    checked={isExcluded}
+                                    onCheckedChange={(checked) =>
+                                      handleExcludeToggle(
+                                        col.name,
+                                        checked === true,
+                                      )
+                                    }
+                                    onClick={(e) => e.stopPropagation()}
+                                  />
+                                </div>
+                                {/* biome-ignore lint/a11y/noStaticElementInteractions: stop propagation container */}
+                                <div
+                                  className="flex gap-0.5"
+                                  onClick={(e) => e.stopPropagation()}
+                                  onKeyDown={(e) => e.stopPropagation()}
                                 >
-                                  Num
-                                </Button>
-                                <Button
-                                  variant={
-                                    currentType === "categorical"
-                                      ? "default"
-                                      : "outline"
-                                  }
-                                  size="sm"
-                                  className="h-6 text-[10px] px-2"
-                                  disabled={isExcluded}
-                                  onClick={() =>
-                                    handleTypeChange(col.name, "categorical")
-                                  }
+                                  <Button
+                                    variant={
+                                      currentType === "numeric"
+                                        ? "default"
+                                        : "outline"
+                                    }
+                                    size="sm"
+                                    className="h-6 text-[10px] px-2"
+                                    disabled={isExcluded}
+                                    onClick={() =>
+                                      handleTypeChange(col.name, "numeric")
+                                    }
+                                  >
+                                    Num
+                                  </Button>
+                                  <Button
+                                    variant={
+                                      currentType === "categorical"
+                                        ? "default"
+                                        : "outline"
+                                    }
+                                    size="sm"
+                                    className="h-6 text-[10px] px-2"
+                                    disabled={isExcluded}
+                                    onClick={() =>
+                                      handleTypeChange(col.name, "categorical")
+                                    }
+                                  >
+                                    Cat
+                                  </Button>
+                                </div>
+                              </button>
+                              {isExpanded && stats && (
+                                <div
+                                  className="px-3 py-2 bg-muted/10 border-t"
+                                  data-testid={`column-dist-${col.name}`}
                                 >
-                                  Cat
-                                </Button>
-                              </div>
+                                  <DistributionBar
+                                    valueCounts={stats.value_counts}
+                                    totalCount={stats.total_count}
+                                  />
+                                  <p className="text-[10px] text-muted-foreground mt-1">
+                                    {stats.unique_count} unique,{" "}
+                                    {stats.null_count} null
+                                  </p>
+                                </div>
+                              )}
                             </div>
                           );
                         })}
@@ -645,12 +717,22 @@ export function DataPanel({
               Cross Validation
             </AccordionTrigger>
             <AccordionContent>
-              <div className="pl-4">
+              <div className="pl-4 space-y-3">
                 <CvSection
                   cv={cv}
                   onChange={setCv}
                   uiSchema={uiSchema}
                   nonExcludedCols={nonExcludedCols}
+                  blocked={blocked}
+                  onBlockedChange={setBlocked}
+                />
+                <FoldPreview
+                  enabled={!!target && !!task && shape !== null}
+                  cvKey={JSON.stringify({
+                    strategy: cv.strategy,
+                    folds: cv.folds,
+                    gap: cv.gap,
+                  })}
                 />
               </div>
             </AccordionContent>

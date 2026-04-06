@@ -10,29 +10,22 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { CompactStepper } from "./CompactStepper";
-import { KNOWN_PARAMS, RANGE_DEFAULTS } from "./constants";
-import { SearchSpaceTable } from "./SearchSpaceTable";
+import { groupToCategory, SearchSpaceTable } from "./SearchSpaceTable";
 import { SegmentGroup } from "./SegmentGroup";
 import { TuneSettings } from "./TuneSettings";
-
-/** Default params to auto-populate in search space when empty. */
-const DEFAULT_TUNE_PARAMS = [
-  "learning_rate",
-  "num_leaves",
-  "n_estimators",
-  "max_depth",
-];
 
 interface TuneTabProps {
   config: Record<string, unknown>;
   onChange: (config: Record<string, unknown>) => void;
   task: string | null;
   uiSchema?: import("@/api/types").UiSchema;
+  columns?: string[];
 }
 
-function updateTuningConfig(
+/** Update tuning.optuna.{params|space} (NOT evaluation — that goes to tuning.evaluation). */
+function updateOptunaField(
   config: Record<string, unknown>,
-  path: "params" | "space" | "evaluation",
+  path: "params" | "space",
   value: unknown,
 ): Record<string, unknown> {
   const tuning = (config.tuning as Record<string, unknown>) ?? {};
@@ -41,6 +34,16 @@ function updateTuningConfig(
     ...config,
     tuning: { ...tuning, optuna: { ...optuna, [path]: value } },
   };
+}
+
+/** Update tuning.{field} (e.g. tuning.evaluation — Widget conformance). */
+function updateTuningField(
+  config: Record<string, unknown>,
+  field: string,
+  value: unknown,
+): Record<string, unknown> {
+  const tuning = (config.tuning as Record<string, unknown>) ?? {};
+  return { ...config, tuning: { ...tuning, [field]: value } };
 }
 
 function extractOptunaField<T>(
@@ -53,7 +56,23 @@ function extractOptunaField<T>(
   return (optuna?.[field] as T) ?? fallback;
 }
 
-export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
+/** Extract tuning.{field} (for evaluation — Widget conformance). */
+function extractTuningField<T>(
+  config: Record<string, unknown>,
+  field: string,
+  fallback: T,
+): T {
+  const tuning = config.tuning as Record<string, unknown> | undefined;
+  return (tuning?.[field] as T) ?? fallback;
+}
+
+export function TuneTab({
+  config,
+  onChange,
+  task,
+  uiSchema,
+  columns,
+}: TuneTabProps) {
   const tuningParams = extractOptunaField<{
     n_trials?: number;
     timeout?: number | null;
@@ -65,35 +84,42 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
     {},
   );
 
-  // Auto-populate search space with default params when empty (initial load only)
+  // Auto-populate search space with catalog entries that have default_mode: "range".
   const spaceInitialized = useRef(false);
+  const prevTuningRef = useRef(config.tuning);
+  useEffect(() => {
+    if (prevTuningRef.current && !config.tuning) {
+      spaceInitialized.current = false;
+    }
+    prevTuningRef.current = config.tuning;
+  }, [config.tuning]);
   useEffect(() => {
     if (spaceInitialized.current) return;
     if (Object.keys(searchSpace).length > 0) {
       spaceInitialized.current = true;
       return;
     }
-    // Build default space from RANGE_DEFAULTS for the 4 key params
+    const catalogEntries = uiSchema?.search_space_catalog;
+    if (!catalogEntries) return;
     const defaultSpace: Record<string, unknown> = {};
-    for (const key of DEFAULT_TUNE_PARAMS) {
-      const defaults = RANGE_DEFAULTS[key];
-      if (!defaults) continue;
-      const param = KNOWN_PARAMS.find((p) => p.key === key);
-      defaultSpace[key] = {
-        type: param?.type === "integer" ? "int" : "float",
-        low: defaults.low,
-        high: defaults.high,
-        log: defaults.log,
-        step: defaults.step,
+    for (const entry of catalogEntries) {
+      if (entry.default_mode !== "range" || !entry.default_range) continue;
+      defaultSpace[entry.key] = {
+        type: entry.paramType === "integer" ? "int" : "float",
+        low: entry.default_range.low,
+        high: entry.default_range.high,
+        log: entry.default_range.log,
+        category: groupToCategory(entry.group ?? "model_params"),
       };
     }
     if (Object.keys(defaultSpace).length > 0) {
       spaceInitialized.current = true;
-      onChange(updateTuningConfig(config, "space", defaultSpace));
+      onChange(updateOptunaField(config, "space", defaultSpace));
     }
-  }, [searchSpace, config, onChange]);
+  }, [searchSpace, config, onChange, uiSchema]);
 
-  const evaluation = extractOptunaField<{
+  // Evaluation from tuning.evaluation (Widget conformance — NOT tuning.optuna.evaluation)
+  const evaluation = extractTuningField<{
     metrics?: MetricEntry[];
   }>(config, "evaluation", {});
 
@@ -129,18 +155,17 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
     return [];
   }, [task, uiSchema]);
 
-  // Per-parameter option sets derived from uiSchema.option_sets for generic choice mode.
-  // Each key in option_sets whose value is a flat string[] is passed through directly;
-  // task-keyed nested records are resolved for the current task.
+  // Per-parameter option sets — exclude "metric" to avoid overriding
+  // SearchSpaceTable's getChoiceOptions which correctly uses model_metric.
   const paramOptionSets = useMemo((): Record<string, string[]> => {
     if (!uiSchema?.option_sets) return {};
     const result: Record<string, string[]> = {};
     for (const [paramKey, value] of Object.entries(uiSchema.option_sets)) {
+      // Skip "metric" — SearchSpaceTable handles it via metricOptions prop
+      if (paramKey === "metric") continue;
       if (Array.isArray(value)) {
-        // Flat string[] — task-independent options
         result[paramKey] = value as string[];
       } else if (task && typeof value === "object" && value !== null) {
-        // Nested Record<task, string[]> — resolve for current task
         const taskMap = value as Record<string, string[]>;
         if (taskMap[task]) {
           result[paramKey] = taskMap[task];
@@ -150,11 +175,12 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
     return result;
   }, [task, uiSchema]);
 
-  // Current evaluation metrics from config (may contain MetricEntry dicts)
+  // Current evaluation metrics from config
   const evalMetrics = evaluation.metrics ?? [];
+  // Widget conformance: fall back to first available metric option
   const optimizationMetric = evalMetrics[0]
     ? metricEntryName(evalMetrics[0])
-    : "";
+    : (metricOptions[0] ?? "");
   const additionalMetricNames = evalMetrics.slice(1).map(metricEntryName);
 
   // Auto-determine direction from metric_direction mapping
@@ -166,11 +192,11 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
   }, [task, optimizationMetric, metricDirection]);
 
   const handleParamsChange = (params: Record<string, unknown>) => {
-    onChange(updateTuningConfig(config, "params", params));
+    onChange(updateOptunaField(config, "params", params));
   };
 
   const handleSpaceChange = (space: Record<string, unknown>) => {
-    onChange(updateTuningConfig(config, "space", space));
+    onChange(updateOptunaField(config, "space", space));
   };
 
   const handleModelParamChange = useCallback(
@@ -215,20 +241,22 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
         ...evaluation,
         metrics: [buildEntry(metric), ...filtered],
       };
-      // Also set direction in params
+      // Set direction in optuna params (no "metric" key — Widget conformance)
       const dir = (() => {
         if (!task || !metricDirection) return "minimize";
         const taskDirs = metricDirection[task];
         return taskDirs?.[metric] ?? "minimize";
       })();
-      const newParams = { ...tuningParams, metric, direction: dir };
+      const newParams = { ...tuningParams, direction: dir };
+      // Update both: tuning.evaluation and tuning.optuna.params
       const tuning = (config.tuning as Record<string, unknown>) ?? {};
       const optuna = (tuning.optuna as Record<string, unknown>) ?? {};
       onChange({
         ...config,
         tuning: {
           ...tuning,
-          optuna: { ...optuna, evaluation: newEval, params: newParams },
+          evaluation: newEval,
+          optuna: { ...optuna, params: newParams },
         },
       });
     },
@@ -250,14 +278,12 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
       const newAdditional = isSelected
         ? evalMetrics.slice(1).filter((e) => metricEntryName(e) !== metric)
         : [...evalMetrics.slice(1), buildEntry(metric)];
+      const first = evalMetrics[0] ?? buildEntry(optimizationMetric);
       const newEval = {
         ...evaluation,
-        metrics: [
-          evalMetrics[0] ?? optimizationMetric,
-          ...newAdditional,
-        ].filter(Boolean),
+        metrics: [first, ...newAdditional].filter(Boolean),
       };
-      onChange(updateTuningConfig(config, "evaluation", newEval));
+      onChange(updateTuningField(config, "evaluation", newEval));
     },
     [
       additionalMetricNames,
@@ -280,7 +306,7 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
         return entry;
       });
       const newEval = { ...evaluation, metrics: newMetrics };
-      onChange(updateTuningConfig(config, "evaluation", newEval));
+      onChange(updateTuningField(config, "evaluation", newEval));
     },
     [evalMetrics, evaluation, config, onChange],
   );
@@ -319,6 +345,9 @@ export function TuneTab({ config, onChange, task, uiSchema }: TuneTabProps) {
               additionalParams={uiSchema?.additional_params}
               paramOptionSets={paramOptionSets}
               onModelParamChange={handleModelParamChange}
+              conditionalVisibility={uiSchema?.conditional_visibility}
+              specialSearchSpaceFields={uiSchema?.special_search_space_fields}
+              columns={columns}
             />
           </div>
         </AccordionContent>

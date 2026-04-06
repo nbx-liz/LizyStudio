@@ -24,6 +24,10 @@ src/lizystudio/static/
 .DS_Store
 Thumbs.db
 
+# Data
+*.csv
+*.png
+
 # Environment
 .env
 .env.local

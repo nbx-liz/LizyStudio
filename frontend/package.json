@@ -18,7 +18,8 @@
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
     "test:storybook": "test-storybook",
-    "generate:api": "openapi-typescript http://localhost:8501/openapi.json -o src/api/generated/schema.d.ts"
+    "generate:api": "openapi-typescript http://localhost:8501/openapi.json -o src/api/generated/schema.d.ts",
+    "check:api-types": "bash scripts/check-api-types.sh"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.21",

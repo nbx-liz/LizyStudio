@@ -90,12 +90,11 @@ describe("SearchSpaceTable", () => {
     expect(screen.getByText("0 ~ 1")).toBeInTheDocument();
   });
 
-  it("falls back to KNOWN_PARAMS when no catalog provided", () => {
+  it("renders nothing when no catalog provided", () => {
     render(<SearchSpaceTable space={{}} modelParams={{}} onChange={vi.fn()} />);
-    // KNOWN_PARAMS includes learning_rate, num_leaves, n_estimators, etc.
-    expect(screen.getByText("learning_rate")).toBeInTheDocument();
-    expect(screen.getByText("num_leaves")).toBeInTheDocument();
-    expect(screen.getByText("n_estimators")).toBeInTheDocument();
+    // Without a catalog, no parameter rows are rendered
+    expect(screen.queryByText("learning_rate")).not.toBeInTheDocument();
+    expect(screen.queryByText("n_estimators")).not.toBeInTheDocument();
   });
 
   it('fixed mode shows default value or "default" text', () => {
@@ -257,6 +256,72 @@ describe("SearchSpaceTable", () => {
     ).toBeInTheDocument();
   });
 
+  it("uses catalog default_range when switching to range mode", () => {
+    const catalogWithRange: SearchSpaceCatalogEntry[] = [
+      {
+        key: "learning_rate",
+        title: "Learning Rate",
+        paramType: "number",
+        modes: ["fixed", "range"],
+        group: "model_params",
+        default_mode: "range",
+        default_range: { low: 0.01, high: 0.3, log: true },
+      },
+    ];
+    const onChange = vi.fn();
+    render(
+      <SearchSpaceTable
+        space={{}}
+        modelParams={{}}
+        onChange={onChange}
+        catalog={catalogWithRange}
+      />,
+    );
+    const rangeBtn = screen.getByRole("radio", { name: /range/i });
+    fireEvent.click(rangeBtn);
+
+    expect(onChange).toHaveBeenCalled();
+    const spaceArg = onChange.mock.calls[0][0];
+    expect(spaceArg.learning_rate).toEqual({
+      type: "float",
+      low: 0.01,
+      high: 0.3,
+      log: true,
+      step: undefined,
+      category: "model",
+    });
+  });
+
+  it("uses generic defaults when catalog entry has no default_range", () => {
+    const catalogNoRange: SearchSpaceCatalogEntry[] = [
+      {
+        key: "max_bin",
+        title: "Max Bin",
+        paramType: "integer",
+        modes: ["fixed", "range"],
+        group: "model_params",
+      },
+    ];
+    const onChange = vi.fn();
+    render(
+      <SearchSpaceTable
+        space={{}}
+        modelParams={{}}
+        onChange={onChange}
+        catalog={catalogNoRange}
+      />,
+    );
+    const rangeBtn = screen.getByRole("radio", { name: /range/i });
+    fireEvent.click(rangeBtn);
+
+    expect(onChange).toHaveBeenCalled();
+    const spaceArg = onChange.mock.calls[0][0];
+    // Falls back to generic {low: 0, high: 1, log: false}
+    expect(spaceArg.max_bin.low).toBe(0);
+    expect(spaceArg.max_bin.high).toBe(1);
+    expect(spaceArg.max_bin.log).toBe(false);
+  });
+
   it("renders FixedValueEditor when onModelParamChange is provided", () => {
     const onModelParamChange = vi.fn();
     render(
@@ -268,5 +333,324 @@ describe("SearchSpaceTable", () => {
     // FixedValueEditor should be rendered instead of "default" text
     // The component renders differently with onModelParamChange
     expect(screen.getByText("learning_rate")).toBeInTheDocument();
+  });
+
+  describe("conditional_visibility", () => {
+    const visibilityCatalog: SearchSpaceCatalogEntry[] = [
+      {
+        key: "auto_num_leaves",
+        title: "Auto Num Leaves",
+        paramType: "boolean",
+        modes: ["fixed", "choice"],
+        group: "smart_params",
+      },
+      {
+        key: "num_leaves_ratio",
+        title: "Num Leaves Ratio",
+        paramType: "number",
+        modes: ["fixed", "range"],
+        group: "smart_params",
+      },
+      {
+        key: "num_leaves",
+        title: "Num Leaves",
+        paramType: "integer",
+        modes: ["fixed", "range"],
+        group: "smart_params",
+      },
+    ];
+
+    const conditionalVisibility = {
+      num_leaves_ratio: { auto_num_leaves: true },
+      num_leaves: { auto_num_leaves: false },
+    };
+
+    it("hides num_leaves when auto_num_leaves=true (default)", () => {
+      render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{ auto_num_leaves: true }}
+          onChange={vi.fn()}
+          catalog={visibilityCatalog}
+          conditionalVisibility={conditionalVisibility}
+        />,
+      );
+      expect(screen.getByText("num_leaves_ratio")).toBeInTheDocument();
+      expect(screen.queryByText("num_leaves")).not.toBeInTheDocument();
+    });
+
+    it("shows num_leaves when auto_num_leaves=false", () => {
+      render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{ auto_num_leaves: false }}
+          onChange={vi.fn()}
+          catalog={visibilityCatalog}
+          conditionalVisibility={conditionalVisibility}
+        />,
+      );
+      expect(screen.queryByText("num_leaves_ratio")).not.toBeInTheDocument();
+      expect(screen.getByText("num_leaves")).toBeInTheDocument();
+    });
+
+    it("shows both when dep is in search space (choice/range mode)", () => {
+      render(
+        <SearchSpaceTable
+          space={{
+            auto_num_leaves: {
+              type: "categorical",
+              choices: ["true", "false"],
+            },
+          }}
+          modelParams={{}}
+          onChange={vi.fn()}
+          catalog={visibilityCatalog}
+          conditionalVisibility={conditionalVisibility}
+        />,
+      );
+      expect(screen.getByText("num_leaves_ratio")).toBeInTheDocument();
+      expect(screen.getByText("num_leaves")).toBeInTheDocument();
+    });
+
+    it("falls back to catalog default when modelParams has no value", () => {
+      const catalogWithDefault: SearchSpaceCatalogEntry[] = [
+        {
+          key: "auto_num_leaves",
+          title: "Auto Num Leaves",
+          paramType: "boolean",
+          modes: ["fixed", "choice"],
+          group: "smart_params",
+          default: true, // catalog default = true
+        },
+        {
+          key: "num_leaves_ratio",
+          title: "Num Leaves Ratio",
+          paramType: "number",
+          modes: ["fixed", "range"],
+          group: "smart_params",
+        },
+        {
+          key: "num_leaves",
+          title: "Num Leaves",
+          paramType: "integer",
+          modes: ["fixed", "range"],
+          group: "smart_params",
+        },
+      ];
+      // modelParams has NO auto_num_leaves — should fall back to catalog default (true)
+      render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{}}
+          onChange={vi.fn()}
+          catalog={catalogWithDefault}
+          conditionalVisibility={conditionalVisibility}
+        />,
+      );
+      // auto_num_leaves default=true → num_leaves_ratio visible, num_leaves hidden
+      expect(screen.getByText("num_leaves_ratio")).toBeInTheDocument();
+      expect(screen.queryByText("num_leaves")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("specialSearchSpaceFields", () => {
+    const objectiveCatalog: SearchSpaceCatalogEntry[] = [
+      {
+        key: "objective",
+        title: "Objective",
+        paramType: "string",
+        modes: ["fixed", "choice"],
+        group: "model_params",
+        default: {
+          binary: "binary",
+          regression: "huber",
+          multiclass: "multiclass",
+        },
+      },
+    ];
+
+    it("renders SegmentGroup for objective special field", () => {
+      const onModelParamChange = vi.fn();
+      render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{ objective: "binary" }}
+          onChange={vi.fn()}
+          catalog={objectiveCatalog}
+          task="binary"
+          objectiveOptions={["binary", "cross_entropy"]}
+          onModelParamChange={onModelParamChange}
+          specialSearchSpaceFields={{ objective: "objective" }}
+        />,
+      );
+      // SegmentGroup for objective renders the options as radio buttons
+      const binaryButtons = screen.getAllByRole("radio", { name: /binary/i });
+      expect(binaryButtons.length).toBeGreaterThan(0);
+    });
+
+    it("calls onModelParamChange when objective segment is clicked", () => {
+      const onModelParamChange = vi.fn();
+      render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{ objective: "binary" }}
+          onChange={vi.fn()}
+          catalog={objectiveCatalog}
+          task="binary"
+          objectiveOptions={["binary", "cross_entropy"]}
+          onModelParamChange={onModelParamChange}
+          specialSearchSpaceFields={{ objective: "objective" }}
+        />,
+      );
+      const crossEntropyBtn = screen.getByRole("radio", {
+        name: /cross_entropy/i,
+      });
+      fireEvent.click(crossEntropyBtn);
+      expect(onModelParamChange).toHaveBeenCalledWith(
+        "objective",
+        "cross_entropy",
+      );
+    });
+
+    const metricCatalog: SearchSpaceCatalogEntry[] = [
+      {
+        key: "metric",
+        title: "Metric",
+        paramType: "string",
+        modes: ["fixed", "choice"],
+        group: "model_params",
+        default: {
+          binary: "auc",
+          regression: "rmse",
+          multiclass: "multi_logloss",
+        },
+      },
+    ];
+
+    it("renders model_metric badge buttons for metric special field", () => {
+      const onModelParamChange = vi.fn();
+      render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{ metric: ["auc"] }}
+          onChange={vi.fn()}
+          catalog={metricCatalog}
+          task="binary"
+          metricOptions={["auc", "f1", "accuracy"]}
+          onModelParamChange={onModelParamChange}
+          specialSearchSpaceFields={{ metric: "model_metric" }}
+        />,
+      );
+      // model_metric renders badge buttons for each option
+      expect(screen.getByText("auc")).toBeInTheDocument();
+      expect(screen.getByText("f1")).toBeInTheDocument();
+      expect(screen.getByText("accuracy")).toBeInTheDocument();
+    });
+
+    it("clicking metric badge calls onModelParamChange with toggled array", () => {
+      const onModelParamChange = vi.fn();
+      render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{ metric: ["auc"] }}
+          onChange={vi.fn()}
+          catalog={metricCatalog}
+          task="binary"
+          metricOptions={["auc", "f1"]}
+          onModelParamChange={onModelParamChange}
+          specialSearchSpaceFields={{ metric: "model_metric" }}
+        />,
+      );
+      // Click "f1" to add it
+      fireEvent.click(screen.getByText("f1"));
+      expect(onModelParamChange).toHaveBeenCalledWith("metric", ["auc", "f1"]);
+    });
+
+    it("clicking already-selected metric badge removes it from array", () => {
+      const onModelParamChange = vi.fn();
+      render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{ metric: ["auc", "f1"] }}
+          onChange={vi.fn()}
+          catalog={metricCatalog}
+          task="binary"
+          metricOptions={["auc", "f1"]}
+          onModelParamChange={onModelParamChange}
+          specialSearchSpaceFields={{ metric: "model_metric" }}
+        />,
+      );
+      // Click "f1" to remove it (it's currently selected)
+      fireEvent.click(screen.getByText("f1"));
+      expect(onModelParamChange).toHaveBeenCalledWith("metric", ["auc"]);
+    });
+  });
+
+  describe("precision_at_k k-value row", () => {
+    const metricCatalog: SearchSpaceCatalogEntry[] = [
+      {
+        key: "metric",
+        title: "Metric",
+        paramType: "string",
+        modes: ["fixed", "choice"],
+        group: "model_params",
+        default: { binary: "auc" },
+      },
+    ];
+
+    it("shows k-value NumberInput when precision_at_k is in metric array", () => {
+      const onModelParamChange = vi.fn();
+      render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{ metric: ["precision_at_k"], _precision_at_k_k: 10 }}
+          onChange={vi.fn()}
+          catalog={metricCatalog}
+          task="binary"
+          metricOptions={["auc", "precision_at_k"]}
+          onModelParamChange={onModelParamChange}
+          specialSearchSpaceFields={{ metric: "model_metric" }}
+        />,
+      );
+      // The k-value row shows "precision_at_k: k" label
+      expect(screen.getByText("precision_at_k: k")).toBeInTheDocument();
+    });
+
+    it("does not show k-value row when precision_at_k is not selected", () => {
+      const onModelParamChange = vi.fn();
+      render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{ metric: ["auc"] }}
+          onChange={vi.fn()}
+          catalog={metricCatalog}
+          task="binary"
+          metricOptions={["auc", "precision_at_k"]}
+          onModelParamChange={onModelParamChange}
+          specialSearchSpaceFields={{ metric: "model_metric" }}
+        />,
+      );
+      expect(screen.queryByText("precision_at_k: k")).not.toBeInTheDocument();
+    });
+
+    it("k-value change calls onModelParamChange with _precision_at_k_k", () => {
+      const onModelParamChange = vi.fn();
+      render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{ metric: ["precision_at_k"], _precision_at_k_k: 5 }}
+          onChange={vi.fn()}
+          catalog={metricCatalog}
+          task="binary"
+          metricOptions={["precision_at_k"]}
+          onModelParamChange={onModelParamChange}
+          specialSearchSpaceFields={{ metric: "model_metric" }}
+        />,
+      );
+      // The k-value row has a NumberInput with increment button
+      const incrementBtn = screen.getByRole("button", { name: /increment/i });
+      fireEvent.click(incrementBtn);
+      expect(onModelParamChange).toHaveBeenCalledWith("_precision_at_k_k", 6);
+    });
   });
 });

@@ -159,11 +159,13 @@ test.describe("Jobs page flow", () => {
 
     // Cancel the job so it doesn't leak
     const cancelRes = await request.post(`${API}/jobs/${jobId}/cancel`);
-    // Accept 200 (cancelled) or 400 (already finished)
-    expect([200, 400]).toContain(cancelRes.status());
+    // Accept 200 (cancelled), 400 (already finished), or 404 (job not found/deleted)
+    expect([200, 400, 404]).toContain(cancelRes.status());
 
-    // Wait for terminal state
-    await waitForJobDone(request, jobId);
+    // Wait for terminal state — skip if job was already deleted
+    if (deleteRes.status() !== 200) {
+      await waitForJobDone(request, jobId);
+    }
   });
 
   // ---------------------------------------------------------------

@@ -1,11 +1,12 @@
 import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
+import { dismissOnboarding } from "../helpers/onboarding";
 import { waitForStableUI } from "../helpers/visual";
 
 const API = "http://localhost:8501/api";
 
 function createTestCsv(rows = 100): string {
-  const csvPath = "/home/rem/.lizystudio-test-data/e2e_visual_inf_data.csv";
+  const csvPath = "/tmp/e2e_visual_inf_data.csv";
   const lines = ["id,age,gender,target"];
   for (let i = 0; i < rows; i++) {
     lines.push(`${i},${20 + (i % 50)},${i % 2 === 0 ? "M" : "F"},${i % 2}`);
@@ -50,8 +51,9 @@ async function waitForJobDone(
 test.describe("Inference visual regression @visual", () => {
   test.setTimeout(120_000);
 
-  test.beforeEach(async ({ request }) => {
+  test.beforeEach(async ({ page, request }) => {
     await request.post(`${API}/workspace/reset`);
+    await dismissOnboarding(page);
   });
 
   test("empty inference page", async ({ page }) => {

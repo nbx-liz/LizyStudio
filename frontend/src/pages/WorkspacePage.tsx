@@ -26,6 +26,7 @@ export function WorkspacePage() {
   const [task, setTask] = useState<string | null>(null);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [modelTab, setModelTab] = useState<"fit" | "tune">("fit");
 
   useDocumentTitle(running ? "Running..." : null);
   const notify = useBackgroundNotification();
@@ -82,7 +83,8 @@ export function WorkspacePage() {
       try {
         await updateConfig(fullConfig);
         queryClient.invalidateQueries({ queryKey: ["config"] });
-        toast.success("Tune config with best params applied");
+        setModelTab("fit");
+        toast.success("Best params applied to Fit tab. Click Fit to run.");
       } catch {
         toast.error("Failed to apply tune config");
       }
@@ -120,6 +122,8 @@ export function WorkspacePage() {
           onFit={handleFit}
           onTune={handleTune}
           running={running}
+          activeTab={modelTab}
+          onActiveTabChange={setModelTab}
         />
       </ResizablePanel>
       <ResizableHandle withHandle />

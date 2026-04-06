@@ -13,9 +13,14 @@ import {
   fetchJobSplitSummary,
   fetchJobs,
 } from "@/api/jobs";
-import type { JobDetail, MetricEntry, ProgressMessage } from "@/api/types";
-import { metricEntryName } from "@/api/types";
+import type {
+  JobDetail,
+  MetricEntry,
+  ProgressMessage,
+  TrialResult,
+} from "@/api/types";
 import { connectJobProgress } from "@/api/websocket";
+import { MetricCards } from "@/components/shared/MetricCards";
 import { Accordion } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,7 +32,10 @@ import {
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { pivotMetrics } from "@/lib/metrics";
+import { formatElapsed } from "@/lib/utils";
 import { FoldDetailsSection } from "./FoldDetailsSection";
+import { FoldProgressList } from "./FoldProgressList";
+import { PlotlyChart } from "./PlotlyChart";
 import { PlotSection } from "./PlotSection";
 import {
   TrialResultsAccordionItem,
@@ -62,7 +70,8 @@ export function ResultsPanel({
     enabled: !!jobId,
     refetchInterval: (query) => {
       const data = query.state.data as JobDetail | undefined;
-      return data?.status === "running" ? 2000 : false;
+      const s = data?.status;
+      return s === "running" || s === "pending" ? 2000 : false;
     },
   });
 
@@ -83,7 +92,8 @@ export function ResultsPanel({
     | undefined;
 
   useEffect(() => {
-    if (!jobId || job?.status !== "running") return;
+    if (!jobId || (job?.status !== "running" && job?.status !== "pending"))
+      return;
 
     const disconnect = connectJobProgress(jobId, {
       onProgress: (msg) => {
@@ -99,7 +109,7 @@ export function ResultsPanel({
       onCompleted: () => {
         setProgress(null);
         setFoldLog([]);
-        refetchJob();
+        queryClient.invalidateQueries({ queryKey: ["job", jobId] });
         queryClient.invalidateQueries({ queryKey: ["jobs"] });
         onJobDone?.();
       },
@@ -107,13 +117,14 @@ export function ResultsPanel({
         setProgress(null);
         setFoldLog([]);
         toast.error(msg.message);
-        refetchJob();
+        queryClient.invalidateQueries({ queryKey: ["job", jobId] });
+        queryClient.invalidateQueries({ queryKey: ["jobs"] });
         onJobDone?.();
       },
     });
 
     return () => disconnect();
-  }, [jobId, job?.status, refetchJob, queryClient, onJobDone]);
+  }, [jobId, job?.status, queryClient, onJobDone]);
 
   // Polling fallback: detect completion if WebSocket misses it
   const prevStatusRef = useRef<string | undefined>(undefined);
@@ -121,16 +132,15 @@ export function ResultsPanel({
     const prev = prevStatusRef.current;
     prevStatusRef.current = job?.status;
     if (
-      prev === "running" &&
+      (prev === "running" || prev === "pending") &&
       job?.status &&
       job.status !== "running" &&
-      job.status !== "pending" &&
-      progress !== null
+      job.status !== "pending"
     ) {
       setProgress(null);
       onJobDone?.();
     }
-  }, [job?.status, onJobDone, progress]);
+  }, [job?.status, onJobDone]);
 
   const handleCancel = useCallback(async () => {
     if (!jobId) return;
@@ -251,12 +261,59 @@ export function ResultsPanel({
           </p>
         )}
 
+        {progress?.fold_results && progress.fold_results.length > 0 && (
+          <FoldProgressList
+            currentFold={progress.current}
+            totalFolds={progress.total}
+            foldResults={progress.fold_results}
+          />
+        )}
+
+        {progress?.trial_results && progress.trial_results.length > 1 && (
+          <LiveTrialChart trials={progress.trial_results} />
+        )}
+
+        {progress?.trial_results && progress.trial_results.length > 0 && (
+          <div className="mt-3 max-h-48 overflow-auto rounded border bg-muted/30">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-muted">
+                <tr>
+                  <th className="px-2 py-1 text-left font-medium">#</th>
+                  <th className="px-2 py-1 text-left font-medium">Score</th>
+                  <th className="px-2 py-1 text-left font-medium">Best</th>
+                  <th className="px-2 py-1 text-left font-medium">State</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...progress.trial_results].reverse().map((t) => (
+                  <tr
+                    key={t.number}
+                    className="border-t border-muted hover:bg-muted/50"
+                  >
+                    <td className="px-2 py-0.5 font-mono">{t.number}</td>
+                    <td className="px-2 py-0.5 font-mono">
+                      {t.score != null ? t.score.toFixed(4) : "—"}
+                    </td>
+                    <td className="px-2 py-0.5 font-mono">
+                      {t.best_score?.toFixed(4) ?? "—"}
+                    </td>
+                    <td className="px-2 py-0.5">{t.state}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
         {foldLog.length > 0 && (
-          <div className="mt-3 max-h-32 overflow-auto rounded border bg-muted/30 p-2">
+          <div
+            className="mt-3 min-h-16 max-h-[50vh] overflow-auto rounded border bg-muted/30 p-2 resize-y"
+            style={{ height: "8rem" }}
+          >
             {foldLog.map((msg, i) => (
               <p
                 key={`log-${i}`}
-                className="text-xs font-mono text-muted-foreground"
+                className="font-mono text-xs text-muted-foreground"
               >
                 {msg}
               </p>
@@ -349,6 +406,7 @@ export function ResultsPanel({
 
   return (
     <CompletedView
+      key={job.job_id}
       job={job}
       headerLabel={headerLabel}
       modelName={modelName}
@@ -395,14 +453,14 @@ function CompletedView({
 
   // Learning curve metrics filter (H-0034)
   // Default to first metric only to avoid cramped subplots when multiple exist
-  const [lcMetrics, setLcMetrics] = useState<string[] | null>(null);
+  const [lcMetric, setLcMetric] = useState<string | null>(null);
   const lcInitialized = useRef(false);
 
   const { data: learningCurve, isError: isLcError } = useQuery({
-    queryKey: ["job-plot", job.job_id, "learning-curve", lcMetrics],
+    queryKey: ["job-plot", job.job_id, "learning-curve", lcMetric],
     queryFn: () =>
       fetchJobPlot(job.job_id, "learning-curve", {
-        metrics: lcMetrics ?? undefined,
+        metrics: lcMetric ?? undefined,
       }),
     enabled:
       selectedPlot === "learning-curve" &&
@@ -412,10 +470,10 @@ function CompletedView({
 
   // If LC filter fails (e.g. feval-only metric), fall back to unfiltered view
   useEffect(() => {
-    if (isLcError && lcMetrics !== null) {
-      setLcMetrics(null);
+    if (isLcError && lcMetric !== null) {
+      setLcMetric(null);
     }
-  }, [isLcError, lcMetrics]);
+  }, [isLcError, lcMetric]);
 
   const [importanceKind, setImportanceKind] = useState("split");
   const importanceEnabled = plots?.includes("importance") ?? false;
@@ -443,13 +501,11 @@ function CompletedView({
     enabled: importanceEnabled,
   });
 
-  // Importance plot is kind-independent (shows default split importance).
-  // The backend plot API does not accept a kind parameter; the plot is
-  // generated once using the default kind by LizyML's importance_plot().
   const { data: importancePlot, isLoading: isImportancePlotLoading } = useQuery(
     {
-      queryKey: ["job-plot", job.job_id, "importance"],
-      queryFn: () => fetchJobPlot(job.job_id, "importance"),
+      queryKey: ["job-plot", job.job_id, "importance", importanceKind],
+      queryFn: () =>
+        fetchJobPlot(job.job_id, "importance", { kind: importanceKind }),
       enabled: importanceEnabled,
     },
   );
@@ -478,33 +534,32 @@ function CompletedView({
     ? pivotMetrics(fitResult.metrics as Record<string, unknown>)
     : undefined;
 
+  // evalConfig is used by annotateMetric() for precision_at_k k-value display.
   const evalConfig = (job.config?.evaluation as Record<string, unknown>) ?? {};
 
-  // Extract metric names for LC filter chips.
-  // Primary: from job config evaluation.metrics
-  // Fallback: from fit_result metrics (covers cases where evaluation.metrics
-  // is empty/unset — e.g. default config without explicit metric selection,
-  // or feval-only metrics added by LizyML internally).
-  const evalMetricNames = useMemo(() => {
-    const entries = Array.isArray(evalConfig.metrics)
-      ? (evalConfig.metrics as MetricEntry[])
-      : [];
-    const names = entries.map(metricEntryName);
-    if (names.length > 0) return names;
-    return metrics ? Object.keys(metrics) : [];
-  }, [evalConfig.metrics, metrics]);
+  // LC filter uses model.params.metric (LightGBM internal metric names)
+  // which match the subplot titles in the learning curve plot.
+  // If metric is unset in job config (e.g. legacy jobs), lcAvailableMetrics
+  // is empty and the filter is hidden — all subplots are shown unfiltered.
+  const modelConfig = (job.config?.model as Record<string, unknown>) ?? {};
+  const lcAvailableMetrics = useMemo(() => {
+    const m = (modelConfig.params as Record<string, unknown>)?.metric;
+    if (Array.isArray(m)) return m as string[];
+    if (typeof m === "string") return [m];
+    return [];
+  }, [modelConfig.params]);
 
-  // Initialize LC filter to first metric only (avoid cramped subplot layout)
-  // When only 1 metric exists, lcMetrics stays null (no filter needed)
+  // Initialize LC filter to first metric (avoid cramped subplots).
+  // When only 1 metric exists, lcMetric stays null (no filter needed).
   useEffect(() => {
     if (lcInitialized.current) return;
-    if (evalMetricNames.length > 1) {
+    if (lcAvailableMetrics.length > 1) {
       lcInitialized.current = true;
-      setLcMetrics([evalMetricNames[0]]);
-    } else if (evalMetricNames.length === 1) {
+      setLcMetric(lcAvailableMetrics[0]);
+    } else if (lcAvailableMetrics.length >= 1) {
       lcInitialized.current = true;
     }
-  }, [evalMetricNames]);
+  }, [lcAvailableMetrics]);
 
   const annotateMetric = (name: string): string => {
     if (name === "precision_at_k") {
@@ -566,50 +621,22 @@ function CompletedView({
         </div>
       </div>
 
-      {/* KPI Summary Cards (IS + OOS + Std) */}
-      {metrics && (
-        <div className="mb-4 flex flex-wrap gap-2" data-testid="kpi-cards">
-          {Object.entries(metrics).map(([name, vals]) => (
-            <div
-              key={name}
-              className="flex flex-col rounded-md border bg-muted/30 px-3 py-1.5 min-w-[100px]"
-            >
-              <span className="text-[10px] text-muted-foreground uppercase tracking-wide text-center mb-0.5">
-                {annotateMetric(name)}
-              </span>
-              <div className="flex justify-between gap-3 text-xs tabular-nums">
-                <span className="text-muted-foreground">IS</span>
-                <span className="font-medium">
-                  {vals.is != null ? Number(vals.is).toFixed(4) : "—"}
-                </span>
-              </div>
-              <div className="flex justify-between gap-3 text-xs tabular-nums">
-                <span className="text-muted-foreground">OOS</span>
-                <span className="font-semibold">
-                  {vals.oos != null ? Number(vals.oos).toFixed(4) : "—"}
-                </span>
-              </div>
-              {hasFolds && (
-                <div className="flex justify-between gap-3 text-xs tabular-nums">
-                  <span className="text-muted-foreground">Std</span>
-                  <span>
-                    {vals.oos_std != null
-                      ? Number(vals.oos_std).toFixed(4)
-                      : "—"}
-                  </span>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-
+      {/* Tune results first: Optimization History → Best Params → Apply to Fit */}
       {tuneResult && (
         <TuneTrialsSection
           tuneResult={tuneResult}
           tuningPlot={tuningPlot}
           job={job}
           onApplyToFit={onApplyToFit}
+        />
+      )}
+
+      {/* KPI Summary Cards (IS + OOS + Std) */}
+      {metrics && (
+        <MetricCards
+          metrics={metrics}
+          hasFolds={hasFolds}
+          annotateMetric={annotateMetric}
         />
       )}
 
@@ -627,9 +654,9 @@ function CompletedView({
               : isPlotLoading
           }
           isError={isPlotError}
-          lcMetrics={lcMetrics}
-          onLcMetricsChange={setLcMetrics}
-          availableEvalMetrics={evalMetricNames}
+          lcMetric={lcMetric}
+          onLcMetricChange={setLcMetric}
+          availableEvalMetrics={lcAvailableMetrics}
           importanceKinds={importanceKinds}
           selectedImportanceKind={importanceKind}
           onImportanceKindChange={setImportanceKind}
@@ -683,9 +710,54 @@ function LogDialog({
   );
 }
 
-function formatElapsed(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return "--:--";
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+// ---------------------------------------------------------------------------
+// Live Trial Chart — Optimization History during tuning
+// ---------------------------------------------------------------------------
+
+function LiveTrialChart({ trials }: { trials: TrialResult[] }) {
+  const plotlyJson = useMemo(() => {
+    const valid = trials.filter((t) => t.score != null);
+    if (valid.length < 2) return null;
+    const x = valid.map((t) => t.number);
+    const scores = valid.map((t) => t.score);
+    const best = valid.map((t) => t.best_score ?? t.score);
+    return JSON.stringify({
+      data: [
+        {
+          x,
+          y: scores,
+          mode: "markers",
+          type: "scatter",
+          name: "Score",
+          marker: { size: 5, opacity: 0.6 },
+        },
+        {
+          x,
+          y: best,
+          mode: "lines",
+          type: "scatter",
+          name: "Best",
+          line: { width: 2 },
+        },
+      ],
+      layout: {
+        height: 180,
+        margin: { t: 10, r: 10, b: 30, l: 50 },
+        xaxis: { title: "Trial" },
+        yaxis: { title: "Score" },
+        showlegend: false,
+      },
+    });
+  }, [trials]);
+
+  if (!plotlyJson) return null;
+
+  return (
+    <div className="mt-3 rounded border bg-muted/30 p-1">
+      <p className="px-2 pt-1 text-xs font-medium text-muted-foreground">
+        Optimization History
+      </p>
+      <PlotlyChart plotlyJson={plotlyJson} height={180} />
+    </div>
+  );
 }

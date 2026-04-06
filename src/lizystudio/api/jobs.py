@@ -16,10 +16,16 @@ from pydantic import BaseModel
 
 from lizystudio.api.errors import (
     BackendError,
+    ExportError,
     JobNotCompletedError,
     JobNotFoundError,
     JobRunningError,
     StudioError,
+)
+from lizystudio.api.models import (
+    JobDetailResponse,
+    JobSummaryResponse,
+    PlotResponseModel,
 )
 from lizystudio.services.export import export_code_as_zip, export_model, export_report
 from lizystudio.services.jobs import (
@@ -34,6 +40,9 @@ from lizystudio.services.jobs import (
     get_split_summary,
 )
 from lizystudio.services.workspace import WorkspaceState, get_workspace
+
+_MAX_METRICS = 20
+_VALID_PARAM_RE = re.compile(r"^[a-zA-Z0-9_]+$")
 
 router = APIRouter()
 
@@ -96,7 +105,7 @@ def _job_summary(job: Job) -> dict[str, Any]:
 # --- CRUD ---
 
 
-@router.get("/")
+@router.get("/", response_model=list[JobSummaryResponse])
 @router.get("", include_in_schema=False)
 def list_jobs(
     status: str | None = None,
@@ -108,7 +117,7 @@ def list_jobs(
     return [_job_summary(j) for j in jobs]
 
 
-@router.get("/{job_id}")
+@router.get("/{job_id}", response_model=JobDetailResponse)
 def get_job(
     job_id: str,
     job_store: JobStore = Depends(get_job_store),
@@ -116,6 +125,7 @@ def get_job(
     """Get job details."""
     job = _get_job_or_404(job_id, job_store)
     result: dict[str, Any] = _job_summary(job)
+    result["config"] = job.config
     if job.fit_result is not None:
         result["fit_result"] = asdict(job.fit_result)
     if job.tune_result is not None:
@@ -238,32 +248,32 @@ def get_job_importance_kinds_endpoint(
         raise BackendError(exc) from exc
 
 
-@router.get("/{job_id}/plot/{plot_type}")
+@router.get("/{job_id}/plot/{plot_type}", response_model=PlotResponseModel)
 def get_job_plot_endpoint(
     job_id: str,
     plot_type: str,
     metrics: str | None = None,
+    kind: str | None = None,
     job_store: JobStore = Depends(get_job_store),
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, str]:
     """Get a Plotly figure as JSON.
 
     For ``learning-curve``, pass ``?metrics=auc,f1`` to filter subplots.
+    For ``importance``, pass ``?kind=split|gain|shap`` to select kind.
     """
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
     kwargs: dict[str, Any] = {}
     if metrics is not None and plot_type == "learning-curve":
         parsed = [m.strip() for m in metrics.split(",") if m.strip()]
-        _MAX_METRICS = 20
-        _VALID_METRIC_RE = re.compile(r"^[a-zA-Z0-9_]+$")
         if len(parsed) > _MAX_METRICS:
             raise StudioError(
                 "INVALID_PARAM",
                 f"Too many metrics (max {_MAX_METRICS})",
                 400,
             )
-        invalid = [m for m in parsed if not _VALID_METRIC_RE.match(m)]
+        invalid = [m for m in parsed if not _VALID_PARAM_RE.match(m)]
         if invalid:
             raise StudioError(
                 "INVALID_PARAM",
@@ -271,6 +281,10 @@ def get_job_plot_endpoint(
                 400,
             )
         kwargs["metrics"] = parsed
+    if kind is not None and plot_type == "importance":
+        if not _VALID_PARAM_RE.match(kind):
+            raise StudioError("INVALID_PARAM", f"Invalid kind: {kind!r}", 400)
+        kwargs["kind"] = kind
     try:
         plot_data = get_job_plot(job, ws.backend, plot_type, **kwargs)
         return {"plotly_json": plot_data.plotly_json}
@@ -294,6 +308,37 @@ def get_job_available_plots_endpoint(
 
 
 # --- Export ---
+
+
+def _build_export_filename(job: Job, job_store: JobStore) -> str:
+    """Build a descriptive ZIP filename from job metadata.
+
+    Format: {data_stem}_{task}_{model}_job{N}_code.zip
+    Example: train_binary_lightgbm_job3_code.zip
+    """
+    from pathlib import PurePosixPath
+
+    parts: list[str] = []
+    # Data source name (stem of the original filename)
+    if job.data_ref and job.data_ref.filename:
+        stem = PurePosixPath(job.data_ref.filename).stem
+        parts.append(stem)
+    # Task type
+    task = job.config.get("task")
+    if task:
+        parts.append(str(task))
+    # Model name
+    model_cfg = job.config.get("model")
+    if isinstance(model_cfg, dict) and model_cfg.get("name"):
+        parts.append(str(model_cfg["name"]))
+    # Job number (same as Jobs list #N display)
+    all_jobs = job_store.list()
+    idx = next((i for i, j in enumerate(all_jobs) if j.job_id == job.job_id), -1)
+    job_number = len(all_jobs) - idx if idx >= 0 else 0
+    parts.append(f"job{job_number}")
+    # Sanitize: keep only alphanumeric, hyphens, underscores
+    safe = "_".join(re.sub(r"[^\w\-]", "_", p) for p in parts)
+    return f"{safe}_code.zip"
 
 
 class ExportRequest(BaseModel):
@@ -328,10 +373,10 @@ def export_job(
             )
         return {"exported_path": path, "export_type": body.export_type}
     except Exception as exc:
-        raise BackendError(exc) from exc
+        raise ExportError(str(exc)) from exc
 
 
-@router.post("/{job_id}/export-code")
+@router.get("/{job_id}/export-code")
 def export_code(
     job_id: str,
     background_tasks: BackgroundTasks,
@@ -350,8 +395,9 @@ def export_code(
         raise BackendError(exc) from exc
     # Schedule cleanup of the temporary ZIP file after the response is sent
     background_tasks.add_task(os.unlink, str(zip_path))
+    filename = _build_export_filename(job, job_store)
     return FileResponse(
         path=str(zip_path),
         media_type="application/zip",
-        filename=f"job_{job_id}_code.zip",
+        filename=filename,
     )

@@ -9,6 +9,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import {
+  BlockedGroupKFoldEditor,
+  type BlockedGroupKFoldState,
+  INITIAL_BLOCKED_STATE,
+} from "./BlockedGroupKFoldEditor";
+export { type BlockedGroupKFoldState, INITIAL_BLOCKED_STATE };
+
 import { CV_STRATEGY_FIELDS, CV_STRATEGY_LABELS } from "./constants";
 import { NumberInput } from "./NumberInput";
 import { SegmentGroup } from "./SegmentGroup";
@@ -60,8 +67,27 @@ export function resetCvState(strategy: string): CvState {
   return { ...INITIAL_CV_STATE, strategy };
 }
 
+/** Recommend the inner validation method based on outer CV strategy. */
+export function recommendedInnerValid(strategy: string): string {
+  switch (strategy) {
+    case "group_kfold":
+    case "stratified_group_kfold":
+    case "blocked_group_kfold":
+      return "group_holdout";
+    case "time_series":
+    case "purged_time_series":
+    case "group_time_series":
+      return "time_holdout";
+    default:
+      return "holdout";
+  }
+}
+
 /** Build a split config object containing only strategy-relevant fields. */
-export function buildSplitConfig(cv: CvState): Record<string, unknown> {
+export function buildSplitConfig(
+  cv: CvState,
+  blocked?: BlockedGroupKFoldState,
+): Record<string, unknown> {
   const fields = CV_STRATEGY_FIELDS[cv.strategy] ?? ["folds"];
   const split: Record<string, unknown> = {
     method: cv.strategy,
@@ -94,6 +120,18 @@ export function buildSplitConfig(cv: CvState): Record<string, unknown> {
   if (fields.includes("min_valid_rows") && cv.minValidRows !== undefined) {
     split.min_valid_rows = cv.minValidRows;
   }
+  // blocked_group_kfold-specific fields from the dedicated editor state
+  if (cv.strategy === "blocked_group_kfold") {
+    const b = blocked ?? INITIAL_BLOCKED_STATE;
+    split.mode = b.blockMode;
+    split.train_window = b.trainWindow;
+    if (b.cutoffs.length > 0) {
+      split.cutoffs = b.cutoffs;
+    }
+    if (b.stratify !== "auto") {
+      split.stratify = b.stratify === "on";
+    }
+  }
   return split;
 }
 
@@ -104,6 +142,16 @@ export function applyCvDataFields(
 ): Record<string, unknown> {
   const fields = CV_STRATEGY_FIELDS[cv.strategy] ?? [];
   const result = { ...data };
+  // blocked_group_kfold uses blocks_col/groups_col instead of time_col/group_col
+  if (cv.strategy === "blocked_group_kfold") {
+    if (cv.timeCol) {
+      result.blocks_col = cv.timeCol;
+    }
+    if (cv.groupCol) {
+      result.groups_col = cv.groupCol;
+    }
+    return result;
+  }
   if (fields.includes("group_col") && cv.groupCol) {
     result.group_col = cv.groupCol;
   }
@@ -122,6 +170,8 @@ interface CvSectionProps {
   onChange: (next: CvState) => void;
   uiSchema?: UiSchema;
   nonExcludedCols: ColumnInfo[];
+  blocked?: BlockedGroupKFoldState;
+  onBlockedChange?: (next: BlockedGroupKFoldState) => void;
 }
 
 export function CvSection({
@@ -129,6 +179,8 @@ export function CvSection({
   onChange,
   uiSchema,
   nonExcludedCols,
+  blocked,
+  onBlockedChange,
 }: CvSectionProps) {
   const availableStrategies = useMemo(
     () =>
@@ -171,8 +223,19 @@ export function CvSection({
         />
       </div>
 
-      {/* Conditional fields */}
-      {has("folds") && (
+      {/* BlockedGroupKFold: dedicated 2-axis editor */}
+      {cv.strategy === "blocked_group_kfold" && blocked && onBlockedChange && (
+        <BlockedGroupKFoldEditor
+          cv={cv}
+          onChange={onChange}
+          blocked={blocked}
+          onBlockedChange={onBlockedChange}
+          nonExcludedCols={nonExcludedCols}
+        />
+      )}
+
+      {/* Generic conditional fields (hidden when blocked_group_kfold editor is active) */}
+      {cv.strategy !== "blocked_group_kfold" && has("folds") && (
         <div className="space-y-1">
           <Label className="text-xs font-medium text-muted-foreground">
             Folds
@@ -187,7 +250,7 @@ export function CvSection({
         </div>
       )}
 
-      {has("random_state") && (
+      {cv.strategy !== "blocked_group_kfold" && has("random_state") && (
         <div className="space-y-1">
           <Label className="text-xs font-medium text-muted-foreground">
             Random State
@@ -201,7 +264,7 @@ export function CvSection({
         </div>
       )}
 
-      {has("shuffle") && (
+      {cv.strategy !== "blocked_group_kfold" && has("shuffle") && (
         <div className="flex items-center gap-2">
           <Label className="text-xs font-medium text-muted-foreground">
             Shuffle
@@ -213,7 +276,7 @@ export function CvSection({
         </div>
       )}
 
-      {has("group_col") && (
+      {cv.strategy !== "blocked_group_kfold" && has("group_col") && (
         <div>
           <Label className="text-xs font-medium text-muted-foreground">
             Group column
@@ -236,7 +299,7 @@ export function CvSection({
         </div>
       )}
 
-      {has("time_col") && (
+      {cv.strategy !== "blocked_group_kfold" && has("time_col") && (
         <div>
           <Label className="text-xs font-medium text-muted-foreground">
             Time column
@@ -259,7 +322,7 @@ export function CvSection({
         </div>
       )}
 
-      {has("gap") && (
+      {cv.strategy !== "blocked_group_kfold" && has("gap") && (
         <NullableNumberField
           label="Gap"
           value={cv.gap}
@@ -268,7 +331,7 @@ export function CvSection({
         />
       )}
 
-      {has("purge_gap") && (
+      {cv.strategy !== "blocked_group_kfold" && has("purge_gap") && (
         <NullableNumberField
           label="Purge Gap"
           value={cv.purgeGap}
@@ -277,7 +340,7 @@ export function CvSection({
         />
       )}
 
-      {has("embargo") && (
+      {cv.strategy !== "blocked_group_kfold" && has("embargo") && (
         <NullableNumberField
           label="Embargo"
           value={cv.embargo}
@@ -286,7 +349,7 @@ export function CvSection({
         />
       )}
 
-      {has("train_size_max") && (
+      {cv.strategy !== "blocked_group_kfold" && has("train_size_max") && (
         <NullableNumberField
           label="Train Size Max"
           value={cv.trainSizeMax}
@@ -295,7 +358,7 @@ export function CvSection({
         />
       )}
 
-      {has("test_size_max") && (
+      {cv.strategy !== "blocked_group_kfold" && has("test_size_max") && (
         <NullableNumberField
           label="Test Size Max"
           value={cv.testSizeMax}
@@ -304,7 +367,7 @@ export function CvSection({
         />
       )}
 
-      {has("min_train_rows") && (
+      {cv.strategy !== "blocked_group_kfold" && has("min_train_rows") && (
         <NullableNumberField
           label="Min Train Rows"
           value={cv.minTrainRows}
@@ -313,7 +376,7 @@ export function CvSection({
         />
       )}
 
-      {has("min_valid_rows") && (
+      {cv.strategy !== "blocked_group_kfold" && has("min_valid_rows") && (
         <NullableNumberField
           label="Min Valid Rows"
           value={cv.minValidRows}

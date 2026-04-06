@@ -30,12 +30,20 @@ export function fetchJobImportanceKinds(jobId: string): Promise<string[]> {
 export function fetchJobPlot(
   jobId: string,
   plotType: string,
-  options?: { metrics?: string[] },
+  options?: { metrics?: string | string[]; kind?: string },
 ): Promise<PlotResponse> {
-  let url = `/jobs/${jobId}/plot/${plotType}`;
-  if (options?.metrics && options.metrics.length > 0) {
-    url += `?metrics=${options.metrics.join(",")}`;
+  const params = new URLSearchParams();
+  if (options?.metrics) {
+    const m = Array.isArray(options.metrics)
+      ? options.metrics.join(",")
+      : options.metrics;
+    if (m) params.set("metrics", m);
   }
+  if (options?.kind) {
+    params.set("kind", options.kind);
+  }
+  const qs = params.toString();
+  const url = `/jobs/${jobId}/plot/${plotType}${qs ? `?${qs}` : ""}`;
   return apiFetch(url);
 }
 

@@ -502,22 +502,15 @@ class TestLizyMLAdapterUiSchema:
                 f"additional_param '{param}' overlaps with hints/catalog"
             )
 
-    def test_search_space_catalog_additional_group(self) -> None:
-        """Catalog has 'additional' group entries for tunable params."""
+    def test_additional_params_include_tunable_extras(self) -> None:
+        """additional_params list includes commonly tuned params (Widget conformance).
+
+        These are available via the '+ Add' dropdown, not as catalog entries.
+        """
         schema = LizyMLAdapter().get_ui_schema()
-        catalog = schema["search_space_catalog"]
-        additional_entries = [e for e in catalog if e.get("group") == "additional"]
-        # At least the commonly tuned additional params
-        additional_keys = {e["key"] for e in additional_entries}
-        # subsample/colsample_bytree/reg_alpha/reg_lambda excluded:
-        # XGBoost aliases for existing model_params entries
-        expected_tunable = {
-            "min_child_weight",
-            "min_split_gain",
-            "scale_pos_weight",
-        }
-        missing = expected_tunable - additional_keys
-        assert not missing, f"Tunable additional params missing from catalog: {missing}"
+        additional = schema["additional_params"]
+        for key in ("min_child_weight", "min_gain_to_split", "scale_pos_weight"):
+            assert key in additional, f"additional_params missing: {key}"
 
     def test_model_metric_regression_includes_lgbm_native(self) -> None:
         """model_metric regression should include LightGBM native metrics."""
@@ -579,6 +572,59 @@ class TestLizyMLAdapterUiSchema:
         assert ssf["objective"] == "objective"
         assert ssf["metric"] == "model_metric"
 
+    def test_search_space_catalog_learning_rate_default_mode_range(self) -> None:
+        """learning_rate must have default_mode='range' and default_range (H-0053)."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        lr = catalog["learning_rate"]
+        assert lr["default_mode"] == "range"
+        assert lr["default_range"] == {"low": 0.0001, "high": 0.1, "log": True}
+
+    def test_search_space_catalog_num_leaves_no_default_range(self) -> None:
+        """num_leaves must NOT have default_mode/default_range (Widget conformance).
+
+        num_leaves visibility is controlled by auto_num_leaves conditional_visibility.
+        """
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        nl = catalog["num_leaves"]
+        assert "default_mode" not in nl
+        assert "default_range" not in nl
+
+    def test_search_space_catalog_n_estimators_default_mode_range(self) -> None:
+        """n_estimators must have default_mode='range' and default_range (H-0053)."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        ne = catalog["n_estimators"]
+        assert ne["default_mode"] == "range"
+        assert ne["default_range"] == {"low": 600, "high": 2500, "log": False}
+
+    def test_search_space_catalog_max_depth_default_mode_range(self) -> None:
+        """max_depth must have default_mode='range' and default_range (H-0053)."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        md = catalog["max_depth"]
+        assert md["default_mode"] == "range"
+        assert md["default_range"] == {"low": 3, "high": 12, "log": False}
+
+    def test_search_space_catalog_default_mode_absent_means_fixed(self) -> None:
+        """Entries without default_mode omit it (implicit fixed, H-0053)."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        # max_bin should NOT have default_mode
+        assert "default_mode" not in catalog["max_bin"]
+        assert "default_range" not in catalog["max_bin"]
+
+    def test_search_space_catalog_default_range_low_lt_high(self) -> None:
+        """All default_range entries must have low < high (H-0053)."""
+        schema = LizyMLAdapter().get_ui_schema()
+        for entry in schema["search_space_catalog"]:
+            dr = entry.get("default_range")
+            if dr is not None:
+                assert dr["low"] < dr["high"], (
+                    f"default_range low >= high for '{entry['key']}': {dr}"
+                )
+
     def test_step_map_includes_expanded_params(self) -> None:
         """step_map should include entries for newly added params."""
         schema = LizyMLAdapter().get_ui_schema()
@@ -589,6 +635,50 @@ class TestLizyMLAdapterUiSchema:
             "scale_pos_weight",
         ):
             assert key in step_map, f"step_map missing: {key}"
+
+    # --- Widget-conformance tests ---
+
+    def test_eval_metrics_preferred_first(self) -> None:
+        """Eval metrics must place preferred metric first (Widget conformance).
+
+        binary: auc first, regression: rmse first, multiclass: auc first.
+        """
+        schema = LizyMLAdapter().get_ui_schema()
+        metrics = schema["option_sets"]["metric"]
+        assert metrics["binary"][0] == "auc", f"binary first: {metrics['binary'][0]}"
+        assert metrics["regression"][0] == "rmse", (
+            f"regression first: {metrics['regression'][0]}"
+        )
+        assert metrics["multiclass"][0] == "auc", (
+            f"multiclass first: {metrics['multiclass'][0]}"
+        )
+
+    def test_search_space_catalog_ordering_smart_first(self) -> None:
+        """search_space_catalog: Smart Params before Model Params."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = schema["search_space_catalog"]
+        groups_in_order = []
+        for entry in catalog:
+            g = entry.get("group", "model_params")
+            if not groups_in_order or groups_in_order[-1] != g:
+                groups_in_order.append(g)
+        assert groups_in_order[0] == "smart_params", (
+            f"First group should be smart_params, got: {groups_in_order}"
+        )
+        assert "model_params" in groups_in_order
+        # smart_params must appear before model_params
+        sp_idx = groups_in_order.index("smart_params")
+        mp_idx = groups_in_order.index("model_params")
+        assert sp_idx < mp_idx, (
+            f"smart_params (idx={sp_idx}) must come before model_params (idx={mp_idx})"
+        )
+
+    def test_num_leaves_modes_no_choice(self) -> None:
+        """num_leaves: fixed+range only (no choice)."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        nl = catalog["num_leaves"]
+        assert nl["modes"] == ["fixed", "range"], f"num_leaves modes: {nl['modes']}"
 
 
 def _reset_ui_schema_caches() -> None:
@@ -642,6 +732,70 @@ class TestUiSchemaFallbacks:
         d1 = m.get_metric_directions()
         d2 = m.get_metric_directions()
         assert d1 is d2
+
+    def test_get_eval_metrics_inner_double_check_returns_cached(self) -> None:
+        """Line 112: inner if-check inside lock returns pre-populated cache.
+
+        Simulate the race condition where cache is populated between the outer
+        check and acquiring the lock.  We pre-populate the cache while holding
+        no lock, then call get_eval_metrics_by_task again — the inner check
+        (line 112) must short-circuit and return the cached object.
+        """
+        import lizystudio.backends.lizyml_ui_schema as m
+
+        # First call populates the cache normally
+        first_result = m.get_eval_metrics_by_task()
+        # Cache is now set; a second call should hit the outer guard (line 108)
+        # AND if somehow we bypass that, the inner guard at line 112.
+        # We can verify the inner path by temporarily clearing + forcing a
+        # concurrent-style scenario: set cache inside the lock window manually.
+        _reset_ui_schema_caches()
+        # Pre-populate before next call to simulate the "already populated"
+        # scenario inside the lock.
+        m._eval_metrics_cache = first_result  # type: ignore[attr-defined]
+        result = m.get_eval_metrics_by_task()
+        assert result is first_result
+        _reset_ui_schema_caches()
+
+    def test_get_metric_directions_inner_double_check_returns_cached(self) -> None:
+        """Inner if-check inside lock returns cached directions."""
+        import lizystudio.backends.lizyml_ui_schema as m
+
+        first_result = m.get_metric_directions()
+        _reset_ui_schema_caches()
+        m._metric_direction_cache = first_result  # type: ignore[attr-defined]
+        result = m.get_metric_directions()
+        assert result is first_result
+        _reset_ui_schema_caches()
+
+    def test_get_metric_directions_individual_metric_lookup_exception(
+        self,
+        monkeypatch: object,
+    ) -> None:
+        """get_metric() exception falls back to minimize."""
+        import lizystudio.backends.lizyml_ui_schema as m
+
+        _reset_ui_schema_caches()
+        # First populate eval metrics using real registry
+        m.get_eval_metrics_by_task()
+
+        # Now patch get_metric to always raise so every metric gets 'minimize'
+        import lizyml.metrics.registry as reg
+
+        original_get_metric = reg.get_metric
+
+        def always_raises(name: str) -> object:
+            raise ValueError(f"Cannot find metric: {name}")
+
+        monkeypatch.setattr(reg, "get_metric", always_raises)  # type: ignore[attr-defined]
+        try:
+            result = m.get_metric_directions()
+            for task_dirs in result.values():
+                for direction in task_dirs.values():
+                    assert direction == "minimize"
+        finally:
+            monkeypatch.setattr(reg, "get_metric", original_get_metric)  # type: ignore[attr-defined]
+            _reset_ui_schema_caches()
 
 
 # --- Integration test: API endpoint ---

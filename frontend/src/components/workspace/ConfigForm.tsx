@@ -335,6 +335,15 @@ export function ConfigForm({
                         handleHintChange={handleHintChange}
                         getOptionsForHint={getOptionsForHint}
                         shouldShowField={shouldShowField}
+                        precisionAtKValue={
+                          (modelParams._precision_at_k_k as number) ?? 10
+                        }
+                        onPrecisionAtKChange={(k) =>
+                          handleFieldChange(
+                            ["model", "params", "_precision_at_k_k"],
+                            k,
+                          )
+                        }
                       />
 
                       {/* ── Additional Params ── */}
@@ -502,6 +511,8 @@ function ModelParamsSection({
   handleHintChange,
   getOptionsForHint,
   shouldShowField,
+  precisionAtKValue,
+  onPrecisionAtKChange,
 }: {
   hints: import("@/api/types").ParameterHint[];
   getValueForHint: (hint: import("@/api/types").ParameterHint) => unknown;
@@ -511,6 +522,8 @@ function ModelParamsSection({
   ) => void;
   getOptionsForHint: (hint: import("@/api/types").ParameterHint) => string[];
   shouldShowField: (key: string) => boolean;
+  precisionAtKValue?: number;
+  onPrecisionAtKChange?: (k: number) => void;
 }) {
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -527,6 +540,12 @@ function ModelParamsSection({
           onChange={(v) => handleHintChange(hint, v)}
           options={getOptionsForHint(hint)}
           visible={shouldShowField(hint.key)}
+          precisionAtKValue={
+            hint.kind === "model_metric" ? precisionAtKValue : undefined
+          }
+          onPrecisionAtKChange={
+            hint.kind === "model_metric" ? onPrecisionAtKChange : undefined
+          }
         />
       ))}
       {advanced.length > 0 && (
@@ -550,6 +569,14 @@ function ModelParamsSection({
                 onChange={(v) => handleHintChange(hint, v)}
                 options={getOptionsForHint(hint)}
                 visible={shouldShowField(hint.key)}
+                precisionAtKValue={
+                  hint.kind === "model_metric" ? precisionAtKValue : undefined
+                }
+                onPrecisionAtKChange={
+                  hint.kind === "model_metric"
+                    ? onPrecisionAtKChange
+                    : undefined
+                }
               />
             ))}
         </>

@@ -65,11 +65,31 @@ class LizyMLAdapter:
         from lizyml.config.schema import LizyMLConfig
         from pydantic import ValidationError
 
+        clean = self._strip_internal_keys(config)
         try:
-            LizyMLConfig.model_validate(config)
+            LizyMLConfig.model_validate(clean)
             return []
         except ValidationError as exc:
             return exc.errors()  # type: ignore[return-value]
+
+    @staticmethod
+    def _strip_internal_keys(config: dict[str, Any]) -> dict[str, Any]:
+        """Remove UI-internal keys (prefixed with _) and tune-only sections
+        that LizyML's Pydantic schema doesn't accept."""
+        import copy
+
+        result = copy.deepcopy(config)
+        # Strip _ keys from model.params
+        model_params = (result.get("model") or {}).get("params")
+        if isinstance(model_params, dict):
+            result["model"]["params"] = {
+                k: v for k, v in model_params.items() if not k.startswith("_")
+            }
+        # Strip tune-only keys from tuning (evaluation, model_params, training)
+        tuning = result.get("tuning")
+        if isinstance(tuning, dict):
+            result["tuning"] = {k: v for k, v in tuning.items() if k in ("optuna",)}
+        return result
 
     def load_config_from_file(self, content: bytes, filename: str) -> dict[str, Any]:
         text = content.decode("utf-8")
@@ -93,7 +113,8 @@ class LizyMLAdapter:
     def create_model(self, config: dict[str, Any], dataframe: pd.DataFrame) -> Any:
         from lizyml import Model
 
-        return Model(config, data=dataframe)
+        clean = self._strip_internal_keys(config)
+        return Model(clean, data=dataframe)
 
     def fit(
         self,
@@ -121,17 +142,39 @@ class LizyMLAdapter:
         if on_progress is not None:
             from lizyml import TuneProgressInfo
 
+            accumulated_trials: list[dict[str, Any]] = []
+
             def _bridge(info: TuneProgressInfo) -> None:
                 msg = f"Trial {info.current_trial}/{info.total_trials}"
                 if info.best_score is not None:
                     msg += f" | Best: {info.best_score:.4f}"
                 if info.latest_score is not None:
                     msg += f" | Latest: {info.latest_score:.4f} ({info.latest_state})"
-                on_progress(
-                    current=info.current_trial,
-                    total=info.total_trials,
-                    message=msg,
+                # Accumulate all trial results (including pruned/failed)
+                accumulated_trials.append(
+                    {
+                        "number": info.current_trial - 1,
+                        "score": float(info.latest_score)
+                        if info.latest_score is not None
+                        else None,
+                        "state": info.latest_state,
+                        "best_score": float(info.best_score)
+                        if info.best_score is not None
+                        else None,
+                    }
                 )
+                try:
+                    on_progress(
+                        current=info.current_trial,
+                        total=info.total_trials,
+                        message=msg,
+                        trial_results=list(accumulated_trials),
+                    )
+                except Exception:
+                    # CancelledError from _make_cancel_aware_cb is caught by
+                    # Optuna internally.  Re-raise as KeyboardInterrupt which
+                    # Optuna honours to abort the study gracefully.
+                    raise KeyboardInterrupt from None
 
             lizyml_callback = _bridge
             # total=0 signals indeterminate until first trial callback
@@ -224,6 +267,8 @@ class LizyMLAdapter:
         call_kwargs: dict[str, Any] = {}
         if plot_type == "learning-curve" and "metrics" in kwargs:
             call_kwargs["metrics"] = kwargs["metrics"]
+        if plot_type == "importance" and "kind" in kwargs:
+            call_kwargs["kind"] = kwargs["kind"]
         fig = getattr(model, method_name)(**call_kwargs)
         return PlotData(plotly_json=fig.to_json())
 
@@ -231,14 +276,16 @@ class LizyMLAdapter:
         cfg = model.fit_result.run_meta.config_normalized
         task: str = str(cfg["task"])
         calibration_enabled = cfg.get("calibration") is not None
-        plots = ["learning-curve", "oof-distribution", "importance"]
-        if task == "regression":
-            plots.append("residuals")
+        plots: list[str] = ["learning-curve"]
         if task == "binary":
             plots.append("roc-curve")
-            if calibration_enabled:
-                plots.append("probability-histogram")
-                plots.append("calibration")
+        if task == "regression":
+            plots.append("residuals")
+        plots.append("importance")
+        plots.append("oof-distribution")
+        if task == "binary" and calibration_enabled:
+            plots.append("probability-histogram")
+            plots.append("calibration")
         try:
             model.tuning_plot()
             plots.append("tuning")

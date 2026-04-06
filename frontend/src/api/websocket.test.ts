@@ -17,7 +17,9 @@ class MockWebSocket {
 
   url: string;
   readyState = MockWebSocket.OPEN;
+  onopen: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
+  onclose: (() => void) | null = null;
   onerror: (() => void) | null = null;
   close = vi.fn(() => {
     this.readyState = MockWebSocket.CLOSED;
@@ -30,6 +32,18 @@ class MockWebSocket {
   /** Simulate receiving a message from the server */
   simulateMessage(data: unknown) {
     this.onmessage?.({ data: JSON.stringify(data) });
+  }
+
+  /** Simulate connection opened */
+  simulateOpen() {
+    this.readyState = MockWebSocket.OPEN;
+    this.onopen?.();
+  }
+
+  /** Simulate connection closed */
+  simulateClose() {
+    this.readyState = MockWebSocket.CLOSED;
+    this.onclose?.();
   }
 }
 
@@ -173,5 +187,130 @@ describe("connectJobProgress", () => {
     connectJobProgress("j1", {});
     const ws = getLastWebSocket();
     expect(ws.url).toBe("wss://example.com/ws/jobs/j1/progress");
+  });
+
+  // --- Reconnection logic (#5) ---
+
+  it("schedules reconnect on close", () => {
+    vi.useFakeTimers();
+    const onReconnect = vi.fn();
+    connectJobProgress("j1", { onReconnect });
+
+    const ws = getLastWebSocket();
+    ws.simulateClose();
+
+    // Advance past initial delay (1000ms)
+    vi.advanceTimersByTime(1000);
+    expect(onReconnect).toHaveBeenCalledTimes(1);
+    // A new WebSocket should have been created
+    expect(wsInstances.length).toBe(2);
+
+    vi.useRealTimers();
+  });
+
+  it("uses exponential backoff delays", () => {
+    vi.useFakeTimers();
+    const onReconnect = vi.fn();
+    connectJobProgress("j1", { onReconnect });
+
+    // Close 1: delay = 1000ms
+    getLastWebSocket().simulateClose();
+    vi.advanceTimersByTime(999);
+    expect(onReconnect).toHaveBeenCalledTimes(0);
+    vi.advanceTimersByTime(1);
+    expect(onReconnect).toHaveBeenCalledTimes(1);
+
+    // Close 2: delay = 2000ms
+    getLastWebSocket().simulateClose();
+    vi.advanceTimersByTime(1999);
+    expect(onReconnect).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(onReconnect).toHaveBeenCalledTimes(2);
+
+    // Close 3: delay = 4000ms
+    getLastWebSocket().simulateClose();
+    vi.advanceTimersByTime(3999);
+    expect(onReconnect).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(1);
+    expect(onReconnect).toHaveBeenCalledTimes(3);
+
+    vi.useRealTimers();
+  });
+
+  it("fires onError after max retries exceeded", () => {
+    vi.useFakeTimers();
+    const onError = vi.fn();
+    connectJobProgress("j1", { onError });
+
+    // Trigger 10 closes (MAX_RETRIES = 10)
+    for (let i = 0; i < 10; i++) {
+      getLastWebSocket().simulateClose();
+      vi.advanceTimersByTime(30000); // max delay
+    }
+
+    // 11th close — should trigger error, no more reconnects
+    getLastWebSocket().simulateClose();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        message: expect.stringContaining("maximum retries"),
+      }),
+    );
+
+    vi.useRealTimers();
+  });
+
+  it("does not reconnect after completed message", () => {
+    vi.useFakeTimers();
+    const onReconnect = vi.fn();
+    const onCompleted = vi.fn();
+    connectJobProgress("j1", { onCompleted, onReconnect });
+
+    const ws = getLastWebSocket();
+    ws.simulateMessage({ type: "completed", job_id: "j1" });
+    ws.simulateClose();
+
+    vi.advanceTimersByTime(5000);
+    expect(onReconnect).not.toHaveBeenCalled();
+    expect(wsInstances.length).toBe(1);
+
+    vi.useRealTimers();
+  });
+
+  it("does not reconnect after error message", () => {
+    vi.useFakeTimers();
+    const onReconnect = vi.fn();
+    const onError = vi.fn();
+    connectJobProgress("j1", { onError, onReconnect });
+
+    const ws = getLastWebSocket();
+    ws.simulateMessage({ type: "error", message: "job failed" });
+    ws.simulateClose();
+
+    vi.advanceTimersByTime(5000);
+    expect(onReconnect).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
+
+  it("resets retry count on successful open", () => {
+    vi.useFakeTimers();
+    const onReconnect = vi.fn();
+    connectJobProgress("j1", { onReconnect });
+
+    // Close → reconnect (retry 1)
+    getLastWebSocket().simulateClose();
+    vi.advanceTimersByTime(1000);
+    expect(onReconnect).toHaveBeenCalledTimes(1);
+
+    // Simulate successful open → resets retryCount
+    getLastWebSocket().simulateOpen();
+
+    // Close again → should use initial delay (1000ms) not 2000ms
+    getLastWebSocket().simulateClose();
+    vi.advanceTimersByTime(1000);
+    expect(onReconnect).toHaveBeenCalledTimes(2);
+
+    vi.useRealTimers();
   });
 });

@@ -665,3 +665,55 @@ def test_comparison_stats_binary_positive_pct(
     assert "positive_pct" in result["current"]
     assert result["current"]["positive_pct"] == pytest.approx(50.0)
     assert result["other"]["positive_pct"] == pytest.approx(25.0)
+
+
+# ---------------------------------------------------------------------------
+# Path traversal edge cases (#10)
+# ---------------------------------------------------------------------------
+
+
+def test_inf_dir_traversal_with_dot_dot_job_id(tmp_path: Path) -> None:
+    """_inf_dir rejects job_id containing path traversal."""
+    jobs_dir = tmp_path / "jobs"
+    jobs_dir.mkdir(parents=True)
+    store = InferenceStore(jobs_dir)
+    with pytest.raises(ValueError, match="Path escapes"):
+        store._inf_dir("../../../etc", "inf_001")
+
+
+def test_inf_dir_traversal_with_absolute_inf_id(
+    tmp_path: Path,
+) -> None:
+    """_inf_dir rejects absolute path in inf_id."""
+    jobs_dir = tmp_path / "jobs"
+    jobs_dir.mkdir(parents=True)
+    store = InferenceStore(jobs_dir)
+    with pytest.raises(ValueError, match="Path escapes"):
+        store._inf_dir("job_ok", "/etc/passwd")
+
+
+def test_save_with_traversal_inf_id_raises(
+    tmp_path: Path,
+    sample_predictions: pd.DataFrame,
+) -> None:
+    """save() with traversal inf_id should raise ValueError."""
+    jobs_dir = tmp_path / "jobs"
+    jobs_dir.mkdir(parents=True)
+    store = InferenceStore(jobs_dir)
+    record = InferenceRecord(
+        inf_id="../../../escape",
+        job_id="job_ok",
+        data_ref=DataRef(
+            source_type="path",
+            path="/d.csv",
+            filename="d.csv",
+            fingerprint="fp",
+            shape=(5, 2),
+        ),
+        has_ground_truth=False,
+        created_at="2026-01-01T00:00:00Z",
+        row_count=5,
+        warnings=[],
+    )
+    with pytest.raises(ValueError, match="Path escapes"):
+        store.save(record, sample_predictions)
