@@ -153,6 +153,8 @@ describe("PreviewResponse", () => {
     const resp: PreviewResponse = {
       columns: ["a", "b"],
       data: [{ a: 1, b: "x" }],
+      total_rows: 1,
+      total_cols: 2,
     };
     expect(resp.columns).toHaveLength(2);
     expect(resp.data).toHaveLength(1);

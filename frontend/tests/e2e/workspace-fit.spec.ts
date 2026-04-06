@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
+import { dismissOnboarding } from "./helpers/onboarding";
 
 const API = "http://localhost:8501/api";
 
@@ -183,12 +184,13 @@ test.describe("Workspace Fit Flow", () => {
   test("UI: Workspace page loads with 3-panel layout and Fit tab", async ({
     page,
   }) => {
+    await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
 
     // Sidebar branding
-    await expect(page.getByText("LizyStudio")).toBeVisible();
-    await expect(page.getByText("Workspace")).toBeVisible();
+    await expect(page.getByText("LizyStudio").first()).toBeVisible();
+    await expect(page.getByRole("link", { name: "Workspace" })).toBeVisible();
 
     // Data panel
     await expect(page.getByText("Data Source")).toBeVisible();
@@ -212,6 +214,7 @@ test.describe("Workspace Fit Flow", () => {
   test("UI: Fit tab is active by default and shows config form", async ({
     page,
   }) => {
+    await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
 
@@ -237,6 +240,7 @@ test.describe("Workspace Fit Flow", () => {
       data: { path: csvPath },
     });
 
+    await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
     await page.waitForTimeout(1000);

@@ -1,10 +1,12 @@
 import { apiFetch } from "./client";
 import type {
   BackendInfo,
+  ColumnStatsResponse,
   ColumnsResponse,
   ConfigError,
   ConfigUpdateResponse,
   PreviewResponse,
+  SplitPreviewResponse,
   UiSchema,
 } from "./types";
 
@@ -36,6 +38,19 @@ export function fetchPreview(rows = 5): Promise<PreviewResponse> {
 export function fetchColumns(target?: string): Promise<ColumnsResponse> {
   const params = target ? `?target=${encodeURIComponent(target)}` : "";
   return apiFetch(`/workspace/data/columns${params}`);
+}
+
+export function fetchColumnStats(
+  col: string,
+  topN = 20,
+): Promise<ColumnStatsResponse> {
+  return apiFetch(
+    `/workspace/data/column-stats/${encodeURIComponent(col)}?top_n=${topN}`,
+  );
+}
+
+export function fetchSplitPreview(): Promise<SplitPreviewResponse> {
+  return apiFetch("/workspace/data/split-preview");
 }
 
 export function fetchConfigSchema(): Promise<Record<string, unknown>> {

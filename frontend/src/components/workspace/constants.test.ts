@@ -8,10 +8,8 @@ import {
   CV_STRATEGY_FIELDS,
   CV_STRATEGY_LABELS,
   getDefaultCvStrategy,
-  KNOWN_PARAMS,
   METRICS_BY_TASK,
   N_TRIALS_PRESETS,
-  RANGE_DEFAULTS,
   TIMEOUT_PRESETS,
 } from "./constants";
 
@@ -41,23 +39,6 @@ describe("TIMEOUT_PRESETS", () => {
   });
 });
 
-describe("KNOWN_PARAMS", () => {
-  it("contains learning_rate and n_estimators", () => {
-    const keys = KNOWN_PARAMS.map((p) => p.key);
-    expect(keys).toContain("learning_rate");
-    expect(keys).toContain("n_estimators");
-  });
-
-  it("each param has key, type, default, description", () => {
-    for (const p of KNOWN_PARAMS) {
-      expect(p.key).toBeTruthy();
-      expect(["float", "integer"]).toContain(p.type);
-      expect(typeof p.default).toBe("number");
-      expect(p.description).toBeTruthy();
-    }
-  });
-});
-
 describe("METRICS_BY_TASK", () => {
   it("has entries for binary, multiclass, regression", () => {
     expect(METRICS_BY_TASK).toHaveProperty("binary");
@@ -76,18 +57,6 @@ describe("METRICS_BY_TASK", () => {
       for (const m of info.available) {
         expect(m).toBe(m.toLowerCase());
       }
-    }
-  });
-});
-
-describe("RANGE_DEFAULTS", () => {
-  it("has learning_rate with log=true", () => {
-    expect(RANGE_DEFAULTS.learning_rate.log).toBe(true);
-  });
-
-  it("all entries have low < high", () => {
-    for (const [, range] of Object.entries(RANGE_DEFAULTS)) {
-      expect(range.low).toBeLessThan(range.high);
     }
   });
 });

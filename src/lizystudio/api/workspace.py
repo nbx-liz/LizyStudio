@@ -12,31 +12,54 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from fastapi import APIRouter, Depends, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, Request, UploadFile
 from fastapi.responses import Response
-from pydantic import BaseModel
 
 import lizystudio.security as security
 from lizystudio.api.errors import (
+    ConfigImportError,
     FileInvalidError,
+    InvalidPatchError,
     JobConflictError,
     PathNotFoundError,
     ValidationError,
     WorkspaceNoConfigError,
     WorkspaceNoDataError,
 )
-from lizystudio.security import read_upload_checked, validate_path_within
+from lizystudio.api.models import (
+    ColumnsResponseModel,
+    ConfigPatchResponse,
+    ConfigUpdateResponse,
+    DataLoadResponse,
+    JobStartResponse,
+    PreviewResponseModel,
+    SplitPreviewResponseModel,
+    ValidationResponse,
+    WorkspaceStatusResponse,
+)
+from lizystudio.security import (
+    check_dataframe_memory,
+    read_upload_checked,
+    validate_path_within,
+)
 from lizystudio.services.data import (
     analyze_columns,
+    compute_split_preview,
+    get_column_value_counts,
     get_describe,
     get_preview,
     load_dataframe,
     make_data_ref,
 )
 from lizystudio.services.jobs import JobStore, get_job_store
-from lizystudio.services.training import start_fit_async, start_tune_async
+from lizystudio.services.training import (
+    PreviousJobStillRunningError,
+    start_fit_async,
+    start_tune_async,
+)
 from lizystudio.services.workspace import (
     WorkspaceState,
+    apply_config_patch,
     get_backend_name,
     get_config_schema,
     get_default_config,
@@ -52,7 +75,7 @@ router = APIRouter()
 # --- Status / Reset ---
 
 
-@router.get("/status")
+@router.get("/status", response_model=WorkspaceStatusResponse)
 def workspace_status(
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, Any]:
@@ -86,17 +109,13 @@ def workspace_reset(ws: WorkspaceState = Depends(get_workspace)) -> dict[str, st
 # --- Data endpoints (BLUEPRINT §5.2 Data) ---
 
 
-class DataPathRequest(BaseModel):
-    path: str
-
-
-@router.post("/data/path")
+@router.post("/data/path", response_model=DataLoadResponse)
 def data_load_path(
-    body: DataPathRequest,
+    body: dict[str, Any],
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, Any]:
     """Load data from a local file path."""
-    path = body.path
+    path = body.get("path", "")
     try:
         validate_path_within(Path(path), security.ALLOWED_FILES_ROOT)
     except ValueError as exc:
@@ -107,14 +126,15 @@ def data_load_path(
         df = load_dataframe(path)
     except Exception as exc:
         raise FileInvalidError(str(exc)) from exc
+    memory_usage_bytes = check_dataframe_memory(df)
     data_ref = make_data_ref(
         df, source_type="path", path=path, filename=Path(path).name
     )
     ws.set_data(df, data_ref)
-    return {"data_ref": asdict(data_ref)}
+    return {"data_ref": asdict(data_ref), "memory_usage_bytes": memory_usage_bytes}
 
 
-@router.post("/data/upload")
+@router.post("/data/upload", response_model=DataLoadResponse)
 async def data_upload(
     file: UploadFile,
     ws: WorkspaceState = Depends(get_workspace),
@@ -138,15 +158,20 @@ async def data_upload(
     except Exception as exc:
         Path(tmp_name).unlink(missing_ok=True)
         raise FileInvalidError(str(exc)) from exc
+    try:
+        memory_usage_bytes = check_dataframe_memory(df)
+    except FileInvalidError:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
     data_ref = make_data_ref(df, source_type="upload", path=tmp_name, filename=filename)
     ws.set_data(df, data_ref)
     ws.track_temp_file(tmp_name)
-    return {"data_ref": asdict(data_ref)}
+    return {"data_ref": asdict(data_ref), "memory_usage_bytes": memory_usage_bytes}
 
 
-@router.get("/data/preview")
+@router.get("/data/preview", response_model=PreviewResponseModel)
 def data_preview(
-    rows: int = Query(default=50, ge=1, le=10000),
+    rows: int = 50,
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, Any]:
     """Return first N rows of loaded data."""
@@ -155,7 +180,7 @@ def data_preview(
     return get_preview(ws.dataframe, rows=rows)
 
 
-@router.get("/data/columns")
+@router.get("/data/columns", response_model=ColumnsResponseModel)
 def data_columns(
     target: str | None = None,
     ws: WorkspaceState = Depends(get_workspace),
@@ -175,6 +200,54 @@ def data_describe(
     if ws.dataframe is None:
         raise WorkspaceNoDataError()
     return get_describe(ws.dataframe)
+
+
+@router.get("/data/column-stats/{col}")
+def data_column_stats(
+    col: str,
+    top_n: int = 20,
+    ws: WorkspaceState = Depends(get_workspace),
+) -> dict[str, Any]:
+    """Return value distribution for a single column (H-0046)."""
+    if ws.dataframe is None:
+        raise WorkspaceNoDataError()
+    try:
+        stats = get_column_value_counts(ws.dataframe, col, top_n=top_n)
+    except KeyError as exc:
+        raise PathNotFoundError(str(exc)) from exc
+    return asdict(stats)
+
+
+@router.get("/data/split-preview", response_model=SplitPreviewResponseModel)
+def data_split_preview(
+    ws: WorkspaceState = Depends(get_workspace),
+) -> dict[str, Any]:
+    """Return approximate fold sizes for the current CV split config.
+
+    Computes sizes arithmetically from n_rows and config — no sklearn needed.
+    Requires both data and config (with ``split.method`` and ``split.n_splits``)
+    to be set in the workspace.
+    """
+    if ws.dataframe is None:
+        raise WorkspaceNoDataError()
+    if not ws.config:
+        raise WorkspaceNoConfigError()
+    split_cfg = ws.config.get("split", {})
+    strategy = split_cfg.get("method", "")
+    n_splits = split_cfg.get("n_splits", 5)
+    gap = split_cfg.get("gap", 0)
+    max_train_size = split_cfg.get("max_train_size")
+    max_test_size = split_cfg.get("max_test_size")
+    n_rows = len(ws.dataframe)
+    preview = compute_split_preview(
+        n_rows,
+        strategy,
+        n_splits,
+        gap=gap,
+        max_train_size=max_train_size,
+        max_test_size=max_test_size,
+    )
+    return asdict(preview)
 
 
 # --- Config endpoints (BLUEPRINT §5.2 Config) ---
@@ -206,7 +279,7 @@ def config_get(
     return ws.config
 
 
-@router.put("/config")
+@router.put("/config", response_model=ConfigUpdateResponse)
 def config_update(
     body: dict[str, Any],
     ws: WorkspaceState = Depends(get_workspace),
@@ -218,7 +291,26 @@ def config_update(
     return {"config": body, "errors": errors, "saved": len(errors) == 0}
 
 
-@router.post("/config/validate")
+@router.patch("/config", response_model=ConfigPatchResponse)
+def config_patch(
+    body: dict[str, Any],
+    ws: WorkspaceState = Depends(get_workspace),
+) -> dict[str, Any]:
+    """Partially update config via patch operations (H-0037)."""
+    if not ws.config:
+        raise WorkspaceNoConfigError()
+    ops = body.get("ops", [])
+    if not isinstance(ops, list):
+        raise InvalidPatchError("'ops' must be a list")
+    try:
+        patched = apply_config_patch(ws.config, ops)
+    except ValueError as exc:
+        raise InvalidPatchError(str(exc)) from exc
+    ws.set_config(patched)
+    return {"config": patched}
+
+
+@router.post("/config/validate", response_model=ValidationResponse)
 def config_validate(
     body: dict[str, Any] | None = None,
     ws: WorkspaceState = Depends(get_workspace),
@@ -234,22 +326,21 @@ def config_validate(
     return {"valid": len(errors) == 0, "errors": errors}
 
 
-@router.post("/config/upload")
+@router.post("/config/upload", response_model=ConfigUpdateResponse)
 async def config_upload(
     file: UploadFile,
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, Any]:
     """Load config from an uploaded YAML/JSON file."""
-    _MAX_CONFIG_BYTES = 1 * 1024 * 1024  # 1 MB — config files are small
     try:
-        content = await read_upload_checked(file, max_bytes=_MAX_CONFIG_BYTES)
+        content = await read_upload_checked(file)
     except ValueError as exc:
         raise FileInvalidError(str(exc)) from exc
     filename = file.filename or "config.yaml"
     try:
         config = load_config_from_file(ws, content, filename)
     except Exception as exc:
-        raise FileInvalidError(str(exc)) from exc
+        raise ConfigImportError(str(exc)) from exc
     errors = validate_config(ws, config)
     if not errors:
         ws.set_config(config)
@@ -281,7 +372,7 @@ def _get_broadcaster(request: Request) -> ProgressBroadcaster:
 # --- Fit / Tune endpoints (BLUEPRINT §5.2 Fit/Tune) ---
 
 
-@router.post("/fit")
+@router.post("/fit", response_model=JobStartResponse)
 def workspace_fit(
     request: Request,
     ws: WorkspaceState = Depends(get_workspace),
@@ -303,18 +394,24 @@ def workspace_fit(
         data_ref=ws.data_ref,
         job_type="fit",
     )
-    job_id = start_fit_async(
-        ws=ws,
-        job_store=job_store,
-        broadcaster=_get_broadcaster(request),
-        config=ws.config,
-        dataframe=ws.dataframe,
-        job=job,
-    )
+    try:
+        job_id = start_fit_async(
+            ws=ws,
+            job_store=job_store,
+            broadcaster=_get_broadcaster(request),
+            config=ws.config,
+            dataframe=ws.dataframe,
+            job=job,
+        )
+    except PreviousJobStillRunningError:
+        job.status = "failed"
+        job.error = "Previous job still running"
+        job_store.update(job)
+        raise JobConflictError(job.job_id) from None
     return {"job_id": job_id}
 
 
-@router.post("/tune")
+@router.post("/tune", response_model=JobStartResponse)
 def workspace_tune(
     request: Request,
     ws: WorkspaceState = Depends(get_workspace),
@@ -346,12 +443,18 @@ def workspace_tune(
         data_ref=ws.data_ref,
         job_type="tune",
     )
-    job_id = start_tune_async(
-        ws=ws,
-        job_store=job_store,
-        broadcaster=_get_broadcaster(request),
-        config=ws.config,
-        dataframe=ws.dataframe,
-        job=job,
-    )
+    try:
+        job_id = start_tune_async(
+            ws=ws,
+            job_store=job_store,
+            broadcaster=_get_broadcaster(request),
+            config=ws.config,
+            dataframe=ws.dataframe,
+            job=job,
+        )
+    except PreviousJobStillRunningError:
+        job.status = "failed"
+        job.error = "Previous job still running"
+        job_store.update(job)
+        raise JobConflictError(job.job_id) from None
     return {"job_id": job_id}

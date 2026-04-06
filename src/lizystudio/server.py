@@ -8,8 +8,9 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi import FastAPI, HTTPException, Request, Response, WebSocket
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -29,6 +30,26 @@ from lizystudio.ws.progress import ProgressBroadcaster, websocket_progress
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+# --- Security headers (H-0039) ---
+
+_CSP_PRODUCTION = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "connect-src 'self' ws://localhost:* wss://localhost:*; "
+    "img-src 'self' data: blob:; "
+    "font-src 'self'"
+)
+
+_CSP_DEV = (
+    "default-src 'self' http://localhost:*; "
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:*; "
+    "style-src 'self' 'unsafe-inline'; "
+    "connect-src 'self' ws://localhost:* wss://localhost:* http://localhost:*; "
+    "img-src 'self' data: blob:; "
+    "font-src 'self'"
+)
 
 
 def _warmup_adapter(adapter: object) -> None:
@@ -79,6 +100,25 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Security headers middleware (H-0039) — must be added before CORS
+    is_dev = os.environ.get("LIZYSTUDIO_RELOAD", "") == "1"
+    csp_value = _CSP_DEV if is_dev else _CSP_PRODUCTION
+
+    @application.middleware("http")
+    async def security_headers_middleware(
+        request: Request,
+        call_next: Any,  # noqa: ANN401
+    ) -> Response:
+        response: Response = await call_next(request)
+        response.headers["Content-Security-Policy"] = csp_value
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = (
+            "camera=(), microphone=(), geolocation=()"
+        )
+        return response
+
     # CORS — allow frontend dev server during development
     application.add_middleware(
         CORSMiddleware,
@@ -90,9 +130,6 @@ def create_app() -> FastAPI:
 
     # Security headers middleware
     from collections.abc import Awaitable, Callable
-
-    from starlette.requests import Request
-    from starlette.responses import Response
 
     @application.middleware("http")
     async def add_security_headers(

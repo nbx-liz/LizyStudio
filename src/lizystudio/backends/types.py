@@ -93,3 +93,21 @@ class ColumnsResponse:
     target: str | None
     suggested_task: Literal["binary", "multiclass", "regression"] | None = None
     columns: list[ColumnInfo] = field(default_factory=list)
+
+
+@dataclass
+class FoldInfo:
+    """Per-fold size information for split preview."""
+
+    fold: int
+    train_size: int
+    valid_size: int
+
+
+@dataclass
+class SplitPreview:
+    """Predicted fold sizes for a CV split strategy (no sklearn needed)."""
+
+    strategy: str
+    n_splits: int
+    folds: list[FoldInfo] = field(default_factory=list)

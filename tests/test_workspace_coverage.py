@@ -353,7 +353,7 @@ def test_config_upload_malformed_yaml_returns_400(client: TestClient) -> None:
     # Either the backend raises FILE_INVALID or returns errors — both acceptable
     # as long as the response does not contain saved=True
     if res.status_code == 400:
-        assert res.json()["error"]["code"] == "FILE_INVALID"
+        assert res.json()["error"]["code"] in ("FILE_INVALID", "CONFIG_IMPORT_ERROR")
     else:
         assert res.status_code == 200
         assert res.json().get("saved") is not True

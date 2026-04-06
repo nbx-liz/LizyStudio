@@ -16,7 +16,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ChipGroup } from "./ChipGroup";
 import { PlotlyChart } from "./PlotlyChart";
 import { SegmentGroup } from "./SegmentGroup";
 
@@ -44,10 +43,10 @@ interface PlotSectionProps {
   learningCurve: PlotResponse | undefined;
   isLoading?: boolean;
   isError?: boolean;
-  /** Selected metrics for learning curve filter (null = show all). */
-  lcMetrics?: string[] | null;
-  onLcMetricsChange?: (metrics: string[] | null) => void;
-  /** Available evaluation metrics (for the filter chip list). */
+  /** Selected metric for learning curve filter (null = show all). */
+  lcMetric?: string | null;
+  onLcMetricChange?: (metric: string | null) => void;
+  /** Available model metrics (for the filter selector). */
   availableEvalMetrics?: string[];
   /** Importance kind options (e.g. ["split", "gain", "shap"]). */
   importanceKinds?: string[];
@@ -69,8 +68,8 @@ export function PlotSection({
   learningCurve,
   isLoading = false,
   isError = false,
-  lcMetrics,
-  onLcMetricsChange,
+  lcMetric,
+  onLcMetricChange,
   availableEvalMetrics,
   importanceKinds,
   selectedImportanceKind,
@@ -78,7 +77,7 @@ export function PlotSection({
   importanceData,
   importancePlot,
 }: PlotSectionProps) {
-  // Include learning-curve in the button list, exclude tuning
+  // Exclude "tuning" — shown in TuneTrialsSection, not in plot tabs
   const availablePlots = plots.filter((p) => p !== "tuning");
 
   // Resolve which data to display
@@ -103,7 +102,7 @@ export function PlotSection({
     isLearningCurve &&
     availableEvalMetrics != null &&
     availableEvalMetrics.length > 1 &&
-    onLcMetricsChange != null;
+    onLcMetricChange != null;
 
   const [fullscreen, setFullscreen] = useState(false);
 
@@ -157,24 +156,13 @@ export function PlotSection({
       {showLcFilter && (
         <div className="mb-3">
           <p className="mb-1 text-xs text-muted-foreground">Filter metrics</p>
-          <ChipGroup
+          <SegmentGroup
             options={availableEvalMetrics}
-            selected={
-              lcMetrics ??
-              (availableEvalMetrics.length > 0 ? [availableEvalMetrics[0]] : [])
+            value={
+              lcMetric ??
+              (availableEvalMetrics.length > 0 ? availableEvalMetrics[0] : "")
             }
-            onChange={(selected) => {
-              // If all selected → null (show all, no filter)
-              if (selected.length === availableEvalMetrics.length) {
-                onLcMetricsChange(null);
-              } else if (selected.length === 0) {
-                // Prevent empty — reset to all
-                onLcMetricsChange(null);
-              } else {
-                onLcMetricsChange(selected);
-              }
-            }}
-            minSelected={1}
+            onChange={(v) => onLcMetricChange(v || null)}
           />
         </div>
       )}
