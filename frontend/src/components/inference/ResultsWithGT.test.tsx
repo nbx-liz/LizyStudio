@@ -158,4 +158,52 @@ describe("ResultsWithGT", () => {
     expect(screen.queryByText("Score")).not.toBeInTheDocument();
     expect(screen.queryByTestId("score-table")).not.toBeInTheDocument();
   });
+
+  it("renders with custom row count", () => {
+    const record = makeRecord({ row_count: 750 });
+    renderWithQuery(
+      <ResultsWithGT
+        record={record}
+        infNumber={2}
+        jobLabel="model"
+        targetCol="y"
+      />,
+    );
+
+    expect(
+      screen.getByText("750 rows -- Ground Truth: 'y'"),
+    ).toBeInTheDocument();
+  });
+
+  it("renders with zero-length warnings", () => {
+    const record = makeRecord({ warnings: [] });
+    renderWithQuery(
+      <ResultsWithGT
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        targetCol="target"
+      />,
+    );
+
+    // Should render without crashing, no Warnings section
+    expect(screen.getByText("Predictions")).toBeInTheDocument();
+    expect(screen.queryByText("Warnings")).not.toBeInTheDocument();
+  });
+
+  it("renders with multiple warnings", () => {
+    const record = makeRecord({
+      warnings: ["Warn 1", "Warn 2", "Warn 3"],
+    });
+    renderWithQuery(
+      <ResultsWithGT
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        targetCol="target"
+      />,
+    );
+
+    expect(screen.getByText("Warnings")).toBeInTheDocument();
+  });
 });

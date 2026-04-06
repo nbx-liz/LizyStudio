@@ -65,4 +65,50 @@ describe("ErrorBoundary", () => {
     expect(screen.getByText("Recovered")).toBeInTheDocument();
     spy.mockRestore();
   });
+
+  it("shows empty message when error has no message text", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    function ThrowEmptyMessage(): never {
+      throw new Error();
+    }
+
+    render(
+      <ErrorBoundary>
+        <ThrowEmptyMessage />
+      </ErrorBoundary>,
+    );
+
+    // Error with empty message still renders the alert and heading
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByText("Something went wrong")).toBeInTheDocument();
+    expect(screen.getByText("Try again")).toBeInTheDocument();
+    spy.mockRestore();
+  });
+
+  it("does not show error UI initially", () => {
+    render(
+      <ErrorBoundary>
+        <div>Safe content</div>
+      </ErrorBoundary>,
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText("Something went wrong")).not.toBeInTheDocument();
+  });
+
+  it("renders error UI with alert role for accessibility", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    render(
+      <ErrorBoundary>
+        <ThrowingComponent shouldThrow />
+      </ErrorBoundary>,
+    );
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toBeInTheDocument();
+    // Verify the warning icon is present
+    expect(alert.textContent).toContain("⚠");
+    spy.mockRestore();
+  });
 });

@@ -152,4 +152,58 @@ describe("ResultsPredOnly", () => {
 
     expect(screen.getByText("Warnings")).toBeInTheDocument();
   });
+
+  it("does not render Warnings accordion when no warnings", () => {
+    const record = makeRecord({ warnings: [] });
+    renderWithQuery(
+      <ResultsPredOnly
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        history={[record]}
+      />,
+    );
+
+    expect(screen.queryByText("Warnings")).not.toBeInTheDocument();
+  });
+
+  it("renders with custom data ref shape", () => {
+    const record = makeRecord({
+      row_count: 50,
+      data_ref: {
+        source_type: "file",
+        path: "/data/test.csv",
+        filename: "my_dataset.csv",
+        fingerprint: "abc",
+        shape: [50, 3],
+      },
+    });
+    renderWithQuery(
+      <ResultsPredOnly
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        history={[record]}
+      />,
+    );
+
+    expect(screen.getByText("50 rows -- Prediction Only")).toBeInTheDocument();
+  });
+
+  it("renders with empty history (only current record)", () => {
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsPredOnly
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        history={[]}
+      />,
+    );
+
+    // Should render without crashing
+    expect(screen.getByText("Predictions")).toBeInTheDocument();
+    // No comparison section since history is empty
+    expect(screen.queryByText("Comparison")).not.toBeInTheDocument();
+  });
 });

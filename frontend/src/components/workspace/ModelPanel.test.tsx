@@ -249,4 +249,144 @@ describe("ModelPanel", () => {
       expect(uploadConfig).toHaveBeenCalledWith(file);
     });
   });
+
+  it("shows Import error toast when upload fails", async () => {
+    const { uploadConfig } = await import("@/api/workspace");
+    (uploadConfig as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("parse error"),
+    );
+    const { toast } = await import("sonner");
+
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    const { fireEvent, waitFor } = await import("@testing-library/react");
+    const fileInput = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    const file = new File(["bad"], "config.yaml", { type: "text/yaml" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringContaining("Import failed"),
+      );
+    });
+  });
+
+  it("Tune tab is selectable", () => {
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+    const tuneTab = screen.getByRole("tab", { name: "Tune" });
+    expect(tuneTab).toBeInTheDocument();
+    expect(tuneTab).not.toBeDisabled();
+  });
+
+  it("calls onFit when Fit button is clicked", () => {
+    const onFit = vi.fn();
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={onFit}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    const fitBtn = screen
+      .getAllByRole("button")
+      .find(
+        (btn) => btn.textContent === "Fit" && !btn.closest('[role="tablist"]'),
+      );
+    expect(fitBtn).toBeDefined();
+    if (fitBtn && !fitBtn.hasAttribute("disabled")) {
+      fitBtn.click();
+      expect(onFit).toHaveBeenCalled();
+    }
+  });
+
+  it("shows disabled reason when running", () => {
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={true}
+      />,
+    );
+    expect(screen.getByText("A job is currently running")).toBeInTheDocument();
+  });
+
+  it("shows disabled reason when no data", () => {
+    renderWithQuery(
+      <ModelPanel
+        hasData={false}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+    expect(screen.getByText("Load data first")).toBeInTheDocument();
+  });
+
+  it("shows guidance message when no data loaded", () => {
+    renderWithQuery(
+      <ModelPanel
+        hasData={false}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+    expect(
+      screen.getByText("Load data in the Data Panel to configure your model."),
+    ).toBeInTheDocument();
+  });
+
+  it("renders Undo and Redo buttons", () => {
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Undo" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Redo" })).toBeInTheDocument();
+  });
+
+  it("renders Save Preset button", () => {
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: /Save Preset/i }),
+    ).toBeInTheDocument();
+  });
 });

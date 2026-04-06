@@ -75,4 +75,69 @@ describe("RawConfigDialog", () => {
     // At least 2 buttons: original trigger + copy (and potentially close)
     expect(buttons.length).toBeGreaterThanOrEqual(2);
   });
+
+  it("copies config text to clipboard on copy button click", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, {
+      clipboard: { writeText },
+    });
+    const { toast } = await import("sonner");
+
+    render(
+      <RawConfigDialog
+        config={{ key: "value" }}
+        trigger={<button type="button">Open</button>}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+
+    // Find the copy button (has the Copy icon, inside the dialog content)
+    const copyButton = screen
+      .getAllByRole("button")
+      .find(
+        (btn) =>
+          btn.querySelector("svg") &&
+          !btn.textContent?.includes("Open") &&
+          !btn.closest('[data-state="closed"]'),
+      );
+    expect(copyButton).toBeDefined();
+    fireEvent.click(copyButton!);
+
+    const { waitFor } = await import("@testing-library/react");
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(JSON.stringify({ key: "value" }));
+      expect(toast.success).toHaveBeenCalledWith("Copied");
+    });
+  });
+
+  it("shows error toast when clipboard write fails", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("not allowed"));
+    Object.assign(navigator, {
+      clipboard: { writeText },
+    });
+    const { toast } = await import("sonner");
+
+    render(
+      <RawConfigDialog
+        config={{ key: "value" }}
+        trigger={<button type="button">Open</button>}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+
+    const copyButton = screen
+      .getAllByRole("button")
+      .find(
+        (btn) =>
+          btn.querySelector("svg") &&
+          !btn.textContent?.includes("Open") &&
+          !btn.closest('[data-state="closed"]'),
+      );
+    fireEvent.click(copyButton!);
+
+    const { waitFor } = await import("@testing-library/react");
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith("Failed to copy");
+    });
+  });
 });

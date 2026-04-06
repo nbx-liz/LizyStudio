@@ -30,6 +30,8 @@ def _make_websocket() -> MagicMock:
     ws = MagicMock()
     ws.accept = AsyncMock()
     ws.send_text = AsyncMock()
+    ws.close = AsyncMock()
+    ws.headers = {}  # No origin header → pass origin check
     return ws
 
 

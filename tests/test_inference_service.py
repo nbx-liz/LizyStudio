@@ -244,7 +244,7 @@ def test_inf_dir_path_escape_raises(tmp_path: Path) -> None:
     jobs_dir.mkdir(parents=True)
     store = InferenceStore(jobs_dir)
     # Five levels of '../' escape from {jobs_dir}/job_x/inferences/../../../../../
-    with pytest.raises(ValueError, match="Path escapes jobs_dir"):
+    with pytest.raises(ValueError, match="outside allowed root"):
         store._inf_dir("job_x", "../../../../../etc/passwd")
 
 

@@ -127,23 +127,24 @@ describe("ExportDialog", () => {
     expect(exportButton).toBeDisabled();
   });
 
-  it("disables Export button when path contains '..'", async () => {
+  it("allows paths with '..' (server validates)", async () => {
     const { fireEvent } = await import("@testing-library/react");
     render(<ExportDialog {...defaultProps} />);
 
     const pathInput = screen.getByDisplayValue("./exports/job_5_model");
-    fireEvent.change(pathInput, { target: { value: "../../../etc/passwd" } });
+    fireEvent.change(pathInput, { target: { value: "../output" } });
 
     const exportButton = screen.getByRole("button", { name: "Export" });
-    expect(exportButton).toBeDisabled();
+    // Non-empty path is valid on client; server enforces path safety
+    expect(exportButton).not.toBeDisabled();
   });
 
-  it("disables Export button when path starts with /etc", async () => {
+  it("disables Export button only when path is whitespace", async () => {
     const { fireEvent } = await import("@testing-library/react");
     render(<ExportDialog {...defaultProps} />);
 
     const pathInput = screen.getByDisplayValue("./exports/job_5_model");
-    fireEvent.change(pathInput, { target: { value: "/etc/config" } });
+    fireEvent.change(pathInput, { target: { value: "   " } });
 
     const exportButton = screen.getByRole("button", { name: "Export" });
     expect(exportButton).toBeDisabled();

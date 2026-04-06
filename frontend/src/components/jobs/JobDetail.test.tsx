@@ -492,4 +492,105 @@ describe("JobDetailPanel", () => {
     // Config tree content is in a collapsed Radix Accordion item;
     // full content rendering is verified via E2E visual tests.
   });
+
+  it("renders pending job without crashing", async () => {
+    const pendingJob = makeJob({
+      status: "pending",
+      completed_at: null,
+    });
+    mockFetchJob.mockResolvedValue(pendingJob);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    // Pending jobs should render the job header
+    expect(await screen.findByText(/Fit #1/)).toBeInTheDocument();
+  });
+
+  it("renders cancelled job with Delete button only", async () => {
+    const cancelledJob = makeJob({
+      status: "cancelled",
+    });
+    mockFetchJob.mockResolvedValue(cancelledJob);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("Delete")).toBeInTheDocument();
+    expect(screen.queryByText("Inference")).not.toBeInTheDocument();
+    expect(screen.queryByText("Export")).not.toBeInTheDocument();
+    expect(screen.queryByText("Cancel")).not.toBeInTheDocument();
+  });
+
+  it("renders job with no model name gracefully", async () => {
+    const job = makeJob({
+      status: "completed",
+      config: {},
+    });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={5}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText(/Fit #5/)).toBeInTheDocument();
+  });
+
+  it("renders completed job without fit_result", async () => {
+    const job = makeJob({
+      status: "completed",
+      fit_result: null,
+    });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    // Should render without crashing; no metric badge
+    expect((await screen.findAllByText(/Completed/))[0]).toBeInTheDocument();
+  });
+
+  it("renders failed job with Delete and Re-fit buttons", async () => {
+    const failedJob = makeJob({
+      status: "failed",
+      error: "Training error",
+    });
+    mockFetchJob.mockResolvedValue(failedJob);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("Delete")).toBeInTheDocument();
+    expect(screen.getByText("Re-fit")).toBeInTheDocument();
+    expect(screen.queryByText("Cancel")).not.toBeInTheDocument();
+  });
 });
