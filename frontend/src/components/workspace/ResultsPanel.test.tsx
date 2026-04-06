@@ -389,4 +389,252 @@ describe("ResultsPanel", () => {
       screen.getByText("Job queued, starting soon..."),
     ).toBeInTheDocument();
   });
+
+  it("calls onJobDone via WebSocket onCompleted callback", async () => {
+    const { waitFor } = await import("@testing-library/react");
+    const runningJob = makeJob({ status: "running" });
+    mockFetchJob.mockResolvedValue(runningJob);
+    mockFetchJobs.mockResolvedValue([runningJob]);
+
+    let capturedCallbacks: Record<string, (msg?: unknown) => void> = {};
+    mockConnectJobProgress.mockImplementation(
+      (_id: string, callbacks: Record<string, (msg?: unknown) => void>) => {
+        capturedCallbacks = callbacks;
+        return () => {};
+      },
+    );
+
+    const onJobDone = vi.fn();
+    renderWithQuery(<ResultsPanel jobId="test-job-1" onJobDone={onJobDone} />);
+
+    await screen.findByText("Running");
+
+    // Simulate WebSocket completion event
+    const { act } = await import("@testing-library/react");
+    act(() => capturedCallbacks.onCompleted?.());
+
+    await waitFor(() => expect(onJobDone).toHaveBeenCalled());
+  });
+
+  it("shows toast.error on WebSocket onError callback", async () => {
+    const { toast } = await import("sonner");
+    const { waitFor, act } = await import("@testing-library/react");
+    const runningJob = makeJob({ status: "running" });
+    mockFetchJob.mockResolvedValue(runningJob);
+    mockFetchJobs.mockResolvedValue([runningJob]);
+
+    let capturedCallbacks: Record<
+      string,
+      (msg?: { message?: string }) => void
+    > = {};
+    mockConnectJobProgress.mockImplementation(
+      (
+        _id: string,
+        callbacks: Record<string, (msg?: { message?: string }) => void>,
+      ) => {
+        capturedCallbacks = callbacks;
+        return () => {};
+      },
+    );
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+    await screen.findByText("Running");
+
+    act(() => capturedCallbacks.onError?.({ message: "GPU out of memory" }));
+
+    await waitFor(() =>
+      expect(
+        (toast as unknown as Record<string, ReturnType<typeof vi.fn>>).error,
+      ).toHaveBeenCalledWith("GPU out of memory"),
+    );
+  });
+
+  it("updates foldLog via WebSocket onProgress with message", async () => {
+    const { waitFor, act } = await import("@testing-library/react");
+    const runningJob = makeJob({ status: "running" });
+    mockFetchJob.mockResolvedValue(runningJob);
+    mockFetchJobs.mockResolvedValue([runningJob]);
+
+    let capturedCallbacks: Record<
+      string,
+      (msg?: { message?: string; current?: number; total?: number }) => void
+    > = {};
+    mockConnectJobProgress.mockImplementation(
+      (_id: string, callbacks: typeof capturedCallbacks) => {
+        capturedCallbacks = callbacks;
+        return () => {};
+      },
+    );
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+    await screen.findByText("Running");
+
+    act(() =>
+      capturedCallbacks.onProgress?.({
+        message: "Fold 1 done",
+        current: 1,
+        total: 5,
+      }),
+    );
+
+    await waitFor(() => {
+      // Message appears in both progress area and fold log
+      const matches = screen.getAllByText("Fold 1 done");
+      expect(matches.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  it("shows progress percentage when total > 0", async () => {
+    const { waitFor, act } = await import("@testing-library/react");
+    const runningJob = makeJob({ status: "running" });
+    mockFetchJob.mockResolvedValue(runningJob);
+    mockFetchJobs.mockResolvedValue([runningJob]);
+
+    let capturedCallbacks: Record<
+      string,
+      (msg?: { current?: number; total?: number; message?: string }) => void
+    > = {};
+    mockConnectJobProgress.mockImplementation(
+      (_id: string, callbacks: typeof capturedCallbacks) => {
+        capturedCallbacks = callbacks;
+        return () => {};
+      },
+    );
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+    await screen.findByText("Running");
+
+    act(() =>
+      capturedCallbacks.onProgress?.({ current: 2, total: 10, message: "" }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("progressbar")).toBeInTheDocument(),
+    );
+  });
+
+  it("shows cancel confirmation dialog when Cancel button is clicked", async () => {
+    const { fireEvent } = await import("@testing-library/react");
+    const runningJob = makeJob({ status: "running" });
+    mockFetchJob.mockResolvedValue(runningJob);
+    mockFetchJobs.mockResolvedValue([runningJob]);
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+    await screen.findByText("Cancel");
+
+    fireEvent.click(screen.getByText("Cancel"));
+
+    expect(await screen.findByText("Cancel job?")).toBeInTheDocument();
+    expect(
+      screen.getByText("Are you sure you want to cancel this running job?"),
+    ).toBeInTheDocument();
+  });
+
+  it("calls cancelJob and onJobDone when Yes Cancel is confirmed", async () => {
+    const { cancelJob } = await import("@/api/jobs");
+    const { toast } = await import("sonner");
+    const { fireEvent, waitFor } = await import("@testing-library/react");
+
+    (cancelJob as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+
+    const runningJob = makeJob({ status: "running" });
+    mockFetchJob.mockResolvedValue(runningJob);
+    mockFetchJobs.mockResolvedValue([runningJob]);
+    const onJobDone = vi.fn();
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" onJobDone={onJobDone} />);
+    await screen.findByText("Cancel");
+
+    fireEvent.click(screen.getByText("Cancel"));
+    await screen.findByText("Cancel job?");
+    fireEvent.click(screen.getByRole("button", { name: "Yes, Cancel" }));
+
+    await waitFor(() => expect(cancelJob).toHaveBeenCalledWith("test-job-1"));
+    await waitFor(() =>
+      expect(
+        (toast as unknown as Record<string, ReturnType<typeof vi.fn>>).info,
+      ).toHaveBeenCalledWith("Job cancelled"),
+    );
+    await waitFor(() => expect(onJobDone).toHaveBeenCalled());
+  });
+
+  it("shows error toast when cancelJob fails", async () => {
+    const { cancelJob } = await import("@/api/jobs");
+    const { toast } = await import("sonner");
+    const { fireEvent, waitFor } = await import("@testing-library/react");
+
+    (cancelJob as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("Network error"),
+    );
+
+    const runningJob = makeJob({ status: "running" });
+    mockFetchJob.mockResolvedValue(runningJob);
+    mockFetchJobs.mockResolvedValue([runningJob]);
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+    await screen.findByText("Cancel");
+
+    fireEvent.click(screen.getByText("Cancel"));
+    await screen.findByText("Cancel job?");
+    fireEvent.click(screen.getByRole("button", { name: "Yes, Cancel" }));
+
+    await waitFor(() =>
+      expect(
+        (toast as unknown as Record<string, ReturnType<typeof vi.fn>>).error,
+      ).toHaveBeenCalledWith("Failed to cancel job"),
+    );
+  });
+
+  it("opens log dialog when View Full Log is clicked for failed job", async () => {
+    const { fireEvent } = await import("@testing-library/react");
+    const failedJob = makeJob({ status: "failed", error: "OOM" });
+    mockFetchJob.mockResolvedValue(failedJob);
+    mockFetchJobs.mockResolvedValue([failedJob]);
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+    await screen.findByText("Failed");
+
+    fireEvent.click(screen.getByText("View Full Log"));
+
+    expect(await screen.findByText("Execution Log")).toBeInTheDocument();
+  });
+
+  it("renders elapsed time when progress has elapsed field", async () => {
+    const { waitFor, act } = await import("@testing-library/react");
+    const runningJob = makeJob({ status: "running" });
+    mockFetchJob.mockResolvedValue(runningJob);
+    mockFetchJobs.mockResolvedValue([runningJob]);
+
+    let capturedCallbacks: Record<
+      string,
+      (msg?: {
+        current?: number;
+        total?: number;
+        message?: string;
+        elapsed?: number;
+      }) => void
+    > = {};
+    mockConnectJobProgress.mockImplementation(
+      (_id: string, callbacks: typeof capturedCallbacks) => {
+        capturedCallbacks = callbacks;
+        return () => {};
+      },
+    );
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+    await screen.findByText("Running");
+
+    act(() =>
+      capturedCallbacks.onProgress?.({
+        current: 3,
+        total: 10,
+        message: "step",
+        elapsed: 12.5,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/Elapsed:/)).toBeInTheDocument(),
+    );
+  });
 });

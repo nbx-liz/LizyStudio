@@ -1086,3 +1086,189 @@ class TestPrepareTuneConfig:
         result = _prepare_tune_config(config)
         # Should not crash; evaluation should get default metric
         assert result["evaluation"]["metrics"] == ["auc"]
+
+    def test_unknown_task_uses_empty_default_metric(self) -> None:
+        """Unknown task type must not inject a default metric."""
+        from lizystudio.services.training import _prepare_tune_config
+
+        config: dict[str, Any] = {
+            "task": "unknown_task",
+            "tuning": {"optuna": {"params": {}, "space": {}}},
+        }
+        result = _prepare_tune_config(config)
+        # No preferred metric → evaluation section should NOT be added
+        assert "evaluation" not in result or result.get("evaluation") == {}
+
+    def test_dict_form_metric_resolves_direction(self) -> None:
+        """Direction resolved from first metric when it is a dict (not str)."""
+        from lizystudio.services.training import _prepare_tune_config
+
+        config: dict[str, Any] = {
+            "task": "binary",
+            "tuning": {
+                "optuna": {"params": {"n_trials": 10}, "space": {}},
+                "evaluation": {"metrics": [{"auc": {}}]},
+            },
+        }
+        result = _prepare_tune_config(config)
+        # {"auc": {}} → first key is "auc" → maximize
+        assert result["tuning"]["optuna"]["params"]["direction"] == "maximize"
+
+    def test_multiclass_task_uses_auc_metric(self) -> None:
+        from lizystudio.services.training import _prepare_tune_config
+
+        config: dict[str, Any] = {
+            "task": "multiclass",
+            "tuning": {"optuna": {"params": {}, "space": {}}},
+        }
+        result = _prepare_tune_config(config)
+        assert result["evaluation"]["metrics"] == ["auc"]
+
+
+# ---------------------------------------------------------------------------
+# _save_tuning_plot
+# ---------------------------------------------------------------------------
+
+
+class TestSaveTuningPlot:
+    """Unit tests for _save_tuning_plot."""
+
+    def test_saves_plot_json_to_disk(self, tmp_path: Path) -> None:
+        """Successful call writes plotly_json to tuning_plot.json."""
+        from unittest.mock import MagicMock
+
+        from lizystudio.backends.types import PlotData
+        from lizystudio.services.training import _save_tuning_plot
+
+        backend = MagicMock()
+        model = MagicMock()
+        backend.plot.return_value = PlotData(plotly_json='{"data":[]}')
+
+        job_dir = tmp_path / "job_abc"
+        job_dir.mkdir()
+        _save_tuning_plot(backend, model, job_dir)
+
+        plot_path = job_dir / "tuning_plot.json"
+        assert plot_path.exists()
+        assert plot_path.read_text(encoding="utf-8") == '{"data":[]}'
+        backend.plot.assert_called_once_with(model, "tuning")
+
+    def test_logs_warning_on_backend_error(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """When backend.plot raises, a warning is logged and no exception propagates."""
+        import logging
+        from unittest.mock import MagicMock
+
+        from lizystudio.services.training import _save_tuning_plot
+
+        backend = MagicMock()
+        model = MagicMock()
+        backend.plot.side_effect = RuntimeError("No study data")
+
+        job_dir = tmp_path / "job_err"
+        job_dir.mkdir()
+
+        # Must NOT raise — _save_tuning_plot catches all exceptions (BLE001)
+        with caplog.at_level(logging.WARNING, logger="lizystudio.services.training"):
+            _save_tuning_plot(backend, model, job_dir)
+
+        # Warning should have been emitted
+        assert any("Failed to save tuning plot" in r.message for r in caplog.records)
+        # File must not have been written
+        assert not (job_dir / "tuning_plot.json").exists()
+
+    def test_suppresses_backend_exception(self, tmp_path: Path) -> None:
+        """_save_tuning_plot must suppress exceptions (BLE001 catch-all)."""
+        from unittest.mock import MagicMock
+
+        from lizystudio.services.training import _save_tuning_plot
+
+        backend = MagicMock()
+        model = MagicMock()
+        backend.plot.side_effect = ValueError("oops")
+
+        job_dir = tmp_path / "job_suppress"
+        job_dir.mkdir()
+
+        # No exception should propagate
+        _save_tuning_plot(backend, model, job_dir)
+
+        # File should not have been written
+        assert not (job_dir / "tuning_plot.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# _prepare_autofit_config
+# ---------------------------------------------------------------------------
+
+
+class TestPrepareAutofitConfig:
+    """Unit tests for _prepare_autofit_config."""
+
+    def test_merges_best_params_into_model_params(self) -> None:
+        from lizystudio.services.training import _prepare_autofit_config
+
+        config: dict[str, Any] = {
+            "task": "binary",
+            "model": {"name": "lgbm", "params": {"n_estimators": 1000}},
+        }
+        best_params = {"learning_rate": 0.05, "num_leaves": 64}
+        result = _prepare_autofit_config(config, best_params)
+
+        assert result["model"]["params"]["n_estimators"] == 1000
+        assert result["model"]["params"]["learning_rate"] == 0.05
+        assert result["model"]["params"]["num_leaves"] == 64
+
+    def test_strips_tuning_section(self) -> None:
+        from lizystudio.services.training import _prepare_autofit_config
+
+        config: dict[str, Any] = {
+            "task": "binary",
+            "model": {"params": {}},
+            "tuning": {"optuna": {"params": {"n_trials": 50}}},
+        }
+        result = _prepare_autofit_config(config, {})
+        assert "tuning" not in result
+
+    def test_does_not_mutate_original_config(self) -> None:
+        from lizystudio.services.training import _prepare_autofit_config
+
+        config: dict[str, Any] = {
+            "task": "binary",
+            "model": {"params": {"n_estimators": 100}},
+        }
+        original_params = dict(config["model"]["params"])  # type: ignore[index]
+        _prepare_autofit_config(config, {"learning_rate": 0.01})
+
+        assert config["model"]["params"] == original_params  # type: ignore[index]
+
+    def test_empty_best_params(self) -> None:
+        from lizystudio.services.training import _prepare_autofit_config
+
+        config: dict[str, Any] = {
+            "task": "binary",
+            "model": {"params": {"n_estimators": 500}},
+        }
+        result = _prepare_autofit_config(config, {})
+        assert result["model"]["params"] == {"n_estimators": 500}
+
+    def test_no_model_section_in_config(self) -> None:
+        """_prepare_autofit_config handles config with no model key."""
+        from lizystudio.services.training import _prepare_autofit_config
+
+        config: dict[str, Any] = {"task": "binary"}
+        result = _prepare_autofit_config(config, {"lr": 0.1})
+        assert result["model"]["params"] == {"lr": 0.1}
+
+    def test_best_params_override_existing(self) -> None:
+        """best_params must overwrite existing model.params values."""
+        from lizystudio.services.training import _prepare_autofit_config
+
+        config: dict[str, Any] = {
+            "task": "binary",
+            "model": {"params": {"learning_rate": 0.1, "n_estimators": 100}},
+        }
+        result = _prepare_autofit_config(config, {"learning_rate": 0.001})
+        assert result["model"]["params"]["learning_rate"] == 0.001
+        assert result["model"]["params"]["n_estimators"] == 100

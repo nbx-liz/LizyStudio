@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { pivotMetrics } from "@/lib/metrics";
+import { formatElapsed } from "@/lib/utils";
 import { FoldDetailsSection } from "./FoldDetailsSection";
 import { FoldProgressList } from "./FoldProgressList";
 import { PlotSection } from "./PlotSection";
@@ -573,21 +574,22 @@ function CompletedView({
         </div>
       </div>
 
-      {/* KPI Summary Cards (IS + OOS + Std) */}
-      {metrics && (
-        <MetricCards
-          metrics={metrics}
-          hasFolds={hasFolds}
-          annotateMetric={annotateMetric}
-        />
-      )}
-
+      {/* Tune results first: Optimization History → Best Params → Apply to Fit */}
       {tuneResult && (
         <TuneTrialsSection
           tuneResult={tuneResult}
           tuningPlot={tuningPlot}
           job={job}
           onApplyToFit={onApplyToFit}
+        />
+      )}
+
+      {/* KPI Summary Cards (IS + OOS + Std) */}
+      {metrics && (
+        <MetricCards
+          metrics={metrics}
+          hasFolds={hasFolds}
+          annotateMetric={annotateMetric}
         />
       )}
 
@@ -659,11 +661,4 @@ function LogDialog({
       </DialogContent>
     </Dialog>
   );
-}
-
-function formatElapsed(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return "--:--";
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }

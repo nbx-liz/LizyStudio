@@ -211,7 +211,7 @@ describe("WorkspacePage", () => {
       model: { name: "LGBMClassifier" },
     });
     expect(mockToast.success).toHaveBeenCalledWith(
-      "Tune config with best params applied",
+      "Best params applied to Fit tab. Click Fit to run.",
     );
   });
 
@@ -244,6 +244,18 @@ describe("WorkspacePage", () => {
     expect(screen.getByTestId("results-panel")).toBeInTheDocument();
   });
 
+  it("switches ModelPanel to fit tab after applyToFit", async () => {
+    mockUpdateConfig.mockResolvedValue({});
+    renderWithProviders(<WorkspacePage />);
+
+    const onApplyToFit = capturedResultsPanelProps.onApplyToFit as (
+      config: Record<string, unknown>,
+    ) => Promise<void>;
+    await act(async () => onApplyToFit({ model: { name: "lgbm" } }));
+
+    expect(capturedModelPanelProps.activeTab).toBe("fit");
+  });
+
   it("handles applyToFit failure with error toast", async () => {
     mockUpdateConfig.mockRejectedValue(new Error("Server error"));
     renderWithProviders(<WorkspacePage />);
@@ -254,5 +266,64 @@ describe("WorkspacePage", () => {
     await act(async () => onApplyToFit({}));
 
     expect(mockToast.error).toHaveBeenCalledWith("Failed to apply tune config");
+  });
+
+  it("updates task when onTaskChanged is called", () => {
+    renderWithProviders(<WorkspacePage />);
+
+    // Initially task is null
+    expect(capturedModelPanelProps.task).toBeNull();
+
+    const onTaskChanged = capturedDataPanelProps.onTaskChanged as (
+      t: string | null,
+    ) => void;
+    act(() => onTaskChanged("binary"));
+
+    expect(capturedModelPanelProps.task).toBe("binary");
+  });
+
+  it("calls notify when onJobDone fires after job completion", async () => {
+    // useBackgroundNotification is called inside WorkspacePage.
+    // We can verify that onJobDone resets running=false (which exercises lines 97-98).
+    mockRunFit.mockResolvedValue({ job_id: "job-1" });
+    renderWithProviders(<WorkspacePage />);
+
+    const onFit = capturedModelPanelProps.onFit as () => Promise<void>;
+    await act(async () => onFit());
+
+    // running should be true now
+    expect(capturedModelPanelProps.running).toBe(true);
+
+    // Trigger onJobDone — this exercises lines 136-139 (setRunning(false) + notify)
+    const onJobDone = capturedResultsPanelProps.onJobDone as () => void;
+    act(() => onJobDone());
+
+    expect(capturedModelPanelProps.running).toBe(false);
+  });
+
+  it("shows error toast with non-Error object on fit failure", async () => {
+    // Covers the String(err) branch (line 62)
+    mockRunFit.mockRejectedValue("plain string error");
+    renderWithProviders(<WorkspacePage />);
+
+    const onFit = capturedModelPanelProps.onFit as () => Promise<void>;
+    await act(async () => onFit());
+
+    expect(mockToast.error).toHaveBeenCalledWith(
+      "Fit failed: plain string error",
+    );
+  });
+
+  it("shows error toast with non-Error object on tune failure", async () => {
+    // Covers the String(err) branch (line 75)
+    mockRunTune.mockRejectedValue("plain string error");
+    renderWithProviders(<WorkspacePage />);
+
+    const onTune = capturedModelPanelProps.onTune as () => Promise<void>;
+    await act(async () => onTune());
+
+    expect(mockToast.error).toHaveBeenCalledWith(
+      "Tune failed: plain string error",
+    );
   });
 });

@@ -150,6 +150,36 @@ describe("TuneTrialsSection", () => {
     });
   });
 
+  it("strips tuning section from config when applying to fit", () => {
+    const onApplyToFit = vi.fn();
+    const job = makeJob({
+      config: {
+        model: { name: "lgbm", params: { learning_rate: 0.1 } },
+        tuning: {
+          optuna: { space: { learning_rate: { low: 0.01, high: 0.3 } } },
+        },
+      },
+    });
+    const tuneResult = makeTuneResult({
+      best_params: { learning_rate: 0.05 },
+    });
+
+    render(
+      <TuneTrialsSection
+        tuneResult={tuneResult}
+        tuningPlot={undefined}
+        job={job}
+        onApplyToFit={onApplyToFit}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply to Fit" }));
+
+    const calledWith = onApplyToFit.mock.calls[0][0];
+    expect(calledWith).not.toHaveProperty("tuning");
+    expect(calledWith.model.params).toEqual({ learning_rate: 0.05 });
+  });
+
   it("renders optimization history plot when tuningPlot is provided", () => {
     const tuningPlot: PlotResponse = { plotly_json: '{"data":[]}' };
     render(

@@ -48,6 +48,8 @@ interface ModelPanelProps {
   onFit: () => void;
   onTune: () => void;
   running: boolean;
+  activeTab?: "fit" | "tune";
+  onActiveTabChange?: (tab: "fit" | "tune") => void;
 }
 
 export function ModelPanel({
@@ -56,8 +58,15 @@ export function ModelPanel({
   onFit,
   onTune,
   running,
+  activeTab: controlledTab,
+  onActiveTabChange,
 }: ModelPanelProps) {
-  const [activeTab, setActiveTab] = useState<"fit" | "tune">("fit");
+  const [internalTab, setInternalTab] = useState<"fit" | "tune">("fit");
+  const activeTab = controlledTab ?? internalTab;
+  const setActiveTab = (tab: "fit" | "tune") => {
+    setInternalTab(tab);
+    onActiveTabChange?.(tab);
+  };
   const [errors, setErrors] = useState<ConfigError[]>([]);
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);

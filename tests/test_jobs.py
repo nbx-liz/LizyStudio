@@ -108,3 +108,315 @@ def test_delete(job_store: JobStore, sample_data_ref: DataRef) -> None:
     assert job_store.delete(job.job_id) is True
     assert job_store.get(job.job_id) is None
     assert job_store.delete(job.job_id) is False
+
+
+# ---------------------------------------------------------------------------
+# _job_dir — path traversal guard
+# ---------------------------------------------------------------------------
+
+
+def test_job_dir_traversal_guard_raises(job_store: JobStore) -> None:
+    """_job_dir must raise ValueError when job_id escapes jobs_dir."""
+    with pytest.raises(ValueError, match="escapes jobs_dir"):
+        job_store._job_dir("../escape")
+
+
+# ---------------------------------------------------------------------------
+# list — empty jobs_dir branch
+# ---------------------------------------------------------------------------
+
+
+def test_list_returns_empty_when_jobs_dir_missing(tmp_path: Path) -> None:
+    """list() must return [] when the jobs directory does not exist yet."""
+    jobs_dir = tmp_path / "missing_dir"
+    # Do NOT create the directory — simulate fresh store with no jobs_dir
+    store = JobStore.__new__(JobStore)
+    store.jobs_dir = jobs_dir
+    store._cancel_requested = set()
+    import threading
+
+    store._cancel_lock = threading.Lock()
+    store._active_job_id = None
+    store._active_lock = threading.Lock()
+
+    result = store.list()
+    assert result == []
+
+
+# ---------------------------------------------------------------------------
+# load_job_model — no model_path raises ValueError
+# ---------------------------------------------------------------------------
+
+
+def test_load_job_model_raises_when_no_model_path(
+    job_store: JobStore, sample_data_ref: DataRef
+) -> None:
+    """load_job_model must raise ValueError when model_path is None."""
+    from unittest.mock import MagicMock
+
+    from lizystudio.services.jobs import load_job_model
+
+    job = job_store.create(
+        backend_name="lizyml",
+        config={},
+        data_ref=sample_data_ref,
+        job_type="fit",
+    )
+    assert job.model_path is None
+    backend = MagicMock()
+
+    with pytest.raises(ValueError, match="no saved model"):
+        load_job_model(job, backend)
+
+
+# ---------------------------------------------------------------------------
+# _load_tuning_plot_from_file
+# ---------------------------------------------------------------------------
+
+
+def test_load_tuning_plot_from_file_returns_none_when_missing(
+    job_store: JobStore, sample_data_ref: DataRef
+) -> None:
+    """Returns None when tuning_plot.json does not exist."""
+    from lizystudio.services.jobs import _load_tuning_plot_from_file
+
+    job = job_store.create(
+        backend_name="lizyml",
+        config={},
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )
+    # Set model_path so _get_jobs_dir can derive jobs_dir
+    model_dir = job_store.jobs_dir / job.job_id / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    job.model_path = str(model_dir)
+    result = _load_tuning_plot_from_file(job)
+    assert result is None
+
+
+def test_load_tuning_plot_from_file_returns_none_when_no_model_path(
+    job_store: JobStore, sample_data_ref: DataRef
+) -> None:
+    """Returns None when job has no model_path."""
+    from lizystudio.services.jobs import _load_tuning_plot_from_file
+
+    job = job_store.create(
+        backend_name="lizyml",
+        config={},
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )
+    result = _load_tuning_plot_from_file(job)
+    assert result is None
+
+
+def test_load_tuning_plot_from_file_returns_plot_data(
+    job_store: JobStore, sample_data_ref: DataRef
+) -> None:
+    """Returns PlotData when tuning_plot.json exists."""
+    from lizystudio.services.jobs import _load_tuning_plot_from_file
+
+    job = job_store.create(
+        backend_name="lizyml",
+        config={},
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )
+    model_dir = job_store.jobs_dir / job.job_id / "model"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    job.model_path = str(model_dir)
+
+    plot_json = '{"data":[],"layout":{}}'
+    plot_path = job_store.jobs_dir / job.job_id / "tuning_plot.json"
+    plot_path.write_text(plot_json, encoding="utf-8")
+
+    result = _load_tuning_plot_from_file(job)
+    assert result is not None
+    assert result.plotly_json == plot_json
+
+
+# ---------------------------------------------------------------------------
+# _get_jobs_dir
+# ---------------------------------------------------------------------------
+
+
+def test_get_jobs_dir_with_model_path(
+    job_store: JobStore, sample_data_ref: DataRef
+) -> None:
+    """_get_jobs_dir returns parent.parent of model_path."""
+    from pathlib import Path
+
+    from lizystudio.services.jobs import _get_jobs_dir
+
+    job = job_store.create(
+        backend_name="lizyml",
+        config={},
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )
+    job.model_path = "/tmp/jobs/job_abc123/model"
+    result = _get_jobs_dir(job)
+    assert result == Path("/tmp/jobs")
+
+
+def test_get_jobs_dir_without_model_path(
+    job_store: JobStore, sample_data_ref: DataRef
+) -> None:
+    """_get_jobs_dir returns None when model_path is None."""
+    from lizystudio.services.jobs import _get_jobs_dir
+
+    job = job_store.create(
+        backend_name="lizyml",
+        config={},
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )
+    assert job.model_path is None
+    result = _get_jobs_dir(job)
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# get_job_plot — tuning fallback path
+# ---------------------------------------------------------------------------
+
+
+def test_get_job_plot_tuning_falls_back_to_file(
+    job_store: JobStore, sample_data_ref: DataRef
+) -> None:
+    """get_job_plot falls back to saved file when backend raises for tuning."""
+    from unittest.mock import MagicMock
+
+    from lizystudio.backends.types import PlotData
+    from lizystudio.services.jobs import get_job_plot
+
+    job = job_store.create(
+        backend_name="lizyml",
+        config={},
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )
+    job.model_path = str(job_store.jobs_dir / job.job_id / "model")
+
+    # Write tuning plot file
+    plot_json = '{"data":[],"layout":{}}'
+    plot_path = job_store.jobs_dir / job.job_id / "tuning_plot.json"
+    plot_path.parent.mkdir(parents=True, exist_ok=True)
+    plot_path.write_text(plot_json, encoding="utf-8")
+
+    backend = MagicMock()
+    backend.load_model.return_value = MagicMock()
+    # Backend raises when trying to get tuning plot from exported model
+    backend.plot.side_effect = RuntimeError("No Optuna study data")
+
+    result = get_job_plot(job, backend, "tuning")
+    assert isinstance(result, PlotData)
+    assert result.plotly_json == plot_json
+
+
+def test_get_job_plot_tuning_reraises_when_no_file(
+    job_store: JobStore, sample_data_ref: DataRef
+) -> None:
+    """get_job_plot re-raises when backend raises and no fallback file exists."""
+    from unittest.mock import MagicMock
+
+    from lizystudio.services.jobs import get_job_plot
+
+    job = job_store.create(
+        backend_name="lizyml",
+        config={},
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )
+    job.model_path = str(job_store.jobs_dir / job.job_id / "model")
+
+    backend = MagicMock()
+    backend.load_model.return_value = MagicMock()
+    backend.plot.side_effect = RuntimeError("No Optuna study data")
+
+    with pytest.raises(RuntimeError, match="No Optuna study data"):
+        get_job_plot(job, backend, "tuning")
+
+
+def test_get_job_plot_non_tuning_delegates_to_backend(
+    job_store: JobStore, sample_data_ref: DataRef
+) -> None:
+    """get_job_plot delegates directly to backend for non-tuning plot types."""
+    from unittest.mock import MagicMock
+
+    from lizystudio.backends.types import PlotData
+    from lizystudio.services.jobs import get_job_plot
+
+    job = job_store.create(
+        backend_name="lizyml",
+        config={},
+        data_ref=sample_data_ref,
+        job_type="fit",
+    )
+    job.model_path = str(job_store.jobs_dir / job.job_id / "model")
+
+    expected = PlotData(plotly_json='{"data":[]}')
+    backend = MagicMock()
+    backend.load_model.return_value = MagicMock()
+    backend.plot.return_value = expected
+
+    result = get_job_plot(job, backend, "learning-curve")
+    assert result is expected
+
+
+# ---------------------------------------------------------------------------
+# get_available_plots — tuning file fallback
+# ---------------------------------------------------------------------------
+
+
+def test_get_available_plots_adds_tuning_from_file(
+    job_store: JobStore, sample_data_ref: DataRef
+) -> None:
+    """get_available_plots appends 'tuning' when file exists but backend lacks it."""
+    from unittest.mock import MagicMock
+
+    from lizystudio.services.jobs import get_available_plots
+
+    job = job_store.create(
+        backend_name="lizyml",
+        config={},
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )
+    job.model_path = str(job_store.jobs_dir / job.job_id / "model")
+
+    # Write tuning_plot.json
+    plot_path = job_store.jobs_dir / job.job_id / "tuning_plot.json"
+    plot_path.parent.mkdir(parents=True, exist_ok=True)
+    plot_path.write_text("{}", encoding="utf-8")
+
+    backend = MagicMock()
+    backend.load_model.return_value = MagicMock()
+    backend.available_plots.return_value = ["learning-curve", "importance"]
+
+    result = get_available_plots(job, backend)
+    assert "tuning" in result
+
+
+def test_get_available_plots_no_tuning_when_file_absent(
+    job_store: JobStore, sample_data_ref: DataRef
+) -> None:
+    """get_available_plots does NOT add 'tuning' when file is absent."""
+    from unittest.mock import MagicMock
+
+    from lizystudio.services.jobs import get_available_plots
+
+    job = job_store.create(
+        backend_name="lizyml",
+        config={},
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )
+    job.model_path = str(job_store.jobs_dir / job.job_id / "model")
+
+    backend = MagicMock()
+    backend.load_model.return_value = MagicMock()
+    backend.available_plots.return_value = ["learning-curve"]
+
+    result = get_available_plots(job, backend)
+    assert "tuning" not in result

@@ -143,9 +143,13 @@ def test_run_tune_success(
     sample_df: pd.DataFrame,
     mock_backend: MagicMock,
 ) -> None:
+    config = {
+        "task": "binary",
+        "model": {"name": "lgbm", "params": {"n_estimators": 100}},
+    }
     job = job_store.create(
         backend_name="lizyml",
-        config={"task": "binary"},
+        config=config,
         data_ref=sample_data_ref,
         job_type="tune",
     )
@@ -153,7 +157,7 @@ def test_run_tune_success(
         job=job,
         job_store=job_store,
         backend=mock_backend,
-        config={"task": "binary"},
+        config=config,
         dataframe=sample_df,
     )
     assert result.status == "completed"
@@ -164,10 +168,14 @@ def test_run_tune_success(
 
     # Verify create_model called twice (tune + auto-fit)
     assert mock_backend.create_model.call_count == 2
-    # Verify fit was called with best_params
+    # Auto-fit config should merge best_params into original model.params
+    autofit_config = mock_backend.create_model.call_args_list[1][0][0]
+    assert autofit_config["model"]["params"] == {"n_estimators": 100, "lr": 0.01}
+    assert "tuning" not in autofit_config
+    # fit() called without params kwarg (params baked into config)
     mock_backend.fit.assert_called_once()
     call_kwargs = mock_backend.fit.call_args[1]
-    assert call_kwargs["params"] == {"lr": 0.01}
+    assert "params" not in call_kwargs
 
 
 def test_run_tune_failure(

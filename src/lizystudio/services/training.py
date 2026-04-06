@@ -7,12 +7,14 @@ workspace state updates (Phase 29 — Router must NOT own threads).
 
 from __future__ import annotations
 
+import copy
 import io
 import logging
 import threading
 import traceback
 from collections.abc import Callable
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from lizystudio.backends.base import BackendAdapter, ProgressCallback
@@ -153,6 +155,47 @@ def run_fit(
     )
 
 
+def _save_tuning_plot(
+    backend: BackendAdapter,
+    model: Any,
+    job_dir: Path,
+) -> None:
+    """Persist the tuning plot JSON so it survives model export (H-0002 B).
+
+    The exported model (fit with best_params) loses Optuna study data,
+    so we capture the plot from the original tune model.
+    """
+    try:
+        plot_data = backend.plot(model, "tuning")
+        path = job_dir / "tuning_plot.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(plot_data.plotly_json, encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        _logger.warning(
+            "Failed to save tuning plot for %s", job_dir.name, exc_info=True
+        )
+
+
+def _prepare_autofit_config(
+    config: dict[str, Any], best_params: dict[str, Any]
+) -> dict[str, Any]:
+    """Build a fit-ready config from the original config + best_params.
+
+    Uses the original config as base (same as Apply to Fit) and merges
+    best_params into model.params.  The tuning section is stripped since
+    it is not needed for a plain fit.
+    """
+
+    result = copy.deepcopy(config)
+    model = dict(result.get("model", {}))
+    existing_params = dict(model.get("params", {}))
+    model["params"] = {**existing_params, **best_params}
+    result["model"] = model
+    # Remove tuning section — not needed for fit
+    result.pop("tuning", None)
+    return result
+
+
 def _prepare_tune_config(config: dict[str, Any]) -> dict[str, Any]:
     """Merge tuning-specific overrides into the top-level config for LizyML.
 
@@ -163,7 +206,6 @@ def _prepare_tune_config(config: dict[str, Any]) -> dict[str, Any]:
 
     This mirrors LizyML-Widget's ``prepare_tune_overrides``.
     """
-    import copy
 
     result = copy.deepcopy(config)
     tune_section = result.get("tuning", {})
@@ -258,8 +300,17 @@ def run_tune(
     def execute(cb: ProgressCallback) -> tuple[FitSummary, TuningSummary | None, str]:
         model = backend.create_model(tune_config, dataframe)
         tune_result: TuningSummary = backend.tune(model, on_progress=cb)
-        model2 = backend.create_model(tune_config, dataframe)
-        fit_result: FitSummary = backend.fit(model2, params=tune_result.best_params)
+
+        # Capture tuning plot from the tune model before creating model2.
+        # The exported model2 (fit with best params) loses tuning history.
+        _save_tuning_plot(backend, model, job_store.jobs_dir / job.job_id)
+
+        # Build fit config from the ORIGINAL config (not tune_config) with
+        # best_params merged into model.params.  This ensures the auto-fit
+        # model uses the same parameter base as "Apply to Fit → Fit".
+        fit_config = _prepare_autofit_config(config, tune_result.best_params)
+        model2 = backend.create_model(fit_config, dataframe)
+        fit_result: FitSummary = backend.fit(model2, on_progress=cb)
         model_dir = str(job_store.jobs_dir / job.job_id / "model")
         backend.export_model(model2, model_dir)
         return fit_result, tune_result, model_dir
@@ -313,8 +364,6 @@ def _run_subprocess_job(
     if ws.data_ref is None or not ws.data_ref.path:
         job.status = "failed"
         job.error = "No data loaded — cannot run subprocess job"
-        from datetime import datetime, timezone
-
         job.completed_at = datetime.now(timezone.utc).isoformat()
         job_store.update(job)
         if broadcaster is not None:
