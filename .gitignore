@@ -9,6 +9,9 @@ build/
 # Frontend
 frontend/node_modules/
 frontend/dist/
+*.tsbuildinfo
+.eslintcache
+.lizystudio/
 
 # Built frontend assets served by backend
 src/lizystudio/static/
@@ -21,16 +24,33 @@ src/lizystudio/static/
 .DS_Store
 Thumbs.db
 
+# Data
+*.csv
+*.png
+
 # Environment
 .env
 .env.local
 
-# Testing
+# Playwright MCP
+.playwright-mcp/
+
+# Testing & Audit
+.audit/
+audit-*.png
+audit-*.md
 .coverage
 htmlcov/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Analysis data files (keep README.md and schema.json only)
+data/**/*.csv
+data/**/*.parquet
+data/**/*.pkl
+data/**/*.feather
+data/**/*.xlsx
 
 # AI & Automation (Abstra, Cursor, etc)
 .abstra/

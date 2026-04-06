@@ -1,0 +1,359 @@
+/**
+ * Tests for CvSection pure functions: resetCvState, buildSplitConfig, applyCvDataFields.
+ */
+import { describe, expect, it } from "vitest";
+import {
+  applyCvDataFields,
+  buildSplitConfig,
+  type CvState,
+  INITIAL_CV_STATE,
+  resetCvState,
+} from "./CvSection";
+import { CV_STRATEGY_FIELDS } from "./constants";
+
+// ---------------------------------------------------------------------------
+// resetCvState
+// ---------------------------------------------------------------------------
+describe("resetCvState", () => {
+  it("returns INITIAL_CV_STATE with overridden strategy", () => {
+    const result = resetCvState("group_kfold");
+    expect(result.strategy).toBe("group_kfold");
+    expect(result.folds).toBe(INITIAL_CV_STATE.folds);
+    expect(result.randomState).toBe(INITIAL_CV_STATE.randomState);
+    expect(result.shuffle).toBe(INITIAL_CV_STATE.shuffle);
+    expect(result.groupCol).toBeNull();
+    expect(result.timeCol).toBeNull();
+    expect(result.gap).toBe(INITIAL_CV_STATE.gap);
+    expect(result.purgeGap).toBe(INITIAL_CV_STATE.purgeGap);
+    expect(result.embargo).toBe(INITIAL_CV_STATE.embargo);
+    expect(result.trainSizeMax).toBeUndefined();
+    expect(result.testSizeMax).toBeUndefined();
+    expect(result.minTrainRows).toBeUndefined();
+    expect(result.minValidRows).toBeUndefined();
+  });
+
+  it("does not mutate INITIAL_CV_STATE", () => {
+    const before = { ...INITIAL_CV_STATE };
+    resetCvState("time_series");
+    expect(INITIAL_CV_STATE).toEqual(before);
+  });
+
+  it("works for every known strategy", () => {
+    for (const strategy of Object.keys(CV_STRATEGY_FIELDS)) {
+      const state = resetCvState(strategy);
+      expect(state.strategy).toBe(strategy);
+      expect(state.folds).toBe(5);
+    }
+  });
+
+  it("handles unknown strategy gracefully", () => {
+    const state = resetCvState("unknown_strategy");
+    expect(state.strategy).toBe("unknown_strategy");
+    expect(state.folds).toBe(5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildSplitConfig
+// ---------------------------------------------------------------------------
+describe("buildSplitConfig", () => {
+  it("always includes method and n_splits", () => {
+    const cv: CvState = { ...INITIAL_CV_STATE, strategy: "kfold", folds: 10 };
+    const result = buildSplitConfig(cv);
+    expect(result.method).toBe("kfold");
+    expect(result.n_splits).toBe(10);
+  });
+
+  describe("kfold family", () => {
+    it("kfold includes folds, random_state, shuffle", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "kfold",
+        folds: 5,
+        randomState: 42,
+        shuffle: true,
+      };
+      const result = buildSplitConfig(cv);
+      expect(result).toEqual({
+        method: "kfold",
+        n_splits: 5,
+        random_state: 42,
+        shuffle: true,
+      });
+    });
+
+    it("stratified_kfold includes folds and random_state but not shuffle", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "stratified_kfold",
+        folds: 3,
+        randomState: 0,
+        shuffle: true,
+      };
+      const result = buildSplitConfig(cv);
+      expect(result).toEqual({
+        method: "stratified_kfold",
+        n_splits: 3,
+        random_state: 0,
+      });
+      expect(result).not.toHaveProperty("shuffle");
+    });
+  });
+
+  describe("group family", () => {
+    it("group_kfold includes only folds (no group_col — that goes to data)", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "group_kfold",
+        folds: 4,
+        groupCol: "user_id",
+      };
+      const result = buildSplitConfig(cv);
+      expect(result).toEqual({
+        method: "group_kfold",
+        n_splits: 4,
+      });
+      // group_col is handled by applyCvDataFields, not buildSplitConfig
+      expect(result).not.toHaveProperty("group_col");
+    });
+
+    it("stratified_group_kfold includes folds and random_state", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "stratified_group_kfold",
+        folds: 5,
+        randomState: 123,
+        groupCol: "org",
+      };
+      const result = buildSplitConfig(cv);
+      expect(result.method).toBe("stratified_group_kfold");
+      expect(result.random_state).toBe(123);
+      expect(result).not.toHaveProperty("group_col");
+    });
+  });
+
+  describe("time series family", () => {
+    it("time_series includes gap, train_size_max, test_size_max", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "time_series",
+        folds: 5,
+        timeCol: "date",
+        gap: 2,
+        trainSizeMax: 1000,
+        testSizeMax: 200,
+      };
+      const result = buildSplitConfig(cv);
+      expect(result).toEqual({
+        method: "time_series",
+        n_splits: 5,
+        gap: 2,
+        train_size_max: 1000,
+        test_size_max: 200,
+      });
+      expect(result).not.toHaveProperty("time_col");
+    });
+
+    it("purged_time_series includes purge_gap, embargo", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "purged_time_series",
+        folds: 3,
+        timeCol: "ts",
+        purgeGap: 5,
+        embargo: 10,
+        trainSizeMax: 500,
+        testSizeMax: 100,
+      };
+      const result = buildSplitConfig(cv);
+      expect(result.method).toBe("purged_time_series");
+      expect(result.purge_gap).toBe(5);
+      expect(result.embargo).toBe(10);
+      expect(result.train_size_max).toBe(500);
+      expect(result.test_size_max).toBe(100);
+      expect(result).not.toHaveProperty("gap");
+    });
+
+    it("group_time_series includes gap, train/test size_max", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "group_time_series",
+        folds: 4,
+        timeCol: "date",
+        groupCol: "region",
+        gap: 1,
+        trainSizeMax: 800,
+        testSizeMax: undefined,
+      };
+      const result = buildSplitConfig(cv);
+      expect(result.method).toBe("group_time_series");
+      expect(result.gap).toBe(1);
+      expect(result.train_size_max).toBe(800);
+      expect(result).not.toHaveProperty("test_size_max");
+    });
+  });
+
+  describe("blocked_group_kfold", () => {
+    it("includes min_train_rows and min_valid_rows", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "blocked_group_kfold",
+        folds: 5,
+        timeCol: "date",
+        groupCol: "block",
+        minTrainRows: 100,
+        minValidRows: 50,
+      };
+      const result = buildSplitConfig(cv);
+      expect(result).toEqual({
+        method: "blocked_group_kfold",
+        n_splits: 5,
+        min_train_rows: 100,
+        min_valid_rows: 50,
+      });
+    });
+
+    it("omits undefined optional fields", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "blocked_group_kfold",
+        folds: 3,
+        minTrainRows: undefined,
+        minValidRows: undefined,
+      };
+      const result = buildSplitConfig(cv);
+      expect(result).toEqual({
+        method: "blocked_group_kfold",
+        n_splits: 3,
+      });
+    });
+  });
+
+  describe("unknown strategy", () => {
+    it("falls back to folds-only output", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "custom_splitter",
+        folds: 7,
+      };
+      const result = buildSplitConfig(cv);
+      expect(result).toEqual({
+        method: "custom_splitter",
+        n_splits: 7,
+      });
+    });
+  });
+
+  it("omits random_state when undefined", () => {
+    const cv: CvState = {
+      ...INITIAL_CV_STATE,
+      strategy: "kfold",
+      randomState: undefined,
+    };
+    const result = buildSplitConfig(cv);
+    expect(result).not.toHaveProperty("random_state");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// applyCvDataFields
+// ---------------------------------------------------------------------------
+describe("applyCvDataFields", () => {
+  it("injects group_col for group_kfold", () => {
+    const data = { path: "/data.csv", target: "y" };
+    const cv: CvState = {
+      ...INITIAL_CV_STATE,
+      strategy: "group_kfold",
+      groupCol: "user_id",
+    };
+    const result = applyCvDataFields(data, cv);
+    expect(result.group_col).toBe("user_id");
+    expect(result.path).toBe("/data.csv");
+  });
+
+  it("injects time_col for time_series", () => {
+    const data = { path: "/data.csv" };
+    const cv: CvState = {
+      ...INITIAL_CV_STATE,
+      strategy: "time_series",
+      timeCol: "date",
+    };
+    const result = applyCvDataFields(data, cv);
+    expect(result.time_col).toBe("date");
+    expect(result).not.toHaveProperty("group_col");
+  });
+
+  it("injects both group_col and time_col for group_time_series", () => {
+    const data = {};
+    const cv: CvState = {
+      ...INITIAL_CV_STATE,
+      strategy: "group_time_series",
+      groupCol: "region",
+      timeCol: "date",
+    };
+    const result = applyCvDataFields(data, cv);
+    expect(result.group_col).toBe("region");
+    expect(result.time_col).toBe("date");
+  });
+
+  it("does not inject group_col when null", () => {
+    const data = { path: "/data.csv" };
+    const cv: CvState = {
+      ...INITIAL_CV_STATE,
+      strategy: "group_kfold",
+      groupCol: null,
+    };
+    const result = applyCvDataFields(data, cv);
+    expect(result).not.toHaveProperty("group_col");
+  });
+
+  it("does not inject time_col when null", () => {
+    const data = {};
+    const cv: CvState = {
+      ...INITIAL_CV_STATE,
+      strategy: "time_series",
+      timeCol: null,
+    };
+    const result = applyCvDataFields(data, cv);
+    expect(result).not.toHaveProperty("time_col");
+  });
+
+  it("does not inject fields for strategies that do not use them", () => {
+    const data = { path: "/data.csv" };
+    const cv: CvState = {
+      ...INITIAL_CV_STATE,
+      strategy: "stratified_kfold",
+      groupCol: "should_be_ignored",
+      timeCol: "also_ignored",
+    };
+    const result = applyCvDataFields(data, cv);
+    expect(result).not.toHaveProperty("group_col");
+    expect(result).not.toHaveProperty("time_col");
+  });
+
+  it("does not mutate the original data object", () => {
+    const data = { path: "/data.csv" };
+    const cv: CvState = {
+      ...INITIAL_CV_STATE,
+      strategy: "group_kfold",
+      groupCol: "user_id",
+    };
+    const result = applyCvDataFields(data, cv);
+    expect(data).not.toHaveProperty("group_col");
+    expect(result.group_col).toBe("user_id");
+  });
+
+  it("handles unknown strategy without injecting fields", () => {
+    const data = { path: "/data.csv" };
+    const cv: CvState = {
+      ...INITIAL_CV_STATE,
+      strategy: "unknown",
+      groupCol: "g",
+      timeCol: "t",
+    };
+    const result = applyCvDataFields(data, cv);
+    // Unknown strategy has no fields defined, so nothing injected
+    expect(result).not.toHaveProperty("group_col");
+    expect(result).not.toHaveProperty("time_col");
+  });
+});

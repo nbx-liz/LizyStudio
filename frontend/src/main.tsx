@@ -1,18 +1,13 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { MantineProvider } from "@mantine/core";
-import { BrowserRouter } from "react-router-dom";
-
-import "@mantine/core/styles.css";
-
 import { App } from "./App";
+import "./index.css";
 
-createRoot(document.getElementById("root")!).render(
+const root = document.getElementById("root");
+if (!root) throw new Error("Root element not found");
+
+createRoot(root).render(
   <StrictMode>
-    <MantineProvider defaultColorScheme="auto">
-      <BrowserRouter>
-        <App />
-      </BrowserRouter>
-    </MantineProvider>
+    <App />
   </StrictMode>,
 );

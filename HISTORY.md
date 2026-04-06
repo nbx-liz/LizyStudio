@@ -1,0 +1,1330 @@
+## 仕様変更ログ
+
+### 形式
+
+各エントリは以下の構造に従う。詳細は `skills/history-proposals/SKILL.md` を参照。
+
+```
+### H-XXXX: タイトル
+- **Status:** proposed | accepted | rejected | superseded
+- **Scope:** API | Frontend | Backend | Adapter | Build | Config
+- **Related:** BLUEPRINT.md の該当セクション
+- **Context:** なぜこの変更が必要か
+- **Proposal:** 提案内容
+- **Impact:** 影響を受けるファイル・コンポーネント
+- **Compatibility:** 破壊的 / 非破壊的
+- **Alternatives:** 検討した代替案
+- **Acceptance Criteria:** 受け入れ基準
+- **Decision:** 日付 + 結果 + 備考
+```
+
+### 変更ゲート対象
+
+以下に該当する変更は、先に本ドキュメントに Proposal を追加してから実装する。
+
+- API エンドポイントの追加・変更・削除
+- `BackendAdapter` Protocol の変更
+- 共通型（`FitSummary`, `PlotData` 等）の変更
+- 画面間のデータフロー変更
+- フロントエンドの外部依存ライブラリの追加・削除
+- ビルド・配布方式の変更
+
+ゲート不要: 純粋なUI調整（色、レイアウト微修正）、テスト追加、ドキュメント修正
+
+---
+
+### H-0001: POST /api/workspace/tune エンドポイントの追加
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §5.2
+- **Context:** §4.2.2 で Tune タブと Tune ボタンが定義されており、Workspace から Tune を実行できる設計になっている。しかし §5.2 の Workspace API には `POST /api/workspace/fit` のみが定義されており、Tune 実行用のエンドポイントが存在しない。
+- **Proposal:** `POST /api/workspace/tune` エンドポイントを §5.2 に追加する。Fit と同様に現在の Config + Data で Tune Job を作成・実行し、`{ "job_id": "job_042" }` を返す。
+- **Impact:** BLUEPRINT.md §5.2、api/workspace.py、services/training.py
+- **Compatibility:** 非破壊的（新規エンドポイント追加）
+- **Alternatives:** `POST /api/workspace/fit` に `type: "fit" | "tune"` パラメータを追加する案 → Fit と Tune では Config の意味（固定パラメータ vs 探索空間）が異なるため、エンドポイントを分離するほうが明確
+- **Acceptance Criteria:** BLUEPRINT §5.2 に Tune エンドポイントが定義されている
+- **Decision:** 2026-03-09 accepted — 提案通り
+
+---
+
+### H-0002: TuningSummary に Best Params モデルの評価情報を含める
+- **Status:** accepted
+- **Scope:** Adapter
+- **Related:** BLUEPRINT.md §3.3.1、§4.2.3
+- **Context:** §4.2.3 の Tune 完了画面では、探索結果（Optimization History / Best Params / Trial Results）に加え、Best Params で学習したモデルの Score / Learning Curve / Plots / Feature Importance / Fold Details を表示する。しかし現在の `TuningSummary`（§3.3.1）は `best_params` / `best_score` / `trials` のみで、Best Params モデルの評価情報を取得する手段がない。
+- **Proposal:** Tune 実行時に best params で自動的に fit を行い、その評価結果も保存する。具体的には以下のいずれか:
+  - 案A: `TuningSummary` に `fit_summary: FitSummary | None` フィールドを追加
+  - 案B: Job の result を拡張し `tune_result: TuningSummary` + `fit_result: FitSummary | None` を持つ
+  - 案C: `BackendAdapter.tune()` の戻り値を `TuningSummary` から `TuneWithFitSummary` に変更
+- **Impact:** backends/types.py、backends/lizyml.py、services/training.py、api/jobs.py、Job 保存形式
+- **Compatibility:** 非破壊的（型の拡張）
+- **Alternatives:** Tune 完了後にユーザーが手動で「Apply to Fit → Fit 実行」する運用 → UX が大幅に劣化するため不採用
+- **Acceptance Criteria:** Tune 完了後に Score / Learning Curve / Plots / Feature Importance が表示可能であること
+- **Decision:** 2026-03-09 accepted — 案B を採用。Job の result を `tune_result: TuningSummary` + `fit_result: FitSummary | None` の2フィールドに拡張する
+
+---
+
+### H-0003: Inference API の拡充（履歴・評価・永続化）
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §5.4、§4.4、§3.4
+- **Context:** §4.4 の画面仕様では以下の機能が定義されている:
+  - 推論履歴リスト（§4.4.1 History）
+  - 履歴クリックによる結果切替
+  - 正解ラベルありの評価（IS/OOS/Inf の3列 Score テーブル + 評価プロット）
+  - 正解ラベルなしの過去推論との分布比較
+
+  しかし §5.4 の Inference API は `POST /run` / `GET /result` / `GET /download` の3エンドポイントのみで、上記機能を実現するための API が不足している。また §3.4 の状態管理に推論履歴の永続化モデルが定義されていない。
+- **Proposal:**
+  1. API エンドポイントの追加:
+     - `GET /api/inference/history?job_id={job_id}` — 推論履歴一覧
+     - `GET /api/inference/{inf_id}` — 特定推論の結果サマリー
+     - `GET /api/inference/{inf_id}/predictions` — 予測テーブル（ページネーション: `rows`, `offset`）
+     - `GET /api/inference/{inf_id}/metrics` — 評価メトリクス（正解あり時、IS/OOS/Inf の3列）
+     - `GET /api/inference/{inf_id}/plot/{plot_type}` — 評価プロット（正解あり時）
+     - `GET /api/inference/{inf_id}/download` — CSV ダウンロード
+     - `GET /api/inference/{inf_id}/comparison/{other_inf_id}` — 分布比較統計
+  2. 永続化モデルの追加（§3.4 に追記）:
+     - 保存場所: `{jobs_dir}/{job_id}/inferences/{inf_id}/`
+     - 保存内容: meta.json（inf_id, job_id, data_ref, has_ground_truth, created_at, row_count）/ predictions.parquet / metrics.json（正解あり時）
+  3. 既存エンドポイントの整理:
+     - `POST /api/inference/run` のレスポンスに `inf_id` を含める
+     - `GET /api/inference/result` と `GET /api/inference/download` を `{inf_id}` パス付きに変更
+- **Impact:** BLUEPRINT.md §5.4 全体、§3.4 状態管理、api/inference.py、services/inference.py
+- **Compatibility:** 非破壊的（新規エンドポイント追加 + 既存エンドポイントの整理）
+- **Alternatives:** 推論結果をセッション内のみ保持（揮発）する案 → §4.4.1 History の画面仕様（過去履歴の一覧と選択）と矛盾するため不採用
+- **Acceptance Criteria:** 推論履歴の永続化モデルが §3.4 に、全エンドポイントが §5.4 に定義されている
+- **Decision:** 2026-03-09 accepted — API 構成・永続化モデルとも提案通り
+
+---
+
+### H-0004: GET /api/workspace/data/columns レスポンススキーマの定義
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §5.2、§4.2.1
+- **Context:** §5.2 Data に `GET /api/workspace/data/columns` が「カラム情報一覧」と記載されているが、レスポンスのフィールド定義がない。§4.2.1 Column Settings テーブルにはカラム名・ユニーク数・Type・自動除外判定結果が必要であり、API レスポンスの仕様が未定義では実装できない。
+- **Proposal:** レスポンススキーマを §5.2 に追記する:
+  ```json
+  {
+    "target": "y",
+    "columns": [
+      {
+        "name": "age",
+        "dtype": "int64",
+        "unique_count": 50,
+        "suggested_type": "numeric",
+        "suggested_excluded": false,
+        "exclude_reason": null
+      }
+    ]
+  }
+  ```
+  - `suggested_type`: `"numeric"` | `"categorical"`（§4.2.1 の自動判定ルールに基づく）
+  - `suggested_excluded`: 自動除外の推奨（ID / Const 判定）
+  - `exclude_reason`: `"id"` | `"constant"` | `null`
+  - データ加工ロジック（自動検出の閾値判定）は Service 層が担う（CLAUDE.md §4 準拠）
+- **Impact:** BLUEPRINT.md §5.2、api/workspace.py、services/data.py
+- **Compatibility:** 非破壊的（新規スキーマ定義）
+- **Alternatives:** dtype のみ返しフロントエンドで自動判定する案 → CLAUDE.md §4 のレイヤー責務（データ加工は Service 層）に反するため不採用
+- **Acceptance Criteria:** BLUEPRINT §5.2 にレスポンスの JSON スキーマが定義されている
+- **Decision:** 2026-03-09 accepted — 提案通り
+
+---
+
+### H-0005: POST /api/jobs/{job_id}/export リクエスト・レスポンスの定義
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §5.3、§4.3
+- **Context:** §5.3 に `POST /api/jobs/{job_id}/export` が「モデル/レポートを指定パスに Export」と記載されているが、リクエストボディとレスポンスの仕様がない。§4.3 の Export ダイアログでは Export 形式（Model / Report）と出力先パスを指定する UI が定義されている。
+- **Proposal:** リクエスト・レスポンスを §5.3 に追記する:
+  ```json
+  // リクエスト
+  {
+    "export_type": "model",
+    "output_path": "/path/to/output"
+  }
+  ```
+  - `export_type`: `"model"`（学習済みモデル）| `"report"`（結果レポート）
+  - `output_path`: 出力先ディレクトリパス
+  ```json
+  // レスポンス
+  {
+    "exported_path": "/path/to/output/job_042_model",
+    "export_type": "model"
+  }
+  ```
+- **Impact:** BLUEPRINT.md §5.3、api/jobs.py、services/export.py
+- **Compatibility:** 非破壊的（新規スキーマ定義）
+- **Alternatives:** なし
+- **Acceptance Criteria:** BLUEPRINT §5.3 にリクエスト・レスポンスの JSON スキーマが定義されている
+- **Decision:** 2026-03-09 accepted — 提案通り
+
+---
+
+### H-0006: GET /api/jobs/{job_id}/log エンドポイント追加
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §4.3.2、§5.3
+- **Context:** §4.3.2 の Jobs 詳細画面に「Execution Log」Accordion が定義されているが、実行ログを提供する API エンドポイントが §5.3 に存在しない。また `services/training.py` は fit/tune 時のログをディスクに永続化していない。
+- **Proposal:**
+  1. `GET /api/jobs/{job_id}/log` エンドポイントを §5.3 に追加。レスポンス: `{ "log": "...text..." }`。ログが未保存の場合は空文字列を返す。
+  2. `services/training.py` で fit/tune 実行時の stdout/stderr を `{job_dir}/execution.log` に書き込む。
+  3. `services/jobs.py` に `get_log(job_id) -> str` メソッドを追加。
+- **Impact:** BLUEPRINT.md §5.3、api/jobs.py、services/jobs.py、services/training.py
+- **Compatibility:** 非破壊的（新規エンドポイント追加）
+- **Alternatives:** なし
+- **Acceptance Criteria:** `GET /api/jobs/{job_id}/log` がログテキストを返す
+- **Decision:** 2026-03-09 accepted — 提案通り
+
+---
+
+### H-0007: RequestValidationError ハンドラ追加（共通エラー形式統一）
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §6.1
+- **Context:** §6.1 で全エラーレスポンスは `{ "error": { "code", "message", "details" } }` 形式と定義されている。しかし FastAPI のデフォルト `RequestValidationError` ハンドラは Pydantic 形式で 422 を返しており、共通形式に従っていない。
+- **Proposal:** `fastapi.exceptions.RequestValidationError` 用のカスタムハンドラを `api/errors.py` に追加し、`server.py` に登録する。レスポンスは `{ "error": { "code": "VALIDATION_ERROR", "message": "Request validation failed", "details": { "errors": [...] } } }` 形式。
+- **Impact:** api/errors.py、server.py
+- **Compatibility:** 非破壊的（レスポンス形式の統一、既存クライアントはステータスコード 422 で判別可能）
+- **Alternatives:** なし
+- **Acceptance Criteria:** 422 エラーが共通エラー形式で返る
+- **Decision:** 2026-03-09 accepted — 提案通り
+
+---
+
+### H-0008: InferenceNotFoundError を api/errors.py に統合
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §6.1
+- **Context:** 全 `StudioError` サブクラスは `api/errors.py` に集約されているが、`InferenceNotFoundError` のみ `api/inference.py` にローカル定義されている。エラー体系の一元管理に反する。
+- **Proposal:** `InferenceNotFoundError` を `api/errors.py` に移動し、`api/inference.py` からは import で参照する。
+- **Impact:** api/errors.py、api/inference.py
+- **Compatibility:** 非破壊的（内部リファクタリング）
+- **Alternatives:** なし
+- **Acceptance Criteria:** `InferenceNotFoundError` が `api/errors.py` に定義されている
+- **Decision:** 2026-03-09 accepted — 提案通り
+
+---
+
+### H-0009: POST /api/inference/run リクエストボディ形式変更 + evaluate 追加
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §5.4、§4.4.1
+- **Context:** BLUEPRINT §5.4 は `POST /run` のリクエストボディを `{ "job_id": "...", "data": { "source_type": "path", "path": "..." }, "return_shap": false }` と定義しているが、現在の実装は `{ "job_id": "...", "data_path": "...", "return_shap": false }` のフラット形式。また §4.4.1 の Evaluate チェックボックスに対応する `evaluate` パラメータが未実装。
+- **Proposal:**
+  1. `RunRequest` を BLUEPRINT 準拠のネスト構造に変更: `data: { source_type, path }`
+  2. `evaluate: bool = True` パラメータを追加。False の場合、GT 列が存在してもメトリクス計算をスキップ
+- **Impact:** api/inference.py、services/inference.py、frontend/src/api/inference.ts、frontend/src/pages/InferencePage.tsx
+- **Compatibility:** 破壊的（プレリリースのため許容）
+- **Alternatives:** なし
+- **Acceptance Criteria:** `POST /run` が BLUEPRINT 形式で 200 を返し、`evaluate: false` でメトリクスなし
+- **Decision:** 2026-03-09 accepted — BLUEPRINT §5.4 準拠
+
+---
+
+### H-0010: GET /api/inference/history の job_id optional 化
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §5.4
+- **Context:** BLUEPRINT §5.4 は「推論履歴一覧（query: `job_id`、省略時は全件）」と定義しているが、現在の実装では `job_id` は必須パラメータ。
+- **Proposal:** `job_id` を optional 化。省略時は全ジョブの推論履歴を返却。
+- **Impact:** api/inference.py、services/inference.py、frontend/src/api/inference.ts
+- **Compatibility:** 非破壊的（既存リクエストはそのまま動作）
+- **Alternatives:** なし
+- **Acceptance Criteria:** `GET /api/inference/history` が `job_id` 省略で全件返却
+- **Decision:** 2026-03-09 accepted — BLUEPRINT §5.4 準拠
+
+---
+
+### H-0011: POST /api/jobs/{job_id}/cancel エンドポイント追加
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §4.3.2、§5.3
+- **Context:** BLUEPRINT §4.3.2 は Running ジョブに Cancel ボタンを定義し、§5.3 は Cancel アクションを記載している。しかし現在の実装にはキャンセルエンドポイントが存在せず、フロントエンドの Cancel ボタンは disabled 状態。
+- **Proposal:**
+  1. `POST /api/jobs/{job_id}/cancel` エンドポイント追加。レスポンス: `{ "status": "cancelled" }`
+  2. Job status に `"cancelled"` を追加
+  3. `JobStore` に `request_cancel()` / `is_cancel_requested()` メソッド追加
+  4. training.py の progress callback 内でキャンセルフラグを確認し、検出時に `CancelledError` を送出
+- **Impact:** api/jobs.py、services/jobs.py、services/training.py、frontend (ResultsPanel.tsx, jobs.ts)
+- **Compatibility:** 非破壊的（新規エンドポイント + 新ステータス追加）
+- **Alternatives:** なし
+- **Acceptance Criteria:** `POST /api/jobs/{job_id}/cancel` が running ジョブを cancelled に遷移させる
+- **Decision:** 2026-03-09 accepted — BLUEPRINT §5.3 準拠
+
+---
+
+### H-0012: BLUEPRINT §3.3.2 BackendAdapter Protocol に params / return_shap を追記
+- **Status:** accepted
+- **Scope:** Adapter
+- **Related:** BLUEPRINT.md §3.3.2
+- **Context:** H-0002 で Tune→Fit フローのために `fit(params=...)` が、H-0009 で SHAP のために `predict(return_shap=...)` が実装済みだが、BLUEPRINT §3.3.2 の Protocol 定義が未更新。
+- **Proposal:** §3.3.2 の Protocol 定義を実装と整合させる:
+  - `fit(model, *, params=None, on_progress=None) -> FitSummary`
+  - `predict(model, data, *, return_shap=False) -> PredictionSummary`
+- **Impact:** BLUEPRINT.md §3.3.2 のみ（コード変更なし）
+- **Compatibility:** 非破壊的（文書化のみ）
+- **Alternatives:** なし
+- **Acceptance Criteria:** BLUEPRINT §3.3.2 が実装と一致する
+- **Decision:** 2026-03-09 accepted — spec-update
+
+---
+
+### H-0013: BLUEPRINT §3.3.1 TuningSummary に metric_name / direction を追記
+- **Status:** accepted
+- **Scope:** Adapter
+- **Related:** BLUEPRINT.md §3.3.1
+- **Context:** `TuningSummary` に `metric_name: str` と `direction: str` が実装済みだが、BLUEPRINT §3.3.1 に記載がない。Tune 結果の UI 表示に必要。
+- **Proposal:** §3.3.1 の TuningSummary 定義に以下を追記:
+  - `metric_name: str` — 最適化対象メトリクス名
+  - `direction: str` — `"minimize"` | `"maximize"`
+- **Impact:** BLUEPRINT.md §3.3.1 のみ（コード変更なし）
+- **Compatibility:** 非破壊的（文書化のみ）
+- **Alternatives:** なし
+- **Acceptance Criteria:** BLUEPRINT §3.3.1 が実装と一致する
+- **Decision:** 2026-03-09 accepted — spec-update
+
+---
+
+### H-0014: GET /api/backends エンドポイント追加
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §5（新規セクション）
+- **Context:** フロントエンドが利用可能なバックエンド一覧を取得する手段がない。バックエンド名・バージョンを表示する UI（Model Panel のバッジ等）に必要。
+- **Proposal:** `GET /api/backends` エンドポイントを追加。レスポンス: `[{"name": "lizyml", "version": "1.2.3"}]`
+- **Impact:** BLUEPRINT.md §5（新規セクション追加）、api/backends.py（新規）、server.py
+- **Compatibility:** 非破壊的（新規エンドポイント追加）
+- **Alternatives:** バックエンド情報を `/api/workspace/status` に含める案 → 独立したエンドポイントのほうが RESTful
+- **Acceptance Criteria:** `GET /api/backends` が 200 でバックエンド一覧を返す
+- **Decision:** 2026-03-09 accepted — 提案通り
+
+---
+
+### H-0015: POST /api/inference/upload を upload-only に変更
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §5.4
+- **Context:** BLUEPRINT §5.4 は upload と run を分離している（先に upload でデータ送信、次に run で `source_type: "upload"` を指定）。現在の実装は upload 時に即座に推論を実行しており、BLUEPRINT の設計意図と異なる。
+- **Proposal:** `POST /api/inference/upload` を upload-only に変更。ファイルを一時保存しパス参照を返す。推論実行は `POST /run` で行う。
+  - レスポンス: `{ "upload_path": "/tmp/lizystudio_xxx.csv", "filename": "data.csv" }`
+- **Impact:** api/inference.py、frontend/src/api/inference.ts、frontend/src/pages/InferencePage.tsx
+- **Compatibility:** 破壊的（プレリリースのため許容）
+- **Alternatives:** なし
+- **Acceptance Criteria:** upload が推論を実行せずパスのみ返す
+- **Decision:** 2026-03-09 accepted — BLUEPRINT §5.4 準拠
+
+---
+
+### H-0016: GET /api/inference/{inf_id}/metrics の GT なし時応答を 404 に変更
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §5.4
+- **Context:** BLUEPRINT §5.4 は metrics エンドポイントを「正解あり時」の条件付きとしている。現在の実装は GT なし時に `200 + {"error": "no ground truth available"}` を返しており、正常レスポンスとエラーの区別が困難。
+- **Proposal:** GT なし時は `404 INFERENCE_NOT_FOUND` または新コード `METRICS_NOT_AVAILABLE` を返す。
+- **Impact:** api/inference.py、frontend/src/pages/InferencePage.tsx
+- **Compatibility:** 破壊的（プレリリースのため許容）
+- **Alternatives:** 200 + `{"metrics": null, "has_ground_truth": false}` を返す案 → 404 のほうが REST 慣例に沿う
+- **Acceptance Criteria:** GT なし時に 404 が返る
+- **Decision:** 2026-03-09 accepted — 提案通り
+
+---
+
+## v2 テックスタック移行（2026-03-10）
+
+v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテックスタックとビルド基盤を刷新する。
+
+---
+
+### H-0017: フロントエンド UI ライブラリを Mantine v8 から Tailwind CSS + shadcn/ui に変更
+- **Status:** accepted
+- **Scope:** Frontend
+- **Related:** BLUEPRINT.md §3.1、§4 全体、CLAUDE.md §3
+- **Context:** v2 再開発にあたり、UIコンポーネントの設計方針を見直す。Mantine はフル UI フレームワークだが、カスタマイズ性と AI による継続的修正への耐性に課題がある。Tailwind CSS（ユーティリティファースト CSS）+ shadcn/ui（リポジトリ内に持つ直接編集可能なコンポーネント集）に移行し、コンポーネントの透明性と保守性を向上させる。
+- **Proposal:**
+  1. 以下のパッケージを削除: `@mantine/core`, `@mantine/hooks`, `@mantine/form`, `@mantine/notifications`, `@mantine/dropzone`, `@tabler/icons-react`
+  2. 以下を導入: `tailwindcss`, `@tailwindcss/vite`, `shadcn/ui`（CLI でコンポーネントを生成しリポジトリ内に保持）, `lucide-react`（アイコン）
+  3. BLUEPRINT の画面仕様で使用する UI コンポーネント名を shadcn/ui ベースの汎用名に置換
+  4. フォーム管理は `react-hook-form` + `zod`（shadcn/ui の標準構成）に移行
+- **Impact:** BLUEPRINT.md §3.1/§4 全体、CLAUDE.md §3、AGENTS.md §3、frontend/ 全コンポーネント、skills/frontend-pages、skills/frontend-components
+- **Compatibility:** 破壊的（v2 再開発ブランチのため許容）
+- **Alternatives:** Mantine v8 を継続する案 → AI による修正耐性と直接編集可能性の要件を満たさないため不採用
+- **Acceptance Criteria:** BLUEPRINT/CLAUDE.md/AGENTS.md から Mantine 参照が除去され、Tailwind + shadcn/ui がテックスタックとして定義されている
+- **Decision:** 2026-03-10 accepted — v2 再開発方針として採用
+
+---
+
+### H-0018: フロントエンド Lint/Format ツールを ESLint から Biome に変更
+- **Status:** accepted
+- **Scope:** Build
+- **Related:** CLAUDE.md §5、§6
+- **Context:** v2 再開発にあたり、フロントエンドの lint/format ツールを統一する。ESLint + Prettier の組み合わせは設定が複雑で、Biome は lint と format を単一ツールで高速に実行できる。
+- **Proposal:**
+  1. ESLint 関連パッケージを全て削除
+  2. `@biomejs/biome` を devDependencies に追加
+  3. `biome.json` を `frontend/` に配置
+  4. `pnpm lint` → `biome check` に変更
+  5. `pnpm format` → `biome format` に変更
+- **Impact:** CLAUDE.md §5/§6、AGENTS.md §5/§6、frontend/package.json、frontend/.eslintrc（削除）、frontend/biome.json（新規）
+- **Compatibility:** 破壊的（v2 再開発ブランチのため許容）
+- **Alternatives:** ESLint v9 flat config への移行 → Biome のほうが高速かつ設定が簡素なため不採用
+- **Acceptance Criteria:** `pnpm lint` が Biome で実行され、ESLint 関連ファイルが存在しない
+- **Decision:** 2026-03-10 accepted — v2 再開発方針として採用
+
+---
+
+### H-0019: フロントエンドテスト基盤の導入（Vitest + Playwright + Storybook + MSW）
+- **Status:** accepted
+- **Scope:** Build
+- **Related:** CLAUDE.md §5、§6、PLAN.md
+- **Context:** 既存プロジェクトにはフロントエンドテスト戦略が存在しない。v2 ではユニットテスト（Vitest）、E2E テスト（Playwright）、コンポーネント開発環境（Storybook）、API モック（MSW）を標準基盤として導入する。
+- **Proposal:**
+  1. `vitest` + `@testing-library/react` を devDependencies に追加
+  2. `@playwright/test` を devDependencies に追加
+  3. `storybook` + 関連パッケージを devDependencies に追加
+  4. `msw` を devDependencies に追加
+  5. 開発コマンドを追加: `pnpm test`（Vitest）、`pnpm test:e2e`（Playwright）、`pnpm storybook`
+- **Impact:** CLAUDE.md §5/§6、AGENTS.md §5/§6、frontend/package.json、frontend/vitest.config.ts（新規）、frontend/playwright.config.ts（新規）、frontend/.storybook/（新規）
+- **Compatibility:** 非破壊的（新規追加）
+- **Alternatives:** Jest を使用する案 → Vite との統合が良い Vitest を採用
+- **Acceptance Criteria:** `pnpm test` / `pnpm test:e2e` / `pnpm storybook` が実行可能
+- **Decision:** 2026-03-10 accepted — v2 再開発方針として採用
+
+---
+
+### H-0020: API 型生成パイプラインの導入（openapi-typescript）
+- **Status:** accepted
+- **Scope:** Build
+- **Related:** BLUEPRINT.md §2（設計原則 #3 型安全）、CLAUDE.md §3
+- **Context:** BLUEPRINT §2 で「Pydantic Schema → OpenAPI → TypeScript 型の自動連携チェーンを維持する」と原則を定めているが、具体的な生成ツールと手順が未定義。フロントエンドで API 型を手書きする運用は型安全の原則に反する。
+- **Proposal:**
+  1. `openapi-typescript` を devDependencies に追加
+  2. `pnpm generate:api` コマンドを追加: FastAPI の `/openapi.json` から TypeScript 型を自動生成
+  3. 生成先: `frontend/src/api/generated/` に配置
+  4. フロントエンドの API クライアントは生成型を使用し、手書き型を禁止
+- **Impact:** CLAUDE.md §5、frontend/package.json、frontend/src/api/（手書き型の廃止）、skills/frontend-pages
+- **Compatibility:** 非破壊的（新規追加、既存手書き型は段階的に置換）
+- **Alternatives:** openapi-fetch（クライアント自動生成）も候補だが、まず型生成のみで開始
+- **Acceptance Criteria:** `pnpm generate:api` で TypeScript 型が生成され、API クライアントが生成型を参照している
+- **Decision:** 2026-03-10 accepted — BLUEPRINT 設計原則の実現として採用
+
+---
+
+### H-0021: pre-commit フックの導入
+- **Status:** accepted
+- **Scope:** Build
+- **Related:** CLAUDE.md §6
+- **Context:** 品質ゲート（lint / format / typecheck）は PR 前に手動実行する運用だが、コミット時に自動チェックすることで品質違反の混入を防止できる。
+- **Proposal:**
+  1. `pre-commit` を Python dev dependencies に追加
+  2. `.pre-commit-config.yaml` をリポジトリルートに配置
+  3. フック内容: Ruff（lint/format）、mypy、Biome（lint/format）
+  4. `uv run pre-commit install` でローカル環境にフックを登録
+- **Impact:** pyproject.toml、.pre-commit-config.yaml（新規）、CLAUDE.md §6
+- **Compatibility:** 非破壊的（新規追加）
+- **Alternatives:** husky（Node.js 側のフック）→ Python 側も含めた統一管理のため pre-commit を採用
+- **Acceptance Criteria:** `git commit` 時に Ruff + Biome が自動実行される
+- **Decision:** 2026-03-10 accepted — 品質ゲート強化として採用
+
+---
+
+### H-0022: PyPI 配布ツールを twine から gh-action-pypi-publish に変更
+- **Status:** accepted
+- **Scope:** Build
+- **Related:** CLAUDE.md §3、skills/build-and-deploy
+- **Context:** 現在の配布手順は `twine` による手動アップロードだが、GitHub Actions の Trusted Publisher（OIDC）を使った `pypa/gh-action-pypi-publish` に移行することで、API トークン管理が不要になり CI/CD パイプラインに統合できる。
+- **Proposal:**
+  1. `twine` を依存から削除
+  2. `.github/workflows/publish.yml` に `pypa/gh-action-pypi-publish` を使用した自動配布ワークフローを定義
+  3. PyPI Trusted Publisher を設定（リポジトリ + ワークフロー名で認証）
+- **Impact:** pyproject.toml、.github/workflows/publish.yml（新規）、skills/build-and-deploy
+- **Compatibility:** 非破壊的（配布方法の変更、パッケージ自体は同一）
+- **Alternatives:** twine を GitHub Actions 内で使用する案 → Trusted Publisher のほうがセキュア
+- **Acceptance Criteria:** GitHub tag push で PyPI に自動配布される
+- **Decision:** 2026-03-10 accepted — CI/CD 統合として採用
+
+---
+
+### H-0023: `react-resizable-panels` フロントエンド依存追加
+- **Status:** accepted
+- **Scope:** Frontend
+- **Related:** CLAUDE.md §3、BLUEPRINT §4 Workspace 画面
+- **Context:** Workspace 画面の 3 カラムレイアウト（DataPanel / ModelPanel / ResultsPanel）のサイズをユーザーがドラッグで変更できるようにする。`react-resizable-panels` は shadcn/ui が公式に採用しているリサイズパネルライブラリで、Node 18 / React 19 対応済み。
+- **Proposal:**
+  1. `pnpm add react-resizable-panels` でフロントエンド依存に追加
+  2. shadcn/ui resizable コンポーネント（`components/ui/resizable.tsx`）を追加
+  3. WorkspacePage の CSS grid を `ResizablePanelGroup` に置換
+- **Impact:** frontend/package.json、WorkspacePage.tsx、新規 resizable.tsx
+- **Compatibility:** 非破壊的（内部 UI 変更のみ）
+- **Alternatives:** CSS resize プロパティ → 操作性が劣る。カスタム実装 → 工数大
+- **Acceptance Criteria:** パネル間のドラッグリサイズが動作し、サイズが localStorage に永続化される
+- **Decision:** 2026-03-10 accepted — UX 改善として採用
+
+---
+
+### H-0024: `GET /api/files` ディレクトリ一覧エンドポイント追加
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT §3.1 API エンドポイント一覧
+- **Context:** データソース選択時にファイルパスを手入力する代わりに、サーバーサイドのディレクトリをブラウズして CSV/Parquet ファイルを選択できるようにする。シングルユーザーのローカルアプリケーションであり、セキュリティリスクは限定的。
+- **Proposal:**
+  1. `GET /api/files?path=<dir>` エンドポイントを追加
+  2. レスポンス: `{path, parent, entries: [{name, type, size, extension}]}`
+  3. デフォルトはホームディレクトリ、.csv/.parquet ファイルのみ表示
+  4. フロントエンドに Dialog ベースのファイルブラウザコンポーネントを追加
+- **Impact:** 新規 `api/files.py` ルーター、新規 `services/files.py`、フロントエンド FileBrowser コンポーネント
+- **Compatibility:** 非破壊的（新規エンドポイント追加）
+- **Alternatives:** `<input type="file">` のみ → サーバーサイドのパス指定が必要なケースに対応できない
+- **Acceptance Criteria:** ファイルブラウザでディレクトリを遷移し、ファイル選択→データロードが動作する
+- **Decision:** 2026-03-10 accepted — UX 改善として採用
+
+---
+
+### H-0025: `get_default_config` on BackendAdapter + `GET /workspace/config/defaults` エンドポイント追加
+- **Status:** accepted
+- **Scope:** API, Adapter
+- **Related:** BLUEPRINT.md §3.3.2、§5.2
+- **Context:** データ読み込み + ターゲット選択後、Config が空のため Fit/Tune を即座に実行できない。LizyML が必須とする `config_version`、`task`（トップレベル）、`model` が欠落しており validation エラーになる。ユーザーがデフォルト値で即座に Fit/Tune を実行できるようにするため、バックエンドから完全なデフォルト Config を取得する手段が必要。
+- **Proposal:**
+  1. `BackendAdapter` Protocol に `get_default_config(task: str, target: str) -> dict[str, Any]` メソッドを追加
+  2. `GET /api/workspace/config/defaults?task={task}&target={target}` エンドポイントを追加。バックエンドの Pydantic モデルから完全なデフォルト Config を生成して返す
+  3. フロントエンドはターゲット選択時にこのエンドポイントを呼び、デフォルト Config をベースに DataPanel の設定をマージする
+- **Impact:** backends/base.py、backends/lizyml.py、services/workspace.py、api/workspace.py、frontend API client、DataPanel.tsx
+- **Compatibility:** 非破壊的（新規メソッド + 新規エンドポイント追加）
+- **Alternatives:** フロントエンドで JSON Schema から defaults を抽出する案 → discriminated union（model, split）の解決が困難。また「バックエンドの仕様が正」原則に反するため不採用
+- **Acceptance Criteria:** ターゲット選択後に完全なデフォルト Config が設定され、追加設定なしで Fit/Tune が実行可能
+- **Decision:** 2026-03-10 accepted — 提案通り
+
+### H-0026: BackendAdapter に `get_ui_schema()` メソッドを追加（Backend Contract パターン）
+- **Status:** proposed
+- **Scope:** Adapter, API, Frontend
+- **Related:** BLUEPRINT.md §3.3.2, §4.2.2, §5.2
+
+- **Context:**
+  現在の Model Panel は LightGBM のパラメータ名・メトリクス選択肢・探索範囲デフォルトをフロントエンドの `constants.ts` にハードコードしている。この設計には以下の問題がある:
+  1. バックエンドにモデル（例: XGBoost）を追加するたびにフロントエンドも変更が必要
+  2. LizyML のパラメータ名（`feature_fraction` 等）とフロントエンドのプリセット（`colsample_bytree` 等）が不一致になるリスク
+  3. Task ごとの objective/metric 選択肢がバックエンド知識であるにもかかわらずフロントエンドに記述されている
+  4. `model.params` が `additionalProperties: true` の自由辞書のため JSON Schema だけでは適切なフォームを生成できない
+
+  LizyML-Widget は「Backend Contract」パターンでこの問題を解決済み: Adapter が `config_schema`（JSON Schema）に加えて `ui_schema`（パラメータヒント、選択肢、探索範囲カタログ、条件付き表示ルール）を返し、フロントエンドはバックエンド固有の知識を一切持たない。
+
+- **Proposal:**
+
+  **1. BackendAdapter Protocol に `get_ui_schema()` を追加:**
+  ```python
+  def get_ui_schema(self) -> dict[str, Any]:
+      """Return UI metadata that supplements config_schema.
+
+      The returned dict contains:
+      - sections: List of config section definitions (display order)
+      - parameter_hints: Typed parameter metadata for model.params
+      - option_sets: Task-specific valid values (objective, metric, model_metric)
+      - search_space_catalog: Tunable parameters with mode/range info
+      - step_map: Stepper increment hints per parameter
+      - conditional_visibility: Field visibility rules based on task/toggles
+      - defaults: Section-specific default structures (e.g., calibration)
+      """
+      ...
+  ```
+
+  **2. `GET /api/backends/ui-schema` エンドポイントを追加:**
+  現在のバックエンドの `ui_schema` を返す。フロントエンドは初回ロード時に1回取得してキャッシュする。
+
+  **3. LizyMLAdapter に実装を追加:**
+  LizyML-Widget の `adapter_contract.py` から移植。`parameter_hints`、`option_sets`、`search_space_catalog`、`step_map`、`conditional_visibility`、`defaults` を返す。
+
+  **4. フロントエンドから `constants.ts` のハードコードを削除:**
+  `KNOWN_PARAMS`、`METRICS_BY_TASK`、`RANGE_DEFAULTS`、`CALIBRATION_DEFAULTS` を API レスポンスから取得する。`constants.ts` はフォールバック値のみ保持（API 未取得時のスケルトン表示用）。
+
+  **5. Model Panel の各コンポーネントを ui_schema 駆動に変更:**
+  - `KeyValueEditor` → `parameter_hints` からパラメータ一覧を生成
+  - `MetricsChips` → `option_sets.metric[task]` から選択肢を取得
+  - `SearchSpaceTable` → `search_space_catalog` から行を生成
+  - `ConfigForm` → `conditional_visibility` で表示/非表示を制御
+  - `NumberInput` → `step_map` からステップ値を取得
+
+- **Impact:**
+  - `backends/base.py` — Protocol にメソッド追加
+  - `backends/lizyml.py` — `get_ui_schema()` 実装追加
+  - `api/backends.py` — 新規エンドポイント追加
+  - `frontend/src/components/workspace/constants.ts` — ハードコード削除、フォールバック化
+  - `frontend/src/components/workspace/ModelPanel.tsx` — ui_schema 取得 + 配布
+  - `frontend/src/components/workspace/*.tsx` — 各コンポーネントが ui_schema を props で受け取る
+
+- **Compatibility:** 非破壊的
+  - 新規メソッド + 新規エンドポイントの追加のみ
+  - 既存の `get_config_schema()` / `get_default_config()` は変更なし
+  - フロントエンドは `constants.ts` をフォールバックとして保持するため、API が利用不可でも動作する
+
+- **Alternatives:**
+  1. **フロントエンドにハードコードを維持する案** — 現状維持。バックエンド追加時にフロントエンドも毎回変更が必要。スケールしないため不採用
+  2. **JSON Schema の `x-ui-*` 拡張で UI メタデータを埋め込む案** — Pydantic の `model_json_schema()` が返すスキーマを拡張する。スキーマ汚染になり、バリデーションと UI 関心が混在するため不採用
+  3. **`get_backend_contract()` で config_schema と ui_schema を一括返す案** — LizyML-Widget のアプローチ。LizyStudio では既に `get_config_schema()` が分離されているため、`get_ui_schema()` を別メソッドにする方が既存設計と一貫する
+
+- **Acceptance Criteria:**
+  1. `GET /api/backends/ui-schema` が `parameter_hints`, `option_sets`, `search_space_catalog`, `step_map`, `conditional_visibility`, `defaults` を含む JSON を返す
+  2. フロントエンドの `constants.ts` からバックエンド固有のハードコード（パラメータ名、メトリクス選択肢、探索範囲）が削除されている
+  3. Model Panel の全コンポーネントが API レスポンスから UI を生成する
+  4. Task 変更時に `option_sets` に基づいて選択肢が動的に切り替わる
+  5. `pnpm build` + `pnpm check` + `uv run pytest` + `uv run mypy` が通る
+
+- **Migration:** なし（非破壊的追加）
+- **Decision:** 2026-03-15 accepted — LizyML-Widget の実績あるパターンを採用
+
+---
+
+### H-0027: LizyML v0.4.0 対応 — export_code() API の追加
+- **Status:** proposed
+- **Scope:** API, Adapter, Frontend
+- **Related:** BLUEPRINT.md §5.3（Jobs API）、§3.2（Adapter 層）
+- **Context:** LizyML v0.3.0 で `Model.export_code(path)` が追加された。学習済みモデルから LizyML 非依存の Python スクリプト（`train.py`, `predict.py`, `test_equivalence.py`, `config.json`, `requirements.txt`, `artifacts/`）を生成する機能。LizyStudio ユーザーが GUI から利用できるようにする。
+- **Proposal:**
+  1. `BackendAdapter` Protocol に `export_code(model, path) -> str` メソッドを追加
+  2. `POST /api/jobs/{job_id}/export-code` エンドポイントを追加（ZIP ダウンロード）
+  3. Jobs 画面の Export セクションに「Export Code」ボタンを追加
+- **Impact:**
+  - `src/lizystudio/backends/base.py` — Protocol にメソッド追加
+  - `src/lizystudio/backends/lizyml.py` — `model.export_code(path)` 呼び出し
+  - `src/lizystudio/api/jobs.py` — 新エンドポイント
+  - `src/lizystudio/services/export.py` — export_code サービス関数
+  - Frontend: Jobs 画面の Export UI
+- **Compatibility:** 非破壊的（新規メソッド・エンドポイント追加のみ）
+- **Alternatives:**
+  1. **既存の `export_model` に統合する案** — export_model は LizyML フォーマットの保存、export_code は独立スクリプト生成で目的が異なるため分離が適切
+  2. **CLI 専用にする案** — GUI ユーザーにもコード生成を提供するのが LizyStudio の価値
+- **Acceptance Criteria:**
+  1. `POST /api/jobs/{job_id}/export-code` が ZIP ファイルを返す
+  2. ZIP 内に `train.py`, `predict.py`, `requirements.txt` が含まれる
+  3. 既存テストが壊れない
+  4. `uv run pytest` + `uv run mypy` が通る
+- **Migration:** なし
+
+---
+
+### H-0028: LizyML v0.4.0 対応 — Tune 進捗コールバック統合（TuneProgressInfo）
+- **Status:** proposed
+- **Scope:** Adapter, Backend
+- **Related:** BLUEPRINT.md §3.2（Adapter 層）、§5.2（Workspace API）
+- **Context:** LizyML v0.1.3 で `TuneProgressInfo` / `TuneProgressCallback` が追加された。`Model.tune(progress_callback=fn)` で Trial 単位の進捗（current_trial, total_trials, best_score, latest_score, latest_state）を受け取れる。現在の LizyStudio Adapter は tune 開始/完了の2ポイントしか報告しておらず、長時間の Tune でユーザーに進捗が伝わらない。
+- **Proposal:**
+  1. `LizyMLAdapter.tune()` 内で `model.tune(progress_callback=fn)` を使い、Trial 単位で `on_progress` を呼び出す
+  2. `BackendAdapter` Protocol の `tune()` シグネチャは変更しない（`on_progress: ProgressCallback` はすでに定義済み）
+  3. `ProgressCallback` の `current`/`total` に `current_trial`/`total_trials` をマッピング
+- **Impact:**
+  - `src/lizystudio/backends/lizyml.py` — `tune()` 内部のみ変更
+- **Compatibility:** 非破壊的（内部実装変更のみ。Protocol シグネチャ変更なし）
+- **Alternatives:**
+  1. **WebSocket メッセージに `best_score` 等を追加する案** — ProgressCallback の `message` フィールドに JSON を埋め込む方法。現時点では `message` は人間可読文字列の想定なので、将来の WebSocket 拡張時に検討
+- **Acceptance Criteria:**
+  1. Tune 実行中に Trial 単位で WebSocket 進捗メッセージが送信される
+  2. 既存テストが壊れない
+- **Migration:** なし
+
+---
+
+### H-0029: LizyML-Widget 画面仕様統合 — Data Panel CV 拡張
+- **Status:** accepted
+- **Scope:** Frontend, Config
+- **Related:** BLUEPRINT.md §4.2.1 Cross Validation
+- **Context:** LizyML-Widget では LizyML v0.4.0 の全 8 split method に対応し、strategy ごとの条件付きフィールド（time_col, group_col, purge_gap, embargo, gap, train_size_max, test_size_max, blocks/groups）を動的表示している。現 BLUEPRINT は 4 strategy しか定義しておらず、条件付きフィールドも不足。
+- **Proposal:**
+  1. CV Strategy を 8 種に拡張: kfold, stratified_kfold, group_kfold, stratified_group_kfold, time_series, purged_time_series, group_time_series, blocked_group_kfold
+  2. Strategy ごとの条件付きフィールドを Widget に合わせて定義
+  3. Folds を Slider から NumberInput（stepper）に変更
+  4. CV Strategy の表示を Segment buttons（折返し可）に変更
+  5. Config 自動反映マッピングに `data.time_col`, `split.gap`, `split.purge_gap`, `split.embargo` 等を追加
+- **Impact:** BLUEPRINT.md §4.2.1, frontend DataPanel, lizyml_ui_schema.py
+- **Compatibility:** 非破壊的
+- **Acceptance Criteria:** BLUEPRINT §4.2.1 が Widget の CV 仕様と一致する
+- **Decision:** 2026-03-22 accepted — Widget 踏襲方針
+
+---
+
+### H-0030: LizyML-Widget 画面仕様統合 — Model Panel Fit タブ拡張
+- **Status:** accepted
+- **Scope:** Frontend, Config
+- **Related:** BLUEPRINT.md §4.2.2 Fit タブ
+- **Context:** Widget の Fit タブでは (1) Smart Params / Model Params / Additional Params の3グループ分離、(2) Feature Weights Editor、(3) Inner Validation の Select 表示、(4) Additional Params のカタログ選択、(5) Objective の Segment buttons 表示、が実装されている。
+- **Proposal:**
+  1. Model セクションを3サブグループに視覚分離: Smart Params / Model Params / Additional Params
+  2. Feature Weights Editor を追加: Toggle + column dropdown + weight stepper の Multi-row editor
+  3. Inner Validation を Training セクション内に Select 表示（holdout / group_holdout / time_holdout）
+  4. Additional Params をカタログドロップダウン選択に変更（`ui_schema.additional_params` から）
+  5. Objective を Segment buttons に変更
+  6. Evaluation メトリクスの選択肢を `ui_schema.option_sets.metric` から動的取得に統一
+  7. Calibration methods を `ui_schema.calibration_methods` から動的取得
+- **Impact:** BLUEPRINT.md §4.2.2, frontend ConfigForm, lizyml_ui_schema.py
+- **Compatibility:** 非破壊的
+- **Acceptance Criteria:** Fit タブが Widget と同等のグループ分け・Feature Weights・Inner Valid を持つ
+- **Decision:** 2026-03-22 accepted — Widget 踏襲方針
+
+---
+
+### H-0031: LizyML-Widget 画面仕様統合 — Tune タブ拡張
+- **Status:** accepted
+- **Scope:** Frontend, Config
+- **Related:** BLUEPRINT.md §4.2.2 Tune タブ
+- **Context:** Widget の Tune タブでは (1) Search Space のグループ分け、(2) Tune 専用 Evaluation（Optimization Metric + Additional Metrics）、(3) direction 自動判定、(4) Empty space 許可、(5) Fixed 値の Fit 取り込みが実装されている。
+- **Proposal:**
+  1. Search Space テーブルを `group` フィールドでグループ分け表示
+  2. Tune 専用 Evaluation セクション追加: Optimization Metric（single select）+ Additional Metrics（multi-select）
+  3. direction Select を廃止し、`metric_direction` マップから自動判定
+  4. Tune ボタン有効条件から「探索パラメータあり」を削除（empty space 許可）
+  5. Tune タブ初回遷移時に Fit config の値を Fixed 値として取り込み
+  6. `search_space_catalog` に `group` フィールドを追加
+- **Impact:** BLUEPRINT.md §4.2.2, frontend TuneTab, lizyml_ui_schema.py
+- **Compatibility:** 非破壊的
+- **Acceptance Criteria:** Tune タブが Widget と同等の UX を持つ
+- **Decision:** 2026-03-22 accepted — Widget 踏襲方針
+
+---
+
+### H-0032: Backend Contract capabilities セクション追加
+- **Status:** accepted
+- **Scope:** Adapter, Frontend
+- **Related:** BLUEPRINT.md §3.3
+- **Context:** Widget の backend contract には `capabilities` セクションがあり UI が機能を動的判定する。現 `get_ui_schema()` にはこれがない。
+- **Proposal:**
+  1. `get_ui_schema()` レスポンスに `capabilities` を追加: `cv_strategies`（8種リスト）、`tune.allow_empty_space`（boolean）
+  2. `ui_schema` に `additional_params`, `calibration_methods` リストを追加
+  3. `search_space_catalog` エントリに `group` フィールドを追加
+  4. `conditional_visibility` に `early_stopping.*` 連動条件を追加
+- **Impact:** lizyml_ui_schema.py, frontend
+- **Compatibility:** 非破壊的（新フィールド追加のみ）
+- **Acceptance Criteria:** `GET /api/backends/ui-schema` が capabilities 等を含む
+- **Decision:** 2026-03-22 accepted — Widget 踏襲方針
+
+---
+
+### H-0033: Importance kind 選択機能の追加
+- **Status:** accepted
+- **Scope:** Adapter, API, Frontend
+- **Related:** BLUEPRINT.md §3.3 BackendAdapter Protocol
+- **Context:** Feature Importance が split のみ表示されている。LizyML は split / gain / shap の3種類をサポートするが、LizyStudio 側で kind を切り替える UI と API が不足。
+- **Proposal:**
+  1. `BackendAdapter` Protocol に `importance_kinds(model) -> list[str]` メソッド追加（デフォルト `["split"]`）
+  2. LizyML Adapter で `["split", "gain", "shap"]` を返す実装
+  3. API エンドポイント `GET /api/jobs/{job_id}/importance-kinds` 追加
+  4. フロントエンド FoldDetailsSection に kind セレクタ（SegmentGroup）追加
+  5. `fetchJobImportance(jobId, kind)` の kind パラメータを UI から制御
+- **Impact:** base.py（Protocol）、lizyml.py（Adapter）、api/jobs.py、FoldDetailsSection.tsx、ResultsPanel.tsx、api/jobs.ts
+- **Compatibility:** 非破壊的（Protocol にデフォルト実装付きメソッド追加、新 API エンドポイント追加のみ）
+- **Alternatives:** ハードコードで kind リストをフロントに持つ案 → バックエンド依存の種別なので動的取得が適切
+- **Acceptance Criteria:**
+  1. Importance セクションで split / gain / shap を切り替えられる
+  2. 選択した kind に応じてテーブルとプロットが更新される
+  3. 既存テストが全パス
+- **Decision:** 2026-03-28 accepted
+
+---
+
+### H-0034: LizyML v0.7.0 対応 — MetricEntry / Training Metric / Learning Curve Filter
+- **Status:** accepted
+- **Scope:** Adapter, API, Frontend, Config
+- **Related:** BLUEPRINT.md §3.3 BackendAdapter Protocol、§4.2.1 Model Panel、§4.2.3 Tune Tab
+- **Context:** LizyML v0.5.0〜v0.7.0 で以下の機能が追加された:
+  1. `model.params.metric` のユーザー指定（v0.5.0 / H-0061）
+  2. `plot_learning_curve(metrics=[...])` フィルター（v0.5.0 / H-0062）
+  3. Metric Bridge — feval カスタムメトリクス対応（v0.6.0 / H-0064）
+  4. `MetricEntry` パラメータ付きメトリクス — `{"precision_at_k": {"k": 20}}`（v0.7.0 / H-0065）
+  現在 LizyStudio は `lizyml>=0.4.0,<0.5.0` に固定されており、これらの機能を利用できない。
+- **Proposal:**
+  **Phase 1: 依存更新 + Adapter 対応**
+  - `pyproject.toml` のバージョンピンを `>=0.7.0,<0.8.0` に更新
+  - `LizyMLAdapter.plot()` で `learning-curve` 呼び出し時に `metrics` パラメータを転送
+  - `BackendAdapter.plot()` の signature に `**kwargs` を追加（learning curve filter 用）
+  - `lizyml_ui_schema.py` のフォールバックメトリクス名を修正（`binary_logloss` → `logloss` 等）
+
+  **Phase 2: API 拡張**
+  - `GET /api/jobs/{job_id}/plot/learning-curve?metrics=auc,f1` — メトリクスフィルターパラメータ追加
+  - Config schema の `evaluation.metrics` が `list[str | dict]` に自然拡張される（Pydantic → JSON Schema）
+
+  **Phase 3: フロントエンド UI 更新**
+  - `MetricsChips` の `precision_at_k` パラメータを `MetricEntry` dict 形式で config に書き込み
+    - 現在: `config.evaluation.metrics = ["auc", "precision_at_k"]` + `config.evaluation.precision_at_k = 20`
+    - 変更後: `config.evaluation.metrics = ["auc", {"precision_at_k": {"k": 20}}]`
+  - Tune Evaluation セクションも同様に `MetricEntry` 対応
+  - Learning Curve プロットにメトリクスフィルター UI（チップ選択）追加
+  - `config.evaluation.precision_at_k` フィールドを廃止（`MetricEntry` dict に統合）
+
+- **Impact:**
+  - `pyproject.toml`, `uv.lock`
+  - `backends/base.py`（Protocol: plot kwargs）
+  - `backends/lizyml.py`（Adapter: learning curve filter 転送）
+  - `backends/lizyml_ui_schema.py`（フォールバック名修正）
+  - `backends/types.py`（変更なし — PlotData は plotly_json のみで MetricEntry の通過不要）
+  - `api/jobs.py`（learning curve filter query param）
+  - `frontend/src/components/workspace/MetricsChips.tsx`（MetricEntry 形式出力）
+  - `frontend/src/components/workspace/ConfigForm.tsx`（precision_at_k 統合）
+  - `frontend/src/components/workspace/TuneTab.tsx`（MetricEntry 対応）
+  - `frontend/src/components/workspace/PlotSection.tsx`（learning curve filter UI）
+  - `frontend/src/components/workspace/ResultsPanel.tsx`（annotateMetric 更新）
+  - `frontend/src/api/jobs.ts`（fetchJobPlot に metrics param 追加）
+- **Compatibility:** 非破壊的（バージョン更新、API は query param 追加のみ、Config は上位互換）
+- **Alternatives:**
+  - `precision_at_k` の k を引き続き `config.evaluation.precision_at_k` に分離保持する案 → LizyML 0.7.0 の `MetricEntry` 設計と不一致、config 変換ロジックが複雑化するため不採用
+  - Learning Curve フィルターをフロントエンドのみで実装（Plotly subplot 表示/非表示）する案 → サーバーサイドで不要なサブプロットを生成する無駄があるため不採用
+- **Acceptance Criteria:**
+  1. `lizyml>=0.7.0` でテストが全パス
+  2. `precision_at_k` 選択時に k 値を指定でき、config に `{"precision_at_k": {"k": N}}` 形式で保存される
+  3. Tune Evaluation でも同様に `MetricEntry` 形式が使用される
+  4. Learning Curve プロットで表示メトリクスをフィルター可能
+  5. 既存テストが全パス + 新機能のテストカバレッジ 80%+
+- **Decision:** 2026-03-28 accepted — 提案通り
+
+---
+
+### H-0035: WebSocket 再接続プロトコルの実装
+- **Status:** proposed
+- **Scope:** Frontend
+- **Related:** BLUEPRINT.md §3.1、frontend/src/api/websocket.ts
+- **Context:** 現在の `connectJobProgress` は WebSocket 切断時の再接続ロジックを持たない。ネットワーク不安定やブラウザのスリープ復帰時に接続が切れると、ジョブ進捗が消失しユーザーに完了通知が届かない。LizyML-Widget では Colab 環境でのコネクション不安定に対処するためポーリングフォールバックと再接続パターンを実装しており、その知見を活用する。
+- **Proposal:**
+  1. `connectJobProgress` に指数バックオフ再接続ロジックを追加:
+     - 再接続間隔: 1s → 2s → 4s → 8s → max 30s
+     - 最大リトライ回数: 10回（超過でユーザーにトースト通知）
+  2. 再接続成功後、既存の `GET /api/jobs/{job_id}` でジョブ状態を復元し、`completed` / `failed` の場合は結果表示に遷移
+  3. `onReconnect` コールバックを追加し、呼び出し元（ResultsPanel）が状態を同期可能にする
+- **Impact:** frontend/src/api/websocket.ts、frontend/src/components/workspace/ResultsPanel.tsx
+- **Compatibility:** 非破壊的（既存 API 変更なし、フロントエンドのみ）
+- **Alternatives:** Server-Sent Events (SSE) に切り替える案 → 既存 WebSocket インフラを活かすほうが低コスト。フォールバックポーリング（Widget 方式）案 → Studio は Colab 環境を考慮不要なため WebSocket 再接続で十分
+- **Acceptance Criteria:**
+  1. WebSocket 切断後、自動再接続が発火する
+  2. 再接続成功後にジョブ状態が正しく復元される
+  3. 最大リトライ超過時にユーザー通知が表示される
+  4. 既存テストが全パス
+
+---
+
+### H-0036: OpenMP デーモンスレッド劣化対策（サブプロセスフォールバック）
+- **Status:** proposed
+- **Scope:** Backend
+- **Related:** BLUEPRINT.md §3.2（Service レイヤー）、services/training.py
+- **Context:** `start_fit_async` / `start_tune_async` はデーモンスレッドで ML バックエンドを実行する。LizyML-Widget の本番運用で、libgomp (OpenMP) がスレッドプールを最初の利用スレッドにバインドする仕様により、デーモンスレッドから LightGBM を実行すると 50x の性能劣化が発生することが判明した（Widget learned skill: `openmp-daemon-thread-degradation`）。Widget では `subprocess_runner.py` でプロセス分離フォールバックを実装済み。
+- **Proposal:**
+  1. OpenMP 検出ユーティリティを追加（`libomp.so` / `libgomp.so` の存在チェック）
+  2. OpenMP 検出時は `subprocess` ベースのジョブワーカーにフォールバック
+  3. 環境変数 `LIZYSTUDIO_FORCE_SUBPROCESS=1` で強制サブプロセスモードを選択可能
+  4. サブプロセスワーカーは結果をテンポラリファイル経由で親プロセスに返却
+  5. 新ジョブ開始前に前回スレッド/プロセスを `join()` する（`openmp-thread-pool-accumulation` 対策）
+- **Impact:** services/training.py（ジョブ実行部分の大幅変更）、新規: services/subprocess_runner.py、services/openmp_detect.py
+- **Compatibility:** 非破壊的（デフォルト動作は変わらない。OpenMP 検出時のみサブプロセス化）
+- **Alternatives:**
+  - `LD_PRELOAD=libomp.so` でユーザーに対処を求める案 → UX が悪く、サポートコストが高い
+  - `asyncio.to_thread` に変更する案 → GIL 解放されるが OpenMP 問題は解決しない
+  - デーモンスレッドを非デーモンに変更する案 → サーバー終了時にハングする可能性
+- **Acceptance Criteria:**
+  1. OpenMP 環境で Fit/Tune の性能がメインスレッド実行と同等であること
+  2. 非 OpenMP 環境ではスレッドベース実行のまま（既存動作維持）
+  3. `LIZYSTUDIO_FORCE_SUBPROCESS=1` でサブプロセスモードが強制される
+  4. 前回ジョブのスレッド/プロセスが新ジョブ開始前に join される
+  5. 既存テストが全パス + サブプロセスモードのテスト追加
+
+---
+
+### H-0037: PATCH /api/workspace/config — Config パッチプロトコルの導入
+- **Status:** proposed
+- **Scope:** API
+- **Related:** BLUEPRINT.md §5.2（Workspace API）、api/workspace.py
+- **Context:** 現在の `PUT /api/workspace/config` は Config 全体を置換する。フロントエンドが単一フィールドを変更する場合でも Config 全体を送信する必要があり、ネットワーク効率が悪い。また、全体置換では並行編集での意図しない上書きリスクがある。LizyML-Widget では `ConfigPatchOp` による細粒度パッチプロトコルを実装しており、パスバリデーション（正規表現 `/^[a-zA-Z_]\w*(\.[a-zA-Z_]\w*)*$/`）と dunder (`__`) パス拒否により安全性を確保している。
+- **Proposal:**
+  1. `PATCH /api/workspace/config` エンドポイントを追加
+  2. リクエストボディ:
+     ```json
+     {
+       "ops": [
+         { "op": "set", "path": "model.params.learning_rate", "value": 0.05 },
+         { "op": "unset", "path": "model.params.reg_lambda" },
+         { "op": "merge", "path": "training", "value": { "seed": 42 } }
+       ]
+     }
+     ```
+  3. パスバリデーション:
+     - 正規表現: `/^[a-zA-Z_]\w*(\.[a-zA-Z_]\w*)*$/`
+     - dunder (`__`) を含むパスを拒否
+     - op: `"set"` | `"unset"` | `"merge"` のみ許可
+  4. 既存の `PUT /api/workspace/config` は後方互換として維持
+  5. エラーレスポンス: `{ "error": { "code": "INVALID_PATCH", "message": "..." } }` (HTTP 422)
+- **Impact:** api/workspace.py、services/workspace.py（パッチ適用ロジック追加）、api/errors.py（INVALID_PATCH エラー追加）、frontend/src/api/workspace.ts
+- **Compatibility:** 非破壊的（新規エンドポイント追加、既存 PUT は維持）
+- **Alternatives:**
+  - JSON Patch (RFC 6902) を採用する案 → 配列操作やパス表現が複雑すぎる（ML Config には不要）
+  - PUT のみ維持し楽観ロック（ETag）を追加する案 → 実装コストが高く、並行編集の UX が悪い
+- **Acceptance Criteria:**
+  1. `PATCH /api/workspace/config` が正しく Config を部分更新する
+  2. 不正なパス（dunder 含む、正規表現不一致）で 422 が返る
+  3. 不正な op で 422 が返る
+  4. 既存 `PUT /api/workspace/config` が引き続き動作する
+  5. フロントエンドが PATCH を使用するように更新される
+
+---
+
+### H-0038: DataFrame メモリ上限チェックの追加
+- **Status:** proposed
+- **Scope:** Backend
+- **Related:** BLUEPRINT.md §4.2.1（Data Source）、security.py
+- **Context:** 現在のアップロードサイズ制限（`MAX_UPLOAD_BYTES = 100MB`）はファイルサイズのみをチェックする。Parquet ファイルは高圧縮されるため、100MB のファイルが展開後に数 GB のメモリを消費する可能性がある。LizyML-Widget の移植計画では `df.memory_usage(deep=True).sum()` による展開後チェックと環境変数による上限設定を定義している。
+- **Proposal:**
+  1. `load_dataframe` 後に `df.memory_usage(deep=True).sum()` でメモリ使用量を計算
+  2. 環境変数 `LIZYSTUDIO_MAX_DF_MEMORY`（デフォルト: 2GB）でメモリ上限を設定可能
+  3. 上限超過時は `FileInvalidError` を raise し、メッセージにファイルサイズとメモリ使用量を含める
+  4. `/api/workspace/data/load` のレスポンスに `memory_usage_bytes` フィールドを追加（情報表示用）
+- **Impact:** security.py（チェック追加）、api/workspace.py（data/load エンドポイント）、services/data.py
+- **Compatibility:** 非破壊的（新規チェック追加。デフォルト上限 2GB は十分大きい）
+- **Alternatives:**
+  - アップロードサイズ上限のみで対処する案 → Parquet の圧縮率が予測不可能なため不十分
+  - 読み込み前にスキーマのみ解析してメモリを推定する案 → 精度が低く実装が複雑
+- **Acceptance Criteria:**
+  1. 展開後メモリが上限を超えるデータで `FileInvalidError` が返る
+  2. 環境変数でメモリ上限をカスタマイズ可能
+  3. エラーメッセージにファイルサイズとメモリ使用量が含まれる
+  4. 正常なデータで既存動作に影響がない
+
+---
+
+### H-0039: Content Security Policy (CSP) ヘッダーの追加
+- **Status:** proposed
+- **Scope:** Backend
+- **Related:** BLUEPRINT.md §3.1（全体構成）、server.py
+- **Context:** 現在のサーバーには CSP ヘッダーが設定されていない。localhost 専用のため即座の脅威は低いが、将来のリモートアクセス対応やセキュリティ監査に備え、XSS 防御を強化すべきである。LizyML-Widget 移植計画でも CSP を明示的に定義している。
+- **Proposal:**
+  1. `server.py` に CSP ミドルウェアを追加
+  2. CSP ポリシー:
+     ```
+     default-src 'self';
+     script-src 'self';
+     style-src 'self' 'unsafe-inline';
+     connect-src 'self' ws://localhost:*;
+     img-src 'self' data: blob:;
+     font-src 'self';
+     ```
+  3. 開発モード（`--reload`）では CSP を緩和または無効化（HMR 対応）
+  4. `X-Content-Type-Options: nosniff` と `X-Frame-Options: DENY` も同時に追加
+- **Impact:** server.py（ミドルウェア追加）
+- **Compatibility:** 非破壊的（ヘッダー追加のみ。`'unsafe-inline'` は既存 Tailwind インラインスタイルに必要）
+- **Alternatives:**
+  - Nginx / リバースプロキシで CSP を設定する案 → Studio は `pip install` 単体で動く前提のため不適切
+  - `nonce` ベースの CSP にする案 → Vite のバンドルと相性が悪く実装コストが高い
+- **Acceptance Criteria:**
+  1. 本番モードでレスポンスに CSP ヘッダーが付与される
+  2. `X-Content-Type-Options`, `X-Frame-Options` も付与される
+  3. 開発モードで HMR が正常動作する
+  4. Plotly のレンダリングが CSP でブロックされない
+
+---
+
+### H-0040: ワーカースレッド join 漏れ対策
+- **Status:** proposed
+- **Scope:** Backend
+- **Related:** services/training.py
+- **Context:** `start_fit_async` / `start_tune_async` で作成されたワーカースレッドは `WorkspaceState` に保持されず、新ジョブ開始前に前回スレッドの `join()` が行われない。LizyML-Widget では `openmp-thread-pool-accumulation` として、unjoin'd ワーカースレッドが OpenMP スレッドプールを蓄積し OS リソースを圧迫する問題が学習済み。H-0036 の前提条件となる。
+- **Proposal:**
+  1. `WorkspaceState` に `_job_thread: threading.Thread | None` フィールドを追加
+  2. 新ジョブ開始前に `_job_thread` が alive であれば `join(timeout=5)` を実行
+  3. join タイムアウト時はログ警告を出して続行（デッドロック防止）
+  4. `cancel_requested` 時にもスレッド参照を保持し、キャンセル後の join を保証
+- **Impact:** services/training.py（start_fit_async, start_tune_async）、services/workspace.py（WorkspaceState 拡張）
+- **Compatibility:** 非破壊的（内部実装変更のみ）
+- **Alternatives:**
+  - `concurrent.futures.ThreadPoolExecutor(max_workers=1)` を使う案 → キャンセル機構との統合が複雑
+  - スレッドプールサイズを制限する案 → OpenMP の問題は解決しない
+- **Acceptance Criteria:**
+  1. 連続して Fit を実行しても前回スレッドが join される
+  2. スレッドリソースが蓄積しない（`threading.active_count()` が安定）
+  3. join タイムアウト時にデッドロックしない
+  4. 既存テストが全パス
+
+---
+
+### H-0041: エラーコードの拡充
+- **Status:** proposed
+- **Scope:** API
+- **Related:** BLUEPRINT.md §6.1（エラーレスポンス）、api/errors.py
+- **Context:** 現在のエラー体系は 12 種類で、一部のエラーが汎用コードに統合されている。LizyML-Widget は 17 種類のエラーコードを持ち、フロントエンドでのエラーメッセージ出し分けに活用している。特に Config ビルド失敗と YAML パースエラーが `VALIDATION_ERROR` / `FILE_INVALID` に統合されており、ユーザーへのガイダンスが不明確。
+- **Proposal:**
+  1. `ConfigBuildError` を追加（code: `CONFIG_BUILD_ERROR`, HTTP 400）— Config の組み立てに失敗した場合（必須フィールド不足等）
+  2. `ConfigImportError` を追加（code: `CONFIG_IMPORT_ERROR`, HTTP 400）— YAML/JSON のパースまたは構造エラー
+  3. `ExportError` を追加（code: `EXPORT_ERROR`, HTTP 500）— モデル/レポートのエクスポート失敗
+  4. 既存コードは維持し、後方互換を保つ
+- **Impact:** api/errors.py（3 エラークラス追加）、api/workspace.py（config 関連エンドポイント）、api/jobs.py（export エンドポイント）
+- **Compatibility:** 非破壊的（新規エラーコード追加。既存コードは変更なし）
+- **Alternatives:**
+  - Widget と完全に同一のコード体系にする案 → Studio と Widget で画面構成が異なるため、Studio に不要なコード（`NO_TARGET` 等は Studio では `VALIDATION_ERROR` で十分）を含めるのは過剰
+  - エラーコードを細分化せず `details` で区別する案 → フロントエンドの条件分岐が `details` パースに依存し脆弱
+- **Acceptance Criteria:**
+  1. Config ビルド失敗時に `CONFIG_BUILD_ERROR` が返る
+  2. YAML インポート失敗時に `CONFIG_IMPORT_ERROR` が返る
+  3. エクスポート失敗時に `EXPORT_ERROR` が返る
+  4. 既存エラーコードの動作が変わらない
+
+---
+
+### H-0042: セキュリティ方針の文書化
+- **Status:** proposed
+- **Scope:** Config
+- **Related:** BLUEPRINT.md、CLAUDE.md §7-8
+- **Context:** Studio の実装はセキュリティ上安全だが（`yaml.safe_load` 使用、パストラバーサル防止、アップロードサイズ制限）、セキュリティ方針としては文書化されていない。LizyML-Widget 移植計画では YAML パース方針、ファイルアップロードのサニタイズ手順、入力バリデーションルールを明文化しており、ガバナンスとして参考にすべきである。
+- **Proposal:** BLUEPRINT.md に「§7. セキュリティ方針」セクションを追加し、以下を文書化:
+  1. **YAML パース**: `yaml.safe_load` のみ使用。`yaml.load` は禁止
+  2. **ファイルアップロード**:
+     - 拡張子チェック（`.csv`, `.tsv`, `.parquet` のみ）
+     - Content-Type とのクロスチェック
+     - pandas の `engine='c'` 推奨（eval 系の脆弱性回避）
+     - ファイル名のサニタイズ（`os.path.basename` + パストラバーサル防止）
+     - アップロードサイズ上限 + メモリ使用量上限（H-0038）
+  3. **入力バリデーション**:
+     - Config パッチのパスバリデーション（H-0037）
+     - dunder (`__`) インジェクション防止
+     - サーバーサイドファイルブラウザのパストラバーサル防止（`validate_path_within`）
+  4. **HTTP ヘッダー**: CSP, X-Content-Type-Options, X-Frame-Options（H-0039）
+  5. **localhost 前提での制限緩和**: 認証不要、CSRF トークン不要、Rate limiting 不要。将来リモート対応時に追加する旨を明記
+- **Impact:** BLUEPRINT.md（新規セクション追加）
+- **Compatibility:** 非破壊的（ドキュメント追加のみ）
+- **Alternatives:** 別ファイル `SECURITY.md` に分離する案 → BLUEPRINT が仕様の正であるため、BLUEPRINT 内に含めるほうが参照しやすい
+- **Acceptance Criteria:**
+  1. BLUEPRINT.md にセキュリティ方針セクションが存在する
+  2. 上記 5 項目がすべて記載されている
+
+---
+
+### H-0043: openapi-typescript 生成型の実活用（手書き型からの段階的移行）
+- **Status:** proposed
+- **Scope:** Frontend
+- **Related:** CLAUDE.md §3（API型生成: openapi-typescript）、frontend/src/api/
+- **Context:** CLAUDE.md §7 で「フロントエンドで API 型を手書きすること」は禁止されているが、現在 `frontend/src/api/types.ts` に手書き型が存在し、API 関数は自動生成型 (`generated/schema.d.ts`) ではなく手書き型を参照している。型のズレが生じるリスクがあり、CLAUDE.md の方針と矛盾する。
+- **Proposal:**
+  1. API 関数（`workspace.ts`, `jobs.ts`, `inference.ts`）の戻り値型とリクエスト型を `generated/schema.d.ts` の型に段階的に移行
+  2. `types.ts` の手書き型を削減し、最終的には `generated/schema.d.ts` の re-export のみに
+  3. CI に型生成チェックを追加: `pnpm generate:api && git diff --exit-code frontend/src/api/generated/` で生成型とコミット済み型の一致を検証
+  4. `pnpm generate:api` をバックエンド変更時の pre-commit フックに追加
+- **Impact:** frontend/src/api/types.ts（段階的削除）、frontend/src/api/*.ts（import 先変更）、CI 設定
+- **Compatibility:** 非破壊的（内部リファクタリング。API は変更なし）
+- **Alternatives:**
+  - 手書き型をテストで自動生成型と比較する案 → 二重管理の解消にならない
+  - 手書き型を一括削除する案 → 一度に大量の変更が発生しリスクが高い
+- **Acceptance Criteria:**
+  1. API 関数が `generated/schema.d.ts` の型を直接参照している
+  2. `types.ts` に手書きの API レスポンス型が存在しない
+  3. CI で型生成チェックが自動実行される
+  4. `pnpm check` が全パス
+
+---
+
+### H-0044: CV Fold Preview の視覚化コンポーネント追加
+- **Status:** proposed
+- **Scope:** Frontend
+- **Related:** BLUEPRINT.md §4.2.1（Cross Validation）、frontend/src/components/workspace/CvSection.tsx
+- **Context:** 現在の CV セクションは Strategy 選択とパラメータ入力のみで、設定した CV がどのようにデータを分割するかの視覚的フィードバックがない。LizyML-Widget では `FoldPreview.tsx` で以下の視覚化を実装しており、特に BlockedGroupKFold のような複雑な CV 戦略の理解に有効であることが実証されている:
+  - 時間 fold × グループ fold のマトリクス表示
+  - Train（青）/ Valid（橙）/ Unused（灰）のカラーブロックによる期間フロー図
+  - `P0+P1 → P2` 形式の期間構造パース
+  - Fold ごとの Train/Valid サイズ表示テーブル
+- **Proposal:**
+  1. `FoldPreview` コンポーネントを新規作成（`frontend/src/components/workspace/FoldPreview.tsx`）
+  2. 表示内容:
+     - サマリーバッジ: `"Total: {N} folds ({T} time × {G} groups)"`
+     - 期間フロー図: 各時間 fold を行とし、期間ブロックを Train/Valid/Unused で色分け
+     - 詳細テーブル: Fold #、構造（train期間 → valid期間 + グループ）、Train サイズ、Valid サイズ
+  3. データソース: 既存の `GET /api/workspace/data/split-preview` を活用（または新設）
+  4. CvSection の下部に配置。CV 設定変更時に自動リフレッシュ（debounce 500ms）
+  5. 色定義: Tailwind のカスタムカラー — `bg-blue-500/20`（train）、`bg-orange-500/20`（valid）、`bg-muted`（unused）
+- **Impact:** frontend/src/components/workspace/FoldPreview.tsx（新規）、CvSection.tsx（FoldPreview 埋め込み）、api/workspace.py（split-preview エンドポイント確認）
+- **Compatibility:** 非破壊的（UI 追加のみ）
+- **Alternatives:**
+  - テキストテーブルのみで表示する案 → BlockedGroupKFold の時間×グループの2軸構造が直感的に伝わらない
+  - Plotly チャートで描画する案 → 単純なカラーブロックに Plotly は過剰。HTML + CSS で十分
+- **Acceptance Criteria:**
+  1. CV 設定後に視覚的な Fold プレビューが表示される
+  2. Train/Valid/Unused が色分けされている
+  3. Fold 数、各 Fold の Train/Valid サイズが確認できる
+  4. 設定変更時にプレビューが更新される
+  5. Storybook にストーリーが追加されている
+
+---
+
+### H-0045: BlockedGroupKFold 専用 2軸エディタの追加
+- **Status:** proposed
+- **Scope:** Frontend
+- **Related:** BLUEPRINT.md §4.2.1（Cross Validation — Blocks/Groups フィールド）、frontend/src/components/workspace/CvSection.tsx
+- **Context:** BlockedGroupKFold は時間軸（Blocks）× エンティティ軸（Groups）の2軸で CV 分割を定義する複雑な戦略であり、汎用フォームフィールドでは設定が困難。LizyML-Widget では `BlockedGroupKFold.tsx` で専用の2軸エディタを実装しており、以下の要素で直感的な設定を実現している:
+  - **Blocks セクション**: カラム選択 → 値分布バー表示 → カットオフ地点をチップ選択 → 結果の期間（P0, P1, ...）と行数プレビュー → Expanding/Sliding モード切替 → Train Window ステッパー（Sliding 時のみ）
+  - **Groups セクション**: カラム選択（Blocks カラムを除外）→ n_splits → stratify (auto/on/off) → shuffle
+  - **統合プレビュー**: H-0044 の FoldPreview + Min Train/Valid Rows 設定
+- **Proposal:**
+  1. `BlockedGroupKFoldEditor` コンポーネントを新規作成
+  2. CvSection で strategy が `blocked_group_kfold` の場合にこのエディタに切り替え
+  3. **Blocks サブセクション**:
+     - カラム選択（Select）
+     - 選択カラムのユニーク値分布バー（`GET /api/workspace/data/column-stats/{col}` を活用）
+     - カットオフ値のチップ選択（クリックでトグル、最後の値は常に ON で disabled）
+     - 結果の期間一覧（P0〜Pn）と各期間の行数
+     - モード切替: Expanding / Sliding（SegmentGroup）
+     - Train Window: NumberInput（Sliding モード時のみ表示）
+  4. **Groups サブセクション**:
+     - カラム選択（Blocks カラムを除外したリスト）
+     - n_splits: NumberInput (2-10)
+     - stratify: SegmentGroup (auto / on / off)
+     - shuffle: Switch
+  5. **Min Rows サブセクション**:
+     - Min Train Rows: NumberInput（nullable）
+     - Min Valid Rows: NumberInput（nullable）
+- **Impact:** frontend/src/components/workspace/BlockedGroupKFoldEditor.tsx（新規）、CvSection.tsx（条件分岐追加）、api/workspace.ts（column-stats API 呼び出し）
+- **Compatibility:** 非破壊的（UI コンポーネント追加。API は既存を活用）
+- **Alternatives:**
+  - 汎用フォームで JSON 入力させる案 → UX が著しく悪い。カットオフ値の手入力はエラーが頻発する
+  - Blocks と Groups を別画面に分離する案 → 2軸の関係が見えなくなり設定ミスが増える
+- **Acceptance Criteria:**
+  1. BlockedGroupKFold 選択時に専用エディタが表示される
+  2. カットオフ地点をチップで視覚的に選択できる
+  3. カラムの値分布がバーで表示される
+  4. Expanding/Sliding モードの切替が機能する
+  5. Groups カラム選択で Blocks カラムが除外される
+  6. H-0044 の FoldPreview と統合されている
+  7. Storybook にストーリーが追加されている
+
+---
+
+### H-0046: カラム値分布バーコンポーネントの追加
+- **Status:** proposed
+- **Scope:** Frontend
+- **Related:** BLUEPRINT.md §4.2.1（Column Settings）、frontend/src/components/workspace/DataPanel.tsx
+- **Context:** 現在の Column Settings テーブルはカラム名・ユニーク数・Type・除外状態のみを表示する。LizyML-Widget ではカラム統計取得時にユニーク値のヒストグラム/分布バー（`DistributionBar`）を表示しており、カテゴリカラムの値分布把握や CV カットオフ設定に有効。また、数値カラムの分布の偏りを視覚的に確認できることで、前処理の必要性判断に役立つ。
+- **Proposal:**
+  1. `DistributionBar` コンポーネントを新規作成（`frontend/src/components/workspace/DistributionBar.tsx`）
+  2. 表示:
+     - 横バー形式。各値の出現頻度に比例した幅のセグメント
+     - カテゴリカル: 上位 N 値 + "other" セグメント（色分け）
+     - 数値: ヒストグラム風バー（ビン分割）
+     - ホバーで値と件数のツールチップ表示
+  3. データソース: `GET /api/workspace/data/column-stats/{col}` のレスポンスに `value_counts` を追加（上位 20 値 + other）
+  4. 利用箇所:
+     - Column Settings テーブルの行展開（Accordion）で表示
+     - H-0045 の BlockedGroupKFoldEditor のカットオフ選択画面
+  5. サイズ: 高さ 8px、幅は親コンテナに追従
+- **Impact:** frontend/src/components/workspace/DistributionBar.tsx（新規）、DataPanel.tsx（行展開追加）、api/workspace.py（column-stats レスポンス拡張）、services/data.py
+- **Compatibility:** 非破壊的（UI 追加 + API レスポンス拡張）
+- **Alternatives:**
+  - Plotly ヒストグラムで描画する案 → 8px バーに Plotly は過剰。CSS で十分
+  - テキストで上位値を列挙する案 → 分布の偏りが直感的に伝わらない
+- **Acceptance Criteria:**
+  1. カラム選択時にユニーク値の分布バーが表示される
+  2. ホバーで値と件数が確認できる
+  3. カテゴリ/数値カラムで適切な表示が切り替わる
+  4. API が `value_counts` を返す
+  5. Storybook にストーリーが追加されている
+
+---
+
+### H-0047: Fold 進捗のリアルタイムスコア表示
+- **Status:** proposed
+- **Scope:** Frontend
+- **Related:** BLUEPRINT.md §4.2.3（Results Panel — Running 状態）、frontend/src/components/workspace/ResultsPanel.tsx
+- **Context:** 現在の進捗表示は WebSocket 経由のテキストメッセージを蓄積表示するのみ。LizyML-Widget では `ProgressView.tsx` で Fold ごとの評価スコアを逐次表示しており、学習の進行状況と品質を早期に把握できる:
+  ```
+  Fold 1/5: AUC = 0.892 ✓
+  Fold 2/5: AUC = 0.905 ✓
+  Fold 3/5: ──（実行中）
+  ```
+  これにより、早期のスコア劣化を検知してキャンセル→設定見直しの判断が可能になる。
+- **Proposal:**
+  1. WebSocket 進捗メッセージに `fold_results` フィールドを追加（バックエンド）:
+     ```json
+     {
+       "type": "progress",
+       "current": 2, "total": 5,
+       "message": "Training fold 3/5...",
+       "fold_results": [
+         { "fold": 1, "metric": "auc", "score": 0.892 },
+         { "fold": 2, "metric": "auc", "score": 0.905 }
+       ]
+     }
+     ```
+  2. `FoldProgressList` コンポーネントを新規作成:
+     - 完了 fold: メトリクス名 + スコア + ✓ アイコン（緑）
+     - 実行中 fold: プログレスインジケータ
+     - 未実行 fold: ダッシュ（──）
+  3. ResultsPanel の Running 状態に `FoldProgressList` を追加
+  4. Fit/Tune の進捗コールバック (`on_progress`) で fold 完了時にスコアを含める
+- **Impact:** frontend/src/components/workspace/FoldProgressList.tsx（新規）、ResultsPanel.tsx（組み込み）、services/training.py（fold_results 追加）、ws/progress.py（WebSocket メッセージ拡張）
+- **Compatibility:** 非破壊的（WebSocket メッセージにフィールド追加。既存フィールドは変更なし）
+- **Alternatives:**
+  - 完了後にのみ全 fold スコアを表示する案 → 早期キャンセル判断ができない
+  - ログテキストにスコアを埋め込む案 → パースが必要で脆弱。構造化データのほうが確実
+- **Acceptance Criteria:**
+  1. Fit/Tune 実行中に完了した fold のスコアがリアルタイム表示される
+  2. 未完了の fold はダッシュで表示される
+  3. スコアの劣化が視覚的に判別できる
+  4. 既存の進捗表示（メッセージ、プログレスバー）が維持される
+  5. Storybook にストーリーが追加されている
+
+---
+
+### H-0048: Search Space Fixed モードのセグメントボタン表示
+- **Status:** proposed
+- **Scope:** Frontend
+- **Related:** BLUEPRINT.md §4.2.2（Tune タブ — Search Space）、frontend/src/components/workspace/SearchSpaceTable.tsx
+- **Context:** 現在の `FixedValueEditor` は boolean と少数 enum（2-4個）の値に対して Select ドロップダウンを使用している。LizyML-Widget では `SearchSpace.tsx` で boolean と少数 enum をセグメントボタン（SegmentGroup）で表示しており、1クリックで値を切り替え可能。探索空間の設定は反復的に行う操作であり、クリック数の削減が UX 向上に直結する。
+- **Proposal:**
+  1. `FixedValueEditor` を以下のルールで表示方法を分岐:
+     - `boolean` → SegmentGroup（`True` / `False` の2ボタン）— 現状維持（既に実装済み）
+     - `enum` で選択肢が **4個以下** → SegmentGroup
+     - `enum` で選択肢が **5個以上** → Select ドロップダウン（現状維持）
+     - `array` with enum items → ChipGroup（現状維持）
+  2. SegmentGroup のスタイル: shadcn ToggleGroup を使用。コンパクトサイズ（`size="sm"`）
+  3. 閾値（4個）は定数として抽出し、将来の調整を容易にする
+- **Impact:** frontend/src/components/workspace/SearchSpaceTable.tsx（FixedValueEditor 分岐追加）
+- **Compatibility:** 非破壊的（表示方法の変更のみ。データ形式は変更なし）
+- **Alternatives:**
+  - 全 enum にセグメントボタンを使う案 → 選択肢が多い場合にレイアウトが崩れる
+  - Radio ボタンにする案 → セグメントボタンのほうがコンパクトで探索空間テーブルに適合する
+- **Acceptance Criteria:**
+  1. boolean パラメータがセグメントボタンで表示される
+  2. 4個以下の enum パラメータがセグメントボタンで表示される
+  3. 5個以上の enum は従来の Select ドロップダウンのまま
+  4. 値の選択が1クリックで完了する
+  5. Storybook にストーリーが追加されている
+
+---
+
+### H-0049: Running 中の Config 編集ロック
+- **Status:** proposed
+- **Scope:** Frontend
+- **Related:** BLUEPRINT.md §4.2.2（Model Panel）、frontend/src/components/workspace/ModelPanel.tsx、TuneTab.tsx
+- **Context:** 現在の Studio では Fit/Tune 実行中（Running 状態）でも Model Panel と Tune タブの Config 編集が可能。ユーザーが実行中に Config を変更すると、表示中の結果と Config の対応関係が不明確になり混乱を招く。LizyML-Widget では Running 中に `pointer-events: none` + `opacity: 0.6` で Config 編集を物理的にブロックしており（ConfigTab.tsx L198）、実行中の Config 変更による混乱を防止している。
+- **Proposal:**
+  1. Model Panel と Tune タブに Running 状態の検出を追加
+  2. Running 中の表示:
+     - Config フォーム全体に `pointer-events: none` + `opacity: 0.6` を適用
+     - フォーム上部にインフォバー表示: "ジョブ実行中は Config を変更できません"（shadcn Alert、info variant）
+  3. Fit/Tune ボタンを Running 中は "Running..." テキスト + disabled 状態に変更
+  4. Cancel ボタンのみ操作可能に維持
+  5. Running → Completed/Failed 遷移時にロックを自動解除
+- **Impact:** frontend/src/components/workspace/ModelPanel.tsx、TuneTab.tsx、ConfigForm.tsx
+- **Compatibility:** 非破壊的（UI 動作変更のみ）
+- **Alternatives:**
+  - 変更を許可し次回ジョブに反映する案（現状） → ユーザーが「変更が即座に反映される」と誤解するリスク
+  - 警告ダイアログを表示するが変更は許可する案 → ダイアログ疲れを起こし、結局混乱を防げない
+- **Acceptance Criteria:**
+  1. Running 中に Config フォームが操作不可になる
+  2. インフォバーで理由が表示される
+  3. Cancel ボタンは操作可能
+  4. 完了後にロックが解除される
+  5. Fit/Tune ボタンが Running 中に disabled になる
+
+---
+
+### H-0050: Jobs 詳細画面の KPI カード表示統一
+- **Status:** proposed
+- **Scope:** Frontend
+- **Related:** BLUEPRINT.md §4.3.2（Jobs 詳細画面）、frontend/src/components/jobs/CompletedContent.tsx
+- **Context:** Workspace の ResultsPanel ではメトリクスを **KPI カード形式**（metric name + IS / OOS / Std の3値カード）で表示しているが、Jobs 詳細画面の CompletedContent では **テーブル形式**（ScoreSection）で表示している。同じ Fit 結果を見ているのに表示形式が異なり、ユーザー体験の一貫性が損なわれている。
+- **Proposal:**
+  1. CompletedContent のメトリクス表示を ResultsPanel と同じ KPI カードコンポーネントに統一
+  2. KPI カードコンポーネントを `components/shared/MetricCards.tsx` として抽出し、ResultsPanel と CompletedContent の両方で使用
+  3. ScoreSection（テーブル形式）は KPI カードの下に "View Details" リンクで展開可能なアコーディオンとして残す（全 fold の詳細を見たい場合用）
+- **Impact:** frontend/src/components/jobs/CompletedContent.tsx（KPI カード使用）、frontend/src/components/shared/MetricCards.tsx（新規抽出）、frontend/src/components/workspace/ResultsPanel.tsx（共通コンポーネント使用）
+- **Compatibility:** 非破壊的（表示変更のみ）
+- **Alternatives:**
+  - ResultsPanel をテーブル形式に統一する案 → KPI カードのほうが一目でスコアを把握しやすく、Workspace の反復作業に適している
+  - Jobs 詳細のみ独自デザインにする案 → 一貫性がない
+- **Acceptance Criteria:**
+  1. Jobs 詳細画面で KPI カードが表示される
+  2. ResultsPanel と同じコンポーネントを使用している
+  3. テーブル形式はアコーディオン内で引き続き利用可能
+  4. Storybook にストーリーが追加されている
+
+---
+
+### H-0051: Jobs 詳細画面の Learning Curve メトリクスフィルター追加
+- **Status:** proposed
+- **Scope:** Frontend
+- **Related:** BLUEPRINT.md §4.3.2（Jobs 詳細画面 — Plots）、frontend/src/components/jobs/CompletedContent.tsx
+- **Context:** Workspace の ResultsPanel では Learning Curve プロットのメトリクスフィルター（chip 選択で表示メトリクスを切替）が実装されているが、Jobs 詳細画面の CompletedContent では Learning Curve フィルターが未実装。複数メトリクスを使用する場合、全メトリクスの Learning Curve が重なって表示され見づらい。LizyML-Widget でも Learning Curve のメトリクスフィルターは Results 画面の重要機能として実装されている。
+- **Proposal:**
+  1. CompletedContent の PlotSection に `lcMetrics` state を追加
+  2. Learning Curve 選択時にメトリクス chip フィルターを表示
+  3. chip 選択時に `GET /api/jobs/{id}/plots/learning-curve?metrics={metric}` を呼び出し
+  4. ResultsPanel と同じフィルター UI コンポーネントを共用
+- **Impact:** frontend/src/components/jobs/CompletedContent.tsx（state + UI 追加）、PlotSection.tsx（共通化確認）
+- **Compatibility:** 非破壊的（UI 追加のみ）
+- **Alternatives:**
+  - Plotly のレジェンドクリックで非表示にする案 → ユーザーが知らないと使えない、サーバー側でフィルターすべき
+- **Acceptance Criteria:**
+  1. Jobs 詳細画面の Learning Curve にメトリクスフィルターが表示される
+  2. chip 選択でプロットが更新される
+  3. Workspace ResultsPanel と同じ UI
+
+---
+
+### H-0052: Jobs 詳細画面の Importance Kind セレクター追加
+- **Status:** proposed
+- **Scope:** Frontend
+- **Related:** BLUEPRINT.md §4.3.2（Jobs 詳細画面 — Plots）、frontend/src/components/jobs/CompletedContent.tsx
+- **Context:** Workspace の ResultsPanel には Feature Importance の Kind セレクター（Split / Gain / SHAP の切替）が Segment group で実装されている（PlotSection.tsx）が、Jobs 詳細画面の CompletedContent ではデフォルトの kind のみ表示され、Kind を切り替える UI がない。H-0033 で追加された Importance Kind 選択機能が Jobs 画面に反映されていない。
+- **Proposal:**
+  1. CompletedContent の PlotSection に `importanceKind` state を追加
+  2. Importance プロット選択時に Kind セレクター（Segment group: Split / Gain / SHAP）を表示
+  3. Kind 切替時に `GET /api/jobs/{id}/plots/importance?kind={kind}` を呼び出し
+  4. ResultsPanel と同じセレクター UI を共用
+- **Impact:** frontend/src/components/jobs/CompletedContent.tsx（state + UI 追加）
+- **Compatibility:** 非破壊的（UI 追加のみ）
+- **Alternatives:** なし（Workspace との一貫性維持のため）
+- **Acceptance Criteria:**
+  1. Jobs 詳細画面の Importance プロットに Kind セレクターが表示される
+  2. Kind 切替でプロットが更新される
+  3. Workspace ResultsPanel と同じ UI
+
+---
+
+### H-0053: Tune Tab — Search Space デフォルト Range 自動ポピュレートの Widget 側への逆輸入提案
+- **Status:** proposed
+- **Scope:** Frontend
+- **Related:** BLUEPRINT.md §4.2.2（Tune タブ — Search Space）
+- **Context:** LizyStudio の SearchSpaceTable は初回表示時に主要パラメータ（`learning_rate`, `num_leaves`, `n_estimators`, `max_depth`）を Range モードで自動ポピュレートする（`RANGE_DEFAULTS` + `KNOWN_PARAMS` 定数）。これにより、初心者が Tune を始める際の「全パラメータが Fixed で何も探索されない」問題を回避している。LizyML-Widget ではこの機能がなく、ユーザーが手動で Range に切り替える必要がある。
+  本 Proposal は Studio 側の対応ではなく、Widget（`search_space_catalog`）のデフォルトモードを拡張し、Adapter が `default_mode: "range"` を指定可能にすることで、Studio と Widget の両方でデフォルト Range パラメータを Adapter 契約で統一的に制御する提案。
+- **Proposal:**
+  1. `search_space_catalog` の各エントリに `default_mode: "fixed" | "range" | "choice"` フィールドを追加（デフォルト: `"fixed"`、後方互換）
+  2. `default_mode: "range"` の場合、`default_range: { low, high, log }` フィールドも追加可能
+  3. Studio の `RANGE_DEFAULTS` / `KNOWN_PARAMS` ハードコードを廃止し、Adapter 契約から取得
+  4. Widget の SearchSpace も `default_mode` を参照して初期モードを設定
+  5. LizyML Adapter に以下のデフォルト Range を設定:
+     - `learning_rate`: { low: 0.01, high: 0.3, log: true }
+     - `num_leaves`: { low: 15, high: 127, log: false }
+     - `n_estimators`: { low: 50, high: 500, log: false }
+     - `max_depth`: { low: 3, high: 12, log: false }
+- **Impact:** backends/types.py（CatalogEntry 型拡張）、backends/lizyml.py（デフォルト Range 設定）、Studio: SearchSpaceTable.tsx（RANGE_DEFAULTS 廃止）、Widget: SearchSpace.tsx（default_mode 参照）
+- **Compatibility:** 非破壊的（`default_mode` はオプショナル、デフォルト `"fixed"` で後方互換）
+- **Alternatives:**
+  - Studio のハードコードを維持する案 → Adapter 追加時に Studio 側のコード変更が必要になり拡張性が低い
+  - Widget のみに対応する案 → Studio と Widget で異なるデフォルトになり一貫性がない
+- **Acceptance Criteria:**
+  1. `search_space_catalog` のエントリに `default_mode` が含まれる
+  2. Studio の SearchSpaceTable が Adapter 契約から Range デフォルトを取得する
+  3. Widget の SearchSpace が `default_mode: "range"` のパラメータを Range モードで初期表示する
+  4. Studio の `RANGE_DEFAULTS` ハードコードが削除されている
+  5. 既存テストが全パス
+
+---
+
+### H-0054: PyPI 配布準備 — LICENSE / README / メタデータ整備
+- **Status:** accepted
+- **Scope:** Build
+- **Related:** BLUEPRINT.md §9.3
+- **Context:** `pyproject.toml` で `license = "MIT"` と宣言しているが、リポジトリルートに LICENSE ファイルが存在しない。README.md も空でありPyPI プロジェクトページが空になる。classifiers / keywords が不十分で検索性が低い。py.typed マーカーもなく型情報の配布ができない。PyPI 初回登録に向けてこれらを整備する必要がある。
+- **Proposal:**
+  1. リポジトリルートに `LICENSE` ファイル（MIT）を作成
+  2. `README.md` にプロジェクト概要・インストール方法・使い方を記載（英語）
+  3. `pyproject.toml` に classifiers（Development Status, Python versions, Topic 等）、keywords、追加 URLs（Documentation, Issues）を追加
+  4. `src/lizystudio/py.typed` マーカーファイルを作成
+- **Impact:** LICENSE（新規）、README.md（既存・空→内容追加）、pyproject.toml（メタデータ追加）、src/lizystudio/py.typed（新規）
+- **Compatibility:** 非破壊的（メタデータ追加のみ、コード変更なし）
+- **Alternatives:**
+  - LICENSE をプロジェクトルートでなく pyproject.toml 内に inline 記載する案 → PyPI/GitHub ともにファイルとして存在するのが標準
+  - README を日本語で書く案 → PyPI は国際ユーザー向けなので英語が適切
+- **Acceptance Criteria:**
+  1. `LICENSE` ファイルが存在し MIT 全文を含む
+  2. `README.md` にインストール・使い方が記載されている
+  3. `uv build` で生成される wheel に LICENSE が含まれる
+  4. PyPI メタデータに classifiers / keywords が反映される
+  5. `py.typed` が wheel に含まれる
+- **Decision:** 2026-04-04 accepted — 提案通り
