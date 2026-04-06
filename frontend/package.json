@@ -57,7 +57,7 @@
     "@types/react-dom": "^19.2.3",
     "@types/react-plotly.js": "^2.6.4",
     "@vitejs/plugin-react": "^5.1.4",
-    "@vitest/coverage-istanbul": "^4.1.0",
+    "@vitest/coverage-istanbul": "^4.1.2",
     "jsdom": "^25.0.1",
     "msw": "^2.12.14",
     "openapi-typescript": "^7.13.0",
@@ -65,6 +65,6 @@
     "storybook": "^8.6.18",
     "typescript": "~5.9.3",
     "vite": "^6.4.1",
-    "vitest": "^4.1.0"
+    "vitest": "^4.1.2"
   }
 }
