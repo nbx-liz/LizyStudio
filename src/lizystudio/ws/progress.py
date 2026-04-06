@@ -105,12 +105,24 @@ class ProgressBroadcaster:
         return callback
 
 
+_ALLOWED_WS_ORIGINS: set[str] = {
+    "http://localhost:5173",
+    "http://localhost:8501",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:8501",
+}
+
+
 async def websocket_progress(
     websocket: WebSocket,
     job_id: str,
     broadcaster: ProgressBroadcaster,
 ) -> None:
     """WebSocket handler for ``/ws/jobs/{job_id}/progress``."""
+    origin = websocket.headers.get("origin", "")
+    if origin and origin not in _ALLOWED_WS_ORIGINS:
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     queue = broadcaster.subscribe(job_id)
     try:

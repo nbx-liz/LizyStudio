@@ -15,6 +15,7 @@ from fastapi import Request
 
 from lizystudio.backends.base import BackendAdapter
 from lizystudio.backends.types import DataRef, FitSummary, TuningSummary
+from lizystudio.security import validate_path_within  # noqa: E402
 
 
 @dataclass
@@ -57,10 +58,7 @@ class JobStore:
     def _job_dir(self, job_id: str) -> Path:
         """Resolve job directory with traversal guard."""
         candidate = (self.jobs_dir / job_id).resolve()
-        root = self.jobs_dir.resolve()
-        if not str(candidate).startswith(str(root) + "/"):
-            msg = f"job_id escapes jobs_dir: {job_id!r}"
-            raise ValueError(msg)
+        validate_path_within(candidate, self.jobs_dir)
         return candidate
 
     # --- CRUD ---
@@ -212,7 +210,7 @@ class JobStore:
         self._write_json(job_dir / "meta.json", meta)
 
     def _load_job(self, job_id: str) -> Job:
-        job_dir = self.jobs_dir / job_id
+        job_dir = self._job_dir(job_id)
         meta = self._read_json(job_dir / "meta.json")
 
         fit_result = None

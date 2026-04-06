@@ -23,6 +23,7 @@ import pandas as pd
 
 from lizystudio.backends.base import BackendAdapter
 from lizystudio.backends.types import DataRef
+from lizystudio.security import validate_path_within  # noqa: E402
 from lizystudio.services.data import load_dataframe, make_data_ref
 from lizystudio.services.jobs import Job, JobStore
 
@@ -48,10 +49,7 @@ class InferenceStore:
 
     def _inf_dir(self, job_id: str, inf_id: str) -> Path:
         candidate = (self.jobs_dir / job_id / "inferences" / inf_id).resolve()
-        root = self.jobs_dir.resolve()
-        if not str(candidate).startswith(str(root) + "/"):
-            msg = f"Path escapes jobs_dir: {candidate}"
-            raise ValueError(msg)
+        validate_path_within(candidate, self.jobs_dir)
         return candidate
 
     # --- CRUD ---

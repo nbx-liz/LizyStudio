@@ -36,7 +36,7 @@ def validate_static_path(path: Path, static_dir: Path) -> Path | None:
     """
     resolved = path.resolve()
     root = static_dir.resolve()
-    if not (str(resolved).startswith(str(root) + os.sep) or resolved == root):
+    if not (resolved == root or str(resolved).startswith(str(root) + os.sep)):
         return None
     if not resolved.is_file():
         return None

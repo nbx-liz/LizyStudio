@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -25,6 +26,8 @@ from lizystudio.services.jobs import JobStore
 from lizystudio.services.workspace import WorkspaceState
 from lizystudio.ws.progress import ProgressBroadcaster, websocket_progress
 
+logger = logging.getLogger(__name__)
+
 STATIC_DIR = Path(__file__).parent / "static"
 
 
@@ -42,7 +45,7 @@ def _warmup_adapter(adapter: object) -> None:
             adapter.get_ui_schema()
     except Exception:  # noqa: BLE001
         # Non-fatal: the adapter may work once imports settle.
-        pass
+        logger.warning("Adapter warmup failed", exc_info=True)
 
 
 def create_app() -> FastAPI:
@@ -84,6 +87,15 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Security headers middleware
+    @application.middleware("http")
+    async def add_security_headers(request: object, call_next: object) -> object:  # type: ignore[type-arg]
+        response = await call_next(request)  # type: ignore[misc]
+        response.headers["X-Content-Type-Options"] = "nosniff"  # type: ignore[union-attr]
+        response.headers["X-Frame-Options"] = "DENY"  # type: ignore[union-attr]
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"  # type: ignore[union-attr]
+        return response
 
     # Exception handlers
     application.add_exception_handler(StudioError, studio_error_handler)  # type: ignore[arg-type]

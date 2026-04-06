@@ -16,6 +16,14 @@ import {
 } from "@/api/workspace";
 import { Button } from "@/components/ui/button";
 import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -50,6 +58,8 @@ export function ModelPanel({
   running,
 }: ModelPanelProps) {
   const [activeTab, setActiveTab] = useState<"fit" | "tune">("fit");
+  const [presetDialogOpen, setPresetDialogOpen] = useState(false);
+  const [presetName, setPresetName] = useState("");
   const [errors, setErrors] = useState<ConfigError[]>([]);
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -115,8 +125,9 @@ export function ModelPanel({
         try {
           const result = await validateConfig(newConfig);
           setErrors(result.errors);
-        } catch {
-          // silent
+        } catch (err) {
+          // Validation network errors are non-fatal but logged for debugging
+          console.warn("Config validation failed:", err);
         }
       }, 500);
     },
@@ -173,10 +184,15 @@ export function ModelPanel({
 
   const handleSavePreset = () => {
     if (!config) return;
-    const name = prompt("Preset name:");
-    if (!name?.trim()) return;
-    savePreset(name.trim(), config);
-    toast.success(`Preset "${name.trim()}" saved`);
+    setPresetName("");
+    setPresetDialogOpen(true);
+  };
+
+  const confirmSavePreset = () => {
+    if (!config || !presetName.trim()) return;
+    savePreset(presetName.trim(), config);
+    toast.success(`Preset "${presetName.trim()}" saved`);
+    setPresetDialogOpen(false);
   };
 
   const handleLoadPreset = (name: string) => {
@@ -390,6 +406,40 @@ export function ModelPanel({
           />
         </div>
       </div>
+
+      {/* Save Preset Dialog */}
+      <Dialog open={presetDialogOpen} onOpenChange={setPresetDialogOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Save Preset</DialogTitle>
+          </DialogHeader>
+          <Input
+            placeholder="Preset name"
+            value={presetName}
+            onChange={(e) => setPresetName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") confirmSavePreset();
+            }}
+            autoFocus
+          />
+          <DialogFooter>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setPresetDialogOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={confirmSavePreset}
+              disabled={!presetName.trim()}
+            >
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

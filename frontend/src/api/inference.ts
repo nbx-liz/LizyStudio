@@ -128,6 +128,6 @@ export function fetchInferenceComparison(
   jobId: string,
 ): Promise<ComparisonStats> {
   return apiFetch(
-    `/inference/${infId}/comparison/${otherInfId}?job_id=${encodeURIComponent(jobId)}`,
+    `/inference/${infId}/comparison/${encodeURIComponent(otherInfId)}?job_id=${encodeURIComponent(jobId)}`,
   );
 }

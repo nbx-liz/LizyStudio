@@ -154,7 +154,8 @@ def _build_report_html(
 <head>
     <meta charset="utf-8">
     <title>{title}</title>
-    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"
+            crossorigin="anonymous"></script>
     <style>
         body {{ font-family: system-ui, sans-serif;
                max-width: 1000px; margin: 0 auto;

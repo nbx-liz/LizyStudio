@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging  # noqa: F401
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,8 @@ from lizystudio.backends.types import (
     PredictionSummary,
     TuningSummary,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class LizyMLAdapter:
@@ -243,7 +246,7 @@ class LizyMLAdapter:
             model.tuning_plot()
             plots.append("tuning")
         except Exception:  # noqa: BLE001
-            pass
+            logger.debug("tuning_plot not available", exc_info=True)
         return plots
 
     # -- Persistence --

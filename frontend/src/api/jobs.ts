@@ -20,7 +20,9 @@ export function fetchJobImportance(
   jobId: string,
   kind = "default",
 ): Promise<ImportanceResponse> {
-  return apiFetch(`/jobs/${jobId}/importance?kind=${kind}`);
+  return apiFetch(
+    `/jobs/${encodeURIComponent(jobId)}/importance?kind=${encodeURIComponent(kind)}`,
+  );
 }
 
 export function fetchJobImportanceKinds(jobId: string): Promise<string[]> {
@@ -32,9 +34,9 @@ export function fetchJobPlot(
   plotType: string,
   options?: { metrics?: string[] },
 ): Promise<PlotResponse> {
-  let url = `/jobs/${jobId}/plot/${plotType}`;
+  let url = `/jobs/${encodeURIComponent(jobId)}/plot/${encodeURIComponent(plotType)}`;
   if (options?.metrics && options.metrics.length > 0) {
-    url += `?metrics=${options.metrics.join(",")}`;
+    url += `?metrics=${options.metrics.map(encodeURIComponent).join(",")}`;
   }
   return apiFetch(url);
 }

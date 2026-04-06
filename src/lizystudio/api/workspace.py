@@ -12,8 +12,9 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from fastapi import APIRouter, Depends, Request, UploadFile
+from fastapi import APIRouter, Depends, Query, Request, UploadFile
 from fastapi.responses import Response
+from pydantic import BaseModel
 
 import lizystudio.security as security
 from lizystudio.api.errors import (
@@ -85,13 +86,17 @@ def workspace_reset(ws: WorkspaceState = Depends(get_workspace)) -> dict[str, st
 # --- Data endpoints (BLUEPRINT §5.2 Data) ---
 
 
+class DataPathRequest(BaseModel):
+    path: str
+
+
 @router.post("/data/path")
 def data_load_path(
-    body: dict[str, Any],
+    body: DataPathRequest,
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, Any]:
     """Load data from a local file path."""
-    path = body.get("path", "")
+    path = body.path
     try:
         validate_path_within(Path(path), security.ALLOWED_FILES_ROOT)
     except ValueError as exc:
@@ -141,7 +146,7 @@ async def data_upload(
 
 @router.get("/data/preview")
 def data_preview(
-    rows: int = 50,
+    rows: int = Query(default=50, ge=1, le=10000),
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, Any]:
     """Return first N rows of loaded data."""
@@ -235,8 +240,9 @@ async def config_upload(
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, Any]:
     """Load config from an uploaded YAML/JSON file."""
+    _MAX_CONFIG_BYTES = 1 * 1024 * 1024  # 1 MB — config files are small
     try:
-        content = await read_upload_checked(file)
+        content = await read_upload_checked(file, max_bytes=_MAX_CONFIG_BYTES)
     except ValueError as exc:
         raise FileInvalidError(str(exc)) from exc
     filename = file.filename or "config.yaml"

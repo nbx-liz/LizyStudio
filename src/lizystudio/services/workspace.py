@@ -49,7 +49,8 @@ class WorkspaceState:
 
     def track_temp_file(self, path: str) -> None:
         """Register a temp file for cleanup on reset."""
-        self._temp_files.append(path)
+        with self._lock:
+            self._temp_files.append(path)
 
     def set_data(self, dataframe: pd.DataFrame, data_ref: DataRef) -> None:
         """Load data into the workspace."""

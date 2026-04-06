@@ -10,9 +10,9 @@ import tempfile
 from dataclasses import asdict
 from io import StringIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal  # noqa: UP035
 
-from fastapi import APIRouter, Depends, UploadFile
+from fastapi import APIRouter, Depends, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -60,7 +60,7 @@ def _get_job_or_404(job_id: str, job_store: JobStore) -> Any:
 
 
 class DataSource(BaseModel):
-    source_type: str  # "path" or "upload"
+    source_type: Literal["path", "upload"]
     path: str
 
 
@@ -152,8 +152,8 @@ def inference_get(
 def inference_predictions(
     inf_id: str,
     job_id: str,
-    rows: int = 50,
-    offset: int = 0,
+    rows: int = Query(default=50, ge=1, le=10000),
+    offset: int = Query(default=0, ge=0),
     job_store: JobStore = Depends(get_job_store),
 ) -> dict[str, Any]:
     """Get paginated predictions table."""

@@ -36,11 +36,8 @@ export function ExportDialog({
     setOutputPath(`./exports/job_${jobNumber}_${type}`);
   };
 
-  const isPathValid =
-    outputPath.trim().length > 0 &&
-    !outputPath.includes("..") &&
-    !outputPath.startsWith("/etc") &&
-    !outputPath.startsWith("/usr");
+  // Client-side: only check non-empty. Server enforces path safety.
+  const isPathValid = outputPath.trim().length > 0;
 
   const handleExport = async () => {
     if (!isPathValid) {

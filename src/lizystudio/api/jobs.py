@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict
-from typing import Any
+from pathlib import Path  # noqa: F811
+from typing import Any, Literal  # noqa: UP035
 
 from fastapi import APIRouter, BackgroundTasks, Depends
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+import lizystudio.security as security
 from lizystudio.api.errors import (
     BackendError,
     JobNotCompletedError,
@@ -21,6 +23,7 @@ from lizystudio.api.errors import (
     JobRunningError,
     StudioError,
 )
+from lizystudio.security import validate_path_within
 from lizystudio.services.export import export_code_as_zip, export_model, export_report
 from lizystudio.services.jobs import (
     Job,
@@ -250,6 +253,9 @@ def get_job_plot_endpoint(
 
     For ``learning-curve``, pass ``?metrics=auc,f1`` to filter subplots.
     """
+    _VALID_PLOT_TYPE_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+    if not _VALID_PLOT_TYPE_RE.match(plot_type):
+        raise StudioError("INVALID_PARAM", f"Invalid plot type: {plot_type!r}", 400)
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
     kwargs: dict[str, Any] = {}
@@ -297,7 +303,7 @@ def get_job_available_plots_endpoint(
 
 
 class ExportRequest(BaseModel):
-    export_type: str  # "model" or "report"
+    export_type: Literal["model", "report"]
     output_path: str
 
 
@@ -309,14 +315,9 @@ def export_job(
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, str]:
     """Export model or report to the given path (H-0005)."""
-    from pathlib import Path as _Path
-
-    import lizystudio.security as security
-    from lizystudio.security import validate_path_within
-
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
-    validate_path_within(_Path(body.output_path), security.ALLOWED_FILES_ROOT)
+    validate_path_within(Path(body.output_path), security.ALLOWED_FILES_ROOT)
     try:
         if body.export_type == "report":
             path = export_report(
