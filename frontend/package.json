@@ -61,7 +61,7 @@
     "jsdom": "^25.0.1",
     "msw": "^2.12.14",
     "openapi-typescript": "^7.13.0",
-    "@storybook/test-runner": "^0.22.0",
+    "@storybook/test-runner": "^0.23.0",
     "storybook": "^8.6.18",
     "typescript": "~5.9.3",
     "vite": "^6.4.1",
