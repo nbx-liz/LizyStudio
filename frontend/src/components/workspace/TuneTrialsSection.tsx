@@ -1,3 +1,4 @@
+import { ArrowRight } from "lucide-react";
 import type { JobDetail, PlotResponse, TuneResult } from "@/api/types";
 import {
   AccordionContent,
@@ -61,16 +62,17 @@ export function TuneTrialsSection({
         </Table>
         {onApplyToFit && (
           <Button
-            variant="outline"
             size="sm"
-            className="mt-2"
+            className="mt-3"
             onClick={() => {
-              // Restore full config snapshot with best_params applied
-              const baseConfig = (job.config as Record<string, unknown>) ?? {};
+              // Restore full config snapshot with best_params applied,
+              // stripping the tuning section (not needed for fit).
+              const { tuning: _stripped, ...baseWithoutTuning } =
+                (job.config as Record<string, unknown>) ?? {};
               const baseModel =
-                (baseConfig.model as Record<string, unknown>) ?? {};
-              const tuneConfig: Record<string, unknown> = {
-                ...baseConfig,
+                (baseWithoutTuning.model as Record<string, unknown>) ?? {};
+              const fitConfig: Record<string, unknown> = {
+                ...baseWithoutTuning,
                 model: {
                   ...baseModel,
                   params: {
@@ -79,10 +81,11 @@ export function TuneTrialsSection({
                   },
                 },
               };
-              onApplyToFit(tuneConfig);
+              onApplyToFit(fitConfig);
             }}
           >
             Apply to Fit
+            <ArrowRight className="ml-1 h-3.5 w-3.5" />
           </Button>
         )}
       </section>

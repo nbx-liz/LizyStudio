@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchJobImportance,
   fetchJobImportanceKinds,
@@ -7,8 +7,15 @@ import {
   fetchJobPlots,
   fetchJobSplitSummary,
 } from "@/api/jobs";
-import type { JobDetail } from "@/api/types";
-import { Accordion } from "@/components/ui/accordion";
+import type { JobDetail, MetricEntry } from "@/api/types";
+import { metricEntryName } from "@/api/types";
+import { MetricCards } from "@/components/shared/MetricCards";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import { FoldDetailsSection } from "@/components/workspace/FoldDetailsSection";
 import { PlotSection } from "@/components/workspace/PlotSection";
 import { ScoreSection } from "@/components/workspace/ScoreSection";
@@ -48,14 +55,30 @@ export function CompletedContent({
     retry: false,
   });
 
-  const { data: learningCurve } = useQuery({
-    queryKey: ["job-plot", job.job_id, "learning-curve"],
-    queryFn: () => fetchJobPlot(job.job_id, "learning-curve"),
+  // Learning curve metric filter (H-0051) — single-select
+  const [lcMetric, setLcMetric] = useState<string | null>(null);
+  const lcInitialized = useRef(false);
+
+  const { data: learningCurve, isError: isLcError } = useQuery({
+    queryKey: ["job-plot", job.job_id, "learning-curve", lcMetric],
+    queryFn: () =>
+      fetchJobPlot(job.job_id, "learning-curve", {
+        metrics: lcMetric ?? undefined,
+      }),
     enabled:
       selectedPlot === "learning-curve" &&
       (plots?.includes("learning-curve") ?? false),
+    retry: false,
   });
 
+  // If LC filter fails (e.g. feval-only metric), fall back to unfiltered view
+  useEffect(() => {
+    if (isLcError && lcMetric !== null) {
+      setLcMetric(null);
+    }
+  }, [isLcError, lcMetric]);
+
+  // Importance kind selector (H-0052)
   const importanceEnabled = plots?.includes("importance") ?? false;
   const [importanceKind, setImportanceKind] = useState("split");
 
@@ -64,6 +87,17 @@ export function CompletedContent({
     queryFn: () => fetchJobImportanceKinds(job.job_id),
     enabled: importanceEnabled,
   });
+
+  // Sync initial kind with backend response when it differs
+  useEffect(() => {
+    if (
+      importanceKinds &&
+      importanceKinds.length > 0 &&
+      !importanceKinds.includes(importanceKind)
+    ) {
+      setImportanceKind(importanceKinds[0]);
+    }
+  }, [importanceKinds, importanceKind]);
 
   const { data: importance } = useQuery({
     queryKey: ["job-importance", job.job_id, importanceKind],
@@ -105,10 +139,46 @@ export function CompletedContent({
     : undefined;
   const hasFolds = fitResult != null && fitResult.fold_count > 1;
 
+  const evalConfig = (job.config?.evaluation as Record<string, unknown>) ?? {};
+
+  // Extract metric names for LC filter chips (H-0051).
+  const evalMetricNames = useMemo(() => {
+    const entries = Array.isArray(evalConfig.metrics)
+      ? (evalConfig.metrics as MetricEntry[])
+      : [];
+    const names = entries.map(metricEntryName);
+    if (names.length > 0) return names;
+    return metrics ? Object.keys(metrics) : [];
+  }, [evalConfig.metrics, metrics]);
+
+  // Initialize LC filter to first metric (single-select)
+  useEffect(() => {
+    if (lcInitialized.current) return;
+    if (evalMetricNames.length > 1) {
+      lcInitialized.current = true;
+      setLcMetric(evalMetricNames[0]);
+    } else if (evalMetricNames.length === 1) {
+      lcInitialized.current = true;
+    }
+  }, [evalMetricNames]);
+
   const annotateMetric = (name: string): string => {
-    const evalConfig =
-      (job.config?.evaluation as Record<string, unknown>) ?? {};
     if (name === "precision_at_k") {
+      // Look for MetricEntry dict form in evaluation.metrics
+      const entries = Array.isArray(evalConfig.metrics)
+        ? (evalConfig.metrics as MetricEntry[])
+        : [];
+      for (const entry of entries) {
+        if (
+          typeof entry === "object" &&
+          entry !== null &&
+          "precision_at_k" in entry
+        ) {
+          const k = entry.precision_at_k?.k;
+          return typeof k === "number" ? `${name}@${k}` : name;
+        }
+      }
+      // Fallback: check evaluation config directly
       const k = evalConfig.precision_at_k;
       return typeof k === "number" ? `${name}@${k}` : name;
     }
@@ -126,16 +196,16 @@ export function CompletedContent({
         />
       )}
 
-      {/* Score */}
+      {/* KPI Summary Cards (H-0050) */}
       {metrics && (
-        <ScoreSection
+        <MetricCards
           metrics={metrics}
           hasFolds={hasFolds}
           annotateMetric={annotateMetric}
         />
       )}
 
-      {/* Plots (including Learning Curve) */}
+      {/* Plots (including Learning Curve with filter H-0051, Importance with kind selector H-0052) */}
       {plots && plots.length > 0 && (
         <PlotSection
           plots={plots}
@@ -149,6 +219,9 @@ export function CompletedContent({
               : isPlotLoading
           }
           isError={isPlotError}
+          lcMetric={lcMetric}
+          onLcMetricChange={setLcMetric}
+          availableEvalMetrics={evalMetricNames}
           importanceKinds={importanceKinds}
           selectedImportanceKind={importanceKind}
           onImportanceKindChange={setImportanceKind}
@@ -160,6 +233,22 @@ export function CompletedContent({
       {/* Accordion sections */}
       <Accordion type="multiple">
         {tuneResult && <TrialResultsAccordionItem tuneResult={tuneResult} />}
+
+        {/* Score table (detailed fold view) inside accordion (H-0050) */}
+        {metrics && (
+          <AccordionItem value="score-details">
+            <AccordionTrigger className="text-sm">
+              View Details
+            </AccordionTrigger>
+            <AccordionContent>
+              <ScoreSection
+                metrics={metrics}
+                hasFolds={hasFolds}
+                annotateMetric={annotateMetric}
+              />
+            </AccordionContent>
+          </AccordionItem>
+        )}
 
         {fitResult && (
           <FoldDetailsSection

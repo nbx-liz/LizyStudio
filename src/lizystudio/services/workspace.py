@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+import re
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +31,8 @@ class WorkspaceState:
     current_job_id: str | None = None
     # Thread safety for background thread writes
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    # Background job thread tracking (H-0040)
+    _job_thread: threading.Thread | None = field(default=None, repr=False)
     # Temp files to clean up on reset
     _temp_files: list[str] = field(default_factory=list, repr=False)
 
@@ -42,6 +46,7 @@ class WorkspaceState:
             self.workspace_fit_result = None
             self.workspace_tune_result = None
             self.current_job_id = None
+            self._job_thread = None
             # Clean up tracked temp files
             for tmp in self._temp_files:
                 Path(tmp).unlink(missing_ok=True)
@@ -108,3 +113,74 @@ def load_config_from_file(
 def get_backend_name(ws: WorkspaceState) -> str:
     """Return the backend adapter name."""
     return ws.backend.info.name
+
+
+# --- Config patch operations (H-0037) ---
+
+
+# Allows letters, digits, underscores (single _ OK, __ rejected separately).
+_PATH_RE = re.compile(r"^[a-zA-Z_]\w*(\.[a-zA-Z_]\w*)*$")
+_ALLOWED_OPS = frozenset({"set", "unset", "merge"})
+
+
+def apply_config_patch(
+    config: dict[str, Any],
+    ops: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Apply patch operations to a config dict and return a new copy.
+
+    Each op is ``{"op": "set"|"unset"|"merge", ...}``.
+    ``merge`` performs a **shallow** (1-level) merge.
+    Raises ``ValueError`` on invalid path or op.
+    """
+    result = copy.deepcopy(config)
+    for op_dict in ops:
+        if not isinstance(op_dict, dict):
+            msg = "Each op must be a dict"
+            raise ValueError(msg)
+        op = op_dict.get("op", "")
+        path = op_dict.get("path", "")
+        value = op_dict.get("value")
+
+        if op not in _ALLOWED_OPS:
+            msg = f"Unsupported op: {op!r}. Allowed: {sorted(_ALLOWED_OPS)}"
+            raise ValueError(msg)
+        if not _PATH_RE.match(path):
+            msg = f"Invalid path: {path!r}"
+            raise ValueError(msg)
+        if "__" in path:
+            msg = f"Path contains dunder: {path!r}"
+            raise ValueError(msg)
+
+        parts = path.split(".")
+        _apply_single_op(result, parts, op, value)
+    return result
+
+
+def _apply_single_op(
+    target: dict[str, Any],
+    parts: list[str],
+    op: str,
+    value: Any,
+) -> None:
+    """Apply a single patch op at the given path."""
+    # Navigate to parent
+    current = target
+    for part in parts[:-1]:
+        if part not in current or not isinstance(current[part], dict):
+            current[part] = {}
+        current = current[part]
+
+    key = parts[-1]
+    if op == "set":
+        current[key] = value
+    elif op == "unset":
+        current.pop(key, None)
+    elif op == "merge":
+        if not isinstance(value, dict):
+            msg = f"merge value must be a dict, got {type(value).__name__}"
+            raise ValueError(msg)
+        existing = current.get(key, {})
+        if not isinstance(existing, dict):
+            existing = {}
+        current[key] = {**existing, **value}

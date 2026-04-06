@@ -11,6 +11,7 @@ vi.mock("@/api/jobs", () => ({
   fetchJobPlots: vi.fn().mockResolvedValue([]),
   fetchJobPlot: vi.fn().mockResolvedValue({ plotly_json: "{}" }),
   fetchJobImportance: vi.fn().mockResolvedValue({}),
+  fetchJobImportanceKinds: vi.fn().mockResolvedValue([]),
   fetchJobSplitSummary: vi.fn().mockResolvedValue([]),
 }));
 
@@ -109,10 +110,10 @@ afterEach(() => {
 });
 
 // ---------------------------------------------------------------------------
-// Fit result rendering
+// KPI Cards (H-0050)
 // ---------------------------------------------------------------------------
-describe("CompletedContent — fit result", () => {
-  it("renders score table with metrics", () => {
+describe("CompletedContent — KPI cards (H-0050)", () => {
+  it("renders KPI cards with metrics", () => {
     const job = makeFitJob();
     renderWithQuery(
       <CompletedContent
@@ -121,13 +122,13 @@ describe("CompletedContent — fit result", () => {
         onSelectPlot={vi.fn()}
       />,
     );
-    expect(screen.getByText("Score")).toBeInTheDocument();
+    expect(screen.getByTestId("kpi-cards")).toBeInTheDocument();
     expect(screen.getByText("auc")).toBeInTheDocument();
     expect(screen.getByText("0.9500")).toBeInTheDocument();
     expect(screen.getByText("0.9000")).toBeInTheDocument();
   });
 
-  it("shows OOS Std column when fold_count > 1", () => {
+  it("shows Std in KPI cards when fold_count > 1", () => {
     const job = makeFitJob();
     renderWithQuery(
       <CompletedContent
@@ -136,11 +137,11 @@ describe("CompletedContent — fit result", () => {
         onSelectPlot={vi.fn()}
       />,
     );
-    expect(screen.getByText("OOS Std")).toBeInTheDocument();
+    expect(screen.getByText("Std")).toBeInTheDocument();
     expect(screen.getByText("0.0100")).toBeInTheDocument();
   });
 
-  it("hides OOS Std column when fold_count is 1", () => {
+  it("hides Std in KPI cards when fold_count is 1", () => {
     const job = makeFitJob({
       fit_result: {
         metrics: {
@@ -157,7 +158,19 @@ describe("CompletedContent — fit result", () => {
         onSelectPlot={vi.fn()}
       />,
     );
-    expect(screen.queryByText("OOS Std")).not.toBeInTheDocument();
+    expect(screen.queryByText("Std")).not.toBeInTheDocument();
+  });
+
+  it("renders View Details accordion for score table", () => {
+    const job = makeFitJob();
+    renderWithQuery(
+      <CompletedContent
+        job={job}
+        selectedPlot="learning-curve"
+        onSelectPlot={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("View Details")).toBeInTheDocument();
   });
 });
 
@@ -186,12 +199,13 @@ describe("CompletedContent — tune result", () => {
 // No fit result
 // ---------------------------------------------------------------------------
 describe("CompletedContent — no results", () => {
-  it("does not render Score section when fit_result is null", () => {
+  it("does not render KPI cards when fit_result is null", () => {
     const job = makeFitJob({ fit_result: null });
     renderWithQuery(
       <CompletedContent job={job} selectedPlot="" onSelectPlot={vi.fn()} />,
     );
-    expect(screen.queryByText("Score")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("kpi-cards")).not.toBeInTheDocument();
+    expect(screen.queryByText("View Details")).not.toBeInTheDocument();
   });
 });
 
@@ -275,7 +289,7 @@ describe("CompletedContent — annotateMetric", () => {
 });
 
 describe("CompletedContent — multiple metrics", () => {
-  it("renders multiple metric rows in score table", () => {
+  it("renders multiple metric KPI cards", () => {
     const job = makeFitJob({
       fit_result: {
         metrics: {

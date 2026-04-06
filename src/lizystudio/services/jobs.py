@@ -295,15 +295,51 @@ def get_importance_kinds(job: Job, backend: BackendAdapter) -> list[str]:
     return backend.importance_kinds(model)
 
 
+def _get_jobs_dir(job: Job) -> Path | None:
+    """Derive the jobs directory from a job's model_path."""
+    if job.model_path:
+        return Path(job.model_path).parent.parent
+    return None
+
+
+def _load_tuning_plot_from_file(job: Job) -> Any:
+    """Load a saved tuning plot JSON from disk (fallback for exported models)."""
+    from lizystudio.backends.types import PlotData
+
+    jobs_dir = _get_jobs_dir(job)
+    if jobs_dir is None:
+        return None
+    path = jobs_dir / job.job_id / "tuning_plot.json"
+    if not path.exists():
+        return None
+    return PlotData(plotly_json=path.read_text(encoding="utf-8"))
+
+
 def get_job_plot(
     job: Job, backend: BackendAdapter, plot_type: str, **kwargs: Any
 ) -> Any:
     """Get a plot for a completed job. Returns PlotData."""
     model = load_job_model(job, backend)
+    # For tuning plots, the exported model may lack Optuna study data.
+    # Fall back to the saved file captured at tune time.
+    if plot_type == "tuning":
+        try:
+            return backend.plot(model, plot_type, **kwargs)
+        except Exception:  # noqa: BLE001
+            saved = _load_tuning_plot_from_file(job)
+            if saved is not None:
+                return saved
+            raise
     return backend.plot(model, plot_type, **kwargs)
 
 
 def get_available_plots(job: Job, backend: BackendAdapter) -> list[str]:
     """Get list of available plot types for a completed job."""
     model = load_job_model(job, backend)
-    return backend.available_plots(model)
+    plots = list(backend.available_plots(model))
+    # If tuning plot file exists but model doesn't have tuning data, add it
+    if "tuning" not in plots and job.job_type == "tune":
+        saved = _load_tuning_plot_from_file(job)
+        if saved is not None:
+            plots.append("tuning")
+    return plots

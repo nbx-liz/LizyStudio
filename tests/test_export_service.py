@@ -212,3 +212,45 @@ def test_export_code_as_zip_no_model_path_raises(mock_backend: MagicMock) -> Non
 
     with pytest.raises(ValueError, match="no saved model"):
         export_code_as_zip(job=job_no_model, backend=mock_backend)
+
+
+# --- Export I/O error edge cases (#3) ---
+
+
+def test_export_model_backend_permission_error(
+    completed_job: Job, mock_backend: MagicMock
+) -> None:
+    """PermissionError from backend.export_model propagates."""
+    mock_backend.export_model.side_effect = PermissionError("read-only filesystem")
+    with pytest.raises(PermissionError, match="read-only"):
+        export_model(
+            job=completed_job,
+            backend=mock_backend,
+            output_path="/tmp/readonly",
+        )
+
+
+def test_export_report_backend_error_propagates(
+    completed_job: Job, mock_backend: MagicMock, tmp_path: Path
+) -> None:
+    """RuntimeError from backend during report generation propagates."""
+    mock_backend.evaluate_table.side_effect = RuntimeError("model corrupted")
+    with pytest.raises(RuntimeError, match="model corrupted"):
+        export_report(
+            job=completed_job,
+            backend=mock_backend,
+            output_path=str(tmp_path / "report.html"),
+        )
+
+
+def test_export_report_auto_creates_parent_dirs(
+    completed_job: Job, mock_backend: MagicMock, tmp_path: Path
+) -> None:
+    """export_report creates parent directories if needed."""
+    deep_path = str(tmp_path / "a" / "b" / "c" / "report.html")
+    result = export_report(
+        job=completed_job,
+        backend=mock_backend,
+        output_path=deep_path,
+    )
+    assert Path(result).exists()

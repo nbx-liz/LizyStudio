@@ -171,12 +171,12 @@ test.describe("Workspace advanced flows", () => {
     );
     const config = await defaultsRes.json();
 
-    // Set group_kfold strategy
+    // Set group_kfold method and group_col in data
     config.split = {
-      strategy: "group_kfold",
+      method: "group_kfold",
       n_splits: 5,
-      group_col: "group",
     };
+    config.data.group_col = "group";
 
     await request.put(`${API}/workspace/config`, { data: config });
 

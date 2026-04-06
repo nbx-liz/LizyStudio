@@ -44,6 +44,8 @@ def main(argv: list[str] | None = None) -> None:
     # Pass settings via env vars so they survive --reload restarts
     os.environ["LIZYSTUDIO_BACKEND"] = args.backend
     os.environ["LIZYSTUDIO_JOBS_DIR"] = str(args.jobs_dir)
+    if args.reload:
+        os.environ["LIZYSTUDIO_RELOAD"] = "1"
 
     import uvicorn
 

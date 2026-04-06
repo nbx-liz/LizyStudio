@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -623,3 +624,82 @@ def test_inference_plot_no_model_path(
 
     res = client.get(f"/api/inference/{inf_id}/plot/roc?job_id={job_id}")
     assert res.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Inference on non-completed jobs (#9)
+# ---------------------------------------------------------------------------
+
+
+def _create_job_with_status(
+    client: TestClient,
+    sample_data_ref: DataRef,
+    status: str,
+) -> str:
+    """Create a job with the given status and return its job_id."""
+    app = client.app  # type: ignore[union-attr]
+    job_store: JobStore = app.state.job_store
+    job = job_store.create(
+        backend_name="lizyml",
+        config={
+            "task": "binary",
+            "data": {"target": "y"},
+            "model": {"name": "lightgbm"},
+        },
+        data_ref=sample_data_ref,
+        job_type="fit",
+    )
+    job.status = status
+    job_store.update(job)
+    return job.job_id
+
+
+def test_inference_run_on_failed_job(
+    client: TestClient, sample_data_ref: DataRef, tmp_path: Path
+) -> None:
+    """Inference on a failed job should return error."""
+    job_id = _create_job_with_status(client, sample_data_ref, "failed")
+    csv_path = tmp_path / "inf.csv"
+    csv_path.write_text("x,y\n1,0\n2,1\n", encoding="utf-8")
+    res = client.post(
+        "/api/inference/run",
+        json={
+            "job_id": job_id,
+            "data": {"source_type": "path", "path": str(csv_path)},
+        },
+    )
+    assert res.status_code in (400, 404, 500)
+
+
+def test_inference_run_on_cancelled_job(
+    client: TestClient, sample_data_ref: DataRef, tmp_path: Path
+) -> None:
+    """Inference on a cancelled job should return error."""
+    job_id = _create_job_with_status(client, sample_data_ref, "cancelled")
+    csv_path = tmp_path / "inf.csv"
+    csv_path.write_text("x,y\n1,0\n2,1\n", encoding="utf-8")
+    res = client.post(
+        "/api/inference/run",
+        json={
+            "job_id": job_id,
+            "data": {"source_type": "path", "path": str(csv_path)},
+        },
+    )
+    assert res.status_code in (400, 404, 500)
+
+
+def test_inference_run_on_pending_job(
+    client: TestClient, sample_data_ref: DataRef, tmp_path: Path
+) -> None:
+    """Inference on a pending job should return error."""
+    job_id = _create_job_with_status(client, sample_data_ref, "pending")
+    csv_path = tmp_path / "inf.csv"
+    csv_path.write_text("x,y\n1,0\n2,1\n", encoding="utf-8")
+    res = client.post(
+        "/api/inference/run",
+        json={
+            "job_id": job_id,
+            "data": {"source_type": "path", "path": str(csv_path)},
+        },
+    )
+    assert res.status_code in (400, 404, 500)

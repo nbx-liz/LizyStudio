@@ -35,12 +35,6 @@ _KNOWN_PARAM_KEYS: frozenset[str] = frozenset(
         "min_data_in_bin_ratio",
         "feature_weights",
         "balanced",
-        # Additional params promoted to search_space_catalog
-        "min_child_weight",
-        "min_split_gain",
-        "min_gain_to_split",  # LightGBM alias for min_split_gain
-        "scale_pos_weight",
-        "is_unbalance",  # LightGBM native; use `balanced` smart param instead
     }
 )
 
@@ -90,6 +84,22 @@ def _build_additional_params() -> list[str]:
 _eval_metrics_cache: dict[str, list[str]] | None = None
 _eval_metrics_lock: threading.Lock = threading.Lock()
 
+# Preferred metric per task — shown first in UI (Widget conformance).
+_PREFERRED_METRIC: dict[str, str] = {
+    "binary": "auc",
+    "regression": "rmse",
+    "multiclass": "auc",
+}
+
+
+def _sort_with_preferred(metrics: list[str], task: str) -> list[str]:
+    """Sort metrics alphabetically but place the preferred metric first."""
+    preferred = _PREFERRED_METRIC.get(task)
+    ordered = sorted(metrics)
+    if preferred and preferred in ordered:
+        ordered = [preferred, *(m for m in ordered if m != preferred)]
+    return ordered
+
 
 def get_eval_metrics_by_task() -> dict[str, list[str]]:
     """Query LizyML's metric registry for available evaluation metrics per task."""
@@ -104,12 +114,17 @@ def get_eval_metrics_by_task() -> dict[str, list[str]]:
         try:
             from lizyml.metrics.registry import _TASK_METRICS
 
-            metrics = {task: sorted(ms) for task, ms in _TASK_METRICS.items()}
+            metrics = {
+                task: _sort_with_preferred(list(ms), task)
+                for task, ms in _TASK_METRICS.items()
+            }
         except (ImportError, AttributeError, TypeError):
             # Fallback for older LizyML versions
             metrics = {
-                "regression": sorted(["mae", "mape", "rmse", "huber", "r2", "rmsle"]),
-                "binary": sorted(
+                "regression": _sort_with_preferred(
+                    ["mae", "mape", "rmse", "huber", "r2", "rmsle"], "regression"
+                ),
+                "binary": _sort_with_preferred(
                     [
                         "auc",
                         "logloss",
@@ -119,10 +134,12 @@ def get_eval_metrics_by_task() -> dict[str, list[str]]:
                         "brier",
                         "ece",
                         "precision_at_k",
-                    ]
+                    ],
+                    "binary",
                 ),
-                "multiclass": sorted(
-                    ["logloss", "f1", "accuracy", "auc", "auc_pr", "brier"]
+                "multiclass": _sort_with_preferred(
+                    ["logloss", "f1", "accuracy", "auc", "auc_pr", "brier"],
+                    "multiclass",
                 ),
             }
         _eval_metrics_cache = metrics
@@ -362,6 +379,64 @@ def build_ui_schema(
             },
         ],
         "search_space_catalog": [
+            # ── Smart Params group (Widget order: Smart first) ──
+            {
+                "key": "auto_num_leaves",
+                "title": "Auto Num Leaves",
+                "paramType": "boolean",
+                "modes": ["fixed", "choice"],
+                "group": "smart_params",
+                "default": True,
+            },
+            {
+                "key": "num_leaves_ratio",
+                "title": "Num Leaves Ratio",
+                "paramType": "number",
+                "modes": ["fixed", "range"],
+                "group": "smart_params",
+                "default": 1.0,
+            },
+            {
+                "key": "num_leaves",
+                "title": "Num Leaves",
+                "paramType": "integer",
+                "modes": ["fixed", "range"],
+                "group": "smart_params",
+                "default": 256,
+            },
+            {
+                "key": "min_data_in_leaf_ratio",
+                "title": "Min Data in Leaf Ratio",
+                "paramType": "number",
+                "modes": ["fixed", "range"],
+                "group": "smart_params",
+                "default": 0.01,
+            },
+            {
+                "key": "min_data_in_bin_ratio",
+                "title": "Min Data in Bin Ratio",
+                "paramType": "number",
+                "modes": ["fixed", "range"],
+                "group": "smart_params",
+                "default": 0.01,
+            },
+            {
+                "key": "feature_weights",
+                "title": "Feature Weights",
+                "paramType": "object",
+                "modes": ["fixed"],
+                "group": "smart_params",
+                "default": None,
+            },
+            {
+                "key": "balanced",
+                "title": "Balanced",
+                "paramType": "boolean",
+                "modes": ["fixed", "choice"],
+                "group": "smart_params",
+                "default": False,
+            },
+            # ── Model Params group ──
             {
                 "key": "objective",
                 "title": "Objective",
@@ -387,12 +462,22 @@ def build_ui_schema(
                 },
             },
             {
+                "key": "first_metric_only",
+                "title": "First Metric Only",
+                "paramType": "boolean",
+                "modes": ["fixed", "choice"],
+                "group": "model_params",
+                "default": False,
+            },
+            {
                 "key": "n_estimators",
                 "title": "N Estimators",
                 "paramType": "integer",
                 "modes": ["fixed", "range"],
                 "group": "model_params",
                 "default": 1000,
+                "default_mode": "range",
+                "default_range": {"low": 600, "high": 2500, "log": False},
             },
             {
                 "key": "learning_rate",
@@ -401,6 +486,8 @@ def build_ui_schema(
                 "modes": ["fixed", "range"],
                 "group": "model_params",
                 "default": 0.1,
+                "default_mode": "range",
+                "default_range": {"low": 0.0001, "high": 0.1, "log": True},
             },
             {
                 "key": "max_depth",
@@ -409,6 +496,8 @@ def build_ui_schema(
                 "modes": ["fixed", "range"],
                 "group": "model_params",
                 "default": -1,
+                "default_mode": "range",
+                "default_range": {"low": 3, "high": 12, "log": False},
             },
             {
                 "key": "max_bin",
@@ -425,6 +514,8 @@ def build_ui_schema(
                 "modes": ["fixed", "range"],
                 "group": "model_params",
                 "default": 1.0,
+                "default_mode": "range",
+                "default_range": {"low": 0.5, "high": 1.0, "log": False},
             },
             {
                 "key": "bagging_fraction",
@@ -433,6 +524,8 @@ def build_ui_schema(
                 "modes": ["fixed", "range"],
                 "group": "model_params",
                 "default": 1.0,
+                "default_mode": "range",
+                "default_range": {"low": 0.5, "high": 1.0, "log": False},
             },
             {
                 "key": "bagging_freq",
@@ -459,14 +552,6 @@ def build_ui_schema(
                 "default": 0.0,
             },
             {
-                "key": "first_metric_only",
-                "title": "First Metric Only",
-                "paramType": "boolean",
-                "modes": ["fixed", "choice"],
-                "group": "model_params",
-                "default": False,
-            },
-            {
                 "key": "verbose",
                 "title": "Log Output",
                 "paramType": "integer",
@@ -474,91 +559,6 @@ def build_ui_schema(
                 "group": "model_params",
                 "default": -1,
             },
-            # ── Smart Params group ──
-            {
-                "key": "auto_num_leaves",
-                "title": "Auto Num Leaves",
-                "paramType": "boolean",
-                "modes": ["fixed", "choice"],
-                "group": "smart_params",
-                "default": True,
-            },
-            {
-                "key": "num_leaves_ratio",
-                "title": "Num Leaves Ratio",
-                "paramType": "number",
-                "modes": ["fixed", "range"],
-                "group": "smart_params",
-                "default": 1.0,
-            },
-            {
-                "key": "min_data_in_leaf_ratio",
-                "title": "Min Data in Leaf Ratio",
-                "paramType": "number",
-                "modes": ["fixed", "range"],
-                "group": "smart_params",
-                "default": 0.01,
-            },
-            {
-                "key": "min_data_in_bin_ratio",
-                "title": "Min Data in Bin Ratio",
-                "paramType": "number",
-                "modes": ["fixed", "range"],
-                "group": "smart_params",
-                "default": 0.01,
-            },
-            {
-                "key": "num_leaves",
-                "title": "Num Leaves",
-                "paramType": "integer",
-                "modes": ["fixed", "range", "choice"],
-                "group": "smart_params",
-                "default": 256,
-            },
-            {
-                "key": "feature_weights",
-                "title": "Feature Weights",
-                "paramType": "object",
-                "modes": ["fixed"],
-                "group": "smart_params",
-                "default": None,
-            },
-            {
-                "key": "balanced",
-                "title": "Balanced",
-                "paramType": "boolean",
-                "modes": ["fixed", "choice"],
-                "group": "smart_params",
-                "default": False,
-            },
-            # ── Additional (commonly tuned LightGBM params) ──
-            {
-                "key": "min_child_weight",
-                "title": "Min Child Weight",
-                "paramType": "number",
-                "modes": ["fixed", "range"],
-                "group": "additional",
-                "default": 0.001,
-            },
-            {
-                "key": "min_split_gain",
-                "title": "Min Split Gain",
-                "paramType": "number",
-                "modes": ["fixed", "range"],
-                "group": "additional",
-                "default": 0.0,
-            },
-            {
-                "key": "scale_pos_weight",
-                "title": "Scale Pos Weight",
-                "paramType": "number",
-                "modes": ["fixed", "range"],
-                "group": "additional",
-                "default": 1.0,
-            },
-            # Note: subsample/colsample_bytree/reg_alpha/reg_lambda are
-            # XGBoost aliases for bagging_fraction/feature_fraction/lambda_l1/lambda_l2
-            # and are available via additional_params only (not in catalog).
             # ── Training group ──
             {
                 "key": "seed",
@@ -583,6 +583,8 @@ def build_ui_schema(
                 "modes": ["fixed", "range"],
                 "group": "training",
                 "default": 150,
+                "default_mode": "range",
+                "default_range": {"low": 40, "high": 240, "log": False},
             },
             {
                 "key": "validation_ratio",
@@ -591,6 +593,8 @@ def build_ui_schema(
                 "modes": ["fixed", "range"],
                 "group": "training",
                 "default": 0.1,
+                "default_mode": "range",
+                "default_range": {"low": 0.1, "high": 0.3, "log": False},
             },
             {
                 "key": "inner_valid",

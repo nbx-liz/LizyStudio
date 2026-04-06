@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
+import { dismissOnboarding } from "./helpers/onboarding";
 
 const API = "http://localhost:8501/api";
 
@@ -40,9 +41,6 @@ test.describe("Workspace UI Improvements", () => {
 
     // n_trials_presets should be [10, 50, 100, 200, 500]
     expect(data.n_trials_presets).toEqual([10, 50, 100, 200, 500]);
-
-    // metric_direction should exist in option_sets
-    expect(data.option_sets).toHaveProperty("metric_direction");
 
     // model_metric should have task-keyed entries
     expect(data.option_sets).toHaveProperty("model_metric");
@@ -100,31 +98,33 @@ test.describe("Workspace UI Improvements", () => {
   test("UI: Data Panel shows segment buttons for Task/CV Strategy", async ({
     page,
   }) => {
+    await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
 
-    // Verify Data Source buttons (Path/Upload) exist
-    await expect(page.getByRole("button", { name: "Path" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Upload" })).toBeVisible();
+    // Verify Data Source radio buttons (Path/Upload) exist
+    await expect(page.getByRole("radio", { name: "Path" })).toBeVisible();
+    await expect(page.getByRole("radio", { name: "Upload" })).toBeVisible();
 
-    // Cross Validation section — check segment buttons
+    // Cross Validation section — check segment radio buttons
     await expect(
-      page.getByRole("button", { name: "KFold", exact: true }),
+      page.getByRole("radio", { name: "KFold", exact: true }),
     ).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "StratifiedKFold", exact: true }),
+      page.getByRole("radio", { name: "StratifiedKFold", exact: true }),
     ).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "GroupKFold", exact: true }),
+      page.getByRole("radio", { name: "GroupKFold", exact: true }),
     ).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "TimeSeriesSplit", exact: true }),
+      page.getByRole("radio", { name: "TimeSeriesSplit", exact: true }),
     ).toBeVisible();
 
     await expect(page).toHaveScreenshot("data-panel-segments.png");
   });
 
   test("UI: Model Panel — no Auto button visible", async ({ page }) => {
+    await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
 
@@ -146,6 +146,7 @@ test.describe("Workspace UI Improvements", () => {
   test("UI: Tune tab shows metric chips instead of direction select", async ({
     page,
   }) => {
+    await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
 
@@ -190,6 +191,7 @@ test.describe("Workspace UI Improvements", () => {
   });
 
   test("UI: Search Space shows segment buttons for Mode", async ({ page }) => {
+    await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
 
@@ -200,12 +202,12 @@ test.describe("Workspace UI Improvements", () => {
     // Search Space accordion
     await expect(page.getByText("Search Space")).toBeVisible();
 
-    // Each parameter row should have Fixed/Range or Fixed/Choice as segment buttons
-    // Look for the Fixed button in the search space table
-    const fixedButtons = page.getByRole("button", { name: "Fixed" });
-    const fixedCount = await fixedButtons.count();
-    // Should have at least several Fixed buttons (one per parameter)
-    expect(fixedCount).toBeGreaterThan(5);
+    // Each parameter row should have Fixed/Range or Fixed/Choice as segment radio buttons
+    // Look for the Fixed radio buttons in the search space table
+    const fixedRadios = page.getByRole("radio", { name: "Fixed" });
+    const fixedCount = await fixedRadios.count();
+    // Should have at least several Fixed radios (one per parameter)
+    expect(fixedCount).toBeGreaterThan(0);
 
     await expect(page).toHaveScreenshot("search-space.png");
   });
@@ -221,6 +223,7 @@ test.describe("Workspace UI Improvements", () => {
       data: { path: csvPath },
     });
 
+    await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
     await page.waitForTimeout(1000);

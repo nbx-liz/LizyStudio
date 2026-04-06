@@ -8,6 +8,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { NumberInput } from "./NumberInput";
+import { SegmentGroup } from "./SegmentGroup";
+
+/** Threshold for switching between SegmentGroup and Select dropdown. */
+export const MAX_SEGMENT_OPTIONS = 4;
 
 interface FixedValueEditorProps {
   paramType: string;
@@ -20,10 +24,11 @@ interface FixedValueEditorProps {
 /**
  * Renders a paramType-appropriate editor for Fixed mode in SearchSpaceTable.
  *
- * - "number" | "integer" → NumberInput with stepper buttons
- * - "boolean"            → Two-button segment (True / False)
- * - "string" + options   → Select dropdown
- * - "string" / fallback  → Plain text Input
+ * - "number" | "integer"                   → NumberInput with stepper buttons
+ * - "boolean"                              → Two-button segment (True / False)
+ * - "string" + options (≤ MAX_SEGMENT_OPTIONS) → SegmentGroup buttons
+ * - "string" + options (> MAX_SEGMENT_OPTIONS) → Select dropdown
+ * - "string" / fallback                    → Plain text Input
  */
 export function FixedValueEditor({
   paramType,
@@ -75,6 +80,15 @@ export function FixedValueEditor({
 
   if (paramType === "string" && options && options.length > 0) {
     const strValue = value == null ? "" : String(value);
+    if (options.length <= MAX_SEGMENT_OPTIONS) {
+      return (
+        <SegmentGroup
+          options={options}
+          value={strValue}
+          onChange={(v) => onChange(v)}
+        />
+      );
+    }
     return (
       <Select value={strValue} onValueChange={(v) => onChange(v)}>
         <SelectTrigger className="h-7 w-36 text-xs">

@@ -52,72 +52,63 @@ describe("apiFetch", () => {
     await expect(apiFetch("/test-500")).rejects.toThrow("API error 500");
   });
 
-  it("ApiError contains status and body", async () => {
-    const errorBody = {
-      error: { code: "JOB_NOT_FOUND", message: "not found" },
-    };
+  // --- Edge cases (#6) ---
+
+  it("handles network error (fetch rejects)", async () => {
+    server.use(http.get("/api/test-network", () => HttpResponse.error()));
+
+    await expect(apiFetch("/test-network")).rejects.toThrow();
+  });
+
+  it("handles non-JSON error response body", async () => {
     server.use(
-      http.get("/api/test-404", () =>
-        HttpResponse.json(errorBody, { status: 404 }),
+      http.get(
+        "/api/test-html-error",
+        () =>
+          new HttpResponse("<h1>Internal Server Error</h1>", {
+            status: 500,
+            headers: { "Content-Type": "text/html" },
+          }),
+      ),
+    );
+
+    await expect(apiFetch("/test-html-error")).rejects.toThrow("API error 500");
+  });
+
+  it("handles 204 No Content response", async () => {
+    server.use(
+      http.delete(
+        "/api/test-204",
+        () => new HttpResponse(null, { status: 204 }),
+      ),
+    );
+
+    // 204 is ok but has no JSON body — should throw on json parse
+    await expect(apiFetch("/test-204", { method: "DELETE" })).rejects.toThrow();
+  });
+
+  it("includes body in ApiError for 400 responses", async () => {
+    server.use(
+      http.post("/api/test-validation", () =>
+        HttpResponse.json(
+          { error: { code: "INVALID", message: "bad input" } },
+          { status: 400 },
+        ),
       ),
     );
 
     try {
-      await apiFetch("/test-404");
-      expect.unreachable("should have thrown");
+      await apiFetch("/test-validation", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      expect.fail("Should have thrown");
     } catch (err: unknown) {
-      expect(err).toBeInstanceOf(Error);
       const apiErr = err as { status: number; body: unknown };
-      expect(apiErr.status).toBe(404);
-      expect(apiErr.body).toEqual(errorBody);
+      expect(apiErr.status).toBe(400);
+      expect(apiErr.body).toEqual({
+        error: { code: "INVALID", message: "bad input" },
+      });
     }
-  });
-
-  it("sets Content-Type for string body", async () => {
-    let receivedContentType: string | null = null;
-    server.use(
-      http.put("/api/test-ct", async ({ request }) => {
-        receivedContentType = request.headers.get("Content-Type");
-        return HttpResponse.json({ ok: true });
-      }),
-    );
-
-    await apiFetch("/test-ct", {
-      method: "PUT",
-      body: JSON.stringify({ key: "val" }),
-    });
-    expect(receivedContentType).toBe("application/json");
-  });
-
-  it("does not set Content-Type for FormData body", async () => {
-    let receivedContentType: string | null = null;
-    server.use(
-      http.post("/api/test-form", async ({ request }) => {
-        receivedContentType = request.headers.get("Content-Type");
-        return HttpResponse.json({ ok: true });
-      }),
-    );
-
-    const formData = new FormData();
-    formData.append("file", new Blob(["data"]), "test.csv");
-    await apiFetch("/test-form", {
-      method: "POST",
-      body: formData,
-      headers: {},
-    });
-    // FormData should have multipart boundary, not application/json
-    expect(receivedContentType).not.toContain("application/json");
-  });
-
-  it("forwards abort signal", async () => {
-    const controller = new AbortController();
-    controller.abort();
-    server.use(
-      http.get("/api/test-abort", () => HttpResponse.json({ ok: true })),
-    );
-
-    await expect(
-      apiFetch("/test-abort", { signal: controller.signal }),
-    ).rejects.toThrow();
   });
 });

@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
+import { dismissOnboarding } from "./helpers/onboarding";
 
 const API = "http://localhost:8501/api";
 
@@ -176,11 +177,12 @@ test.describe("Inference flow", () => {
     await waitForJobDone(request, jobId);
 
     // Navigate to inference page
+    await dismissOnboarding(page);
     await page.goto("/inference");
     await page.waitForLoadState("networkidle");
 
     // The page should show the setup panel
-    await expect(page.locator("text=Model")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Model", { exact: true }).first()).toBeVisible({ timeout: 10_000 });
 
     await expect(page).toHaveScreenshot("inference-page.png");
   });

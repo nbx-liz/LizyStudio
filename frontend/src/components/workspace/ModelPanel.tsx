@@ -1,5 +1,13 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, FileText, FileUp, Redo2, Save, Undo2 } from "lucide-react";
+import {
+  Download,
+  FileText,
+  FileUp,
+  Info,
+  Redo2,
+  Save,
+  Undo2,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { ConfigError } from "@/api/types";
@@ -15,14 +23,6 @@ import {
   validateConfig,
 } from "@/api/workspace";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -48,6 +48,8 @@ interface ModelPanelProps {
   onFit: () => void;
   onTune: () => void;
   running: boolean;
+  activeTab?: "fit" | "tune";
+  onActiveTabChange?: (tab: "fit" | "tune") => void;
 }
 
 export function ModelPanel({
@@ -56,10 +58,15 @@ export function ModelPanel({
   onFit,
   onTune,
   running,
+  activeTab: controlledTab,
+  onActiveTabChange,
 }: ModelPanelProps) {
-  const [activeTab, setActiveTab] = useState<"fit" | "tune">("fit");
-  const [presetDialogOpen, setPresetDialogOpen] = useState(false);
-  const [presetName, setPresetName] = useState("");
+  const [internalTab, setInternalTab] = useState<"fit" | "tune">("fit");
+  const activeTab = controlledTab ?? internalTab;
+  const setActiveTab = (tab: "fit" | "tune") => {
+    setInternalTab(tab);
+    onActiveTabChange?.(tab);
+  };
   const [errors, setErrors] = useState<ConfigError[]>([]);
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -125,9 +132,8 @@ export function ModelPanel({
         try {
           const result = await validateConfig(newConfig);
           setErrors(result.errors);
-        } catch (err) {
-          // Validation network errors are non-fatal but logged for debugging
-          console.warn("Config validation failed:", err);
+        } catch {
+          // silent
         }
       }, 500);
     },
@@ -184,15 +190,10 @@ export function ModelPanel({
 
   const handleSavePreset = () => {
     if (!config) return;
-    setPresetName("");
-    setPresetDialogOpen(true);
-  };
-
-  const confirmSavePreset = () => {
-    if (!config || !presetName.trim()) return;
-    savePreset(presetName.trim(), config);
-    toast.success(`Preset "${presetName.trim()}" saved`);
-    setPresetDialogOpen(false);
+    const name = prompt("Preset name:");
+    if (!name?.trim()) return;
+    savePreset(name.trim(), config);
+    toast.success(`Preset "${name.trim()}" saved`);
   };
 
   const handleLoadPreset = (name: string) => {
@@ -246,7 +247,7 @@ export function ModelPanel({
             value={activeTab}
             onValueChange={(v) => setActiveTab(v as "fit" | "tune")}
           >
-            <TabsList className="h-9 w-auto">
+            <TabsList variant="line" className="h-9 w-auto">
               <TabsTrigger value="fit" className="px-6">
                 Fit
               </TabsTrigger>
@@ -267,7 +268,7 @@ export function ModelPanel({
               onClick={activeTab === "fit" ? onFit : onTune}
               disabled={activeTab === "fit" ? !fitEnabled : !tuneEnabled}
             >
-              {activeTab === "fit" ? "Fit" : "Tune"}
+              {running ? "Running..." : activeTab === "fit" ? "Fit" : "Tune"}
             </Button>
           </div>
         </div>
@@ -275,6 +276,18 @@ export function ModelPanel({
 
       {/* Scrollable Content */}
       <div className="flex-1 overflow-auto p-4">
+        {running && (
+          <output
+            className="mb-4 flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 p-3 dark:border-blue-800 dark:bg-blue-950"
+            data-testid="running-info-bar"
+          >
+            <Info className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" />
+            <p className="text-xs text-blue-800 dark:text-blue-200">
+              A job is currently running. Configuration is locked until the job
+              completes.
+            </p>
+          </output>
+        )}
         {hasData && errors.length > 0 && (
           <div className="mb-4 rounded-md border border-destructive/50 bg-destructive/10 p-3">
             {errors
@@ -287,10 +300,35 @@ export function ModelPanel({
           </div>
         )}
 
-        {activeTab === "fit" ? (
-          schema && config ? (
-            <ConfigForm
-              schema={schema}
+        <div
+          className={running ? "pointer-events-none opacity-60" : undefined}
+          data-testid="config-form-area"
+          aria-disabled={running}
+        >
+          {activeTab === "fit" ? (
+            schema && config ? (
+              <ConfigForm
+                schema={schema}
+                config={config}
+                onChange={handleConfigChange}
+                task={task}
+                uiSchema={uiSchema}
+                columns={nonExcludedColumns}
+              />
+            ) : (
+              <div
+                className="flex flex-col items-center justify-center py-12 text-center text-muted-foreground"
+                data-testid="config-guidance"
+              >
+                <p className="text-sm">
+                  {hasData
+                    ? "Loading configuration..."
+                    : "Load data in the Data Panel to configure your model."}
+                </p>
+              </div>
+            )
+          ) : config ? (
+            <TuneTab
               config={config}
               onChange={handleConfigChange}
               task={task}
@@ -298,36 +336,22 @@ export function ModelPanel({
               columns={nonExcludedColumns}
             />
           ) : (
-            <div
-              className="flex flex-col items-center justify-center py-12 text-center text-muted-foreground"
-              data-testid="config-guidance"
-            >
-              <p className="text-sm">
-                {hasData
-                  ? "Loading configuration..."
-                  : "Load data in the Data Panel to configure your model."}
-              </p>
-            </div>
-          )
-        ) : config ? (
-          <TuneTab
-            config={config}
-            onChange={handleConfigChange}
-            task={task}
-            uiSchema={uiSchema}
-          />
-        ) : (
-          <p className="text-sm text-muted-foreground">Loading config...</p>
-        )}
+            <p className="text-sm text-muted-foreground">Loading config...</p>
+          )}
+        </div>
       </div>
 
       {/* Config Actions — sticky footer */}
-      <div className="shrink-0 border-t bg-background px-4 py-3">
+      <div
+        className={`shrink-0 border-t bg-background px-4 py-3${running ? " pointer-events-none opacity-60" : ""}`}
+        aria-disabled={running}
+      >
         <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="outline"
             size="sm"
             onClick={() => fileInputRef.current?.click()}
+            disabled={running}
           >
             <FileUp className="mr-1 h-3 w-3" />
             Import YAML
@@ -406,40 +430,6 @@ export function ModelPanel({
           />
         </div>
       </div>
-
-      {/* Save Preset Dialog */}
-      <Dialog open={presetDialogOpen} onOpenChange={setPresetDialogOpen}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Save Preset</DialogTitle>
-          </DialogHeader>
-          <Input
-            placeholder="Preset name"
-            value={presetName}
-            onChange={(e) => setPresetName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") confirmSavePreset();
-            }}
-            autoFocus
-          />
-          <DialogFooter>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setPresetDialogOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              onClick={confirmSavePreset}
-              disabled={!presetName.trim()}
-            >
-              Save
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

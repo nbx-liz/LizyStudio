@@ -13,6 +13,10 @@ interface DynParamProps {
   options?: string[];
   /** Whether the field is visible (conditional_visibility). */
   visible?: boolean;
+  /** precision_at_k k-value (for model_metric kind). */
+  precisionAtKValue?: number;
+  /** Callback for precision_at_k k-value change. */
+  onPrecisionAtKChange?: (k: number) => void;
 }
 
 /**
@@ -31,6 +35,8 @@ export function DynParam({
   onChange,
   options,
   visible = true,
+  precisionAtKValue,
+  onPrecisionAtKChange,
 }: DynParamProps) {
   if (!visible) return null;
 
@@ -57,15 +63,31 @@ export function DynParam({
         : typeof value === "string"
           ? [value]
           : [];
+      const showK = selected.includes("precision_at_k") && onPrecisionAtKChange;
       return (
-        <FormRow label={hint.label} description={hint.description}>
-          <ChipGroup
-            options={opts}
-            selected={selected}
-            onChange={(v) => onChange(v)}
-            minSelected={1}
-          />
-        </FormRow>
+        <>
+          <FormRow label={hint.label} description={hint.description}>
+            <ChipGroup
+              options={opts}
+              selected={selected}
+              onChange={(v) => onChange(v)}
+              minSelected={1}
+            />
+          </FormRow>
+          {showK && (
+            <FormRow label="precision_at_k: k">
+              <CompactStepper
+                value={precisionAtKValue ?? 10}
+                onChange={(v) => {
+                  if (v !== undefined) onPrecisionAtKChange(v);
+                }}
+                min={1}
+                max={100}
+                step={1}
+              />
+            </FormRow>
+          )}
+        </>
       );
     }
 

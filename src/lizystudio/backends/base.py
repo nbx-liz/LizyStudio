@@ -23,7 +23,9 @@ class ProgressCallback(Protocol):
     UI should display an indeterminate indicator (e.g. a pulsing bar).
     """
 
-    def __call__(self, *, current: int, total: int, message: str) -> None: ...
+    def __call__(
+        self, *, current: int, total: int, message: str, **extra: Any
+    ) -> None: ...
 
 
 class BackendAdapter(Protocol):
