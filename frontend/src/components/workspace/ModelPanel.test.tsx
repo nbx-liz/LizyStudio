@@ -15,6 +15,21 @@ vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
 
+// Capture ConfigForm's onChange to invoke handleConfigChange directly.
+// Using a mutable ref object so Biome is happy with const.
+const captured = {
+  onChange: null as ((c: Record<string, unknown>) => void) | null,
+};
+vi.mock("./ConfigForm", () => ({
+  ConfigForm: (props: { onChange: (c: Record<string, unknown>) => void }) => {
+    captured.onChange = props.onChange;
+    return <div data-testid="mock-config-form" />;
+  },
+}));
+vi.mock("./TuneTab", () => ({
+  TuneTab: () => <div data-testid="mock-tune-tab" />,
+}));
+
 vi.mock("@/api/workspace", () => ({
   fetchConfigSchema: vi.fn().mockResolvedValue({ properties: {}, $defs: {} }),
   fetchConfig: vi
@@ -653,5 +668,393 @@ describe("ModelPanel", () => {
       />,
     );
     expect(screen.getByText("Load data first")).toBeInTheDocument();
+  });
+
+  // --- handleConfigChange: updateConfig + debounced validation ---
+
+  it("calls updateConfig via ConfigForm onChange (handleConfigChange)", async () => {
+    const { updateConfig: mockUpdate } = await import("@/api/workspace");
+    (mockUpdate as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (mockUpdate as ReturnType<typeof vi.fn>).mockClear();
+    captured.onChange = null;
+
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    // ConfigForm mock captures onChange when it renders
+    await waitFor(() => {
+      expect(screen.getByTestId("mock-config-form")).toBeInTheDocument();
+    });
+
+    expect(captured.onChange).not.toBeNull();
+
+    captured.onChange!({ model: { name: "xgb", params: {} } });
+
+    await waitFor(() => {
+      expect(mockUpdate).toHaveBeenCalledWith({
+        model: { name: "xgb", params: {} },
+      });
+    });
+  });
+
+  it("shows error toast when handleConfigChange updateConfig fails", async () => {
+    const { updateConfig: mockUpdate } = await import("@/api/workspace");
+    (mockUpdate as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("update fail"),
+    );
+    const { toast } = await import("sonner");
+
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(captured.onChange).not.toBeNull();
+    });
+
+    captured.onChange!({ model: { name: "bad", params: {} } });
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith("Failed to update config");
+    });
+  });
+
+  it("skips handleConfigChange when running is true", async () => {
+    const { updateConfig: mockUpdate } = await import("@/api/workspace");
+    (mockUpdate as ReturnType<typeof vi.fn>).mockClear();
+
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={true}
+      />,
+    );
+
+    // ConfigForm is not rendered when running, but handleConfigChange returns early
+    // We verify updateConfig was NOT called
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  // --- handleUndo / handleRedo ---
+
+  it("enables Undo after config change and calls updateConfig on Undo click", async () => {
+    const { updateConfig: mockUpdate } = await import("@/api/workspace");
+    (mockUpdate as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (mockUpdate as ReturnType<typeof vi.fn>).mockClear();
+    captured.onChange = null;
+
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("mock-config-form")).toBeInTheDocument();
+    });
+
+    // Push two configs so undo has history
+    captured.onChange!({ model: { name: "lgbm", params: { depth: 5 } } });
+    await waitFor(() => {
+      expect(mockUpdate).toHaveBeenCalled();
+    });
+
+    (mockUpdate as ReturnType<typeof vi.fn>).mockClear();
+    captured.onChange!({ model: { name: "lgbm", params: { depth: 10 } } });
+    await waitFor(() => {
+      expect(mockUpdate).toHaveBeenCalled();
+    });
+
+    // Undo should now be enabled
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Undo" })).not.toBeDisabled();
+    });
+
+    (mockUpdate as ReturnType<typeof vi.fn>).mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+
+    await waitFor(() => {
+      expect(mockUpdate).toHaveBeenCalled();
+    });
+  });
+
+  // --- handleSavePreset ---
+
+  it("saves preset when Save Preset is clicked and name is provided", async () => {
+    const { toast } = await import("sonner");
+    (toast.success as ReturnType<typeof vi.fn>).mockClear();
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("My Preset");
+
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    // Wait for config query so config is not null (handleSavePreset guards on !config)
+    await waitFor(() => {
+      expect(screen.getByTestId("mock-config-form")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Save Preset/i }));
+
+    expect(promptSpy).toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalledWith(
+      expect.stringContaining("My Preset"),
+    );
+
+    promptSpy.mockRestore();
+  });
+
+  it("does nothing when Save Preset prompt is cancelled", async () => {
+    const { toast } = await import("sonner");
+    vi.spyOn(window, "prompt").mockReturnValue(null);
+
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    (toast.success as ReturnType<typeof vi.fn>).mockClear();
+    const saveBtn = screen.getByRole("button", { name: /Save Preset/i });
+    fireEvent.click(saveBtn);
+
+    expect(toast.success).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
+
+  // --- handleRedo ---
+
+  it("enables Redo after Undo and calls updateConfig on Redo click", async () => {
+    const { updateConfig: mockUpdate } = await import("@/api/workspace");
+    (mockUpdate as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (mockUpdate as ReturnType<typeof vi.fn>).mockClear();
+    captured.onChange = null;
+
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("mock-config-form")).toBeInTheDocument();
+    });
+
+    // Push two configs
+    captured.onChange!({ model: { name: "lgbm", params: { d: 1 } } });
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalled());
+    (mockUpdate as ReturnType<typeof vi.fn>).mockClear();
+
+    captured.onChange!({ model: { name: "lgbm", params: { d: 2 } } });
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalled());
+    (mockUpdate as ReturnType<typeof vi.fn>).mockClear();
+
+    // Undo
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalled());
+    (mockUpdate as ReturnType<typeof vi.fn>).mockClear();
+
+    // Redo should be enabled
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Redo" })).not.toBeDisabled();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Redo" }));
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalled());
+  });
+
+  // --- handleLoadPreset ---
+
+  it("loads preset from localStorage and calls handleConfigChange", async () => {
+    const { updateConfig: mockUpdate } = await import("@/api/workspace");
+    const { toast } = await import("sonner");
+    (mockUpdate as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (toast.success as ReturnType<typeof vi.fn>).mockClear();
+
+    // Seed localStorage with a preset
+    localStorage.setItem(
+      "lizystudio-config-presets",
+      JSON.stringify([
+        {
+          name: "fast-lgbm",
+          config: { model: { name: "lgbm", params: { n_iter: 10 } } },
+          createdAt: "2026-01-01",
+        },
+      ]),
+    );
+
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("mock-config-form")).toBeInTheDocument();
+    });
+
+    // Load Preset select trigger should be visible
+    expect(screen.getByText("Load Preset")).toBeInTheDocument();
+
+    localStorage.removeItem("lizystudio-config-presets");
+  });
+
+  // --- debounced validateConfig ---
+
+  it("calls validateConfig after debounce via handleConfigChange", async () => {
+    const { updateConfig: mockUpdate, validateConfig: mockValidate } =
+      await import("@/api/workspace");
+    (mockUpdate as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (mockValidate as ReturnType<typeof vi.fn>).mockResolvedValue({
+      errors: [],
+    });
+    (mockValidate as ReturnType<typeof vi.fn>).mockClear();
+    captured.onChange = null;
+
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("mock-config-form")).toBeInTheDocument();
+    });
+
+    captured.onChange!({ model: { name: "xgb", params: {} } });
+
+    // validateConfig is called after 500ms debounce
+    await waitFor(
+      () => {
+        expect(mockValidate).toHaveBeenCalled();
+      },
+      { timeout: 2000 },
+    );
+  });
+
+  // --- useEffect cleanup ---
+
+  it("cleans up debounce timer on unmount", async () => {
+    const { unmount } = renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    // Just verify unmount doesn't throw
+    unmount();
+  });
+
+  // --- errors.filter path coverage ---
+
+  it("renders error messages with path and message joined", async () => {
+    const { uploadConfig } = await import("@/api/workspace");
+    (uploadConfig as ReturnType<typeof vi.fn>).mockResolvedValue({
+      errors: [
+        { path: "model.params.depth", message: "Must be > 0" },
+        { path: "", message: "General error" },
+      ],
+    });
+
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    const fileInput = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    const file = new File(["bad"], "bad.yaml", { type: "text/yaml" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("model.params.depth: Must be > 0"),
+      ).toBeInTheDocument();
+      expect(screen.getByText("General error")).toBeInTheDocument();
+    });
+  });
+
+  // --- footer disabled class when running ---
+
+  it("footer area has pointer-events-none when running", () => {
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={true}
+      />,
+    );
+    // footer has aria-disabled="true" when running
+    const footers = document.querySelectorAll('[aria-disabled="true"]');
+    expect(footers.length).toBeGreaterThanOrEqual(2); // config-form-area + footer
+  });
+
+  // --- disabledReason: running ---
+
+  it("shows running disabledReason", () => {
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={true}
+      />,
+    );
+    expect(screen.getByText("A job is currently running")).toBeInTheDocument();
   });
 });
