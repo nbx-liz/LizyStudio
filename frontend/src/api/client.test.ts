@@ -1,7 +1,7 @@
 import { HttpResponse, http } from "msw";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { server } from "../test/mocks/server";
-import { apiFetch } from "./client";
+import { ApiError, apiFetch } from "./client";
 
 describe("apiFetch", () => {
   beforeAll(() => server.listen({ onUnhandledRequest: "bypass" }));
@@ -104,7 +104,8 @@ describe("apiFetch", () => {
       });
       expect.fail("Should have thrown");
     } catch (err: unknown) {
-      const apiErr = err as { status: number; body: unknown };
+      expect(err).toBeInstanceOf(ApiError);
+      const apiErr = err as ApiError;
       expect(apiErr.status).toBe(400);
       expect(apiErr.body).toEqual({
         error: { code: "INVALID", message: "bad input" },

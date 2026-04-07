@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { getErrorMessage } from "@/api/errors";
 import {
   fetchConfig,
   fetchUiSchema,
@@ -58,9 +59,7 @@ export function WorkspacePage() {
       const { job_id } = await runFit();
       setCurrentJobId(job_id);
     } catch (err) {
-      toast.error(
-        `Fit failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      toast.error(`Fit failed: ${getErrorMessage(err)}`);
       setRunning(false);
     }
   }, []);
@@ -71,9 +70,7 @@ export function WorkspacePage() {
       const { job_id } = await runTune();
       setCurrentJobId(job_id);
     } catch (err) {
-      toast.error(
-        `Tune failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      toast.error(`Tune failed: ${getErrorMessage(err)}`);
       setRunning(false);
     }
   }, []);

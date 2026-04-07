@@ -1,6 +1,7 @@
 import { Upload } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { getErrorMessage } from "@/api/errors";
 import type { ColumnInfo, ColumnStatsResponse, UiSchema } from "@/api/types";
 import {
   fetchColumnStats,
@@ -196,9 +197,7 @@ export function DataPanel({
         `Data loaded: ${res.data_ref.shape[0]} rows x ${res.data_ref.shape[1]} columns`,
       );
     } catch (err) {
-      toast.error(
-        `Failed to load data: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      toast.error(`Failed to load data: ${getErrorMessage(err)}`);
     } finally {
       setLoading(false);
     }
@@ -224,9 +223,7 @@ export function DataPanel({
       onDataChanged();
       toast.success(`Uploaded: ${file.name}`);
     } catch (err) {
-      toast.error(
-        `Upload failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      toast.error(`Upload failed: ${getErrorMessage(err)}`);
     } finally {
       setLoading(false);
     }
@@ -289,9 +286,7 @@ export function DataPanel({
           onDataChanged();
         }
       } catch (err) {
-        toast.error(
-          `Column detection failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        toast.error(`Column detection failed: ${getErrorMessage(err)}`);
       }
     },
     [task, cv, dataPath, onDataChanged, onTaskChanged],

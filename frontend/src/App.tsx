@@ -28,9 +28,30 @@ export function App() {
           <ErrorBoundary>
             <AppLayout>
               <Routes>
-                <Route path="/" element={<WorkspacePage />} />
-                <Route path="/jobs" element={<JobsPage />} />
-                <Route path="/inference" element={<InferencePage />} />
+                <Route
+                  path="/"
+                  element={
+                    <ErrorBoundary>
+                      <WorkspacePage />
+                    </ErrorBoundary>
+                  }
+                />
+                <Route
+                  path="/jobs"
+                  element={
+                    <ErrorBoundary>
+                      <JobsPage />
+                    </ErrorBoundary>
+                  }
+                />
+                <Route
+                  path="/inference"
+                  element={
+                    <ErrorBoundary>
+                      <InferencePage />
+                    </ErrorBoundary>
+                  }
+                />
                 <Route path="*" element={<NotFoundPage />} />
               </Routes>
             </AppLayout>
