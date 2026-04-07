@@ -9,6 +9,7 @@ import {
   type CvState,
   INITIAL_BLOCKED_STATE,
   INITIAL_CV_STATE,
+  recommendedInnerValid,
   resetCvState,
 } from "./CvSection";
 import { CV_STRATEGY_FIELDS } from "./constants";
@@ -52,6 +53,49 @@ describe("resetCvState", () => {
     const state = resetCvState("unknown_strategy");
     expect(state.strategy).toBe("unknown_strategy");
     expect(state.folds).toBe(5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// recommendedInnerValid
+// ---------------------------------------------------------------------------
+describe("recommendedInnerValid", () => {
+  it("returns group_holdout for group_kfold", () => {
+    expect(recommendedInnerValid("group_kfold")).toBe("group_holdout");
+  });
+
+  it("returns group_holdout for stratified_group_kfold", () => {
+    expect(recommendedInnerValid("stratified_group_kfold")).toBe(
+      "group_holdout",
+    );
+  });
+
+  it("returns group_holdout for blocked_group_kfold", () => {
+    expect(recommendedInnerValid("blocked_group_kfold")).toBe("group_holdout");
+  });
+
+  it("returns time_holdout for time_series", () => {
+    expect(recommendedInnerValid("time_series")).toBe("time_holdout");
+  });
+
+  it("returns time_holdout for purged_time_series", () => {
+    expect(recommendedInnerValid("purged_time_series")).toBe("time_holdout");
+  });
+
+  it("returns time_holdout for group_time_series", () => {
+    expect(recommendedInnerValid("group_time_series")).toBe("time_holdout");
+  });
+
+  it("returns holdout for kfold (default case)", () => {
+    expect(recommendedInnerValid("kfold")).toBe("holdout");
+  });
+
+  it("returns holdout for stratified_kfold (default case)", () => {
+    expect(recommendedInnerValid("stratified_kfold")).toBe("holdout");
+  });
+
+  it("returns holdout for unknown strategy (default case)", () => {
+    expect(recommendedInnerValid("unknown_strategy")).toBe("holdout");
   });
 });
 

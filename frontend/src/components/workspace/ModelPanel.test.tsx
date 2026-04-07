@@ -1,5 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { renderWithQuery } from "@/test/helpers";
@@ -522,5 +528,130 @@ describe("ModelPanel", () => {
     );
     // When controlled tab is "tune", the action button should show "Tune"
     expect(screen.getByRole("button", { name: "Tune" })).toBeInTheDocument();
+  });
+
+  // --- Coverage expansion: disabledReason, running state, handleExport ---
+
+  it("shows Running button and info bar when running", async () => {
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={true}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Running..." })).toBeDisabled();
+    expect(screen.getByTestId("running-info-bar")).toBeInTheDocument();
+    expect(screen.getByTestId("config-form-area")).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  it("disables Fit button when hasData is false", () => {
+    renderWithQuery(
+      <ModelPanel
+        hasData={false}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+    const fitBtn = screen.getByRole("button", { name: "Fit" });
+    expect(fitBtn).toBeDisabled();
+  });
+
+  it("calls onFit when Fit button is clicked", async () => {
+    const onFit = vi.fn();
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={onFit}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Fit" })).not.toBeDisabled();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Fit" }));
+    expect(onFit).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls handleExport when export button is clicked", async () => {
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+    const exportBtn = screen.getByRole("button", { name: /export/i });
+    fireEvent.click(exportBtn);
+    expect(openSpy).toHaveBeenCalledWith(
+      "/api/workspace/config/download",
+      "_blank",
+    );
+    openSpy.mockRestore();
+  });
+
+  it("shows updateConfig error toast on handleConfigChange failure", async () => {
+    const { updateConfig: mockUpdate } = await import("@/api/workspace");
+    (mockUpdate as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("fail"),
+    );
+    const { toast } = await import("sonner");
+
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    // Trigger config change via import (upload config)
+    const { uploadConfig: mockUpload } = await import("@/api/workspace");
+    (mockUpload as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("import fail"),
+    );
+
+    const fileInput = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    if (fileInput) {
+      const file = new File(["{}"], "config.json", {
+        type: "application/json",
+      });
+      Object.defineProperty(fileInput, "files", { value: [file] });
+      fireEvent.change(fileInput);
+      await waitFor(() => {
+        expect(toast.error).toHaveBeenCalledWith(
+          expect.stringContaining("Import failed"),
+        );
+      });
+    }
+  });
+
+  it("renders disabledReason text when hasData is false", () => {
+    renderWithQuery(
+      <ModelPanel
+        hasData={false}
+        task={null}
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+    expect(screen.getByText("Load data first")).toBeInTheDocument();
   });
 });

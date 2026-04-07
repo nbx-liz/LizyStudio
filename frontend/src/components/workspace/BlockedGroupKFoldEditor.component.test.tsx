@@ -395,4 +395,156 @@ describe("BlockedGroupKFoldEditor", () => {
       screen.getByTestId("blocked-group-kfold-editor"),
     ).toBeInTheDocument();
   });
+
+  it("shows error message when fetchColumnStats rejects", async () => {
+    const { fetchColumnStats } = await import("@/api/workspace");
+    vi.mocked(fetchColumnStats).mockRejectedValueOnce(
+      new Error("Network failure"),
+    );
+
+    render(
+      <BlockedGroupKFoldEditor
+        cv={makeCvState({ timeCol: "year" })}
+        onChange={mockOnChange}
+        blocked={INITIAL_BLOCKED_STATE}
+        onBlockedChange={mockOnBlockedChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("block-stats-error")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("block-stats-error")).toHaveTextContent(
+      "Network failure",
+    );
+  });
+
+  it("clears block stats when timeCol is unset", async () => {
+    const { rerender } = render(
+      <BlockedGroupKFoldEditor
+        cv={makeCvState({ timeCol: "year" })}
+        onChange={mockOnChange}
+        blocked={{ ...INITIAL_BLOCKED_STATE, cutoffs: ["2024"] }}
+        onBlockedChange={mockOnBlockedChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("distribution-bar")).toBeInTheDocument();
+    });
+
+    rerender(
+      <BlockedGroupKFoldEditor
+        cv={makeCvState({ timeCol: null })}
+        onChange={mockOnChange}
+        blocked={INITIAL_BLOCKED_STATE}
+        onBlockedChange={mockOnBlockedChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    expect(screen.queryByTestId("distribution-bar")).not.toBeInTheDocument();
+  });
+
+  it("calls onBlockedChange when stratify segment is changed", () => {
+    render(
+      <BlockedGroupKFoldEditor
+        cv={makeCvState()}
+        onChange={mockOnChange}
+        blocked={INITIAL_BLOCKED_STATE}
+        onBlockedChange={mockOnBlockedChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    const onBtn = screen.getByTestId("seg-on");
+    onBtn.click();
+
+    expect(mockOnBlockedChange).toHaveBeenCalledWith(
+      expect.objectContaining({ stratify: "on" }),
+    );
+  });
+
+  it("calls onChange when folds NumberInput clears (undefined defaults to 2)", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <BlockedGroupKFoldEditor
+        cv={makeCvState({ folds: 5 })}
+        onChange={mockOnChange}
+        blocked={INITIAL_BLOCKED_STATE}
+        onBlockedChange={mockOnBlockedChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    const foldsInput = screen.getByTestId("number-input-5");
+    await user.clear(foldsInput);
+
+    // Clearing sends undefined → updateCv({ folds: undefined ?? 2 }) = { folds: 2 }
+    expect(mockOnChange).toHaveBeenCalledWith(
+      expect.objectContaining({ folds: 2 }),
+    );
+  });
+
+  it("calls onChange when minTrainRows NumberInput changes", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <BlockedGroupKFoldEditor
+        cv={makeCvState()}
+        onChange={mockOnChange}
+        blocked={INITIAL_BLOCKED_STATE}
+        onBlockedChange={mockOnBlockedChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    // Both minTrainRows and minValidRows have placeholder="Auto", use getAllByTestId
+    const autoInputs = screen.getAllByTestId("number-input-Auto");
+    // First is minTrainRows, second is minValidRows
+    await user.type(autoInputs[0], "100");
+
+    expect(mockOnChange).toHaveBeenCalled();
+  });
+
+  it("calls onBlockedChange when blockMode is changed to sliding", () => {
+    render(
+      <BlockedGroupKFoldEditor
+        cv={makeCvState()}
+        onChange={mockOnChange}
+        blocked={{ ...INITIAL_BLOCKED_STATE, blockMode: "expanding" }}
+        onBlockedChange={mockOnBlockedChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    screen.getByTestId("seg-sliding").click();
+
+    expect(mockOnBlockedChange).toHaveBeenCalledWith(
+      expect.objectContaining({ blockMode: "sliding" }),
+    );
+  });
+
+  it("auto-selects last value as cutoff after stats load", async () => {
+    render(
+      <BlockedGroupKFoldEditor
+        cv={makeCvState({ timeCol: "year" })}
+        onChange={mockOnChange}
+        blocked={INITIAL_BLOCKED_STATE}
+        onBlockedChange={mockOnBlockedChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockOnBlockedChange).toHaveBeenCalled();
+    });
+
+    expect(mockOnBlockedChange).toHaveBeenCalledWith(
+      expect.objectContaining({ cutoffs: ["2024"] }),
+    );
+  });
 });
