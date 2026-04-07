@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { FileBrowser } from "@/components/workspace/FileBrowser";
 
 interface ExportDialogProps {
   open: boolean;
@@ -108,18 +109,23 @@ export function ExportDialog({
                 onChange={(e) => setOutputPath(e.target.value)}
                 className="flex-1 text-sm"
               />
-              <Button
-                variant="outline"
-                size="icon"
-                className="shrink-0"
-                title="Browse output directory"
-                onClick={() => {
-                  // TODO: integrate with FileBrowser when available
-                  toast.info("File browser not yet available");
+              <FileBrowser
+                onSelect={(path) => {
+                  // Use the directory containing the selected file as output path
+                  const dir = path.substring(0, path.lastIndexOf("/")) || path;
+                  setOutputPath(dir);
                 }}
-              >
-                <FolderOpen className="h-4 w-4" />
-              </Button>
+                trigger={
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="shrink-0"
+                    title="Browse output directory"
+                  >
+                    <FolderOpen className="h-4 w-4" />
+                  </Button>
+                }
+              />
             </div>
           </div>
 
