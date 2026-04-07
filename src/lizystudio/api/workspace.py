@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from fastapi import APIRouter, Depends, Request, UploadFile
+from fastapi import APIRouter, Depends, Query, Request, UploadFile  # noqa: F401
 from fastapi.responses import Response
 from pydantic import BaseModel  # noqa: F401
 
@@ -176,7 +176,7 @@ async def data_upload(
 
 @router.get("/data/preview", response_model=PreviewResponseModel)
 def data_preview(
-    rows: int = 50,
+    rows: int = Query(default=50, ge=1, le=10000),
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, Any]:
     """Return first N rows of loaded data."""
