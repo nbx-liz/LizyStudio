@@ -7,8 +7,7 @@ import {
   fetchInferenceRecord,
   runInference,
 } from "@/api/inference";
-import { fetchJobs } from "@/api/jobs";
-import type { JobSummary } from "@/api/types";
+import { fetchJob, fetchJobs } from "@/api/jobs";
 import { ResultsPredOnly } from "@/components/inference/ResultsPredOnly";
 import { ResultsWithGT } from "@/components/inference/ResultsWithGT";
 import { SetupPanel } from "@/components/inference/SetupPanel";
@@ -125,20 +124,21 @@ export function InferencePage() {
     const job = completedJobs.find((j) => j.job_id === selectedJobId);
     if (!job) return "";
     const num = completedJobs.length - completedJobs.indexOf(job);
-    return `Job #${num} ${extractModelName(job)}`;
+    return `Job #${num} ${job.model_name}`;
   }, [selectedJobId, completedJobs]);
 
-  // Target column from job config
-  // TODO: config is not in JobSummary type. GET /jobs list does not return config.
-  // Either add config to the list endpoint or fetch job detail separately.
+  // Fetch job detail to get config.data.target for ground-truth detection
+  const { data: jobDetail } = useQuery({
+    queryKey: ["job-detail", selectedJobId],
+    queryFn: () => fetchJob(selectedJobId ?? ""),
+    enabled: selectedJobId != null,
+  });
+
   const targetCol = useMemo(() => {
-    const job = completedJobs.find((j) => j.job_id === selectedJobId) as
-      | (JobSummary & { config?: Record<string, unknown> })
-      | undefined;
-    if (!job?.config) return "";
-    const data = job.config.data as Record<string, unknown> | undefined;
+    if (!jobDetail?.config) return "";
+    const data = jobDetail.config.data as Record<string, unknown> | undefined;
     return String(data?.target ?? "");
-  }, [selectedJobId, completedJobs]);
+  }, [jobDetail]);
 
   return (
     <div className="flex h-full">
@@ -153,6 +153,7 @@ export function InferencePage() {
           onSelectInf={handleSelectInf}
           onRunInference={handleRunInference}
           isRunning={mutation.isPending}
+          targetCol={targetCol}
         />
       </div>
 
@@ -186,12 +187,4 @@ export function InferencePage() {
       </div>
     </div>
   );
-}
-
-function extractModelName(job: JobSummary): string {
-  const config = (job as JobSummary & { config?: Record<string, unknown> })
-    .config;
-  if (!config) return "";
-  const model = config.model as Record<string, unknown> | undefined;
-  return String(model?.name ?? model?.type ?? "");
 }

@@ -42,6 +42,7 @@ describe("SetupPanel", () => {
     onSelectInf: vi.fn(),
     onRunInference: vi.fn(),
     isRunning: false,
+    targetCol: "",
   };
 
   it("renders Inference heading", () => {
@@ -114,29 +115,8 @@ describe("SetupPanel", () => {
     expect(screen.getByText("Prediction only")).toBeInTheDocument();
   });
 
-  it("shows target detected when selected job has target column", () => {
-    const job = {
-      job_id: "j1",
-      job_type: "fit",
-      status: "completed",
-      backend_name: "lizyml",
-      model_name: "lgbm",
-      config: { data: { target: "price" }, model: { name: "lgbm" } },
-      data_ref: {
-        source_type: "path",
-        path: "/data.csv",
-        filename: "data.csv",
-        fingerprint: "abc",
-        shape: [100, 5],
-      },
-      created_at: "2025-01-01T00:00:00Z",
-      completed_at: "2025-01-01T00:01:00Z",
-      error: null,
-      primary_score: 0.95,
-    } as JobSummary;
-    render(
-      <SetupPanel {...baseProps} completedJobs={[job]} selectedJobId="j1" />,
-    );
+  it("shows target detected when targetCol is provided", () => {
+    render(<SetupPanel {...baseProps} targetCol="price" />);
     expect(screen.getByText(/Target.*'price'.*detected/)).toBeInTheDocument();
   });
 

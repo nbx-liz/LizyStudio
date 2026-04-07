@@ -6,6 +6,24 @@ vi.mock("@/api/jobs", () => ({ exportJob: vi.fn() }));
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
+vi.mock("@/components/workspace/FileBrowser", () => ({
+  FileBrowser: ({
+    onSelect,
+    trigger,
+  }: {
+    onSelect: (p: string) => void;
+    trigger?: React.ReactNode;
+  }) =>
+    trigger ? (
+      <button type="button" onClick={() => onSelect("/browse/dir")}>
+        {trigger}
+      </button>
+    ) : (
+      <button type="button" onClick={() => onSelect("/browse/dir")}>
+        Browse
+      </button>
+    ),
+}));
 
 const defaultProps = {
   open: true,
