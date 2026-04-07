@@ -29,5 +29,6 @@ jobs:
       - run: uv run mypy src/lizystudio/
       - run: cd frontend && pnpm install --frozen-lockfile
       - run: cd frontend && pnpm build
+      - run: git checkout -- src/lizystudio/_version.py
       - run: uv build
       - uses: pypa/gh-action-pypi-publish@release/v1
