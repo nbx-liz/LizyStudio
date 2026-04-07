@@ -56,6 +56,8 @@ dev = [
 
 [tool.hatch.version]
 source = "vcs"
+raw-options = { local_scheme = "no-local-version" }
+fallback-version = "0.0.0"
 
 [tool.hatch.build.hooks.vcs]
 version-file = "src/lizystudio/_version.py"
