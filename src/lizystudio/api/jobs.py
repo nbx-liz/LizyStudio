@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict
-from typing import Any
+from typing import Any, Literal  # noqa: UP035
 
 from fastapi import APIRouter, BackgroundTasks, Depends
 from fastapi.responses import FileResponse
@@ -342,7 +342,7 @@ def _build_export_filename(job: Job, job_store: JobStore) -> str:
 
 
 class ExportRequest(BaseModel):
-    export_type: str  # "model" or "report"
+    export_type: Literal["model", "report"]  # noqa: UP035
     output_path: str
 
 
