@@ -21,6 +21,8 @@ from lizystudio.services.subprocess_runner import (
     run_job_in_subprocess,
 )
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture()
 def job_store(tmp_path: Path) -> JobStore:

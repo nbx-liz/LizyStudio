@@ -5,7 +5,10 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
+
+pytestmark = pytest.mark.integration
 
 
 def _create_csv(tmp_path: Path) -> str:

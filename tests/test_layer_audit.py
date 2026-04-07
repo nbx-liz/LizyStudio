@@ -5,6 +5,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.unit
+
 API_DIR = Path("src/lizystudio/api")
 SERVICE_DIR = Path("src/lizystudio/services")
 

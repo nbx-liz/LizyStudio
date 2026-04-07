@@ -21,6 +21,8 @@ from lizystudio.services.training import (
     run_tune,
 )
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture()
 def job_store(tmp_path: Path) -> JobStore:

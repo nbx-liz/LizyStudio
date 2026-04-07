@@ -12,6 +12,8 @@ import pytest
 
 from lizystudio.cli import main
 
+pytestmark = pytest.mark.unit
+
 
 class TestCliAllOptions:
     """Test all CLI option combinations."""

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import sys
 
+import pytest
 from fastapi.testclient import TestClient
 
 from lizystudio.backends.lizyml import LizyMLAdapter
+
+pytestmark = pytest.mark.integration
 
 UI_SCHEMA_KEYS = {
     "sections",

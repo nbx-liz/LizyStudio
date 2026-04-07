@@ -6,7 +6,10 @@ import csv
 import tempfile
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
+
+pytestmark = pytest.mark.integration
 
 
 def _create_csv(tmp_path: Path, name: str = "train.csv") -> str:

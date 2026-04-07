@@ -14,6 +14,8 @@ import pytest
 from lizystudio.backends.types import DataRef, FitSummary, TuningSummary
 from lizystudio.services.jobs import Job, JobStore
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture()
 def store(tmp_path: Path) -> JobStore:
