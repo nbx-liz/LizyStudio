@@ -6,9 +6,12 @@ import csv
 from pathlib import Path
 
 import pandas as pd
+import pytest
 from fastapi.testclient import TestClient
 
 from lizystudio.services.data import analyze_columns, load_dataframe
+
+pytestmark = pytest.mark.integration
 
 # ---------------------------------------------------------------------------
 # load_dataframe — Parquet support

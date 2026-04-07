@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getErrorMessage } from "@/api/errors";
 import type { ColumnInfo, ColumnStatsResponse, ValueCount } from "@/api/types";
 import { fetchColumnStats } from "@/api/workspace";
 import { Label } from "@/components/ui/label";
@@ -117,7 +118,7 @@ export function BlockedGroupKFoldEditor({
       })
       .catch((err) => {
         if (!cancelled) {
-          setStatsError(err instanceof Error ? err.message : String(err));
+          setStatsError(getErrorMessage(err));
           setBlockStats(null);
         }
       })

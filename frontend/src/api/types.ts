@@ -8,14 +8,16 @@
  *    names so consumers keep importing from `@/api/types`.
  *
  * 2. **Hand-written** — types where:
- *    - The generated schema uses `string` but the frontend needs literal unions
- *      (e.g. `"fit" | "tune"`, `"numeric" | "categorical"`).
+ *    - The generated schema marks fields as optional (`?`) but the frontend
+ *      expects them as required with `null` (e.g. `JobSummary.error`).
  *    - The generated schema lacks the type entirely (endpoint has no
  *      `response_model`, or it's a frontend-only / WebSocket type).
  *    - The shape differs (e.g. `shape: [number, number]` vs `number[]`).
  *
- * When the backend Pydantic models gain `Literal[...]` annotations, re-run
- * `pnpm generate:api` and replace the corresponding hand-written types.
+ * Backend Pydantic models now use `Literal[...]` annotations for enum-like
+ * fields. `ColumnInfo` and `ColumnsResponse` are re-exported from the
+ * generated schema. `JobSummary` remains hand-written due to optional vs
+ * required field differences.
  */
 
 import type { components } from "./generated/schema";
@@ -47,8 +49,8 @@ export type SplitPreviewResponse =
 
 /**
  * DataRef — hand-written because generated `DataRefResponse` types
- * `source_type` as `string` and `shape` as `number[]` instead of the
- * stricter `"path" | "upload"` and `[number, number]`.
+ * `shape` as `number[]` instead of the stricter `[number, number]`.
+ * `source_type` now matches the generated Literal union.
  */
 export interface DataRef {
   source_type: "path" | "upload";
@@ -72,24 +74,14 @@ export interface WorkspaceStatus {
 }
 
 /**
- * ColumnInfo — hand-written because generated `ColumnInfoResponse` types
- * `suggested_type` and `exclude_reason` as plain `string` instead of
- * literal unions used throughout the UI.
+ * ColumnInfo — re-exported from generated schema.
+ * Backend Pydantic models now use `Literal` for `suggested_type` and
+ * `exclude_reason`, so the generated type has proper literal unions.
  */
-export interface ColumnInfo {
-  name: string;
-  dtype: string;
-  unique_count: number;
-  suggested_type: "numeric" | "categorical";
-  suggested_excluded: boolean;
-  exclude_reason: "id" | "constant" | null;
-}
+export type ColumnInfo = components["schemas"]["ColumnInfoResponse"];
 
-export interface ColumnsResponse {
-  target: string | null;
-  suggested_task: string | null;
-  columns: ColumnInfo[];
-}
+/** GET /api/workspace/data/columns */
+export type ColumnsResponse = components["schemas"]["ColumnsResponseModel"];
 
 /**
  * ConfigUpdateResponse — hand-written because generated type has
@@ -106,7 +98,9 @@ export interface ConfigError {
   message: string;
 }
 
-// --- Job types — hand-written for literal unions on status / job_type ---
+// --- Job types — hand-written because generated schema marks optional fields
+// with `?` (e.g. `error?: string | null`) while frontend expects them as
+// required with `null` default. Literal unions now match the generated schema. ---
 
 export interface JobSummary {
   job_id: string;

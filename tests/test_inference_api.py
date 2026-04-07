@@ -13,6 +13,8 @@ from lizystudio.backends.types import DataRef, FitSummary
 from lizystudio.services.inference import InferenceRecord, InferenceStore
 from lizystudio.services.jobs import JobStore
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture()
 def sample_data_ref() -> DataRef:

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { getErrorMessage } from "@/api/errors";
 import type { FoldInfo, SplitPreviewResponse } from "@/api/types";
 import { fetchSplitPreview } from "@/api/workspace";
 import { Badge } from "@/components/ui/badge";
@@ -49,7 +50,7 @@ export function FoldPreview({
       const data = await fetchSplitPreview();
       setPreview(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(getErrorMessage(err));
       setPreview(null);
     } finally {
       setLoading(false);

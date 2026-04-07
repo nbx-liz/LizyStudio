@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import sys
 
+import pytest
 from fastapi.testclient import TestClient
 
 from lizystudio.backends.lizyml import LizyMLAdapter
+
+pytestmark = pytest.mark.integration
 
 UI_SCHEMA_KEYS = {
     "sections",
@@ -683,10 +686,10 @@ class TestLizyMLAdapterUiSchema:
 
 def _reset_ui_schema_caches() -> None:
     """Reset module-level caches to force re-evaluation."""
-    import lizystudio.backends.lizyml_ui_schema as m
+    import lizystudio.backends.lizyml_metrics as metrics
 
-    m._eval_metrics_cache = None
-    m._metric_direction_cache = None
+    metrics._eval_metrics_cache = None
+    metrics._metric_direction_cache = None
 
 
 class TestUiSchemaFallbacks:
@@ -752,7 +755,9 @@ class TestUiSchemaFallbacks:
         _reset_ui_schema_caches()
         # Pre-populate before next call to simulate the "already populated"
         # scenario inside the lock.
-        m._eval_metrics_cache = first_result  # type: ignore[attr-defined]
+        import lizystudio.backends.lizyml_metrics as metrics_mod
+
+        metrics_mod._eval_metrics_cache = first_result  # type: ignore[attr-defined]
         result = m.get_eval_metrics_by_task()
         assert result is first_result
         _reset_ui_schema_caches()
@@ -763,7 +768,9 @@ class TestUiSchemaFallbacks:
 
         first_result = m.get_metric_directions()
         _reset_ui_schema_caches()
-        m._metric_direction_cache = first_result  # type: ignore[attr-defined]
+        import lizystudio.backends.lizyml_metrics as metrics_mod2
+
+        metrics_mod2._metric_direction_cache = first_result  # type: ignore[attr-defined]
         result = m.get_metric_directions()
         assert result is first_result
         _reset_ui_schema_caches()

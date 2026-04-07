@@ -1,12 +1,49 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UiSchema } from "@/api/types";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ConfigForm } from "./ConfigForm";
 
-// Mock DynParam which needs TooltipProvider
+// Mock DynParam which needs TooltipProvider.
+// Captures props so tests can inspect hint/value/options passed to each instance.
+const dynParamCalls: {
+  hint: { key: string; kind: string };
+  value: unknown;
+  options: string[];
+  visible: boolean;
+}[] = [];
+
 vi.mock("./DynParam", () => ({
-  DynParam: () => <div data-testid="dyn-param" />,
+  DynParam: (props: {
+    hint: { key: string; kind: string };
+    value: unknown;
+    options: string[];
+    visible: boolean;
+    onChange: (v: unknown) => void;
+  }) => {
+    dynParamCalls.push({
+      hint: props.hint,
+      value: props.value,
+      options: props.options,
+      visible: props.visible,
+    });
+    return (
+      <button
+        type="button"
+        data-testid="dyn-param"
+        data-hint-key={props.hint.key}
+        data-value={String(props.value)}
+        data-visible={String(props.visible)}
+        onClick={() => props.onChange("__changed__")}
+      />
+    );
+  },
 }));
 
 function renderConfigForm(props: Parameters<typeof ConfigForm>[0]) {
@@ -86,6 +123,7 @@ const multiSectionConfig = {
 describe("ConfigForm", () => {
   afterEach(() => {
     cleanup();
+    dynParamCalls.length = 0;
   });
 
   it("returns null when schema has no properties", () => {
@@ -398,5 +436,730 @@ describe("ConfigForm", () => {
         screen.queryByTestId("toggle-advanced-params"),
       ).not.toBeInTheDocument();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Additional coverage: shouldShowField, getOptionsForHint, getValueForHint,
+// handleHintChange, auto-select useEffect, MetricsChips integration,
+// inner_valid_options, Calibration edge cases
+// ---------------------------------------------------------------------------
+
+describe("ConfigForm — shouldShowField conditional_visibility", () => {
+  afterEach(() => {
+    cleanup();
+    dynParamCalls.length = 0;
+  });
+
+  // Use essential key "num_leaves" so DynParam is always rendered (not gated by showAdvanced)
+
+  it("passes visible=true when conditional_visibility condition is satisfied from modelConfig", () => {
+    // num_leaves visible only when boosting_type === "goss" — and boosting_type lives in model config
+    renderConfigForm({
+      schema: minimalSchema,
+      config: { model: { name: "lgbm", boosting_type: "goss", params: {} } },
+      onChange: vi.fn(),
+      uiSchema: {
+        parameter_hints: [
+          { key: "num_leaves", kind: "integer", label: "Num Leaves" },
+        ],
+        conditional_visibility: {
+          num_leaves: { boosting_type: "goss" },
+        },
+      } as unknown as UiSchema,
+    });
+
+    const param = screen
+      .getAllByTestId("dyn-param")
+      .find((el) => el.dataset.hintKey === "num_leaves");
+    expect(param).toBeDefined();
+    expect(param?.dataset.visible).toBe("true");
+  });
+
+  it("passes visible=false when conditional_visibility condition is not met", () => {
+    renderConfigForm({
+      schema: minimalSchema,
+      config: { model: { name: "lgbm", boosting_type: "gbdt", params: {} } },
+      onChange: vi.fn(),
+      uiSchema: {
+        parameter_hints: [
+          { key: "num_leaves", kind: "integer", label: "Num Leaves" },
+        ],
+        conditional_visibility: {
+          num_leaves: { boosting_type: "goss" },
+        },
+      } as unknown as UiSchema,
+    });
+
+    const param = screen
+      .getAllByTestId("dyn-param")
+      .find((el) => el.dataset.hintKey === "num_leaves");
+    expect(param).toBeDefined();
+    expect(param?.dataset.visible).toBe("false");
+  });
+
+  it("passes visible=true when condKey matches a value in model.params", () => {
+    // Condition key resolved from model.params
+    renderConfigForm({
+      schema: minimalSchema,
+      config: {
+        model: { name: "lgbm", params: { boosting_type: "dart" } },
+      },
+      onChange: vi.fn(),
+      uiSchema: {
+        parameter_hints: [
+          { key: "num_leaves", kind: "integer", label: "Num Leaves" },
+        ],
+        conditional_visibility: {
+          num_leaves: { boosting_type: "dart" },
+        },
+      } as unknown as UiSchema,
+    });
+
+    const param = screen
+      .getAllByTestId("dyn-param")
+      .find((el) => el.dataset.hintKey === "num_leaves");
+    expect(param?.dataset.visible).toBe("true");
+  });
+
+  it("passes visible=true when no conditional_visibility rule exists for the key", () => {
+    renderConfigForm({
+      schema: minimalSchema,
+      config: minimalConfig,
+      onChange: vi.fn(),
+      uiSchema: {
+        parameter_hints: [
+          { key: "learning_rate", kind: "number", label: "LR" },
+        ],
+        conditional_visibility: {},
+      } as unknown as UiSchema,
+    });
+
+    const param = screen
+      .getAllByTestId("dyn-param")
+      .find((el) => el.dataset.hintKey === "learning_rate");
+    expect(param?.dataset.visible).toBe("true");
+  });
+});
+
+describe("ConfigForm — getOptionsForHint", () => {
+  afterEach(() => {
+    cleanup();
+    dynParamCalls.length = 0;
+  });
+
+  const uiSchemaWithOptionSets = {
+    parameter_hints: [
+      { key: "objective", kind: "objective", label: "Objective" },
+      { key: "metric", kind: "model_metric", label: "Metric" },
+      { key: "learning_rate", kind: "number", label: "LR" },
+    ],
+    option_sets: {
+      objective: { binary: ["binary", "cross_entropy"] },
+      model_metric: { binary: ["auc", "binary_logloss"] },
+    },
+  } as unknown as UiSchema;
+
+  it("passes objective options for task when kind is objective", () => {
+    renderConfigForm({
+      schema: minimalSchema,
+      config: minimalConfig,
+      onChange: vi.fn(),
+      task: "binary",
+      uiSchema: uiSchemaWithOptionSets,
+    });
+
+    const objCall = dynParamCalls.find((c) => c.hint.key === "objective");
+    expect(objCall).toBeDefined();
+    expect(objCall?.options).toEqual(["binary", "cross_entropy"]);
+  });
+
+  it("passes model_metric options for task when kind is model_metric", () => {
+    renderConfigForm({
+      schema: minimalSchema,
+      config: minimalConfig,
+      onChange: vi.fn(),
+      task: "binary",
+      uiSchema: uiSchemaWithOptionSets,
+    });
+
+    const metricCall = dynParamCalls.find((c) => c.hint.key === "metric");
+    expect(metricCall).toBeDefined();
+    expect(metricCall?.options).toEqual(["auc", "binary_logloss"]);
+  });
+
+  it("returns empty options for non-objective/model_metric kind", () => {
+    renderConfigForm({
+      schema: minimalSchema,
+      config: minimalConfig,
+      onChange: vi.fn(),
+      task: "binary",
+      uiSchema: uiSchemaWithOptionSets,
+    });
+
+    const lrCall = dynParamCalls.find((c) => c.hint.key === "learning_rate");
+    expect(lrCall).toBeDefined();
+    expect(lrCall?.options).toEqual([]);
+  });
+
+  it("returns empty options when task is null", () => {
+    renderConfigForm({
+      schema: minimalSchema,
+      config: minimalConfig,
+      onChange: vi.fn(),
+      task: null,
+      uiSchema: uiSchemaWithOptionSets,
+    });
+
+    for (const call of dynParamCalls) {
+      expect(call.options).toEqual([]);
+    }
+  });
+});
+
+describe("ConfigForm — getValueForHint", () => {
+  afterEach(() => {
+    cleanup();
+    dynParamCalls.length = 0;
+  });
+
+  it("returns model.params.objective for objective kind", () => {
+    renderConfigForm({
+      schema: minimalSchema,
+      config: { model: { name: "lgbm", params: { objective: "binary" } } },
+      onChange: vi.fn(),
+      uiSchema: {
+        parameter_hints: [
+          { key: "objective", kind: "objective", label: "Obj" },
+        ],
+      } as unknown as UiSchema,
+    });
+
+    const objCall = dynParamCalls.find((c) => c.hint.kind === "objective");
+    expect(objCall?.value).toBe("binary");
+  });
+
+  it("returns model.params.metric for model_metric kind", () => {
+    renderConfigForm({
+      schema: minimalSchema,
+      config: { model: { name: "lgbm", params: { metric: "auc" } } },
+      onChange: vi.fn(),
+      uiSchema: {
+        parameter_hints: [
+          { key: "metric", kind: "model_metric", label: "Metric" },
+        ],
+      } as unknown as UiSchema,
+    });
+
+    const metricCall = dynParamCalls.find(
+      (c) => c.hint.kind === "model_metric",
+    );
+    expect(metricCall?.value).toBe("auc");
+  });
+
+  it("returns model.params[key] for numeric kind", () => {
+    renderConfigForm({
+      schema: minimalSchema,
+      config: { model: { name: "lgbm", params: { learning_rate: 0.05 } } },
+      onChange: vi.fn(),
+      uiSchema: {
+        parameter_hints: [
+          { key: "learning_rate", kind: "number", label: "LR" },
+        ],
+      } as unknown as UiSchema,
+    });
+
+    const lrCall = dynParamCalls.find((c) => c.hint.key === "learning_rate");
+    expect(lrCall?.value).toBe(0.05);
+  });
+});
+
+describe("ConfigForm — handleHintChange (onChange propagation)", () => {
+  afterEach(() => {
+    cleanup();
+    dynParamCalls.length = 0;
+  });
+
+  it("calls onChange with updated objective when objective DynParam changes", () => {
+    const onChange = vi.fn();
+    renderConfigForm({
+      schema: minimalSchema,
+      config: minimalConfig,
+      onChange,
+      uiSchema: {
+        parameter_hints: [
+          { key: "objective", kind: "objective", label: "Obj" },
+        ],
+      } as unknown as UiSchema,
+    });
+
+    // Simulate DynParam onChange via click (mock calls onChange("__changed__"))
+    const dynParam = screen
+      .getAllByTestId("dyn-param")
+      .find((el) => el.dataset.hintKey === "objective");
+    fireEvent.click(dynParam!);
+
+    expect(onChange).toHaveBeenCalled();
+    const updatedConfig =
+      onChange.mock.calls[onChange.mock.calls.length - 1][0];
+    expect(updatedConfig.model.params.objective).toBe("__changed__");
+  });
+
+  it("calls onChange with updated metric when model_metric DynParam changes", () => {
+    const onChange = vi.fn();
+    renderConfigForm({
+      schema: minimalSchema,
+      config: minimalConfig,
+      onChange,
+      uiSchema: {
+        parameter_hints: [
+          { key: "metric", kind: "model_metric", label: "Metric" },
+        ],
+      } as unknown as UiSchema,
+    });
+
+    const dynParam = screen
+      .getAllByTestId("dyn-param")
+      .find((el) => el.dataset.hintKey === "metric");
+    fireEvent.click(dynParam!);
+
+    expect(onChange).toHaveBeenCalled();
+    const updatedConfig =
+      onChange.mock.calls[onChange.mock.calls.length - 1][0];
+    expect(updatedConfig.model.params.metric).toBe("__changed__");
+  });
+
+  it("calls onChange with updated numeric param when non-objective DynParam changes", () => {
+    const onChange = vi.fn();
+    renderConfigForm({
+      schema: minimalSchema,
+      config: { model: { name: "lgbm", params: { learning_rate: 0.1 } } },
+      onChange,
+      uiSchema: {
+        parameter_hints: [
+          { key: "learning_rate", kind: "number", label: "LR" },
+        ],
+      } as unknown as UiSchema,
+    });
+
+    const dynParam = screen
+      .getAllByTestId("dyn-param")
+      .find((el) => el.dataset.hintKey === "learning_rate");
+    fireEvent.click(dynParam!);
+
+    expect(onChange).toHaveBeenCalled();
+    const updatedConfig =
+      onChange.mock.calls[onChange.mock.calls.length - 1][0];
+    expect(updatedConfig.model.params.learning_rate).toBe("__changed__");
+  });
+});
+
+describe("ConfigForm — auto-select useEffect", () => {
+  afterEach(() => {
+    cleanup();
+    dynParamCalls.length = 0;
+  });
+
+  it("auto-selects first objective option when model.params.objective is empty", () => {
+    const onChange = vi.fn();
+    renderConfigForm({
+      schema: minimalSchema,
+      config: { model: { name: "lgbm", params: {} } },
+      onChange,
+      task: "binary",
+      uiSchema: {
+        parameter_hints: [],
+        option_sets: {
+          objective: { binary: ["binary", "cross_entropy"] },
+        },
+      } as unknown as UiSchema,
+    });
+
+    expect(onChange).toHaveBeenCalled();
+    const calls = onChange.mock.calls;
+    // Find a call that sets objective
+    const objCall = calls.find(
+      ([cfg]) => cfg?.model?.params?.objective !== undefined,
+    );
+    expect(objCall).toBeDefined();
+    expect(objCall?.[0].model.params.objective).toBe("binary");
+  });
+
+  it("auto-selects first metric option when model.params.metric is empty", () => {
+    const onChange = vi.fn();
+    renderConfigForm({
+      schema: minimalSchema,
+      config: { model: { name: "lgbm", params: {} } },
+      onChange,
+      task: "binary",
+      uiSchema: {
+        parameter_hints: [],
+        option_sets: {
+          model_metric: { binary: ["auc", "binary_logloss"] },
+        },
+      } as unknown as UiSchema,
+    });
+
+    expect(onChange).toHaveBeenCalled();
+    const calls = onChange.mock.calls;
+    const metricCall = calls.find(
+      ([cfg]) => cfg?.model?.params?.metric !== undefined,
+    );
+    expect(metricCall).toBeDefined();
+    expect(metricCall?.[0].model.params.metric).toEqual(["auc"]);
+  });
+
+  it("does not auto-select objective when model.params.objective is already set", () => {
+    const onChange = vi.fn();
+    renderConfigForm({
+      schema: minimalSchema,
+      config: {
+        model: { name: "lgbm", params: { objective: "cross_entropy" } },
+      },
+      onChange,
+      task: "binary",
+      uiSchema: {
+        parameter_hints: [],
+        option_sets: {
+          objective: { binary: ["binary", "cross_entropy"] },
+        },
+      } as unknown as UiSchema,
+    });
+
+    // onChange should not be called for objective (already set)
+    const objOverrideCalls = onChange.mock.calls.filter(
+      ([cfg]) => cfg?.model?.params?.objective === "binary",
+    );
+    expect(objOverrideCalls.length).toBe(0);
+  });
+
+  it("does not auto-select when task is null", () => {
+    const onChange = vi.fn();
+    renderConfigForm({
+      schema: minimalSchema,
+      config: { model: { name: "lgbm", params: {} } },
+      onChange,
+      task: null,
+      uiSchema: {
+        parameter_hints: [],
+        option_sets: {
+          objective: { binary: ["binary"] },
+          model_metric: { binary: ["auc"] },
+        },
+      } as unknown as UiSchema,
+    });
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("does not auto-select objective/metric when option_sets is absent", () => {
+    const onChange = vi.fn();
+    renderConfigForm({
+      schema: minimalSchema,
+      config: { model: { name: "lgbm", params: {} } },
+      onChange,
+      task: "binary",
+      uiSchema: {
+        parameter_hints: [],
+      } as unknown as UiSchema,
+    });
+
+    // onChange may be called by MetricsChips (default metric selection), but
+    // it must NOT be called to set model.params.objective or model.params.metric
+    const objOrMetricCalls = onChange.mock.calls.filter(
+      ([cfg]) =>
+        cfg?.model?.params?.objective !== undefined ||
+        cfg?.model?.params?.metric !== undefined,
+    );
+    expect(objOrMetricCalls.length).toBe(0);
+  });
+});
+
+describe("ConfigForm — inner_valid_options (Inner Validation select)", () => {
+  afterEach(() => {
+    cleanup();
+    dynParamCalls.length = 0;
+  });
+
+  const schemaWithTraining = {
+    properties: {
+      model: {
+        type: "object",
+        title: "Model",
+        properties: {
+          name: { type: "string", const: "lgbm" },
+          params: { type: "object", additionalProperties: true },
+        },
+      },
+      training: {
+        type: "object",
+        title: "Training",
+        properties: {
+          early_stopping: {
+            type: "object",
+            properties: {
+              enabled: { type: "boolean", default: true },
+            },
+          },
+        },
+      },
+    },
+    $defs: {},
+  };
+
+  it("renders Inner Validation select when inner_valid_options and early_stopping enabled", () => {
+    renderConfigForm({
+      schema: schemaWithTraining,
+      config: {
+        model: { name: "lgbm", params: {} },
+        training: { early_stopping: { enabled: true } },
+      },
+      onChange: vi.fn(),
+      uiSchema: {
+        inner_valid_options: ["holdout", "cv"],
+      } as unknown as UiSchema,
+    });
+
+    expect(screen.getByText("Inner Validation")).toBeInTheDocument();
+  });
+
+  it("does not render Inner Validation select when early_stopping is disabled", () => {
+    renderConfigForm({
+      schema: schemaWithTraining,
+      config: {
+        model: { name: "lgbm", params: {} },
+        training: { early_stopping: { enabled: false } },
+      },
+      onChange: vi.fn(),
+      uiSchema: {
+        inner_valid_options: ["holdout", "cv"],
+      } as unknown as UiSchema,
+    });
+
+    expect(screen.queryByText("Inner Validation")).not.toBeInTheDocument();
+  });
+
+  it("does not render Inner Validation select when inner_valid_options is absent", () => {
+    renderConfigForm({
+      schema: schemaWithTraining,
+      config: {
+        model: { name: "lgbm", params: {} },
+        training: { early_stopping: { enabled: true } },
+      },
+      onChange: vi.fn(),
+    });
+
+    expect(screen.queryByText("Inner Validation")).not.toBeInTheDocument();
+  });
+});
+
+describe("ConfigForm — Calibration section edge cases", () => {
+  afterEach(() => {
+    cleanup();
+    dynParamCalls.length = 0;
+  });
+
+  it("does not render Calibration for multiclass task without conditional_visibility", () => {
+    renderConfigForm({
+      schema: minimalSchema,
+      config: { ...minimalConfig, calibration: null },
+      onChange: vi.fn(),
+      task: "multiclass",
+    });
+
+    expect(screen.queryByText("Calibration")).not.toBeInTheDocument();
+  });
+
+  it("renders Calibration for multiclass when conditional_visibility includes multiclass", () => {
+    renderConfigForm({
+      schema: minimalSchema,
+      config: { ...minimalConfig, calibration: null },
+      onChange: vi.fn(),
+      task: "multiclass",
+      uiSchema: {
+        conditional_visibility: {
+          calibration: { task: ["binary", "multiclass"] },
+        },
+      } as unknown as UiSchema,
+    });
+
+    expect(screen.getByText("Calibration")).toBeInTheDocument();
+  });
+
+  it("does not render Calibration when task is null (even with binary default logic)", () => {
+    renderConfigForm({
+      schema: minimalSchema,
+      config: { ...minimalConfig, calibration: null },
+      onChange: vi.fn(),
+      task: null,
+    });
+
+    expect(screen.queryByText("Calibration")).not.toBeInTheDocument();
+  });
+
+  it("renders Calibration for binary task when conditional_visibility calVis.task is non-array (fallback)", () => {
+    // calVis exists but task is not an array → calVis condition not met → show=false
+    renderConfigForm({
+      schema: minimalSchema,
+      config: { ...minimalConfig, calibration: null },
+      onChange: vi.fn(),
+      task: "binary",
+      uiSchema: {
+        conditional_visibility: {
+          // task is NOT an array → Array.isArray returns false → showCal = false
+          calibration: { task: "binary" },
+        },
+      } as unknown as UiSchema,
+    });
+
+    // Non-array calVis.task → showCal evaluates to false
+    expect(screen.queryByText("Calibration")).not.toBeInTheDocument();
+  });
+});
+
+describe("ConfigForm — MetricsChips integration", () => {
+  afterEach(() => {
+    cleanup();
+    dynParamCalls.length = 0;
+  });
+
+  it("renders MetricsChips within Evaluation section when task is set", () => {
+    renderConfigForm({
+      schema: minimalSchema,
+      config: minimalConfig,
+      onChange: vi.fn(),
+      task: "binary",
+    });
+
+    // Evaluation accordion section is expanded by default
+    expect(screen.getByText("Evaluation")).toBeInTheDocument();
+  });
+
+  it("passes metricsByTask from uiSchema option_sets.metric to MetricsChips", () => {
+    renderConfigForm({
+      schema: minimalSchema,
+      config: {
+        ...minimalConfig,
+        evaluation: { metrics: [] },
+      },
+      onChange: vi.fn(),
+      task: "binary",
+      uiSchema: {
+        option_sets: {
+          metric: {
+            binary: ["auc", "ks", "logloss"],
+          },
+        },
+      } as unknown as UiSchema,
+    });
+
+    // MetricsChips renders chip labels from the metric list
+    expect(screen.getByText("auc")).toBeInTheDocument();
+    expect(screen.getByText("ks")).toBeInTheDocument();
+  });
+});
+
+describe("ConfigForm — top-level scalar fields rendering", () => {
+  afterEach(() => {
+    cleanup();
+    dynParamCalls.length = 0;
+  });
+
+  it("renders scalar top-level fields that are not hidden or data-panel fields", () => {
+    const schemaWithScalar = {
+      properties: {
+        model: {
+          type: "object",
+          title: "Model",
+          properties: {
+            name: { type: "string", const: "lgbm" },
+            params: { type: "object", additionalProperties: true },
+          },
+        },
+        // A scalar field that is not in HIDDEN or DATA_PANEL_FIELDS
+        random_seed: { type: "integer", title: "Random Seed" },
+      },
+      $defs: {},
+    };
+
+    renderConfigForm({
+      schema: schemaWithScalar,
+      config: { model: { name: "lgbm", params: {} }, random_seed: 42 },
+      onChange: vi.fn(),
+    });
+
+    expect(screen.getByText("Random Seed")).toBeInTheDocument();
+  });
+});
+
+describe("ConfigForm — CalibrationSection onChange propagation", () => {
+  afterEach(() => {
+    cleanup();
+    dynParamCalls.length = 0;
+  });
+
+  it("calls onChange with updated calibration when CalibrationSection toggle fires", () => {
+    const onChange = vi.fn();
+    renderConfigForm({
+      schema: minimalSchema,
+      config: { ...minimalConfig, calibration: null },
+      onChange,
+      task: "binary",
+    });
+
+    // CalibrationSection renders a Switch inside the Calibration accordion item.
+    // Use the "Calibration" heading's parent container to scope the query.
+    const calibrationHeading = screen.getByText("Calibration");
+    const calibrationSection = calibrationHeading.closest(
+      '[data-slot="accordion-item"]',
+    ) as HTMLElement;
+    const toggle = within(calibrationSection).getByRole("switch");
+    fireEvent.click(toggle);
+
+    expect(onChange).toHaveBeenCalled();
+    // After toggling ON (was null), calibration should be set to defaults (non-null object)
+    const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0];
+    expect(lastCall.calibration).not.toBeNull();
+    expect(typeof lastCall.calibration).toBe("object");
+  });
+});
+
+describe("ConfigForm — advanced DynParam onChange propagation", () => {
+  afterEach(() => {
+    cleanup();
+    dynParamCalls.length = 0;
+  });
+
+  it("calls onChange with updated param when an advanced DynParam changes", () => {
+    const onChange = vi.fn();
+    const uiSchemaWithAdvanced = {
+      parameter_hints: [
+        // essential (shows by default)
+        { key: "objective", kind: "objective", label: "Objective" },
+        // advanced (hidden until toggle clicked) — use a non-essential key
+        { key: "feature_fraction", kind: "number", label: "FF" },
+      ],
+    } as unknown as UiSchema;
+
+    renderConfigForm({
+      schema: minimalSchema,
+      config: minimalConfig,
+      onChange,
+      uiSchema: uiSchemaWithAdvanced,
+    });
+
+    // Reveal advanced params
+    fireEvent.click(screen.getByTestId("toggle-advanced-params"));
+
+    // Click the advanced DynParam (feature_fraction)
+    const advancedParam = screen
+      .getAllByTestId("dyn-param")
+      .find((el) => el.dataset.hintKey === "feature_fraction");
+    expect(advancedParam).toBeDefined();
+    fireEvent.click(advancedParam!);
+
+    expect(onChange).toHaveBeenCalled();
+    const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0];
+    expect(lastCall.model.params.feature_fraction).toBe("__changed__");
   });
 });

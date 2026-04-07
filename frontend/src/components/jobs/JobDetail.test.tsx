@@ -1,4 +1,5 @@
-import { cleanup, screen } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { makeJob, renderWithProviders } from "@/test/helpers";
@@ -592,5 +593,627 @@ describe("JobDetailPanel", () => {
     expect(await screen.findByText("Delete")).toBeInTheDocument();
     expect(screen.getByText("Re-fit")).toBeInTheDocument();
     expect(screen.queryByText("Cancel")).not.toBeInTheDocument();
+  });
+});
+
+describe("JobDetailPanel - Cancel dialog flow", () => {
+  afterEach(() => {
+    cleanup();
+    mockNavigate.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it("opens cancel confirmation dialog when Cancel button is clicked", async () => {
+    const user = userEvent.setup();
+    const runningJob = makeJob({ status: "running", completed_at: null });
+    mockFetchJob.mockResolvedValue(runningJob);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    const cancelBtn = await screen.findByText("Cancel");
+    await user.click(cancelBtn);
+
+    expect(screen.getByText("Cancel job?")).toBeInTheDocument();
+    expect(
+      screen.getByText("Are you sure you want to cancel this running job?"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "No" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Yes, Cancel" }),
+    ).toBeInTheDocument();
+  });
+
+  it("closes cancel dialog when No button is clicked", async () => {
+    const user = userEvent.setup();
+    const runningJob = makeJob({ status: "running", completed_at: null });
+    mockFetchJob.mockResolvedValue(runningJob);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    const cancelBtn = await screen.findByText("Cancel");
+    await user.click(cancelBtn);
+
+    expect(screen.getByText("Cancel job?")).toBeInTheDocument();
+
+    const noBtn = screen.getByRole("button", { name: "No" });
+    await user.click(noBtn);
+
+    await waitFor(() => {
+      expect(screen.queryByText("Cancel job?")).not.toBeInTheDocument();
+    });
+  });
+
+  it("calls cancelJob and shows toast when Yes, Cancel is clicked", async () => {
+    const { cancelJob } = await import("@/api/jobs");
+    const { toast } = await import("sonner");
+    const user = userEvent.setup();
+    const runningJob = makeJob({ status: "running", completed_at: null });
+    mockFetchJob.mockResolvedValue(runningJob);
+    vi.mocked(cancelJob).mockResolvedValue({ status: "cancelled" });
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    const cancelBtn = await screen.findByText("Cancel");
+    await user.click(cancelBtn);
+
+    const yesCancelBtn = screen.getByRole("button", { name: "Yes, Cancel" });
+    await user.click(yesCancelBtn);
+
+    await waitFor(() => {
+      expect(cancelJob).toHaveBeenCalledWith("test-job-1");
+      expect(toast.info).toHaveBeenCalledWith("Job cancelled");
+    });
+  });
+
+  it("shows error toast when cancelJob fails", async () => {
+    const { cancelJob } = await import("@/api/jobs");
+    const { toast } = await import("sonner");
+    const user = userEvent.setup();
+    const runningJob = makeJob({ status: "running", completed_at: null });
+    mockFetchJob.mockResolvedValue(runningJob);
+    vi.mocked(cancelJob).mockRejectedValue(new Error("Network error"));
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    const cancelBtn = await screen.findByText("Cancel");
+    await user.click(cancelBtn);
+
+    const yesCancelBtn = screen.getByRole("button", { name: "Yes, Cancel" });
+    await user.click(yesCancelBtn);
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith("Failed to cancel job");
+    });
+  });
+});
+
+describe("JobDetailPanel - Log dialog flow", () => {
+  afterEach(() => {
+    cleanup();
+    mockNavigate.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it("opens log dialog when View Full Log is clicked on failed job", async () => {
+    const user = userEvent.setup();
+    const failedJob = makeJob({
+      status: "failed",
+      error: "Some failure",
+    });
+    mockFetchJob.mockResolvedValue(failedJob);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    const viewLogBtn = await screen.findByText("View Full Log");
+    await user.click(viewLogBtn);
+
+    expect(screen.getByText("Execution Log")).toBeInTheDocument();
+  });
+});
+
+describe("JobDetailPanel - Export button interaction", () => {
+  afterEach(() => {
+    cleanup();
+    mockNavigate.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it("Export button is present and clickable for completed jobs", async () => {
+    const user = userEvent.setup();
+    const completedJob = makeJob({ status: "completed" });
+    mockFetchJob.mockResolvedValue(completedJob);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    const exportBtn = await screen.findByText("Export");
+    // ExportDialog is mocked to null, but we verify the button exists and is clickable
+    await user.click(exportBtn);
+    // No error = button clicked successfully; ExportDialog receives open=true
+    expect(exportBtn).toBeInTheDocument();
+  });
+});
+
+describe("JobDetailPanel - Re-fit navigation", () => {
+  afterEach(() => {
+    cleanup();
+    mockNavigate.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it("navigates to workspace with refitJobId for failed job Re-fit", async () => {
+    const user = userEvent.setup();
+    const failedJob = makeJob({ status: "failed", error: "Error" });
+    mockFetchJob.mockResolvedValue(failedJob);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-2"
+        jobNumber={2}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    const refitBtn = await screen.findByText("Re-fit");
+    await user.click(refitBtn);
+
+    expect(mockNavigate).toHaveBeenCalledWith("/", {
+      state: { refitJobId: "test-job-2" },
+    });
+  });
+});
+
+describe("JobDetailPanel - ConfigTreeView rendering", () => {
+  afterEach(() => {
+    cleanup();
+    mockNavigate.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it("expands Config accordion and shows primitive values", async () => {
+    const user = userEvent.setup();
+    const job = makeJob({
+      status: "failed",
+      error: "err",
+      config: { learning_rate: 0.01 },
+    });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    const configTrigger = await screen.findByText("Config");
+    await user.click(configTrigger);
+
+    await waitFor(() => {
+      expect(screen.getByText("learning_rate:")).toBeInTheDocument();
+      expect(screen.getByText("0.01")).toBeInTheDocument();
+    });
+  });
+
+  it("expands Config accordion with null config values", async () => {
+    const user = userEvent.setup();
+    const job = makeJob({
+      status: "failed",
+      error: "err",
+      config: { missing_value: null },
+    });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    const configTrigger = await screen.findByText("Config");
+    await user.click(configTrigger);
+
+    await waitFor(() => {
+      expect(screen.getByText("missing_value:")).toBeInTheDocument();
+      expect(screen.getByText("null")).toBeInTheDocument();
+    });
+  });
+
+  it("expands Config accordion with array values via nested node", async () => {
+    const user = userEvent.setup();
+    const job = makeJob({
+      status: "failed",
+      error: "err",
+      config: { tags: ["alpha", "beta"] },
+    });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    const configTrigger = await screen.findByText("Config");
+    await user.click(configTrigger);
+
+    // After expanding Config, the "tags" key should be visible
+    await waitFor(() => {
+      expect(screen.getByText("tags")).toBeInTheDocument();
+    });
+
+    // Click "tags" to expand the array
+    const tagsNode = screen.getByText("tags");
+    await user.click(tagsNode);
+
+    await waitFor(() => {
+      expect(screen.getByText("alpha")).toBeInTheDocument();
+      expect(screen.getByText("beta")).toBeInTheDocument();
+    });
+  });
+
+  it("expands nested ConfigTreeNode when clicking on expandable key", async () => {
+    const user = userEvent.setup();
+    const job = makeJob({
+      status: "failed",
+      error: "err",
+      config: { model: { name: "XGB", depth: 6 } },
+    });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    const configTrigger = await screen.findByText("Config");
+    await user.click(configTrigger);
+
+    // "model" is an expandable node - click to expand
+    const modelNode = await screen.findByText("model");
+    await user.click(modelNode);
+
+    await waitFor(() => {
+      expect(screen.getByText("name:")).toBeInTheDocument();
+      expect(screen.getByText("XGB")).toBeInTheDocument();
+      expect(screen.getByText("depth:")).toBeInTheDocument();
+      expect(screen.getByText("6")).toBeInTheDocument();
+    });
+  });
+
+  it("collapses ConfigTreeNode when clicking expanded key again", async () => {
+    const user = userEvent.setup();
+    const job = makeJob({
+      status: "failed",
+      error: "err",
+      config: { params: { lr: 0.05 } },
+    });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    const configTrigger = await screen.findByText("Config");
+    await user.click(configTrigger);
+
+    // Expand the nested node
+    const paramsNode = await screen.findByText("params");
+    await user.click(paramsNode);
+    await waitFor(() => {
+      expect(screen.getByText("lr:")).toBeInTheDocument();
+    });
+
+    // Collapse it again
+    await user.click(paramsNode);
+    await waitFor(() => {
+      expect(screen.queryByText("lr:")).not.toBeInTheDocument();
+    });
+  });
+
+  it("shows empty object representation in config", async () => {
+    const user = userEvent.setup();
+    const job = makeJob({
+      status: "failed",
+      error: "err",
+      config: { empty_obj: {} },
+    });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    const configTrigger = await screen.findByText("Config");
+    await user.click(configTrigger);
+
+    await waitFor(() => {
+      expect(screen.getByText("{}")).toBeInTheDocument();
+    });
+  });
+
+  it("shows empty array representation in config", async () => {
+    const user = userEvent.setup();
+    const job = makeJob({
+      status: "failed",
+      error: "err",
+      config: { empty_list: [] },
+    });
+    mockFetchJob.mockResolvedValue(job);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    const configTrigger = await screen.findByText("Config");
+    await user.click(configTrigger);
+
+    await waitFor(() => {
+      expect(screen.getByText("[]")).toBeInTheDocument();
+    });
+  });
+});
+
+describe("JobDetailPanel - RunningView tune progress", () => {
+  afterEach(() => {
+    cleanup();
+    mockNavigate.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it("shows tune progress with trial counts when progress has total > 0", async () => {
+    const { connectJobProgress } = await import("@/api/websocket");
+
+    vi.mocked(connectJobProgress).mockImplementation((_jobId, handlers) => {
+      // Emit a progress message immediately
+      handlers.onProgress?.({
+        type: "progress",
+        current: 3,
+        total: 10,
+        message: "Running trial 3",
+        elapsed: 5.5,
+        metrics: { f1: 0.87 },
+      });
+      return () => {};
+    });
+
+    const tuneJob = makeJob({
+      status: "running",
+      job_type: "tune",
+      completed_at: null,
+    });
+    mockFetchJob.mockResolvedValue(tuneJob);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("Running")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Trial 3 / 10")).toBeInTheDocument();
+      expect(screen.getByText(/Best so far:/)).toBeInTheDocument();
+      expect(screen.getByText(/f1 0\.8700/)).toBeInTheDocument();
+    });
+  });
+
+  it("shows elapsed time when progress includes elapsed", async () => {
+    const { connectJobProgress } = await import("@/api/websocket");
+
+    vi.mocked(connectJobProgress).mockImplementation((_jobId, handlers) => {
+      handlers.onProgress?.({
+        type: "progress",
+        current: 1,
+        total: 5,
+        message: "Step 1",
+        elapsed: 12.345,
+        metrics: undefined,
+      });
+      return () => {};
+    });
+
+    const runningJob = makeJob({ status: "running", completed_at: null });
+    mockFetchJob.mockResolvedValue(runningJob);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/Elapsed:/)).toBeInTheDocument();
+    });
+  });
+
+  it("shows custom progress message for running fit job when progress arrives", async () => {
+    const { connectJobProgress } = await import("@/api/websocket");
+
+    vi.mocked(connectJobProgress).mockImplementation((_jobId, handlers) => {
+      handlers.onProgress?.({
+        type: "progress",
+        current: 0,
+        total: 0,
+        message: "Preprocessing data...",
+        elapsed: undefined,
+        metrics: undefined,
+      });
+      return () => {};
+    });
+
+    const runningJob = makeJob({
+      status: "running",
+      job_type: "fit",
+      completed_at: null,
+    });
+    mockFetchJob.mockResolvedValue(runningJob);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Preprocessing data...")).toBeInTheDocument();
+    });
+  });
+});
+
+describe("JobDetailPanel - Delete button interaction", () => {
+  afterEach(() => {
+    cleanup();
+    mockNavigate.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it("Delete button click does not throw for completed job (DeleteDialog is mocked)", async () => {
+    const user = userEvent.setup();
+    const completedJob = makeJob({ status: "completed" });
+    mockFetchJob.mockResolvedValue(completedJob);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    const deleteBtn = await screen.findByText("Delete");
+    await user.click(deleteBtn);
+    // DeleteDialog is mocked to null; clicking the button should not throw
+    expect(deleteBtn).toBeInTheDocument();
+  });
+
+  it("Delete button click does not throw for failed job", async () => {
+    const user = userEvent.setup();
+    const failedJob = makeJob({ status: "failed", error: "Some error" });
+    mockFetchJob.mockResolvedValue(failedJob);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    const deleteBtn = await screen.findByText("Delete");
+    await user.click(deleteBtn);
+    expect(deleteBtn).toBeInTheDocument();
+  });
+});
+
+describe("JobDetailPanel - ExecutionLogContent accordion", () => {
+  afterEach(() => {
+    cleanup();
+    mockNavigate.mockReset();
+    vi.clearAllMocks();
+  });
+
+  it("shows log content when Execution Log accordion is expanded", async () => {
+    const user = userEvent.setup();
+    const completedJob = makeJob({ status: "completed" });
+    mockFetchJob.mockResolvedValue(completedJob);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    // Wait for job to load and Execution Log accordion trigger to appear
+    const logTrigger = await screen.findByText("Execution Log");
+    await user.click(logTrigger);
+
+    // fetchJobLog is mocked to return { log: "test log" }
+    await waitFor(() => {
+      expect(screen.getByText("test log")).toBeInTheDocument();
+    });
   });
 });

@@ -20,6 +20,8 @@ from lizystudio.backends.types import (
     PredictionSummary,
 )
 
+pytestmark = pytest.mark.unit
+
 
 def test_adapter_info() -> None:
     adapter = LizyMLAdapter()

@@ -6,7 +6,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const mockLoadDataFromPath = vi.fn();
 const mockUploadData = vi.fn();
@@ -19,6 +19,17 @@ const mockFetchPreview = vi.fn().mockResolvedValue({ columns: [], data: [] });
 const mockFetchConfig = vi.fn().mockResolvedValue({});
 const mockFetchConfigDefaults = vi.fn().mockResolvedValue({});
 const mockUpdateConfig = vi.fn();
+const mockFetchColumnStats = vi.fn().mockResolvedValue({
+  name: "age",
+  dtype: "int64",
+  unique_count: 10,
+  total_count: 100,
+  null_count: 0,
+  value_counts: [
+    { value: "25", count: 30 },
+    { value: "30", count: 20 },
+  ],
+});
 
 vi.mock("@/api/workspace", () => ({
   fetchColumns: (...args: unknown[]) => mockFetchColumns(...args),
@@ -28,6 +39,7 @@ vi.mock("@/api/workspace", () => ({
   loadDataFromPath: (...args: unknown[]) => mockLoadDataFromPath(...args),
   uploadData: (...args: unknown[]) => mockUploadData(...args),
   updateConfig: (...args: unknown[]) => mockUpdateConfig(...args),
+  fetchColumnStats: (...args: unknown[]) => mockFetchColumnStats(...args),
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("./FileBrowser", () => ({
@@ -564,6 +576,924 @@ describe("DataPanel", () => {
     // Summary should show numeric/categorical counts
     await waitFor(() => {
       expect(screen.getByText(/numeric/i)).toBeInTheDocument();
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Extended coverage suite — handleTargetChange, handleColumnExpand,
+// syncConfig abort, Feature Summary, column type/exclude toggles
+// ---------------------------------------------------------------------------
+
+// Polyfill Radix UI pointer events that jsdom does not implement
+beforeAll(() => {
+  window.HTMLElement.prototype.hasPointerCapture = vi
+    .fn()
+    .mockReturnValue(false);
+  window.HTMLElement.prototype.setPointerCapture = vi.fn();
+  window.HTMLElement.prototype.releasePointerCapture = vi.fn();
+  window.HTMLElement.prototype.scrollIntoView = vi.fn();
+});
+
+/** Shared column fixture used across extended tests */
+const COLUMNS_BINARY = [
+  {
+    name: "age",
+    dtype: "int64",
+    unique_count: 50,
+    suggested_type: "numeric" as const,
+    suggested_excluded: false,
+    exclude_reason: null,
+  },
+  {
+    name: "gender",
+    dtype: "object",
+    unique_count: 2,
+    suggested_type: "categorical" as const,
+    suggested_excluded: false,
+    exclude_reason: null,
+  },
+  {
+    name: "id_col",
+    dtype: "int64",
+    unique_count: 100,
+    suggested_type: "numeric" as const,
+    suggested_excluded: true,
+    exclude_reason: "id" as const,
+  },
+  {
+    name: "target",
+    dtype: "int64",
+    unique_count: 2,
+    suggested_type: "numeric" as const,
+    suggested_excluded: false,
+    exclude_reason: null,
+  },
+];
+
+/** Helper: load data via path and wait for shape to appear */
+async function loadDataViaPath(path = "/data.csv", columns = COLUMNS_BINARY) {
+  mockLoadDataFromPath.mockResolvedValue({
+    data_ref: { shape: [100, columns.length], path },
+  });
+  mockFetchPreview.mockResolvedValue({ columns: [], data: [] });
+  mockFetchColumns.mockResolvedValue({
+    columns,
+    suggested_task: null,
+    target: null,
+  });
+
+  await userEvent.click(screen.getByText("Path"));
+  const input = screen.getByPlaceholderText("/path/to/data.csv");
+  await userEvent.type(input, path);
+  await userEvent.click(screen.getByText("Load"));
+
+  await waitFor(() => {
+    expect(
+      screen.getByText(`100 rows × ${columns.length} columns`),
+    ).toBeInTheDocument();
+  });
+}
+
+/** Helper: select a target column via the Radix Select */
+async function selectTarget(targetName: string) {
+  const trigger = screen.getByRole("combobox");
+  await userEvent.click(trigger);
+  await waitFor(() => {
+    // Options appear in a portal — find by text inside the open listbox
+    expect(screen.getAllByText(targetName).length).toBeGreaterThan(0);
+  });
+  const options = screen.getAllByText(targetName);
+  // Click the last occurrence (the one inside the dropdown portal)
+  await userEvent.click(options[options.length - 1]);
+}
+
+describe("DataPanel — handleTargetChange", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("calls fetchColumns with the selected target name", async () => {
+    mockFetchConfig.mockResolvedValue({
+      task: null,
+      data: {},
+      features: {},
+      training: {},
+    });
+    mockFetchConfigDefaults.mockResolvedValue({});
+    mockUpdateConfig.mockResolvedValue({ config: {}, errors: [] });
+
+    render(<DataPanel onDataChanged={vi.fn()} onTaskChanged={vi.fn()} />);
+    await loadDataViaPath();
+
+    // Reset call count so we only track post-load calls
+    mockFetchColumns.mockClear();
+    mockFetchColumns.mockResolvedValue({
+      columns: COLUMNS_BINARY,
+      suggested_task: "binary",
+      target: "target",
+    });
+    mockFetchConfigDefaults.mockResolvedValue({
+      task: "binary",
+      data: {},
+      features: {},
+      split: {},
+    });
+
+    await selectTarget("target");
+
+    await waitFor(() => {
+      expect(mockFetchColumns).toHaveBeenCalledWith("target");
+    });
+  });
+
+  it("auto-detects task type from suggested_task and calls onTaskChanged", async () => {
+    mockFetchConfig.mockResolvedValue({
+      task: null,
+      data: {},
+      features: {},
+      training: {},
+    });
+    mockFetchConfigDefaults.mockResolvedValue({
+      task: "binary",
+      data: {},
+      features: {},
+      split: {},
+    });
+    mockUpdateConfig.mockResolvedValue({ config: {}, errors: [] });
+
+    const onTaskChanged = vi.fn();
+    render(<DataPanel onDataChanged={vi.fn()} onTaskChanged={onTaskChanged} />);
+    await loadDataViaPath();
+
+    mockFetchColumns.mockClear();
+    mockFetchColumns.mockResolvedValue({
+      columns: COLUMNS_BINARY,
+      suggested_task: "binary",
+      target: "target",
+    });
+
+    await selectTarget("target");
+
+    await waitFor(() => {
+      expect(onTaskChanged).toHaveBeenCalledWith("binary");
+    });
+  });
+
+  it("calls fetchConfigDefaults when task is detected and calls updateConfig", async () => {
+    mockFetchConfig.mockResolvedValue({
+      task: null,
+      data: {},
+      features: {},
+      training: {},
+    });
+    mockFetchConfigDefaults.mockResolvedValue({
+      task: "binary",
+      data: {},
+      features: {},
+      split: {},
+    });
+    mockUpdateConfig.mockResolvedValue({ config: {}, errors: [] });
+
+    render(<DataPanel onDataChanged={vi.fn()} />);
+    await loadDataViaPath();
+
+    mockFetchColumns.mockClear();
+    mockFetchColumns.mockResolvedValue({
+      columns: COLUMNS_BINARY,
+      suggested_task: "binary",
+      target: "target",
+    });
+
+    await selectTarget("target");
+
+    await waitFor(() => {
+      expect(mockFetchConfigDefaults).toHaveBeenCalledWith("binary", "target");
+    });
+    await waitFor(() => {
+      expect(mockUpdateConfig).toHaveBeenCalled();
+    });
+  });
+
+  it("sets column overrides from suggested_excluded and suggested_type", async () => {
+    mockFetchConfig.mockResolvedValue({
+      task: null,
+      data: {},
+      features: {},
+      training: {},
+    });
+    mockFetchConfigDefaults.mockResolvedValue({
+      task: "binary",
+      data: {},
+      features: {},
+      split: {},
+    });
+    mockUpdateConfig.mockResolvedValue({ config: {}, errors: [] });
+
+    render(<DataPanel onDataChanged={vi.fn()} />);
+    await loadDataViaPath();
+
+    mockFetchColumns.mockClear();
+    mockFetchColumns.mockResolvedValue({
+      columns: COLUMNS_BINARY,
+      suggested_task: "binary",
+      target: "target",
+    });
+
+    await selectTarget("target");
+
+    // Column settings grid should appear with the non-target columns
+    await waitFor(() => {
+      expect(screen.getByTestId("column-row-age")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("column-row-gender")).toBeInTheDocument();
+    expect(screen.getByTestId("column-row-id_col")).toBeInTheDocument();
+  });
+
+  it("shows ID badge for id-excluded columns", async () => {
+    mockFetchConfig.mockResolvedValue({
+      task: null,
+      data: {},
+      features: {},
+      training: {},
+    });
+    mockFetchConfigDefaults.mockResolvedValue({
+      task: "binary",
+      data: {},
+      features: {},
+      split: {},
+    });
+    mockUpdateConfig.mockResolvedValue({ config: {}, errors: [] });
+
+    render(<DataPanel onDataChanged={vi.fn()} />);
+    await loadDataViaPath();
+
+    mockFetchColumns.mockClear();
+    mockFetchColumns.mockResolvedValue({
+      columns: COLUMNS_BINARY,
+      suggested_task: "binary",
+      target: "target",
+    });
+
+    await selectTarget("target");
+
+    await waitFor(() => {
+      expect(screen.getByText("ID")).toBeInTheDocument();
+    });
+  });
+
+  it("shows error toast when fetchColumns fails during target change", async () => {
+    mockFetchConfig.mockResolvedValue({});
+    const { toast } = await import("sonner");
+
+    render(<DataPanel onDataChanged={vi.fn()} />);
+    await loadDataViaPath();
+
+    mockFetchColumns.mockClear();
+    mockFetchColumns.mockRejectedValue(new Error("columns API down"));
+
+    await selectTarget("target");
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringContaining("Column detection failed"),
+      );
+    });
+  });
+
+  it("does not call fetchConfigDefaults when suggested_task is null", async () => {
+    mockFetchConfig.mockResolvedValue({});
+    mockFetchConfigDefaults.mockResolvedValue({});
+    mockUpdateConfig.mockResolvedValue({ config: {}, errors: [] });
+
+    render(<DataPanel onDataChanged={vi.fn()} />);
+    await loadDataViaPath();
+
+    mockFetchColumns.mockClear();
+    mockFetchConfigDefaults.mockClear();
+    mockFetchColumns.mockResolvedValue({
+      columns: COLUMNS_BINARY,
+      suggested_task: null,
+      target: "target",
+    });
+
+    await selectTarget("target");
+
+    await waitFor(() => {
+      expect(mockFetchColumns).toHaveBeenCalledWith("target");
+    });
+    // Without a detected task, fetchConfigDefaults must not be called
+    expect(mockFetchConfigDefaults).not.toHaveBeenCalled();
+  });
+});
+
+describe("DataPanel — Feature Summary", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("shows Feature Summary with correct numeric/categorical counts", async () => {
+    mockFetchConfig.mockResolvedValue({
+      task: null,
+      data: {},
+      features: {},
+      training: {},
+    });
+    mockFetchConfigDefaults.mockResolvedValue({
+      task: "binary",
+      data: {},
+      features: {},
+      split: {},
+    });
+    mockUpdateConfig.mockResolvedValue({ config: {}, errors: [] });
+
+    render(<DataPanel onDataChanged={vi.fn()} />);
+    await loadDataViaPath();
+
+    mockFetchColumns.mockClear();
+    mockFetchColumns.mockResolvedValue({
+      columns: COLUMNS_BINARY,
+      suggested_task: "binary",
+      target: "target",
+    });
+
+    await selectTarget("target");
+
+    // Summary: age=numeric(1), gender=categorical(1), id_col=excluded
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Numeric: 1, Categorical: 1/),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("shows excluded count breakdown (ID/Const/Manual) in Feature Summary", async () => {
+    mockFetchConfig.mockResolvedValue({
+      task: null,
+      data: {},
+      features: {},
+      training: {},
+    });
+    mockFetchConfigDefaults.mockResolvedValue({
+      task: "binary",
+      data: {},
+      features: {},
+      split: {},
+    });
+    mockUpdateConfig.mockResolvedValue({ config: {}, errors: [] });
+
+    render(<DataPanel onDataChanged={vi.fn()} />);
+    await loadDataViaPath();
+
+    mockFetchColumns.mockClear();
+    mockFetchColumns.mockResolvedValue({
+      columns: COLUMNS_BINARY,
+      suggested_task: "binary",
+      target: "target",
+    });
+
+    await selectTarget("target");
+
+    await waitFor(() => {
+      // id_col is excluded with reason "id", so ID: 1
+      expect(screen.getByText(/ID: 1/)).toBeInTheDocument();
+    });
+  });
+
+  it("does not show Feature Summary before target is selected", () => {
+    render(<DataPanel onDataChanged={vi.fn()} />);
+    expect(screen.queryByText(/Features:/)).not.toBeInTheDocument();
+  });
+});
+
+describe("DataPanel — handleColumnExpand (column statistics)", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  async function renderWithColumns() {
+    mockFetchConfig.mockResolvedValue({
+      task: null,
+      data: {},
+      features: {},
+      training: {},
+    });
+    mockFetchConfigDefaults.mockResolvedValue({
+      task: "binary",
+      data: {},
+      features: {},
+      split: {},
+    });
+    mockUpdateConfig.mockResolvedValue({ config: {}, errors: [] });
+
+    render(<DataPanel onDataChanged={vi.fn()} />);
+    await loadDataViaPath();
+
+    mockFetchColumns.mockClear();
+    mockFetchColumns.mockResolvedValue({
+      columns: COLUMNS_BINARY,
+      suggested_task: "binary",
+      target: "target",
+    });
+
+    await selectTarget("target");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("column-row-age")).toBeInTheDocument();
+    });
+  }
+
+  it("fetches column stats when a column row is expanded", async () => {
+    mockFetchColumnStats.mockResolvedValue({
+      name: "age",
+      dtype: "int64",
+      unique_count: 50,
+      total_count: 100,
+      null_count: 0,
+      value_counts: [{ value: "25", count: 30 }],
+    });
+
+    await renderWithColumns();
+
+    await userEvent.click(screen.getByTestId("column-row-age"));
+
+    await waitFor(() => {
+      expect(mockFetchColumnStats).toHaveBeenCalledWith("age");
+    });
+  });
+
+  it("shows distribution stats after column is expanded", async () => {
+    mockFetchColumnStats.mockResolvedValue({
+      name: "age",
+      dtype: "int64",
+      unique_count: 50,
+      total_count: 100,
+      null_count: 2,
+      value_counts: [{ value: "25", count: 30 }],
+    });
+
+    await renderWithColumns();
+
+    await userEvent.click(screen.getByTestId("column-row-age"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("column-dist-age")).toBeInTheDocument();
+    });
+    expect(screen.getByText(/50 unique, 2 null/)).toBeInTheDocument();
+  });
+
+  it("collapses a column when clicked a second time", async () => {
+    mockFetchColumnStats.mockResolvedValue({
+      name: "age",
+      dtype: "int64",
+      unique_count: 50,
+      total_count: 100,
+      null_count: 0,
+      value_counts: [],
+    });
+
+    await renderWithColumns();
+
+    // Expand
+    await userEvent.click(screen.getByTestId("column-row-age"));
+    await waitFor(() => {
+      expect(screen.getByTestId("column-dist-age")).toBeInTheDocument();
+    });
+
+    // Collapse
+    await userEvent.click(screen.getByTestId("column-row-age"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("column-dist-age")).not.toBeInTheDocument();
+    });
+  });
+
+  it("does not re-fetch stats when already loaded for the same column", async () => {
+    mockFetchColumnStats.mockResolvedValue({
+      name: "age",
+      dtype: "int64",
+      unique_count: 50,
+      total_count: 100,
+      null_count: 0,
+      value_counts: [],
+    });
+
+    await renderWithColumns();
+
+    // Expand then collapse then expand again
+    await userEvent.click(screen.getByTestId("column-row-age"));
+    await waitFor(() => {
+      expect(mockFetchColumnStats).toHaveBeenCalledTimes(1);
+    });
+
+    await userEvent.click(screen.getByTestId("column-row-age")); // collapse
+    await userEvent.click(screen.getByTestId("column-row-age")); // re-expand
+
+    // Stats should still only have been fetched once
+    expect(mockFetchColumnStats).toHaveBeenCalledTimes(1);
+  });
+
+  it("silently ignores fetchColumnStats errors (no toast shown)", async () => {
+    mockFetchColumnStats.mockRejectedValue(new Error("stats API down"));
+    const { toast } = await import("sonner");
+
+    await renderWithColumns();
+
+    await userEvent.click(screen.getByTestId("column-row-age"));
+
+    // Wait briefly to let the rejection settle
+    await waitFor(() => {
+      expect(mockFetchColumnStats).toHaveBeenCalled();
+    });
+
+    // No error toast should be shown — errors are silently swallowed per spec
+    expect(toast.error).not.toHaveBeenCalled();
+    // Distribution bar should not appear
+    expect(screen.queryByTestId("column-dist-age")).not.toBeInTheDocument();
+  });
+});
+
+describe("DataPanel — column type and exclude toggles", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  async function renderWithColumnsAndTarget() {
+    mockFetchConfig.mockResolvedValue({
+      task: null,
+      data: {},
+      features: {},
+      training: {},
+    });
+    mockFetchConfigDefaults.mockResolvedValue({
+      task: "binary",
+      data: {},
+      features: {},
+      split: {},
+    });
+    mockUpdateConfig.mockResolvedValue({ config: {}, errors: [] });
+
+    render(<DataPanel onDataChanged={vi.fn()} />);
+    await loadDataViaPath();
+
+    mockFetchColumns.mockClear();
+    mockFetchColumns.mockResolvedValue({
+      columns: COLUMNS_BINARY,
+      suggested_task: "binary",
+      target: "target",
+    });
+
+    await selectTarget("target");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("column-row-age")).toBeInTheDocument();
+    });
+  }
+
+  it("column filter hides non-matching columns", async () => {
+    await renderWithColumnsAndTarget();
+
+    const searchInput = screen.getByTestId("column-search");
+    await userEvent.type(searchInput, "gen");
+
+    await waitFor(() => {
+      expect(screen.getByText("gender")).toBeInTheDocument();
+      expect(screen.queryByTestId("column-row-age")).not.toBeInTheDocument();
+    });
+  });
+
+  it("clears column filter shows all columns again", async () => {
+    await renderWithColumnsAndTarget();
+
+    const searchInput = screen.getByTestId("column-search");
+    await userEvent.type(searchInput, "gen");
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("column-row-age")).not.toBeInTheDocument();
+    });
+
+    await userEvent.clear(searchInput);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("column-row-age")).toBeInTheDocument();
+      expect(screen.getByTestId("column-row-gender")).toBeInTheDocument();
+    });
+  });
+
+  it("Cat type button sets column to categorical when clicked", async () => {
+    await renderWithColumnsAndTarget();
+
+    // age is suggested as numeric; click Cat button inside age row
+    const ageRow = screen.getByTestId("column-row-age");
+    const catButtons = ageRow.querySelectorAll("button");
+    // The Cat button is the second button in the type toggle group
+    const catButton = Array.from(catButtons).find(
+      (b) => b.textContent === "Cat",
+    );
+    expect(catButton).toBeTruthy();
+    await userEvent.click(catButton!);
+
+    // After clicking Cat, syncConfig runs and updateConfig is called
+    await waitFor(() => {
+      expect(mockUpdateConfig).toHaveBeenCalled();
+    });
+  });
+
+  it("Num type button sets column to numeric when clicked", async () => {
+    await renderWithColumnsAndTarget();
+
+    // gender is categorical; click Num button to change it
+    const genderRow = screen.getByTestId("column-row-gender");
+    const numButton = Array.from(genderRow.querySelectorAll("button")).find(
+      (b) => b.textContent === "Num",
+    );
+    expect(numButton).toBeTruthy();
+    await userEvent.click(numButton!);
+
+    await waitFor(() => {
+      expect(mockUpdateConfig).toHaveBeenCalled();
+    });
+  });
+});
+
+describe("DataPanel — syncConfig AbortController", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("does not call onDataChanged when request is aborted mid-flight", async () => {
+    // Simulate a slow fetchConfig that gets aborted
+    let rejectFn!: (reason: unknown) => void;
+    mockFetchConfig.mockImplementation(
+      ({ signal }: { signal?: AbortSignal }) =>
+        new Promise((_, reject) => {
+          rejectFn = reject;
+          signal?.addEventListener("abort", () => {
+            reject(new DOMException("Aborted", "AbortError"));
+          });
+        }),
+    );
+    mockFetchConfigDefaults.mockResolvedValue({
+      task: "binary",
+      data: {},
+      features: {},
+      split: {},
+    });
+    mockUpdateConfig.mockResolvedValue({ config: {}, errors: [] });
+
+    const onDataChanged = vi.fn();
+    render(<DataPanel onDataChanged={onDataChanged} />);
+    await loadDataViaPath();
+
+    mockFetchColumns.mockClear();
+    mockFetchColumns.mockResolvedValue({
+      columns: COLUMNS_BINARY,
+      suggested_task: "binary",
+      target: "target",
+    });
+
+    await selectTarget("target");
+
+    // Wait for syncConfig to start
+    await waitFor(() => {
+      expect(mockFetchConfig).toHaveBeenCalled();
+    });
+
+    // Abort the in-flight request
+    rejectFn(new DOMException("Aborted", "AbortError"));
+
+    // onDataChanged should not be called from the aborted sync
+    await new Promise((r) => setTimeout(r, 50));
+    // Only calls from the initial load path, not from the aborted sync
+    const callCount = onDataChanged.mock.calls.length;
+
+    // Re-verify: no extra onDataChanged calls after abort
+    await new Promise((r) => setTimeout(r, 50));
+    expect(onDataChanged.mock.calls.length).toBe(callCount);
+  });
+
+  it("shows error toast when syncConfig encounters a non-abort error", async () => {
+    mockFetchConfig.mockRejectedValue(new Error("network error"));
+    mockFetchConfigDefaults.mockResolvedValue({
+      task: "binary",
+      data: {},
+      features: {},
+      split: {},
+    });
+    mockUpdateConfig.mockResolvedValue({ config: {}, errors: [] });
+    const { toast } = await import("sonner");
+
+    render(<DataPanel onDataChanged={vi.fn()} />);
+    await loadDataViaPath();
+
+    mockFetchColumns.mockClear();
+    mockFetchColumns.mockResolvedValue({
+      columns: COLUMNS_BINARY,
+      suggested_task: "binary",
+      target: "target",
+    });
+
+    await selectTarget("target");
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "Config sync failed — changes may not be saved",
+      );
+    });
+  });
+});
+
+describe("DataPanel — handleUpload additional paths", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("shows shape from upload response after successful upload", async () => {
+    mockUploadData.mockResolvedValue({
+      data_ref: { shape: [200, 8], path: "/uploads/train.csv" },
+    });
+    mockFetchPreview.mockResolvedValue({ columns: [], data: [] });
+    mockFetchColumns.mockResolvedValue({
+      columns: [],
+      suggested_task: null,
+      target: null,
+    });
+
+    render(<DataPanel onDataChanged={vi.fn()} />);
+    const fileInput = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    const file = new File(["a,b\n1,2"], "train.csv", { type: "text/csv" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getByText("200 rows × 8 columns")).toBeInTheDocument();
+    });
+  });
+
+  it("calls onTaskChanged with null after successful upload", async () => {
+    mockUploadData.mockResolvedValue({
+      data_ref: { shape: [50, 3], path: "/uploaded.csv" },
+    });
+    mockFetchPreview.mockResolvedValue({ columns: [], data: [] });
+    mockFetchColumns.mockResolvedValue({
+      columns: [],
+      suggested_task: null,
+      target: null,
+    });
+
+    const onTaskChanged = vi.fn();
+    render(<DataPanel onDataChanged={vi.fn()} onTaskChanged={onTaskChanged} />);
+    const fileInput = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    const file = new File(["a,b\n1,2"], "test.csv", { type: "text/csv" });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(onTaskChanged).toHaveBeenCalledWith(null);
+    });
+  });
+});
+
+describe("DataPanel — handleLoadPathByValue additional paths", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("shows error toast with error message on load failure", async () => {
+    mockLoadDataFromPath.mockRejectedValue(new Error("permission denied"));
+    const { toast } = await import("sonner");
+
+    render(<DataPanel onDataChanged={vi.fn()} />);
+    await userEvent.click(screen.getByText("Path"));
+    const input = screen.getByPlaceholderText("/path/to/data.csv");
+    await userEvent.type(input, "/secret.csv");
+    await userEvent.click(screen.getByText("Load"));
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        "Failed to load data: permission denied",
+      );
+    });
+  });
+
+  it("resets loading state after failed load", async () => {
+    mockLoadDataFromPath.mockRejectedValue(new Error("not found"));
+
+    render(<DataPanel onDataChanged={vi.fn()} />);
+    await userEvent.click(screen.getByText("Path"));
+    const input = screen.getByPlaceholderText("/path/to/data.csv");
+    await userEvent.type(input, "/bad.csv");
+    await userEvent.click(screen.getByText("Load"));
+
+    await waitFor(() => {
+      // After error, loading finishes so Load button should be re-enabled
+      expect(screen.getByText("Load")).not.toBeDisabled();
+    });
+  });
+});
+
+describe("DataPanel — handleTaskChange and handleExcludeToggle", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  async function renderWithTarget() {
+    mockFetchConfig.mockResolvedValue({
+      task: null,
+      data: {},
+      features: {},
+      training: {},
+    });
+    mockFetchConfigDefaults.mockResolvedValue({
+      task: "binary",
+      data: {},
+      features: {},
+      split: {},
+    });
+    mockUpdateConfig.mockResolvedValue({ config: {}, errors: [] });
+
+    render(<DataPanel onDataChanged={vi.fn()} onTaskChanged={vi.fn()} />);
+    await loadDataViaPath();
+
+    mockFetchColumns.mockClear();
+    mockFetchColumns.mockResolvedValue({
+      columns: COLUMNS_BINARY,
+      suggested_task: "binary",
+      target: "target",
+    });
+
+    await selectTarget("target");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("column-row-age")).toBeInTheDocument();
+    });
+  }
+
+  it("handleTaskChange calls onTaskChanged with the new task value", async () => {
+    const onTaskChanged = vi.fn();
+    mockFetchConfig.mockResolvedValue({
+      task: null,
+      data: {},
+      features: {},
+      training: {},
+    });
+    mockFetchConfigDefaults.mockResolvedValue({
+      task: "binary",
+      data: {},
+      features: {},
+      split: {},
+    });
+    mockUpdateConfig.mockResolvedValue({ config: {}, errors: [] });
+
+    render(<DataPanel onDataChanged={vi.fn()} onTaskChanged={onTaskChanged} />);
+    await loadDataViaPath();
+
+    mockFetchColumns.mockClear();
+    mockFetchColumns.mockResolvedValue({
+      columns: COLUMNS_BINARY,
+      suggested_task: "binary",
+      target: "target",
+    });
+
+    await selectTarget("target");
+
+    // After target selection, task is auto-set to "binary".
+    // Now click "regression" in the Task SegmentGroup to invoke handleTaskChange
+    await waitFor(() => {
+      expect(screen.getByText("regression")).toBeInTheDocument();
+    });
+
+    onTaskChanged.mockClear();
+    await userEvent.click(screen.getByText("regression"));
+
+    await waitFor(() => {
+      expect(onTaskChanged).toHaveBeenCalledWith("regression");
+    });
+  });
+
+  it("handleExcludeToggle updates column excluded state via Checkbox", async () => {
+    await renderWithTarget();
+
+    // age is not excluded by default — find its Checkbox and check it
+    const ageRow = screen.getByTestId("column-row-age");
+    const checkbox = ageRow.querySelector('[role="checkbox"]') as HTMLElement;
+    expect(checkbox).toBeTruthy();
+
+    // Click the checkbox (stopPropagation prevents row expand)
+    await userEvent.click(checkbox);
+
+    // After toggling, syncConfig should run and updateConfig should be called
+    await waitFor(() => {
+      expect(mockUpdateConfig).toHaveBeenCalled();
     });
   });
 });

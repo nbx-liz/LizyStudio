@@ -14,6 +14,8 @@ import pytest
 from lizystudio.backends.types import DataRef
 from lizystudio.services.jobs import Job, JobStore
 
+pytestmark = pytest.mark.unit
+
 # --- Fixtures ---
 
 

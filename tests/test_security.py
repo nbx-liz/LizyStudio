@@ -15,6 +15,8 @@ from lizystudio.security import (
     validate_static_path,
 )
 
+pytestmark = pytest.mark.unit
+
 
 class TestValidatePathWithin:
     """Tests for validate_path_within — prevents path traversal."""

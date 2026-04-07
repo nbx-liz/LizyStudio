@@ -5,6 +5,10 @@ from __future__ import annotations
 import subprocess
 import sys
 
+import pytest
+
+pytestmark = pytest.mark.unit
+
 
 def test_python_m_lizystudio_help() -> None:
     """python -m lizystudio --help should exit 0 and show usage."""

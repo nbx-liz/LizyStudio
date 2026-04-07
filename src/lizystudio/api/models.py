@@ -11,7 +11,7 @@ declaring the known fields.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict
 class DataRefResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    source_type: str
+    source_type: Literal["path", "upload"]
     path: str
     filename: str
     fingerprint: str
@@ -39,14 +39,14 @@ class ColumnInfoResponse(BaseModel):
     name: str
     dtype: str
     unique_count: int
-    suggested_type: str
+    suggested_type: Literal["numeric", "categorical"]
     suggested_excluded: bool
-    exclude_reason: str | None = None
+    exclude_reason: Literal["id", "constant"] | None = None
 
 
 class ColumnsResponseModel(BaseModel):
     target: str | None
-    suggested_task: str | None = None
+    suggested_task: Literal["binary", "multiclass", "regression"] | None = None
     columns: list[ColumnInfoResponse]
 
 
@@ -132,9 +132,9 @@ class JobSummaryResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     job_id: str
-    status: str
+    status: Literal["pending", "running", "completed", "failed", "cancelled"]
     backend_name: str
-    job_type: str
+    job_type: Literal["fit", "tune"]
     created_at: str
     completed_at: str | None = None
     error: str | None = None

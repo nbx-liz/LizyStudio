@@ -19,6 +19,8 @@ from lizystudio.services.jobs import JobStore
 from lizystudio.services.training import start_fit_async, start_tune_async
 from lizystudio.services.workspace import WorkspaceState
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture()
 def job_store(tmp_path: Path) -> JobStore:

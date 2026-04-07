@@ -2,6 +2,11 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ErrorBoundary } from "./ErrorBoundary";
 
+// Helper to suppress React error boundary console.error noise
+function suppressConsoleError() {
+  return vi.spyOn(console, "error").mockImplementation(() => {});
+}
+
 function ThrowingComponent({ shouldThrow }: { shouldThrow: boolean }) {
   if (shouldThrow) throw new Error("Test error message");
   return <div>Normal content</div>;
@@ -109,6 +114,121 @@ describe("ErrorBoundary", () => {
     expect(alert).toBeInTheDocument();
     // Verify the warning icon is present
     expect(alert.textContent).toContain("⚠");
+    spy.mockRestore();
+  });
+
+  // --- Phase 2: fallback & onReset props ---
+
+  it("renders custom fallback ReactNode when provided", () => {
+    const spy = suppressConsoleError();
+
+    render(
+      <ErrorBoundary fallback={<div>Custom fallback</div>}>
+        <ThrowingComponent shouldThrow />
+      </ErrorBoundary>,
+    );
+
+    expect(screen.getByText("Custom fallback")).toBeInTheDocument();
+    expect(screen.queryByText("Something went wrong")).not.toBeInTheDocument();
+    spy.mockRestore();
+  });
+
+  it("renders custom fallback render function with error and reset", () => {
+    const spy = suppressConsoleError();
+
+    render(
+      <ErrorBoundary
+        fallback={(error, reset) => (
+          <div>
+            <p>Error: {error.message}</p>
+            <button type="button" onClick={reset}>
+              Reset
+            </button>
+          </div>
+        )}
+      >
+        <ThrowingComponent shouldThrow />
+      </ErrorBoundary>,
+    );
+
+    expect(screen.getByText("Error: Test error message")).toBeInTheDocument();
+    expect(screen.getByText("Reset")).toBeInTheDocument();
+    spy.mockRestore();
+  });
+
+  it("calls onReset callback when reset is triggered", () => {
+    const spy = suppressConsoleError();
+    const onReset = vi.fn();
+    let shouldThrow = true;
+
+    function ConditionalThrow() {
+      if (shouldThrow) throw new Error("Boom");
+      return <div>Recovered</div>;
+    }
+
+    const { rerender } = render(
+      <ErrorBoundary onReset={onReset}>
+        <ConditionalThrow />
+      </ErrorBoundary>,
+    );
+
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+
+    shouldThrow = false;
+    fireEvent.click(screen.getByText("Try again"));
+
+    rerender(
+      <ErrorBoundary onReset={onReset}>
+        <ConditionalThrow />
+      </ErrorBoundary>,
+    );
+
+    expect(onReset).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Recovered")).toBeInTheDocument();
+    spy.mockRestore();
+  });
+
+  it("calls onReset when custom fallback reset function is invoked", () => {
+    const spy = suppressConsoleError();
+    const onReset = vi.fn();
+    let shouldThrow = true;
+
+    function ConditionalThrow() {
+      if (shouldThrow) throw new Error("Boom");
+      return <div>Back to normal</div>;
+    }
+
+    const { rerender } = render(
+      <ErrorBoundary
+        onReset={onReset}
+        fallback={(_error, reset) => (
+          <button type="button" onClick={reset}>
+            Custom Reset
+          </button>
+        )}
+      >
+        <ConditionalThrow />
+      </ErrorBoundary>,
+    );
+
+    shouldThrow = false;
+    fireEvent.click(screen.getByText("Custom Reset"));
+
+    rerender(
+      <ErrorBoundary
+        onReset={onReset}
+        fallback={(_error, reset) => (
+          <button type="button" onClick={reset}>
+            Custom Reset
+          </button>
+        )}
+      >
+        <ConditionalThrow />
+      </ErrorBoundary>,
+    );
+
+    expect(onReset).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Back to normal")).toBeInTheDocument();
     spy.mockRestore();
   });
 });

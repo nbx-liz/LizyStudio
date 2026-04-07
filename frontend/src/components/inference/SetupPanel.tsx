@@ -1,6 +1,7 @@
 import { Upload } from "lucide-react";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
+import { getErrorMessage } from "@/api/errors";
 import type { InferenceRecord } from "@/api/inference";
 import { uploadInferenceData } from "@/api/inference";
 import type { JobSummary } from "@/api/types";
@@ -33,6 +34,7 @@ interface SetupPanelProps {
     returnShap: boolean;
   }) => void;
   isRunning: boolean;
+  targetCol: string;
 }
 
 export function SetupPanel({
@@ -44,6 +46,7 @@ export function SetupPanel({
   onSelectInf,
   onRunInference,
   isRunning,
+  targetCol,
 }: SetupPanelProps) {
   const [sourceType, setSourceType] = useState<SourceType>("path");
   const [dataPath, setDataPath] = useState("");
@@ -52,14 +55,6 @@ export function SetupPanel({
   const [uploading, setUploading] = useState(false);
 
   const selectedJob = completedJobs.find((j) => j.job_id === selectedJobId);
-  // TODO: config is not in JobSummary type. GET /jobs list does not return config.
-  // Either add config to the list endpoint or fetch job detail separately.
-  const selectedJobAny = selectedJob as
-    | (JobSummary & { config?: Record<string, unknown> })
-    | undefined;
-  const targetCol = selectedJobAny?.config?.data
-    ? (selectedJobAny.config.data as Record<string, unknown>).target
-    : null;
 
   const canRun = selectedJobId != null && dataPath.trim() !== "" && !isRunning;
 
@@ -73,9 +68,7 @@ export function SetupPanel({
         setDataPath(result.upload_path);
         toast.success(`Uploaded: ${result.filename}`);
       } catch (err) {
-        toast.error(
-          `Upload failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        toast.error(`Upload failed: ${getErrorMessage(err)}`);
       } finally {
         setUploading(false);
       }
@@ -252,9 +245,5 @@ export function SetupPanel({
 }
 
 function extractModelName(job: JobSummary): string {
-  const config = (job as JobSummary & { config?: Record<string, unknown> })
-    .config;
-  if (!config) return "";
-  const model = config.model as Record<string, unknown> | undefined;
-  return String(model?.name ?? model?.type ?? "");
+  return job.model_name ?? "";
 }

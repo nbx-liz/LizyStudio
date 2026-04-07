@@ -15,6 +15,8 @@ from lizystudio.backends.base import BackendAdapter
 from lizystudio.backends.registry import get_adapter
 from lizystudio.backends.types import BackendInfo, ConfigSchema
 
+pytestmark = pytest.mark.unit
+
 
 def _get_protocol_methods() -> dict[str, inspect.Signature]:
     """Extract all public method/property signatures from BackendAdapter."""

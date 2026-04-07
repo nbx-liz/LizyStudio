@@ -234,6 +234,8 @@ from lizystudio.services.inference import (  # noqa: E402
 )
 from lizystudio.services.jobs import JobStore  # noqa: E402
 
+pytestmark = pytest.mark.unit
+
 # --- Path-escape guard ---
 
 

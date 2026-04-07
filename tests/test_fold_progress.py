@@ -13,6 +13,8 @@ import pytest
 from lizystudio.services.subprocess_runner import _FileBroadcaster, _forward_progress
 from lizystudio.ws.progress import ProgressBroadcaster
 
+pytestmark = pytest.mark.unit
+
 _SAMPLE_FOLD_RESULTS: list[dict[str, Any]] = [
     {"fold": 1, "rmse": 0.12, "r2": 0.95},
     {"fold": 2, "rmse": 0.14, "r2": 0.93},

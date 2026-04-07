@@ -32,6 +32,8 @@ from lizystudio.services.training import (
 from lizystudio.services.workspace import WorkspaceState
 from lizystudio.ws.progress import ProgressBroadcaster
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

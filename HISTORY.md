@@ -1347,3 +1347,109 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   4. PyPI メタデータに classifiers / keywords が反映される
   5. `py.typed` が wheel に含まれる
 - **Decision:** 2026-04-04 accepted — 提案通り
+
+---
+
+### H-0055: BackendAdapter Protocol への get_ui_schema / importance_kinds 追記
+- **Status:** accepted
+- **Scope:** Adapter
+- **Related:** BLUEPRINT.md §3.3.2
+- **Context:** H-0026 で `GET /api/backends/ui-schema` を追加した際に `BackendAdapter` Protocol に `get_ui_schema()` メソッドを実装したが、BLUEPRINT §3.3.2 の Protocol 定義に追記されていない。同様に `importance_kinds()` も実装済みだが未記載。requirements-audit（2026-04-06）で検出。
+- **Proposal:** §3.3.2 の Protocol 定義に以下を追記:
+  - `get_ui_schema(self) -> dict[str, Any]` — UI メタデータ（H-0026）
+  - `importance_kinds(self, model: Any) -> list[str]` — 利用可能な重要度の種類
+- **Impact:** BLUEPRINT.md §3.3.2
+- **Compatibility:** 非破壊的（実装は既に完了。ドキュメント追記のみ）
+- **Alternatives:** なし
+- **Acceptance Criteria:** §3.3.2 に両メソッドが記載されている
+- **Decision:** 2026-04-07 accepted — 実装追認
+
+---
+
+### H-0056: 共通型に ColumnInfo / ColumnsResponse を追記
+- **Status:** accepted
+- **Scope:** Adapter
+- **Related:** BLUEPRINT.md §3.3.1
+- **Context:** `GET /api/workspace/data/columns` のレスポンス型として `ColumnInfo` と `ColumnsResponse` が `backends/types.py` に実装済みだが、§3.3.1 の共通型一覧に記載されていない。`DataRef` は §3.4.3 に記載があるが §3.3.1 には未記載。requirements-audit（2026-04-06）で検出。
+- **Proposal:** §3.3.1 に以下を追記:
+  - `ColumnInfo` — カラム分析情報（name, dtype, unique_count, suggested_type, suggested_excluded, exclude_reason）
+  - `ColumnsResponse` — カラム一覧レスポンス（target, columns）
+- **Impact:** BLUEPRINT.md §3.3.1
+- **Compatibility:** 非破壊的（実装は既に完了。ドキュメント追記のみ）
+- **Alternatives:** なし
+- **Acceptance Criteria:** §3.3.1 に両型が記載されている
+- **Decision:** 2026-04-07 accepted — 実装追認
+
+---
+
+### H-0057: Job.status に cancelled を追記 + Results Panel 状態を 6 モードに更新
+- **Status:** accepted
+- **Scope:** Frontend, Backend
+- **Related:** BLUEPRINT.md §3.4.2, §4.2.3
+- **Context:** H-0011 で Cancel 機能を実装した際、`Job.status` に `"cancelled"` リテラルを追加し、Results Panel にも `pending` / `cancelled` 状態の表示を追加した。しかし §3.4.2 の status 定義は `pending | running | completed | failed` のまま、§4.2.3 は「4つのモード」のままで未更新。requirements-audit（2026-04-06）で検出。
+- **Proposal:**
+  1. §3.4.2 の `status` 型を `pending | running | completed | failed | cancelled` に更新
+  2. §4.2.3 の「4つのモード」を「6つのモード」に更新し、`pending`（キュー待ち）と `cancelled`（キャンセル済み）の表示仕様を追記
+- **Impact:** BLUEPRINT.md §3.4.2, §4.2.3
+- **Compatibility:** 非破壊的（実装は既に完了。ドキュメント追記のみ）
+- **Alternatives:** なし
+- **Acceptance Criteria:** §3.4.2 に cancelled が記載、§4.2.3 に 6 モードが記載されている
+- **Decision:** 2026-04-07 accepted — 実装追認
+
+---
+
+### H-0058: Jobs API に importance-kinds エンドポイント追記 + WebSocket に ping メッセージ追記
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §5.3, §5.5
+- **Context:** `GET /api/jobs/{job_id}/importance-kinds` が実装済みだが §5.3 に未記載。また WebSocket の keepalive `ping` メッセージが 30 秒間隔で送信されているが §5.5 に未記載。requirements-audit（2026-04-06）で検出。
+- **Proposal:**
+  1. §5.3 に `GET /api/jobs/{job_id}/importance-kinds` を追記（利用可能な重要度の種類一覧）
+  2. §5.5 に `ping` メッセージ型を追記（30 秒間隔の keepalive。クライアントは無視してよい）
+- **Impact:** BLUEPRINT.md §5.3, §5.5
+- **Compatibility:** 非破壊的（実装は既に完了。ドキュメント追記のみ）
+- **Alternatives:** なし
+- **Acceptance Criteria:** §5.3 に importance-kinds、§5.5 に ping が記載されている
+- **Decision:** 2026-04-07 accepted — 実装追認
+
+---
+
+### H-0059: UI コンポーネント差異の追認（Task / Column Type / Backend 表示 / FI 表示 / Import-Export 配置）
+- **Status:** accepted
+- **Scope:** Frontend
+- **Related:** BLUEPRINT.md §4.2.1, §4.2.2, §4.2.3
+- **Context:** v2 再実装で以下の UI 仕様が BLUEPRINT と異なる形で実装されたが、実用上は同等以上の UX を提供している。requirements-audit（2026-04-06）で検出。
+  - §4.2.1 Task: Select → SegmentGroup（選択肢が少数のため視認性向上）
+  - §4.2.1 Column Type: Dropdown → Num/Cat トグルボタン（2択のためボタンが適切）
+  - §4.2.2 Backend 表示: Badge → plain text（情報量は同一）
+  - §4.2.2 Config Import/Export: タブ内 → sticky footer（常時アクセス可能に改善）
+  - §4.2.3 Feature Importance: 独立 Accordion → PlotSection 内選択肢（プロット操作の統一）
+- **Proposal:** BLUEPRINT の該当箇所を実装に合わせて更新:
+  1. §4.2.1 Task: 「ドロップダウンで変更可能」→「SegmentGroup で変更可能」
+  2. §4.2.1 Column Type: 「Numeric / Categorical のドロップダウン」→「Num / Cat のトグルボタン」
+  3. §4.2.2 Backend 表示: 「Badge (secondary)」→「テキスト表示（text-xs, muted）」
+  4. §4.2.2 Config Import/Export: 「各タブ内の Action Button 上に配置」→「sticky footer に配置（タブ共通）」
+  5. §4.2.3 Feature Importance: 独立 Accordion から PlotSection 内の選択肢に変更
+- **Impact:** BLUEPRINT.md §4.2.1, §4.2.2, §4.2.3
+- **Compatibility:** 非破壊的（UI 調整の追認）
+- **Alternatives:** 実装を仕様に戻す案 → 現実装の方が UX が優れているため不採用
+- **Acceptance Criteria:** BLUEPRINT の該当箇所が実装と一致する
+- **Decision:** 2026-04-07 accepted — 実装追認
+
+---
+
+### H-0060: Undo/Redo + Preset 機能の追認 + Execution Log 表示方式の追認
+- **Status:** accepted
+- **Scope:** Frontend
+- **Related:** BLUEPRINT.md §4.2.2, §4.3.2
+- **Context:** v2 再実装で以下の機能が BLUEPRINT 未記載のまま追加された。requirements-audit（2026-04-06）で検出。
+  - §4.2.2 Model Panel footer: Undo/Redo ボタン + Save/Load Preset ボタン
+  - §4.3.2 Execution Log: BLUEPRINT は全状態で Accordion だが、実装は completed のみ Accordion、failed/cancelled は View Full Log ダイアログ
+- **Proposal:** BLUEPRINT に以下を追記:
+  1. §4.2.2 に Undo/Redo + Preset 機能の仕様を追記
+  2. §4.3.2 Execution Log の表示方式を実装に合わせて更新（completed: Accordion、failed/cancelled: View Full Log ダイアログ）
+- **Impact:** BLUEPRINT.md §4.2.2, §4.3.2
+- **Compatibility:** 非破壊的（追認のみ）
+- **Alternatives:** なし
+- **Acceptance Criteria:** BLUEPRINT に Undo/Redo/Preset 仕様と Execution Log 表示方式が記載されている
+- **Decision:** 2026-04-07 accepted — 実装追認

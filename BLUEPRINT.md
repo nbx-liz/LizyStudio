@@ -122,6 +122,23 @@ class PredictionSummary:
 class PlotData:
     """Plotly 図のJSON表現。"""
     plotly_json: str                   # fig.to_json() の結果
+
+@dataclass
+class ColumnInfo:
+    """カラム分析情報。GET /api/workspace/data/columns のレスポンス要素。(H-0056)"""
+    name: str                          # カラム名
+    dtype: str                         # 元の dtype (int64, float64, object 等)
+    unique_count: int                  # ユニーク値の数
+    suggested_type: Literal["numeric", "categorical"]  # §4.2.1 の自動判定ルールに基づく推奨
+    suggested_excluded: bool           # 自動除外の推奨 (ID / Const 判定)
+    exclude_reason: Literal["id", "constant"] | None  # 除外理由
+
+@dataclass
+class ColumnsResponse:
+    """カラム一覧レスポンス。(H-0056)"""
+    target: str | None                 # 指定された Target カラム名
+    suggested_task: Literal["binary", "multiclass", "regression"] | None  # §4.2.1 の自動判定ルールに基づく推奨 Task
+    columns: list[ColumnInfo]          # Target 以外の全カラム情報
 ```
 
 #### 3.3.2 BackendAdapter Protocol
@@ -137,6 +154,7 @@ class BackendAdapter(Protocol):
 
     # --- Config ---
     def get_config_schema(self) -> ConfigSchema: ...
+    def get_ui_schema(self) -> dict[str, Any]: ...  # UI メタデータ (H-0026, H-0055)
     def get_default_config(self, task: str, target: str) -> dict: ...  # 完全なデフォルト Config (H-0025)
     def validate_config(self, config: dict) -> list[dict]: ...  # エラー一覧 (空=valid)
     def load_config_from_file(self, content: bytes, filename: str) -> dict: ...
@@ -151,6 +169,7 @@ class BackendAdapter(Protocol):
     def evaluate_table(self, model: Any) -> list[dict]: ...
     def split_summary(self, model: Any) -> list[dict]: ...
     def importance(self, model: Any, kind: str) -> dict[str, float]: ...
+    def importance_kinds(self, model: Any) -> list[str]: ...  # 利用可能な重要度の種類 (H-0055)
     def confusion_matrix(self, model: Any, threshold: float) -> dict[str, Any]: ...
     def plot(self, model: Any, plot_type: str) -> PlotData: ...
     def available_plots(self, model: Any) -> list[str]: ...
@@ -201,7 +220,7 @@ class BackendAdapter(Protocol):
 | 状態 | 型 | 説明 |
 |------|-----|------|
 | `job_id` | `str` | 一意識別子 |
-| `status` | `pending \| running \| completed \| failed` | ジョブの実行状態 |
+| `status` | `pending \| running \| completed \| failed \| cancelled` | ジョブの実行状態 (H-0057) |
 | `backend_name` | `str` | 使用バックエンド名 |
 | `config` | `dict` | 使用Config |
 | `data_ref` | `DataRef` | データ参照（パス + フィンガープリント） |
@@ -384,7 +403,7 @@ Workspace ── fit ──► Job作成 ──► Jobs一覧に反映
 | 要素 | 動作 |
 |------|------|
 | Target | 全カラムのドロップダウン。ユーザーが必須選択 |
-| Task | Target 選択時に自動判定。ドロップダウンで変更可能 |
+| Task | Target 選択時に自動判定。SegmentGroup（binary / multiclass / regression）で変更可能（H-0059） |
 
 Target を選択すると Column Settings / Cross Validation が自動設定される。
 
@@ -397,7 +416,7 @@ Target 以外の全カラムを単一テーブルで表示する。
 | Column | カラム名 |
 | Uniq | ユニーク数 |
 | Excl | 除外チェックボックス。ON で特徴量から除外 |
-| Type | Excl OFF 時: Numeric / Categorical のドロップダウン。Excl ON 時: グレーアウト |
+| Type | Excl OFF 時: Num / Cat のトグルボタン。Excl ON 時: グレーアウト（H-0059） |
 | バッジ | 自動除外理由 `[ID]` `[Const]` を表示（手動除外にはバッジなし） |
 
 **自動設定（Target 選択時に一括実行）:**
@@ -543,7 +562,7 @@ Fit タブと Tune タブは**同一の Config オブジェクト**を操作す�
 |------|-------------|------|
 | タブ | shadcn Tabs | Fit / Tune を切替。ボタンラベルはアクティブタブに連動 |
 | 実行ボタン | Button (primary) | Fit タブ → `Fit`、Tune タブ → `Tune` |
-| Backend バッジ | Badge (secondary) | `/api/backends` から取得。`lizyml v{version}` |
+| Backend 表示 | テキスト（text-xs, muted） | `/api/backends` から取得。`lizyml v{version}`（H-0059） |
 
 ##### Fit タブ
 
@@ -905,13 +924,24 @@ LizyML の Schema は多くのフィールドを `anyOf: [{type: T}, {type: null
 
 ##### Config Import / Export
 
-各タブ内の Action Button 上に配置。どちらのタブから操作しても対象は同じ（フル Config）。
+Model Panel 下部の sticky footer に配置（タブ共通、常時表示）。どちらのタブから操作しても対象は同じ（フル Config）（H-0059）。
 
 | 操作 | コンポーネント | 説明 |
 |------|-------------|------|
 | Import YAML | Button → ファイル選択ダイアログ | YAML/JSON ファイルを読み込み、`POST /api/workspace/config/upload` で送信。data / features / split の値は Data Panel の state に反映（Target/Task/CV 等を更新）、model / training / evaluation / calibration / tuning は Model Panel の Config に反映 |
 | Export YAML | Button → ダウンロード | `GET /api/workspace/config/download` で現在の全 Config を YAML としてダウンロード |
 | Raw Config | Button → Dialog | フル Config を YAML テキストで表示するモーダル。読み取り専用。コピーボタン付き |
+
+##### Undo/Redo + Preset（H-0060）
+
+sticky footer に Config Import/Export と並べて配置する。
+
+| 操作 | コンポーネント | 説明 |
+|------|-------------|------|
+| Undo | Button (ghost, icon) | Config の変更履歴を1ステップ戻す。履歴がない場合は disabled |
+| Redo | Button (ghost, icon) | Undo した変更を1ステップ進める。履歴がない場合は disabled |
+| Save Preset | Button (outline) | 現在の Config に名前を付けてローカルストレージに保存 |
+| Load Preset | Button (outline) | 保存済み Preset の一覧から選択してロード |
 
 ##### デザイン仕様
 
@@ -938,7 +968,7 @@ Model Panel 全体のコンポーネントスタイルを定義する。shadcn/u
 | TabsTrigger | shadcn `TabsTrigger` + `px-6` | Fit / Tune の2つ |
 | 実行ボタン | `Button size="sm"` (default variant) | ラベルはアクティブタブに連動 |
 | 実行ボタン (disabled) | `opacity-50 cursor-not-allowed` | 条件未達時は自動で disabled スタイル |
-| Backend バッジ | `Badge variant="secondary"` + `text-xs` | タブ行の下、左寄せ。`mt-1.5` |
+| Backend テキスト | `<span>` + `text-[10px] text-muted-foreground` | タブ行の下、左寄せ。`mt-1.5`（H-0059） |
 
 **Accordion セクション:**
 
@@ -1164,7 +1194,7 @@ Model Panel 全体のコンポーネントスタイルを定義する。shadcn/u
 
 | 要素 | コンポーネント | Tailwind | アイコン | 備考 |
 |------|-------------|----------|---------|------|
-| コンテナ | `<div>` | `mt-6 flex flex-wrap gap-2` | — | Accordion の下に配置 |
+| コンテナ | `<div>` | `sticky bottom-0 border-t bg-background p-3 flex flex-wrap gap-2` | — | sticky footer に配置（H-0059） |
 | Import YAML | `Button variant="outline" size="sm"` | — | lucide `FileUp` (12px) + `mr-1` | hidden file input をトリガー |
 | Export YAML | `Button variant="outline" size="sm"` | — | lucide `Download` (12px) + `mr-1` | `window.open()` でダウンロード |
 | Raw Config | `Button variant="outline" size="sm"` | — | lucide `FileText` (12px) + `mr-1` | Dialog をトリガー |
@@ -1196,7 +1226,17 @@ Model Panel は中央パネル（デフォルト幅 35%、min 25%、max 45%）�
 
 #### 4.2.3 Results Panel（右パネル）
 
-現セッション中の直近の Fit / Tune 結果を表示する。パネルの表示はジョブの状態に応じて4つのモードを持つ。
+現セッション中の直近の Fit / Tune 結果を表示する。パネルの表示はジョブの状態に応じて6つのモードを持つ（H-0057）。
+
+| モード | 表示条件 | 説明 |
+|--------|---------|------|
+| 初期状態 | Fit/Tune 未実行 | 操作手順のガイドテキスト |
+| Pending | ジョブがキュー待ち | 「Queued」バッジ + 待機メッセージ |
+| Running | ジョブ実行中 | プログレスバー + Fold/Trial ログ + Cancel |
+| Completed (Fit) | Fit 完了 | Score + Learning Curve + Plots + Accordion |
+| Completed (Tune) | Tune 完了 | Optimization History + Best Params + Score + Plots + Accordion |
+| Failed | ジョブ失敗 | エラーコード + View Full Log |
+| Cancelled | ジョブキャンセル済み | キャンセルメッセージ |
 
 ##### 初期状態（未実行）
 
@@ -1330,9 +1370,10 @@ CV 無し（Holdout 等）の場合:
 
 | セクション | 内容 | 表示条件 |
 |-----------|------|---------|
-| Feature Importance | 特徴量重要度の棒グラフ（Plotly） | 常時 |
 | Fold Details | Fold 別メトリクスとデータサイズのテーブル | CV 時のみ |
-| Parameters | 学習に使用したハイパーパラメータ一覧 | 常時 |
+| Parameters | 学習に使用したハイパーパラメータ一覧 | params が存在する場合 |
+
+> 注: Feature Importance は Plots セレクタの選択肢として PlotSection 内に統合されている（H-0059）。独立 Accordion ではない。
 
 ##### Tune 完了
 
@@ -1411,9 +1452,10 @@ Fit 完了と同じ評価項目に加え、探索結果（Best Params・収束�
 | セクション | 内容 | 表示条件 |
 |-----------|------|---------|
 | Trial Results | 全 Trial のスコアとパラメータ。Best 行はハイライト表示。スコア降順ソート | 常時 |
-| Feature Importance | Best Params モデルの特徴量重要度の棒グラフ | 常時 |
 | Fold Details | Fold 別メトリクスとデータサイズのテーブル | CV 時のみ |
-| Parameters | Best Params の全パラメータ一覧（Best Params セクションと同内容、Config 全体を含む） | 常時 |
+| Parameters | Best Params の全パラメータ一覧 | params が存在する場合 |
+
+> 注: Feature Importance は Fit 完了と同様に PlotSection 内に統合（H-0059）。
 
 ##### エラー
 
@@ -1447,7 +1489,7 @@ Fit 完了と同じ評価項目に加え、探索結果（Best Params・収束�
 | モデル名 | `LightGBM` 等 |
 | ステータス | `Running` / `✓ Completed` / `✗ Failed` |
 | プライマリメトリクス | 完了時のみ。OOF スコア（Fit）/ Best Score（Tune） |
-| Export Code ボタン | 完了時のみ。`[Export Code]`。LizyML 非依存のコードを ZIP ダウンロード（H-0027）。`POST /api/jobs/{job_id}/export-code` を呼び出す |
+| Export Code ボタン | 完了時のみ。`[Export Code]`。LizyML 非依存のコードを ZIP ダウンロード（H-0027）。`GET /api/jobs/{job_id}/export-code` を `window.open` で呼び出す |
 
 ##### Workspace の状態ルール
 
@@ -1585,22 +1627,24 @@ Workspace Results Panel のヘッダーと同一フォーマット。
 
 Workspace の Fit 完了表示（§4.2.3）と同一レイアウト:
 
-Score → Learning Curve → Plots（セレクタ） → Accordion（Feature Importance / Fold Details / Parameters）
+Score → Learning Curve → Plots（セレクタ、Feature Importance 含む） → Accordion（Fold Details / Parameters）
 
 上記に加え、Jobs 固有の Accordion セクション:
 
 | セクション | 内容 |
 |-----------|------|
 | Config | ジョブ実行時の Config 全体をツリー表示（読み取り専用） |
-| Execution Log | 実行ログのテキスト表示。タイムスタンプ付き |
+| Execution Log | 実行ログのテキスト表示。タイムスタンプ付き（completed 時のみ Accordion 表示） |
+
+> 注: failed / cancelled 時の Execution Log は Accordion ではなく「View Full Log」ダイアログで表示する（H-0060）。
 
 ##### Tune 完了ジョブ
 
 Workspace の Tune 完了表示（§4.2.3）と同一レイアウト:
 
-Optimization History → Best Params → Score → Learning Curve → Plots（セレクタ） → Accordion（Trial Results / Feature Importance / Fold Details / Parameters）
+Optimization History → Best Params → Score → Learning Curve → Plots（セレクタ、Feature Importance 含む） → Accordion（Trial Results / Fold Details / Parameters）
 
-上記に加え、Jobs 固有の Accordion セクション（Config / Execution Log）を末尾に追加。
+上記に加え、Jobs 固有の Accordion セクション（Config / Execution Log）を末尾に追加。Execution Log の表示方式は Fit 完了ジョブと同じ（H-0060）。
 
 **注:** Jobs 画面での Best Params セクションには `Apply to Fit` ボタンを表示しない。代わりにアクションバーの `Re-fit` を使用する。
 
@@ -2096,6 +2140,7 @@ Workspace の揮発状態を管理する。
 | GET | `/api/workspace/config/defaults` | 完全なデフォルト Config を返す（query: `task`, `target`）(H-0025) |
 | GET | `/api/workspace/config` | 現在の Config を返す |
 | PUT | `/api/workspace/config` | Config を更新（バリデーション付き） |
+| PATCH | `/api/workspace/config` | Config を部分更新（指定キーのみマージ）（H-0037） |
 | POST | `/api/workspace/config/validate` | Config dict をバリデーションのみ行う |
 | POST | `/api/workspace/config/upload` | YAML/JSON ファイルから読み込み |
 | GET | `/api/workspace/config/download` | 現在の Config を YAML でダウンロード |
@@ -2108,6 +2153,8 @@ Workspace の揮発状態を管理する。
 | POST | `/api/workspace/data/path` | ローカルパスを指定してデータ読み込み |
 | GET | `/api/workspace/data/preview` | 先頭 N 行を返す（query: `rows=50`） |
 | GET | `/api/workspace/data/columns` | カラム情報一覧（Target 指定時は自動判定結果を含む。query: `target`） |
+| GET | `/api/workspace/data/column-stats/{col}` | 個別カラムの統計・分布情報（H-0046） |
+| GET | `/api/workspace/data/split-preview` | CV 分割プレビュー（query: Config の split 設定）（H-0044） |
 | GET | `/api/workspace/data/describe` | 数値カラムの基本統計 |
 
 **GET /api/workspace/data/columns レスポンス:**
@@ -2115,6 +2162,7 @@ Workspace の揮発状態を管理する。
 ```json
 {
   "target": "y",
+  "suggested_task": "binary",
   "columns": [
     {
       "name": "age",
@@ -2131,6 +2179,7 @@ Workspace の揮発状態を管理する。
 | フィールド | 型 | 説明 |
 |-----------|-----|------|
 | `target` | `str \| null` | 指定された Target カラム名。未指定時は `null` |
+| `suggested_task` | `"binary" \| "multiclass" \| "regression" \| null` | §4.2.1 の自動判定ルールに基づく推奨 Task。Target 未指定時は `null` |
 | `columns` | `array` | Target 以外の全カラム情報 |
 | `name` | `str` | カラム名 |
 | `dtype` | `str` | 元の dtype（`int64`, `float64`, `object` 等） |
@@ -2161,9 +2210,11 @@ Workspace の `workspace_result` は完了時に自動更新される。
 | GET | `/api/jobs/{job_id}/metrics` | メトリクステーブル |
 | GET | `/api/jobs/{job_id}/split-summary` | Split サマリー |
 | GET | `/api/jobs/{job_id}/importance` | 特徴量重要度（query: `kind=split`） |
+| GET | `/api/jobs/{job_id}/importance-kinds` | 利用可能な重要度の種類一覧（H-0058） |
 | GET | `/api/jobs/{job_id}/plot/{plot_type}` | Plotly 図 JSON |
 | GET | `/api/jobs/{job_id}/plots` | 利用可能なプロットタイプ一覧 |
 | POST | `/api/jobs/{job_id}/export` | モデル/レポートを指定パスにExport |
+| GET | `/api/jobs/{job_id}/export-code` | LizyML 非依存コードを ZIP でダウンロード（H-0027） |
 | GET | `/api/jobs/{job_id}/log` | 実行ログ取得（H-0006） |
 | POST | `/api/jobs/{job_id}/cancel` | Running ジョブのキャンセル（H-0011） |
 | DELETE | `/api/jobs/{job_id}` | ジョブを削除 |
@@ -2279,6 +2330,15 @@ Workspace の `workspace_result` は完了時に自動更新される。
   "code": "CONFIG_INVALID"
 }
 ```
+
+```json
+{
+  "type": "ping",
+  "job_id": "job_042"
+}
+```
+
+`ping` は 30 秒間隔の keepalive メッセージ（H-0058）。クライアントは受信しても無視してよい（WebSocket 接続維持のため）。
 
 ### 5.6 Backend API
 
@@ -2408,6 +2468,8 @@ Workspace の `workspace_result` は完了時に自動更新される。
 | `modes` | string[] | 利用可能な探索モード。`"fixed"`: 固定値、`"range"`: 範囲探索（low/high）、`"choice"`: 選択肢探索 |
 | `group` | `"model_params"` \| `"smart_params"` \| `"training"` | UI グループ分類 |
 | `default` | any \| object | デフォルト値。Task 別の場合は `{"binary": val, "regression": val}` 形式 |
+| `default_mode` | `"fixed"` \| `"range"` \| `"choice"` \| undefined | Tune タブ初回遷移時のデフォルト Mode（H-0053）。未指定時は `"fixed"` |
+| `default_range` | `{low, high, log?, step?}` \| undefined | `default_mode="range"` 時のデフォルト範囲（H-0053） |
 
 **Tune config の `search_space` セクション記述形式:**
 
@@ -2541,34 +2603,62 @@ LizyStudio/
 ├── PLAN.md
 ├── HISTORY.md
 ├── README.md
+├── LICENSE
+├── .github/workflows/       # CI + Publish ワークフロー
 ├── frontend/
 │   ├── package.json
 │   ├── pnpm-lock.yaml
 │   ├── vite.config.ts
 │   ├── tsconfig.json
-│   ├── postcss.config.cjs
+│   ├── biome.json
 │   └── src/
 │       ├── main.tsx
 │       ├── App.tsx
 │       ├── plotly.d.ts
 │       ├── api/
-│       │   ├── client.ts
-│       │   ├── workspace.ts
-│       │   ├── jobs.ts
-│       │   ├── inference.ts
-│       │   └── websocket.ts
+│       │   ├── client.ts          # 共通 fetch ラッパー
+│       │   ├── generated/         # openapi-typescript 生成型
+│       │   │   └── schema.d.ts
+│       │   ├── types.ts           # 生成型ベース + フロントエンド固有型
+│       │   ├── workspace.ts       # Workspace / Data / Config API
+│       │   ├── jobs.ts            # Jobs API
+│       │   ├── inference.ts       # Inference API
+│       │   ├── files.ts           # Files API
+│       │   └── websocket.ts       # WebSocket クライアント
 │       ├── components/
-│       │   ├── Sidebar.tsx
-│       │   ├── Plot.tsx
-│       │   ├── DataSourceInput.tsx    # パス入力 + アップロード共通コンポーネント
-│       │   ├── ConfigEditor.tsx       # Config編集モーダル/ドロワー
-│       │   ├── MetricsTable.tsx       # メトリクステーブル共通
-│       │   ├── PlotViewer.tsx         # プロットセレクタ + 表示共通
-│       │   └── ExportDialog.tsx       # Exportダイアログ共通
+│       │   ├── layout/            # AppLayout, Sidebar
+│       │   ├── ui/                # shadcn/ui コンポーネント
+│       │   ├── shared/            # 画面横断の共有コンポーネント
+│       │   ├── workspace/         # Workspace 画面コンポーネント
+│       │   │   ├── DataPanel.tsx
+│       │   │   ├── ConfigForm.tsx
+│       │   │   ├── TuneTab.tsx
+│       │   │   ├── ResultsPanel.tsx
+│       │   │   ├── FoldDetailsSection.tsx
+│       │   │   ├── TuneTrialsSection.tsx
+│       │   │   ├── PlotSection.tsx
+│       │   │   ├── CvSection.tsx
+│       │   │   ├── SearchSpaceTable.tsx
+│       │   │   ├── FileBrowser.tsx
+│       │   │   └── ...
+│       │   ├── jobs/              # Jobs 画面コンポーネント
+│       │   │   ├── JobDetail.tsx
+│       │   │   ├── CompletedContent.tsx
+│       │   │   ├── ExportDialog.tsx
+│       │   │   └── ...
+│       │   └── inference/         # Inference 画面コンポーネント
+│       │       ├── SetupPanel.tsx
+│       │       ├── ResultsWithGT.tsx
+│       │       ├── ResultsPredOnly.tsx
+│       │       ├── PredictionsTable.tsx
+│       │       └── ...
+│       ├── hooks/                 # カスタムフック
+│       ├── lib/                   # ユーティリティ (cn 等)
+│       ├── test/                  # テストユーティリティ + MSW モック
 │       └── pages/
-│           ├── WorkspacePage.tsx       # 3パネル: Data / Model / Results
-│           ├── JobsPage.tsx           # ジョブ一覧 + 詳細
-│           └── InferencePage.tsx      # 2パネル: Setup / Results
+│           ├── WorkspacePage.tsx   # 3パネル: Data / Model / Results
+│           ├── JobsPage.tsx       # ジョブ一覧 + 詳細
+│           └── InferencePage.tsx  # 2パネル: Setup / Results
 ├── src/lizystudio/
 │   ├── __init__.py
 │   ├── __main__.py
@@ -2579,21 +2669,29 @@ LizyStudio/
 │   │   ├── __init__.py
 │   │   ├── workspace.py       # Workspace API (config, data, fit)
 │   │   ├── jobs.py            # Jobs API
-│   │   └── inference.py       # Inference API
+│   │   ├── inference.py       # Inference API
+│   │   ├── backends.py        # Backend API
+│   │   ├── files.py           # Files API
+│   │   ├── models.py          # Pydantic リクエスト/レスポンスモデル
+│   │   └── errors.py          # エラーハンドラ
 │   ├── services/
 │   │   ├── __init__.py
 │   │   ├── workspace.py       # Workspace 揮発状態管理
+│   │   ├── data.py            # データ読み込み・カラム分析
 │   │   ├── jobs.py            # Job ライフサイクル + ディスク永続化
-│   │   └── inference.py       # 推論実行
+│   │   ├── training.py        # Fit/Tune 実行管理
+│   │   ├── inference.py       # 推論実行 + 永続化
+│   │   └── export.py          # Model/Report/Code Export
 │   ├── backends/
 │   │   ├── __init__.py
 │   │   ├── base.py            # BackendAdapter Protocol
 │   │   ├── types.py           # 共通型 (FitSummary, PlotData, DataRef 等)
 │   │   ├── registry.py        # Adapter 登録・取得
-│   │   └── lizyml.py          # LizyML Adapter 実装
+│   │   ├── lizyml.py          # LizyML Adapter 実装
+│   │   └── lizyml_ui_schema.py # LizyML UI メタデータ
 │   └── ws/
 │       ├── __init__.py
-│       └── jobs.py            # ジョブ進捗 WebSocket
+│       └── progress.py        # ジョブ進捗 WebSocket
 ├── tests/
 │   ├── __init__.py
 │   ├── test_api_workspace.py
@@ -2601,9 +2699,9 @@ LizyStudio/
 │   ├── test_api_inference.py
 │   ├── test_services_jobs.py
 │   └── test_backends_lizyml.py
-└── .ai_settings/skills/
+└── .claude/skills/            # 実装手順スキル
     ├── api-design/
-    ├── backend-adapter/         # Adapter 実装手順
+    ├── backend-adapter/
     ├── frontend-pages/
     ├── frontend-components/
     ├── services/
@@ -2613,7 +2711,10 @@ LizyStudio/
     ├── history-proposals/
     ├── git-workflow/
     ├── dev-environment/
-    └── release/
+    ├── release/
+    ├── spec-update/
+    ├── requirements-audit/
+    └── ml-backend-spec-intake/
 ```
 
 ## 11. セキュリティ方針

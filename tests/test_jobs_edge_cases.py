@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 from lizystudio.backends.types import DataRef, FitSummary
 from lizystudio.services.jobs import JobStore
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture()
 def sample_data_ref() -> DataRef:

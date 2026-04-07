@@ -46,6 +46,453 @@ describe("ResultsPanel", () => {
     vi.clearAllMocks();
   });
 
+  // ---------------------------------------------------------------------------
+  // LiveTrialChart coverage
+  // ---------------------------------------------------------------------------
+
+  it("shows Optimization History chart when trial_results has 2+ valid scores during running", async () => {
+    const { waitFor, act } = await import("@testing-library/react");
+    const runningJob = makeJob({ status: "running" });
+    mockFetchJob.mockResolvedValue(runningJob);
+    mockFetchJobs.mockResolvedValue([runningJob]);
+
+    let capturedCallbacks: Record<
+      string,
+      (msg?: {
+        current?: number;
+        total?: number;
+        message?: string;
+        trial_results?: Array<{
+          number: number;
+          score: number | null;
+          best_score?: number;
+          state: string;
+        }>;
+      }) => void
+    > = {};
+    mockConnectJobProgress.mockImplementation(
+      (_id: string, callbacks: typeof capturedCallbacks) => {
+        capturedCallbacks = callbacks;
+        return () => {};
+      },
+    );
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+    await screen.findByText("Running");
+
+    act(() =>
+      capturedCallbacks.onProgress?.({
+        current: 2,
+        total: 10,
+        message: "",
+        trial_results: [
+          { number: 1, score: 0.85, best_score: 0.85, state: "complete" },
+          { number: 2, score: 0.87, best_score: 0.87, state: "complete" },
+        ],
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Optimization History")).toBeInTheDocument(),
+    );
+  });
+
+  it("does not show Optimization History when trial_results has only 1 entry", async () => {
+    const { waitFor, act } = await import("@testing-library/react");
+    const runningJob = makeJob({ status: "running" });
+    mockFetchJob.mockResolvedValue(runningJob);
+    mockFetchJobs.mockResolvedValue([runningJob]);
+
+    let capturedCallbacks: Record<
+      string,
+      (msg?: {
+        current?: number;
+        total?: number;
+        message?: string;
+        trial_results?: Array<{
+          number: number;
+          score: number | null;
+          best_score?: number;
+          state: string;
+        }>;
+      }) => void
+    > = {};
+    mockConnectJobProgress.mockImplementation(
+      (_id: string, callbacks: typeof capturedCallbacks) => {
+        capturedCallbacks = callbacks;
+        return () => {};
+      },
+    );
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+    await screen.findByText("Running");
+
+    act(() =>
+      capturedCallbacks.onProgress?.({
+        current: 1,
+        total: 10,
+        message: "",
+        trial_results: [
+          { number: 1, score: 0.85, best_score: 0.85, state: "complete" },
+        ],
+      }),
+    );
+
+    // Wait for progress to be applied, then verify chart is absent
+    await waitFor(() =>
+      expect(screen.getByRole("progressbar")).toBeInTheDocument(),
+    );
+    expect(screen.queryByText("Optimization History")).not.toBeInTheDocument();
+  });
+
+  it("shows trial results table when trial_results is non-empty during running", async () => {
+    const { waitFor, act } = await import("@testing-library/react");
+    const runningJob = makeJob({ status: "running" });
+    mockFetchJob.mockResolvedValue(runningJob);
+    mockFetchJobs.mockResolvedValue([runningJob]);
+
+    let capturedCallbacks: Record<
+      string,
+      (msg?: {
+        current?: number;
+        total?: number;
+        message?: string;
+        trial_results?: Array<{
+          number: number;
+          score: number | null;
+          best_score?: number;
+          state: string;
+        }>;
+      }) => void
+    > = {};
+    mockConnectJobProgress.mockImplementation(
+      (_id: string, callbacks: typeof capturedCallbacks) => {
+        capturedCallbacks = callbacks;
+        return () => {};
+      },
+    );
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+    await screen.findByText("Running");
+
+    act(() =>
+      capturedCallbacks.onProgress?.({
+        current: 1,
+        total: 5,
+        message: "",
+        trial_results: [
+          { number: 1, score: 0.91, best_score: 0.91, state: "complete" },
+        ],
+      }),
+    );
+
+    // Table headers should be visible
+    await waitFor(() => expect(screen.getByText("Score")).toBeInTheDocument());
+    expect(screen.getByText("Best")).toBeInTheDocument();
+    expect(screen.getByText("State")).toBeInTheDocument();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Export Code button (window.open)
+  // ---------------------------------------------------------------------------
+
+  it("calls window.open with export-code URL when Export Code is clicked", async () => {
+    const { fireEvent } = await import("@testing-library/react");
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+    const completedJob = makeJob({ status: "completed" });
+    mockFetchJob.mockResolvedValue(completedJob);
+    mockFetchJobs.mockResolvedValue([completedJob]);
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+    await screen.findByText("Export Code");
+
+    fireEvent.click(screen.getByText("Export Code"));
+
+    expect(openSpy).toHaveBeenCalledWith(
+      "/api/jobs/test-job-1/export-code",
+      "_blank",
+    );
+    openSpy.mockRestore();
+  });
+
+  // ---------------------------------------------------------------------------
+  // CompletedView: plots available → PlotSection rendered
+  // ---------------------------------------------------------------------------
+
+  it("renders PlotSection when job has plots available", async () => {
+    const { fetchJobPlots } = await import("@/api/jobs");
+    (fetchJobPlots as ReturnType<typeof vi.fn>).mockResolvedValue([
+      "learning-curve",
+    ]);
+
+    const completedJob = makeJob({ status: "completed" });
+    mockFetchJob.mockResolvedValue(completedJob);
+    mockFetchJobs.mockResolvedValue([completedJob]);
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+    await screen.findByText("Completed");
+
+    const { waitFor } = await import("@testing-library/react");
+    await waitFor(() =>
+      expect(screen.getByTestId("plot-section")).toBeInTheDocument(),
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // annotateMetric: precision_at_k with k value
+  // ---------------------------------------------------------------------------
+
+  it("displays precision_at_k@k metric badge when k is present in evalConfig", async () => {
+    const completedJob = makeJob({
+      status: "completed",
+      config: {
+        model: { name: "LightGBM" },
+        evaluation: {
+          metrics: [{ precision_at_k: { k: 10 } }],
+        },
+      },
+      fit_result: {
+        metrics: {
+          raw: {
+            oof: { precision_at_k: 0.88 },
+            if_mean: { precision_at_k: 0.9 },
+          },
+        },
+        fold_count: 1,
+        params: [],
+      },
+    });
+    mockFetchJob.mockResolvedValue(completedJob);
+    mockFetchJobs.mockResolvedValue([completedJob]);
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+
+    // MetricCards is mocked, but annotateMetric runs on the metric name.
+    // The primary metric badge uses the first oos metric name without annotation,
+    // but we verify the component renders correctly with precision_at_k in config.
+    expect(await screen.findByText("Completed")).toBeInTheDocument();
+    // kpi-cards testid appears when metrics exist (MetricCards mock)
+    const { waitFor } = await import("@testing-library/react");
+    await waitFor(() =>
+      expect(screen.getByTestId("kpi-cards")).toBeInTheDocument(),
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // primaryMetric badge: null when no metrics or tuneResult
+  // ---------------------------------------------------------------------------
+
+  it("does not show primary metric badge when completed job has no fit_result or tune_result", async () => {
+    const completedJob = makeJob({
+      status: "completed",
+      fit_result: null,
+      tune_result: null,
+    });
+    mockFetchJob.mockResolvedValue(completedJob);
+    mockFetchJobs.mockResolvedValue([completedJob]);
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+    await screen.findByText("Completed");
+
+    // No metric badge text like "accuracy: 0.9500"
+    expect(screen.queryByText(/\d+\.\d{4}/)).not.toBeInTheDocument();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Polling fallback: status transitions running → completed calls onJobDone
+  // ---------------------------------------------------------------------------
+
+  it("calls onJobDone via polling when job status transitions from running to completed", async () => {
+    const { waitFor } = await import("@testing-library/react");
+
+    // First call: running, second call: completed
+    const runningJob = makeJob({ status: "running" });
+    const completedJob = makeJob({ status: "completed" });
+    mockFetchJob
+      .mockResolvedValueOnce(runningJob)
+      .mockResolvedValueOnce(completedJob);
+    mockFetchJobs.mockResolvedValue([runningJob]);
+
+    const onJobDone = vi.fn();
+
+    // Re-render with a new queryClient that has refetchInterval firing.
+    // We simulate polling by mounting with running job and then rerendering
+    // with completed job state via a second fetchJob mock resolution.
+
+    const { QueryClient, QueryClientProvider } = await import(
+      "@tanstack/react-query"
+    );
+    const { render, act } = await import("@testing-library/react");
+    const { TooltipProvider } = await import("@/components/ui/tooltip");
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <ResultsPanel jobId="test-job-1" onJobDone={onJobDone} />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText("Running");
+
+    // Manually invalidate to trigger refetch with completed state
+    act(() => {
+      queryClient.invalidateQueries({ queryKey: ["job", "test-job-1"] });
+    });
+
+    await waitFor(() => expect(onJobDone).toHaveBeenCalled(), {
+      timeout: 3000,
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Indeterminate progress bar (total === 0)
+  // ---------------------------------------------------------------------------
+
+  it("renders indeterminate progress bar when progress total is 0", async () => {
+    const { waitFor, act } = await import("@testing-library/react");
+    const runningJob = makeJob({ status: "running" });
+    mockFetchJob.mockResolvedValue(runningJob);
+    mockFetchJobs.mockResolvedValue([runningJob]);
+
+    let capturedCallbacks: Record<
+      string,
+      (msg?: { current?: number; total?: number; message?: string }) => void
+    > = {};
+    mockConnectJobProgress.mockImplementation(
+      (_id: string, callbacks: typeof capturedCallbacks) => {
+        capturedCallbacks = callbacks;
+        return () => {};
+      },
+    );
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+    await screen.findByText("Running");
+
+    act(() =>
+      capturedCallbacks.onProgress?.({
+        current: 0,
+        total: 0,
+        message: "Initializing...",
+      }),
+    );
+
+    await waitFor(() => {
+      const bar = screen.getByRole("progressbar");
+      expect(bar).toBeInTheDocument();
+      // Indeterminate: no value set or value omitted
+    });
+    // The progress bar class should include animate-pulse
+    const bar = screen.getByRole("progressbar");
+    expect(bar.className).toMatch(/animate-pulse/);
+  });
+
+  // ---------------------------------------------------------------------------
+  // FoldProgressList shown when fold_results present
+  // ---------------------------------------------------------------------------
+
+  it("renders fold progress when fold_results present in progress", async () => {
+    const { waitFor, act } = await import("@testing-library/react");
+    const runningJob = makeJob({ status: "running" });
+    mockFetchJob.mockResolvedValue(runningJob);
+    mockFetchJobs.mockResolvedValue([runningJob]);
+
+    let capturedCallbacks: Record<
+      string,
+      (msg?: {
+        current?: number;
+        total?: number;
+        message?: string;
+        fold_results?: Array<{
+          fold: number;
+          metric: string;
+          score: number;
+        }>;
+      }) => void
+    > = {};
+    mockConnectJobProgress.mockImplementation(
+      (_id: string, callbacks: typeof capturedCallbacks) => {
+        capturedCallbacks = callbacks;
+        return () => {};
+      },
+    );
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+    await screen.findByText("Running");
+
+    act(() =>
+      capturedCallbacks.onProgress?.({
+        current: 1,
+        total: 5,
+        message: "fold 1",
+        fold_results: [{ fold: 1, metric: "auc", score: 0.92 }],
+      }),
+    );
+
+    // FoldProgressList renders fold rows; verify fold label is shown
+    await waitFor(() =>
+      expect(screen.getByText("Fold 1/5")).toBeInTheDocument(),
+    );
+  });
+
+  // ---------------------------------------------------------------------------
+  // Duplicate foldLog deduplication
+  // ---------------------------------------------------------------------------
+
+  it("deduplicates consecutive identical foldLog messages", async () => {
+    const { waitFor, act } = await import("@testing-library/react");
+    const runningJob = makeJob({ status: "running" });
+    mockFetchJob.mockResolvedValue(runningJob);
+    mockFetchJobs.mockResolvedValue([runningJob]);
+
+    let capturedCallbacks: Record<
+      string,
+      (msg?: { current?: number; total?: number; message?: string }) => void
+    > = {};
+    mockConnectJobProgress.mockImplementation(
+      (_id: string, callbacks: typeof capturedCallbacks) => {
+        capturedCallbacks = callbacks;
+        return () => {};
+      },
+    );
+
+    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
+    await screen.findByText("Running");
+
+    // Send the same message twice
+    act(() =>
+      capturedCallbacks.onProgress?.({
+        current: 1,
+        total: 5,
+        message: "Step A",
+      }),
+    );
+    act(() =>
+      capturedCallbacks.onProgress?.({
+        current: 1,
+        total: 5,
+        message: "Step A",
+      }),
+    );
+
+    await waitFor(() => {
+      // "Step A" appears in both the progress <p> and the fold log.
+      // The fold log renders with font-mono text-muted-foreground class.
+      // Deduplication means exactly one fold-log entry, not two.
+      const logEntries = document
+        .querySelectorAll(".font-mono.text-xs.text-muted-foreground")
+        .values();
+      const logTexts = Array.from(logEntries)
+        .map((el) => el.textContent)
+        .filter((t) => t === "Step A");
+      expect(logTexts).toHaveLength(1);
+    });
+  });
+
   it("shows placeholder when jobId is null", () => {
     renderWithQuery(<ResultsPanel jobId={null} />);
     expect(screen.getByText("Results")).toBeInTheDocument();

@@ -11,6 +11,8 @@ from fastapi.testclient import TestClient
 
 from lizystudio.services.data import compute_split_preview
 
+pytestmark = pytest.mark.integration
+
 # ---------------------------------------------------------------------------
 # Unit tests: compute_split_preview
 # ---------------------------------------------------------------------------
