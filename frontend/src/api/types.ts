@@ -245,6 +245,8 @@ export interface SearchSpaceCatalogEntry {
   default_mode?: "fixed" | "range" | "choice";
   /** Default range values when switching to range mode. */
   default_range?: { low: number; high: number; log: boolean };
+  /** Default choices when switching to choice mode. */
+  default_choices?: (string | number)[];
 }
 
 export interface UiSchema {

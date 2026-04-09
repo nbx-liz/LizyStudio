@@ -178,7 +178,7 @@ export function ConfigForm({
       handleFieldChange(["model", "params", "objective"], objOpts[0]);
     }
 
-    // Metric: multi-select, pick first option
+    // Metric: multi-select, use parameter_hints default for task
     const metricOpts = uiSchema.option_sets.model_metric?.[task] ?? [];
     if (metricOpts.length > 0) {
       const cur = modelParams.metric;
@@ -187,9 +187,21 @@ export function ConfigForm({
         cur === null ||
         (Array.isArray(cur) && cur.length === 0);
       if (empty) {
+        const metricHint = uiSchema.parameter_hints?.find(
+          (h: { key: string }) => h.key === "metric",
+        );
+        const hintDefault = (
+          metricHint?.default as Record<string, unknown> | undefined
+        )?.[task];
+        const defaults = Array.isArray(hintDefault)
+          ? (hintDefault as unknown[]).filter(
+              (m): m is string =>
+                typeof m === "string" && metricOpts.includes(m),
+            )
+          : [];
         handleFieldChange(
           ["model", "params", "metric"],
-          metricOpts.slice(0, 1),
+          defaults.length > 0 ? defaults : metricOpts.slice(0, 1),
         );
       }
     }

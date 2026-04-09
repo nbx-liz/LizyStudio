@@ -68,14 +68,21 @@ export function TuneTab({
     if (!catalogEntries) return;
     const defaultSpace: Record<string, unknown> = {};
     for (const entry of catalogEntries) {
-      if (entry.default_mode !== "range" || !entry.default_range) continue;
-      defaultSpace[entry.key] = {
-        type: entry.paramType === "integer" ? "int" : "float",
-        low: entry.default_range.low,
-        high: entry.default_range.high,
-        log: entry.default_range.log,
-        category: groupToCategory(entry.group ?? "model_params"),
-      };
+      if (entry.default_mode === "range" && entry.default_range) {
+        defaultSpace[entry.key] = {
+          type: entry.paramType === "integer" ? "int" : "float",
+          low: entry.default_range.low,
+          high: entry.default_range.high,
+          log: entry.default_range.log,
+          category: groupToCategory(entry.group ?? "model_params"),
+        };
+      } else if (entry.default_mode === "choice" && entry.default_choices) {
+        defaultSpace[entry.key] = {
+          type: "categorical",
+          choices: entry.default_choices.map(String),
+          category: groupToCategory(entry.group ?? "model_params"),
+        };
+      }
     }
     if (Object.keys(defaultSpace).length > 0) {
       spaceInitialized.current = true;
