@@ -189,9 +189,9 @@ describe("CompletedContent — tune result", () => {
     );
     expect(screen.getByText("Best Params")).toBeInTheDocument();
     expect(screen.getByText("n_estimators")).toBeInTheDocument();
-    expect(screen.getByText("200")).toBeInTheDocument();
+    expect(screen.getByText("200.0000")).toBeInTheDocument();
     expect(screen.getByText("learning_rate")).toBeInTheDocument();
-    expect(screen.getByText("0.05")).toBeInTheDocument();
+    expect(screen.getByText("0.0500")).toBeInTheDocument();
   });
 });
 

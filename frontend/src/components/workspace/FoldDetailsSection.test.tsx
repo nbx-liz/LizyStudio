@@ -89,9 +89,9 @@ describe("FoldDetailsSection", () => {
       });
       expect(screen.getByText("Parameters")).toBeInTheDocument();
       expect(screen.getByText("learning_rate")).toBeInTheDocument();
-      expect(screen.getByText("0.01")).toBeInTheDocument();
+      expect(screen.getByText("0.0100")).toBeInTheDocument();
       expect(screen.getByText("max_depth")).toBeInTheDocument();
-      expect(screen.getByText("6")).toBeInTheDocument();
+      expect(screen.getByText("6.0000")).toBeInTheDocument();
     });
 
     it("does not render when fitResult.params is empty", () => {

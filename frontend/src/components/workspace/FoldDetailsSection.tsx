@@ -85,7 +85,9 @@ export function FoldDetailsSection({
                       className="hover:bg-muted/50 even:bg-muted/20"
                     >
                       <TableCell className="text-xs font-mono">{k}</TableCell>
-                      <TableCell className="text-xs">{String(v)}</TableCell>
+                      <TableCell className="text-xs">
+                        {typeof v === "number" ? formatNum(v) : String(v)}
+                      </TableCell>
                     </TableRow>
                   )),
                 )}
