@@ -122,10 +122,15 @@ export interface JobDetail extends JobSummary {
   model_path: string | null;
 }
 
+export interface FitResultParam {
+  parameter: string;
+  value: unknown;
+}
+
 export interface FitResult {
   metrics: Record<string, unknown>;
   fold_count: number;
-  params: Record<string, unknown>[];
+  params: FitResultParam[];
 }
 
 export interface TuneResult {

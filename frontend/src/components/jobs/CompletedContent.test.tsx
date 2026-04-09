@@ -79,7 +79,10 @@ function makeFitJob(overrides?: Partial<JobDetail>): JobDetail {
         },
       },
       fold_count: 5,
-      params: [{ n_estimators: 100, learning_rate: 0.1 }],
+      params: [
+        { parameter: "n_estimators", value: 100 },
+        { parameter: "learning_rate", value: 0.1 },
+      ],
     },
     tune_result: null,
     model_path: "/models/j1",
