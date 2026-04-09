@@ -80,7 +80,10 @@ describe("FoldDetailsSection", () => {
       const fitResult: FitResult = {
         metrics: {},
         fold_count: 1,
-        params: [{ learning_rate: 0.01, max_depth: 6 }],
+        params: [
+          { parameter: "learning_rate", value: 0.01 },
+          { parameter: "max_depth", value: 6 },
+        ],
       };
       renderSection({
         fitResult,
