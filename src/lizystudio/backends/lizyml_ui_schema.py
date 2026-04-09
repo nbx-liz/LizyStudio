@@ -6,187 +6,15 @@ Contains only static data structures — no ML logic.
 
 from __future__ import annotations
 
-import threading
 from typing import Any
 
-# Keys already covered by parameter_hints or search_space_catalog.
-# additional_params must exclude these to avoid UI duplication.
-_KNOWN_PARAM_KEYS: frozenset[str] = frozenset(
-    {
-        "objective",
-        "metric",
-        "n_estimators",
-        "learning_rate",
-        "max_depth",
-        "max_bin",
-        "feature_fraction",
-        "bagging_fraction",
-        "bagging_freq",
-        "lambda_l1",
-        "lambda_l2",
-        "first_metric_only",
-        "verbose",
-        "num_threads",  # Excluded from UI intentionally (server-managed)
-        "num_leaves",
-        # Smart params (in search_space_catalog)
-        "auto_num_leaves",
-        "num_leaves_ratio",
-        "min_data_in_leaf_ratio",
-        "min_data_in_bin_ratio",
-        "feature_weights",
-        "balanced",
-    }
+from lizystudio.backends.lizyml_constants import _build_additional_params
+from lizystudio.backends.lizyml_metrics import (
+    get_eval_metrics_by_task as get_eval_metrics_by_task,
 )
-
-# LightGBM parameters available as additional params (beyond hints/catalog).
-_LGBM_ADDITIONAL_PARAMS: list[str] = sorted(
-    [
-        "min_child_weight",
-        "min_child_samples",
-        "subsample",
-        "colsample_bytree",
-        "reg_alpha",
-        "reg_lambda",
-        "max_cat_threshold",
-        "cat_smooth",
-        "cat_l2",
-        "extra_trees",
-        "path_smooth",
-        "min_gain_to_split",
-        "min_data_in_leaf",
-        "min_data_in_bin",
-        "max_cat_to_onehot",
-        "top_k",
-        "min_sum_hessian_in_leaf",
-        "linear_tree",
-        "feature_pre_filter",
-        "force_col_wise",
-        "force_row_wise",
-        "histogram_pool_size",
-        "is_unbalance",
-        "scale_pos_weight",
-        "sigmoid",
-        "boost_from_average",
-        "bin_construct_sample_cnt",
-        "data_sample_strategy",
-        "interaction_constraints",
-    ]
+from lizystudio.backends.lizyml_metrics import (
+    get_metric_directions,
 )
-
-
-def _build_additional_params() -> list[str]:
-    """Return LightGBM params not in parameter_hints or search_space_catalog."""
-    return [p for p in _LGBM_ADDITIONAL_PARAMS if p not in _KNOWN_PARAM_KEYS]
-
-
-# --- Eval metrics registry lookup (cached) ---
-
-_eval_metrics_cache: dict[str, list[str]] | None = None
-_eval_metrics_lock: threading.Lock = threading.Lock()
-
-# Preferred metric per task — shown first in UI (Widget conformance).
-_PREFERRED_METRIC: dict[str, str] = {
-    "binary": "auc",
-    "regression": "rmse",
-    "multiclass": "auc",
-}
-
-
-def _sort_with_preferred(metrics: list[str], task: str) -> list[str]:
-    """Sort metrics alphabetically but place the preferred metric first."""
-    preferred = _PREFERRED_METRIC.get(task)
-    ordered = sorted(metrics)
-    if preferred and preferred in ordered:
-        ordered = [preferred, *(m for m in ordered if m != preferred)]
-    return ordered
-
-
-def get_eval_metrics_by_task() -> dict[str, list[str]]:
-    """Query LizyML's metric registry for available evaluation metrics per task."""
-    global _eval_metrics_cache  # noqa: PLW0603
-
-    if _eval_metrics_cache is not None:
-        return _eval_metrics_cache
-    with _eval_metrics_lock:
-        if _eval_metrics_cache is not None:
-            return _eval_metrics_cache
-        metrics: dict[str, list[str]]
-        try:
-            from lizyml.metrics.registry import _TASK_METRICS
-
-            metrics = {
-                task: _sort_with_preferred(list(ms), task)
-                for task, ms in _TASK_METRICS.items()
-            }
-        except (ImportError, AttributeError, TypeError):
-            # Fallback for older LizyML versions
-            metrics = {
-                "regression": _sort_with_preferred(
-                    ["mae", "mape", "rmse", "huber", "r2", "rmsle"], "regression"
-                ),
-                "binary": _sort_with_preferred(
-                    [
-                        "auc",
-                        "logloss",
-                        "auc_pr",
-                        "f1",
-                        "accuracy",
-                        "brier",
-                        "ece",
-                        "precision_at_k",
-                    ],
-                    "binary",
-                ),
-                "multiclass": _sort_with_preferred(
-                    ["logloss", "f1", "accuracy", "auc", "auc_pr", "brier"],
-                    "multiclass",
-                ),
-            }
-        _eval_metrics_cache = metrics
-        return metrics
-
-
-# --- Metric direction lookup (cached) ---
-
-_metric_direction_cache: dict[str, dict[str, str]] | None = None
-_metric_direction_lock: threading.Lock = threading.Lock()
-
-
-def get_metric_directions() -> dict[str, dict[str, str]]:
-    """Return {task: {metric: 'minimize'|'maximize'}} from LizyML registry."""
-    global _metric_direction_cache  # noqa: PLW0603
-
-    if _metric_direction_cache is not None:
-        return _metric_direction_cache
-    with _metric_direction_lock:
-        if _metric_direction_cache is not None:
-            return _metric_direction_cache
-        result: dict[str, dict[str, str]] = {}
-        metrics_by_task = get_eval_metrics_by_task()
-        try:
-            from lizyml.metrics.registry import get_metric
-
-            for task, metric_names in metrics_by_task.items():
-                task_dirs: dict[str, str] = {}
-                for name in metric_names:
-                    try:
-                        m = get_metric(name)
-                        task_dirs[name] = (
-                            "maximize" if m.greater_is_better else "minimize"
-                        )
-                    except Exception:  # noqa: BLE001
-                        task_dirs[name] = "minimize"
-                result[task] = task_dirs
-        except (ImportError, AttributeError):
-            # Fallback
-            maximize = {"auc", "auc_pr", "r2", "accuracy", "f1", "auc_mu"}
-            for task, metric_names in metrics_by_task.items():
-                result[task] = {
-                    m: "maximize" if m in maximize else "minimize" for m in metric_names
-                }
-        _metric_direction_cache = result
-        return result
-
 
 # --- UI schema builder ---
 
@@ -283,9 +111,9 @@ def build_ui_schema(
                 "label": "Metric",
                 "kind": "model_metric",
                 "default": {
-                    "regression": "rmse",
-                    "binary": "auc",
-                    "multiclass": "multi_logloss",
+                    "regression": ["huber", "mae", "mape"],
+                    "binary": ["auc", "binary_logloss"],
+                    "multiclass": ["auc_mu", "multi_logloss"],
                 },
             },
             {
@@ -293,49 +121,49 @@ def build_ui_schema(
                 "label": "N Estimators",
                 "kind": "integer",
                 "step": 100,
-                "default": 1000,
+                "default": 1500,
             },
             {
                 "key": "learning_rate",
                 "label": "Learning Rate",
                 "kind": "number",
                 "step": 0.001,
-                "default": 0.1,
+                "default": 0.001,
             },
             {
                 "key": "max_depth",
                 "label": "Max Depth",
                 "kind": "integer",
                 "step": 1,
-                "default": -1,
+                "default": 5,
             },
             {
                 "key": "max_bin",
                 "label": "Max Bin",
                 "kind": "integer",
                 "step": 1,
-                "default": 255,
+                "default": 511,
             },
             {
                 "key": "feature_fraction",
                 "label": "Feature Fraction",
                 "kind": "number",
                 "step": 0.05,
-                "default": 1.0,
+                "default": 0.7,
             },
             {
                 "key": "bagging_fraction",
                 "label": "Bagging Fraction",
                 "kind": "number",
                 "step": 0.05,
-                "default": 1.0,
+                "default": 0.7,
             },
             {
                 "key": "bagging_freq",
                 "label": "Bagging Freq",
                 "kind": "integer",
                 "step": 1,
-                "default": 0,
+                "default": 10,
             },
             {
                 "key": "lambda_l1",
@@ -349,7 +177,7 @@ def build_ui_schema(
                 "label": "Lambda L2",
                 "kind": "number",
                 "step": 0.0001,
-                "default": 0.0,
+                "default": 0.000001,
             },
             {
                 "key": "first_metric_only",
@@ -368,7 +196,7 @@ def build_ui_schema(
                 "key": "balanced",
                 "label": "Balanced",
                 "kind": "boolean",
-                "default": False,
+                "default": True,
             },
             {
                 "key": "num_leaves",
@@ -395,6 +223,7 @@ def build_ui_schema(
                 "modes": ["fixed", "range"],
                 "group": "smart_params",
                 "default": 1.0,
+                "default_range": {"low": 0.5, "high": 1.0, "log": False},
             },
             {
                 "key": "num_leaves",
@@ -411,6 +240,7 @@ def build_ui_schema(
                 "modes": ["fixed", "range"],
                 "group": "smart_params",
                 "default": 0.01,
+                "default_range": {"low": 0.01, "high": 0.2, "log": False},
             },
             {
                 "key": "min_data_in_bin_ratio",
@@ -419,6 +249,7 @@ def build_ui_schema(
                 "modes": ["fixed", "range"],
                 "group": "smart_params",
                 "default": 0.01,
+                "default_range": {"low": 0.01, "high": 0.2, "log": False},
             },
             {
                 "key": "feature_weights",
@@ -434,7 +265,7 @@ def build_ui_schema(
                 "paramType": "boolean",
                 "modes": ["fixed", "choice"],
                 "group": "smart_params",
-                "default": False,
+                "default": True,
             },
             # ── Model Params group ──
             {
@@ -467,7 +298,7 @@ def build_ui_schema(
                 "paramType": "boolean",
                 "modes": ["fixed", "choice"],
                 "group": "model_params",
-                "default": False,
+                "default": True,
             },
             {
                 "key": "n_estimators",
@@ -475,7 +306,7 @@ def build_ui_schema(
                 "paramType": "integer",
                 "modes": ["fixed", "range"],
                 "group": "model_params",
-                "default": 1000,
+                "default": 1500,
                 "default_mode": "range",
                 "default_range": {"low": 600, "high": 2500, "log": False},
             },
@@ -485,7 +316,7 @@ def build_ui_schema(
                 "paramType": "number",
                 "modes": ["fixed", "range"],
                 "group": "model_params",
-                "default": 0.1,
+                "default": 0.001,
                 "default_mode": "range",
                 "default_range": {"low": 0.0001, "high": 0.1, "log": True},
             },
@@ -495,7 +326,7 @@ def build_ui_schema(
                 "paramType": "integer",
                 "modes": ["fixed", "range"],
                 "group": "model_params",
-                "default": -1,
+                "default": 5,
                 "default_mode": "range",
                 "default_range": {"low": 3, "high": 12, "log": False},
             },
@@ -503,9 +334,11 @@ def build_ui_schema(
                 "key": "max_bin",
                 "title": "Max Bin",
                 "paramType": "integer",
-                "modes": ["fixed", "range"],
+                "modes": ["fixed", "choice"],
                 "group": "model_params",
-                "default": 255,
+                "default": 511,
+                "default_mode": "choice",
+                "default_choices": [15, 63, 127, 255, 511, 1023],
             },
             {
                 "key": "feature_fraction",
@@ -513,7 +346,7 @@ def build_ui_schema(
                 "paramType": "number",
                 "modes": ["fixed", "range"],
                 "group": "model_params",
-                "default": 1.0,
+                "default": 0.7,
                 "default_mode": "range",
                 "default_range": {"low": 0.5, "high": 1.0, "log": False},
             },
@@ -523,7 +356,7 @@ def build_ui_schema(
                 "paramType": "number",
                 "modes": ["fixed", "range"],
                 "group": "model_params",
-                "default": 1.0,
+                "default": 0.7,
                 "default_mode": "range",
                 "default_range": {"low": 0.5, "high": 1.0, "log": False},
             },
@@ -533,7 +366,9 @@ def build_ui_schema(
                 "paramType": "integer",
                 "modes": ["fixed", "range"],
                 "group": "model_params",
-                "default": 0,
+                "default": 10,
+                "default_mode": "range",
+                "default_range": {"low": 0, "high": 20, "log": False},
             },
             {
                 "key": "lambda_l1",
@@ -542,6 +377,8 @@ def build_ui_schema(
                 "modes": ["fixed", "range"],
                 "group": "model_params",
                 "default": 0.0,
+                "default_mode": "range",
+                "default_range": {"low": 1e-8, "high": 1.0, "log": True},
             },
             {
                 "key": "lambda_l2",
@@ -549,7 +386,9 @@ def build_ui_schema(
                 "paramType": "number",
                 "modes": ["fixed", "range"],
                 "group": "model_params",
-                "default": 0.0,
+                "default": 0.000001,
+                "default_mode": "range",
+                "default_range": {"low": 1e-8, "high": 1.0, "log": True},
             },
             {
                 "key": "verbose",
@@ -566,7 +405,7 @@ def build_ui_schema(
                 "paramType": "integer",
                 "modes": ["fixed"],
                 "group": "training",
-                "default": 42,
+                "default": 1120,
             },
             {
                 "key": "early_stopping.enabled",
@@ -637,7 +476,7 @@ def build_ui_schema(
         },
         "defaults": {
             "calibration": {
-                "method": "platt",
+                "method": "isotonic",
                 "n_splits": 5,
                 "params": {},
             },

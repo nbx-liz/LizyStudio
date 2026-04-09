@@ -9,6 +9,8 @@ import pytest
 
 from lizystudio.cli import main
 
+pytestmark = pytest.mark.unit
+
 
 class TestCli:
     def test_parse_default_args(self) -> None:

@@ -20,6 +20,8 @@ from lizystudio.api.errors import (
 )
 from lizystudio.services.workspace import apply_config_patch
 
+pytestmark = pytest.mark.integration
+
 # --- H-0041: Error code tests ---
 
 

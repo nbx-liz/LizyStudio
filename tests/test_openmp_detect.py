@@ -12,6 +12,8 @@ import pytest
 
 from lizystudio.services.openmp_detect import has_openmp, should_use_subprocess
 
+pytestmark = pytest.mark.unit
+
 
 class TestHasOpenMP:
     """Detect presence of OpenMP shared libraries."""

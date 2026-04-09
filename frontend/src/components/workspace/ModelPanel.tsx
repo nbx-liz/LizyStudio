@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { getErrorMessage } from "@/api/errors";
 import type { ConfigError } from "@/api/types";
 import {
   fetchBackends,
@@ -153,9 +154,7 @@ export function ModelPanel({
       queryClient.invalidateQueries({ queryKey: ["config"] });
       toast.success("Config imported");
     } catch (err) {
-      toast.error(
-        `Import failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      toast.error(`Import failed: ${getErrorMessage(err)}`);
     }
     e.target.value = "";
   };

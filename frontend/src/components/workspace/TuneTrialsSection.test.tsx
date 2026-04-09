@@ -84,9 +84,9 @@ describe("TuneTrialsSection", () => {
       />,
     );
     expect(screen.getByText("learning_rate")).toBeInTheDocument();
-    expect(screen.getByText("0.05")).toBeInTheDocument();
+    expect(screen.getByText("0.0500")).toBeInTheDocument();
     expect(screen.getByText("num_leaves")).toBeInTheDocument();
-    expect(screen.getByText("64")).toBeInTheDocument();
+    expect(screen.getByText("64.0000")).toBeInTheDocument();
   });
 
   it("shows 'Apply to Fit' button when onApplyToFit is provided", () => {

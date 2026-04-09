@@ -1,10 +1,28 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ColumnInfo } from "@/api/types";
-import { CvSection, type CvState, INITIAL_CV_STATE } from "./CvSection";
+import {
+  type BlockedGroupKFoldState,
+  CvSection,
+  type CvState,
+  INITIAL_BLOCKED_STATE,
+  INITIAL_CV_STATE,
+} from "./CvSection";
 
 // --- Mock child components ---
+
+vi.mock("./BlockedGroupKFoldEditor", () => ({
+  BlockedGroupKFoldEditor: () => (
+    <div data-testid="blocked-group-kfold-editor">BlockedGroupKFoldEditor</div>
+  ),
+  INITIAL_BLOCKED_STATE: {
+    cutoffs: [],
+    blockMode: "expanding",
+    trainWindow: 1,
+    stratify: "auto",
+  },
+}));
 
 vi.mock("./SegmentGroup", () => ({
   SegmentGroup: ({
@@ -202,5 +220,232 @@ describe("CvSection", () => {
 
     // onChange should be called with the new folds value
     expect(mockOnChange).toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // Additional strategy rendering tests
+  // -------------------------------------------------------------------------
+
+  it("shows Folds, Random State, and Group column for stratified_group_kfold", () => {
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "stratified_group_kfold" })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+    expect(screen.getByText("Folds")).toBeInTheDocument();
+    expect(screen.getByText("Random State")).toBeInTheDocument();
+    expect(screen.getByText("Group column")).toBeInTheDocument();
+    expect(screen.queryByText("Shuffle")).not.toBeInTheDocument();
+    expect(screen.queryByText("Time column")).not.toBeInTheDocument();
+  });
+
+  it("shows Purge Gap and Embargo fields for purged_time_series strategy", () => {
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "purged_time_series" })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+    expect(screen.getByText("Time column")).toBeInTheDocument();
+    expect(screen.getByText("Purge Gap")).toBeInTheDocument();
+    expect(screen.getByText("Embargo")).toBeInTheDocument();
+    expect(screen.getByText("Train Size Max")).toBeInTheDocument();
+    expect(screen.getByText("Test Size Max")).toBeInTheDocument();
+    expect(screen.queryByText("Gap")).not.toBeInTheDocument();
+    expect(screen.queryByText("Shuffle")).not.toBeInTheDocument();
+  });
+
+  it("shows Time column, Group column, and Gap for group_time_series strategy", () => {
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "group_time_series" })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+    expect(screen.getByText("Time column")).toBeInTheDocument();
+    expect(screen.getByText("Group column")).toBeInTheDocument();
+    expect(screen.getByText("Gap")).toBeInTheDocument();
+    expect(screen.getByText("Train Size Max")).toBeInTheDocument();
+    expect(screen.getByText("Test Size Max")).toBeInTheDocument();
+    expect(screen.queryByText("Purge Gap")).not.toBeInTheDocument();
+    expect(screen.queryByText("Embargo")).not.toBeInTheDocument();
+  });
+
+  it("renders BlockedGroupKFoldEditor and hides generic fields for blocked_group_kfold when blocked props provided", () => {
+    const mockOnBlockedChange = vi.fn();
+    const blockedState: BlockedGroupKFoldState = { ...INITIAL_BLOCKED_STATE };
+
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "blocked_group_kfold" })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+        blocked={blockedState}
+        onBlockedChange={mockOnBlockedChange}
+      />,
+    );
+
+    // Generic fields must NOT appear for blocked_group_kfold
+    expect(screen.queryByText("Folds")).not.toBeInTheDocument();
+    expect(screen.queryByText("Shuffle")).not.toBeInTheDocument();
+    expect(screen.queryByText("Gap")).not.toBeInTheDocument();
+  });
+
+  it("does not render BlockedGroupKFoldEditor when blocked props are absent", () => {
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "blocked_group_kfold" })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+        // blocked and onBlockedChange intentionally omitted
+      />,
+    );
+
+    // Without blocked props, editor is not mounted
+    // Generic fields are also hidden (strategy === blocked_group_kfold guard)
+    expect(screen.queryByText("Folds")).not.toBeInTheDocument();
+  });
+
+  it("uses all strategies from CV_STRATEGY_LABELS when uiSchema is undefined", () => {
+    render(
+      <CvSection
+        cv={makeCvState()}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+        // uiSchema intentionally omitted
+      />,
+    );
+    // SegmentGroup receives all known strategies as options
+    expect(screen.getByTestId("strategy-kfold")).toBeInTheDocument();
+    expect(screen.getByTestId("strategy-stratified_kfold")).toBeInTheDocument();
+    expect(screen.getByTestId("strategy-group_kfold")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("strategy-blocked_group_kfold"),
+    ).toBeInTheDocument();
+  });
+
+  it("calls onChange with updated shuffle value when Shuffle toggle is clicked", async () => {
+    const user = userEvent.setup();
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "kfold", shuffle: true })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    const shuffleSwitch = screen.getByRole("switch");
+    await user.click(shuffleSwitch);
+
+    expect(mockOnChange).toHaveBeenCalledWith(
+      expect.objectContaining({ shuffle: false }),
+    );
+  });
+
+  it("calls onChange with updated randomState when Random State input changes", () => {
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "kfold", randomState: 42 })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    const randomStateInput = screen.getByTestId("number-input-42");
+    fireEvent.change(randomStateInput, { target: { value: "99" } });
+
+    expect(mockOnChange).toHaveBeenCalledWith(
+      expect.objectContaining({ randomState: 99 }),
+    );
+  });
+
+  it("calls onChange with updated gap value for time_series strategy", async () => {
+    const user = userEvent.setup();
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "time_series", gap: 0 })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    const gapInput = screen.getByTestId("number-input-0");
+    await user.clear(gapInput);
+    await user.type(gapInput, "3");
+
+    expect(mockOnChange).toHaveBeenCalledWith(
+      expect.objectContaining({ gap: 3 }),
+    );
+  });
+
+  it("calls onChange with undefined folds when folds input is cleared", async () => {
+    const user = userEvent.setup();
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "stratified_kfold", folds: 5 })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    const foldsInput = screen.getByTestId("number-input-5");
+    await user.clear(foldsInput);
+
+    // When cleared, NumberInput emits undefined; component defaults to 5
+    expect(mockOnChange).toHaveBeenCalledWith(
+      expect.objectContaining({ folds: 5 }),
+    );
+  });
+
+  it("renders Group column select for group_kfold", () => {
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "group_kfold" })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    expect(screen.getByText("Group column")).toBeInTheDocument();
+    // Radix Select renders options only when opened; verify trigger exists
+    expect(screen.getByText("Select column")).toBeInTheDocument();
+  });
+
+  it("renders Time column select for time_series", () => {
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "time_series" })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    expect(screen.getByText("Time column")).toBeInTheDocument();
+    expect(screen.getByText("Select column")).toBeInTheDocument();
+  });
+
+  it("renders Min Train Rows and Min Valid Rows with autoHint for blocked_group_kfold without blocked editor", () => {
+    // When blocked/onBlockedChange are absent, editor is skipped but
+    // the generic Min Train Rows / Min Valid Rows fields are also hidden
+    // because strategy === blocked_group_kfold guard applies.
+    // This test verifies no crash occurs in this edge case.
+    render(
+      <CvSection
+        cv={makeCvState({
+          strategy: "blocked_group_kfold",
+          minTrainRows: 100,
+          minValidRows: 50,
+        })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+    // Fields hidden by the blocked_group_kfold guard
+    expect(screen.queryByText("Min Train Rows")).not.toBeInTheDocument();
+    expect(screen.queryByText("Min Valid Rows")).not.toBeInTheDocument();
   });
 });

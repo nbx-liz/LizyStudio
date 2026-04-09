@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
+import { getErrorMessage } from "@/api/errors";
 import {
   fetchInferenceHistory,
   fetchInferenceRecord,
@@ -79,9 +80,7 @@ export function InferencePage() {
       setSelectedInfId(result.inf_id);
     },
     onError: (err) => {
-      toast.error(
-        `Inference failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      toast.error(`Inference failed: ${getErrorMessage(err)}`);
     },
   });
 

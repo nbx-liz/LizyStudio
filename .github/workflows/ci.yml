@@ -19,7 +19,7 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy src/lizystudio/
-      - run: uv run pytest --cov=src/lizystudio --cov-report=term-missing -q
+      - run: uv run pytest --cov=src/lizystudio --cov-report=term-missing --cov-fail-under=80 -q
 
   frontend:
     runs-on: ubuntu-latest
@@ -36,4 +36,4 @@ jobs:
       - run: cd frontend && pnpm install --frozen-lockfile
       - run: cd frontend && pnpm check
       - run: cd frontend && pnpm build
-      - run: cd frontend && pnpm test -- --run
+      - run: cd frontend && pnpm vitest run --coverage

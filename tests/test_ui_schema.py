@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import sys
 
+import pytest
 from fastapi.testclient import TestClient
 
 from lizystudio.backends.lizyml import LizyMLAdapter
+
+pytestmark = pytest.mark.integration
 
 UI_SCHEMA_KEYS = {
     "sections",
@@ -263,47 +266,47 @@ class TestLizyMLAdapterUiSchema:
                 f"parameter_hint '{h['key']}' is missing a 'default' field"
             )
 
-    def test_parameter_hint_n_estimators_default_is_1000(self) -> None:
-        """n_estimators default must be 1000."""
+    def test_parameter_hint_n_estimators_default(self) -> None:
+        """n_estimators default must be 1500."""
         schema = LizyMLAdapter().get_ui_schema()
         hints = {h["key"]: h for h in schema["parameter_hints"]}
-        assert hints["n_estimators"]["default"] == 1000
+        assert hints["n_estimators"]["default"] == 1500
 
     def test_parameter_hint_learning_rate_default(self) -> None:
-        """learning_rate default must be 0.1."""
+        """learning_rate default must be 0.001."""
         schema = LizyMLAdapter().get_ui_schema()
         hints = {h["key"]: h for h in schema["parameter_hints"]}
-        assert hints["learning_rate"]["default"] == 0.1
+        assert hints["learning_rate"]["default"] == 0.001
 
     def test_parameter_hint_max_depth_default(self) -> None:
-        """max_depth default must be -1 (LightGBM unlimited)."""
+        """max_depth default must be 5."""
         schema = LizyMLAdapter().get_ui_schema()
         hints = {h["key"]: h for h in schema["parameter_hints"]}
-        assert hints["max_depth"]["default"] == -1
+        assert hints["max_depth"]["default"] == 5
 
     def test_parameter_hint_max_bin_default(self) -> None:
-        """max_bin default must be 255."""
+        """max_bin default must be 511."""
         schema = LizyMLAdapter().get_ui_schema()
         hints = {h["key"]: h for h in schema["parameter_hints"]}
-        assert hints["max_bin"]["default"] == 255
+        assert hints["max_bin"]["default"] == 511
 
     def test_parameter_hint_feature_fraction_default(self) -> None:
-        """feature_fraction default must be 1.0."""
+        """feature_fraction default must be 0.7."""
         schema = LizyMLAdapter().get_ui_schema()
         hints = {h["key"]: h for h in schema["parameter_hints"]}
-        assert hints["feature_fraction"]["default"] == 1.0
+        assert hints["feature_fraction"]["default"] == 0.7
 
     def test_parameter_hint_bagging_fraction_default(self) -> None:
-        """bagging_fraction default must be 1.0."""
+        """bagging_fraction default must be 0.7."""
         schema = LizyMLAdapter().get_ui_schema()
         hints = {h["key"]: h for h in schema["parameter_hints"]}
-        assert hints["bagging_fraction"]["default"] == 1.0
+        assert hints["bagging_fraction"]["default"] == 0.7
 
     def test_parameter_hint_bagging_freq_default(self) -> None:
-        """bagging_freq default must be 0."""
+        """bagging_freq default must be 10."""
         schema = LizyMLAdapter().get_ui_schema()
         hints = {h["key"]: h for h in schema["parameter_hints"]}
-        assert hints["bagging_freq"]["default"] == 0
+        assert hints["bagging_freq"]["default"] == 10
 
     def test_parameter_hint_lambda_l1_default(self) -> None:
         """lambda_l1 default must be 0.0."""
@@ -312,16 +315,28 @@ class TestLizyMLAdapterUiSchema:
         assert hints["lambda_l1"]["default"] == 0.0
 
     def test_parameter_hint_lambda_l2_default(self) -> None:
-        """lambda_l2 default must be 0.0."""
+        """lambda_l2 default must be 0.000001."""
         schema = LizyMLAdapter().get_ui_schema()
         hints = {h["key"]: h for h in schema["parameter_hints"]}
-        assert hints["lambda_l2"]["default"] == 0.0
+        assert hints["lambda_l2"]["default"] == 0.000001
 
     def test_parameter_hint_first_metric_only_default(self) -> None:
         """first_metric_only default must be False."""
         schema = LizyMLAdapter().get_ui_schema()
         hints = {h["key"]: h for h in schema["parameter_hints"]}
         assert hints["first_metric_only"]["default"] is False
+
+    def test_parameter_hint_balanced_default(self) -> None:
+        """balanced default must be True."""
+        schema = LizyMLAdapter().get_ui_schema()
+        hints = {h["key"]: h for h in schema["parameter_hints"]}
+        assert hints["balanced"]["default"] is True
+
+    def test_search_space_catalog_seed_default(self) -> None:
+        """search_space_catalog seed default must be 1120."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        assert catalog["seed"]["default"] == 1120
 
     def test_parameter_hint_objective_default_is_task_keyed_dict(self) -> None:
         """objective default must be a dict with regression/binary/multiclass keys."""
@@ -336,16 +351,16 @@ class TestLizyMLAdapterUiSchema:
         assert default["multiclass"] == "multiclass"
 
     def test_parameter_hint_metric_default_is_task_keyed_dict(self) -> None:
-        """metric default must be a dict with regression/binary/multiclass keys."""
+        """metric default must be a task-keyed dict of arrays."""
         schema = LizyMLAdapter().get_ui_schema()
         hints = {h["key"]: h for h in schema["parameter_hints"]}
         default = hints["metric"]["default"]
         assert isinstance(default, dict), "metric default must be a dict"
         for task in ("regression", "binary", "multiclass"):
             assert task in default, f"metric default missing task key: {task}"
-        assert default["regression"] == "rmse"
-        assert default["binary"] == "auc"
-        assert default["multiclass"] == "multi_logloss"
+        assert default["regression"] == ["huber", "mae", "mape"]
+        assert default["binary"] == ["auc", "binary_logloss"]
+        assert default["multiclass"] == ["auc_mu", "multi_logloss"]
 
     def test_search_space_catalog_model_params_have_default(self) -> None:
         """All model_params catalog entries must have a 'default' field."""
@@ -370,10 +385,10 @@ class TestLizyMLAdapterUiSchema:
             )
 
     def test_search_space_catalog_n_estimators_default(self) -> None:
-        """search_space_catalog n_estimators default must be 1000."""
+        """search_space_catalog n_estimators default must be 1500."""
         schema = LizyMLAdapter().get_ui_schema()
         catalog = {e["key"]: e for e in schema["search_space_catalog"]}
-        assert catalog["n_estimators"]["default"] == 1000
+        assert catalog["n_estimators"]["default"] == 1500
 
     def test_search_space_catalog_auto_num_leaves_default(self) -> None:
         """search_space_catalog auto_num_leaves default must be True."""
@@ -607,12 +622,19 @@ class TestLizyMLAdapterUiSchema:
         assert md["default_mode"] == "range"
         assert md["default_range"] == {"low": 3, "high": 12, "log": False}
 
-    def test_search_space_catalog_default_mode_absent_means_fixed(self) -> None:
-        """Entries without default_mode omit it (implicit fixed, H-0053)."""
+    def test_search_space_catalog_max_bin_uses_choice_mode(self) -> None:
+        """max_bin uses default_mode=choice with default_choices."""
         schema = LizyMLAdapter().get_ui_schema()
         catalog = {e["key"]: e for e in schema["search_space_catalog"]}
-        # max_bin should NOT have default_mode
-        assert "default_mode" not in catalog["max_bin"]
+        assert catalog["max_bin"]["default_mode"] == "choice"
+        assert catalog["max_bin"]["default_choices"] == [
+            15,
+            63,
+            127,
+            255,
+            511,
+            1023,
+        ]
         assert "default_range" not in catalog["max_bin"]
 
     def test_search_space_catalog_default_range_low_lt_high(self) -> None:
@@ -683,10 +705,10 @@ class TestLizyMLAdapterUiSchema:
 
 def _reset_ui_schema_caches() -> None:
     """Reset module-level caches to force re-evaluation."""
-    import lizystudio.backends.lizyml_ui_schema as m
+    import lizystudio.backends.lizyml_metrics as metrics
 
-    m._eval_metrics_cache = None
-    m._metric_direction_cache = None
+    metrics._eval_metrics_cache = None
+    metrics._metric_direction_cache = None
 
 
 class TestUiSchemaFallbacks:
@@ -752,7 +774,9 @@ class TestUiSchemaFallbacks:
         _reset_ui_schema_caches()
         # Pre-populate before next call to simulate the "already populated"
         # scenario inside the lock.
-        m._eval_metrics_cache = first_result  # type: ignore[attr-defined]
+        import lizystudio.backends.lizyml_metrics as metrics_mod
+
+        metrics_mod._eval_metrics_cache = first_result  # type: ignore[attr-defined]
         result = m.get_eval_metrics_by_task()
         assert result is first_result
         _reset_ui_schema_caches()
@@ -763,7 +787,9 @@ class TestUiSchemaFallbacks:
 
         first_result = m.get_metric_directions()
         _reset_ui_schema_caches()
-        m._metric_direction_cache = first_result  # type: ignore[attr-defined]
+        import lizystudio.backends.lizyml_metrics as metrics_mod2
+
+        metrics_mod2._metric_direction_cache = first_result  # type: ignore[attr-defined]
         result = m.get_metric_directions()
         assert result is first_result
         _reset_ui_schema_caches()

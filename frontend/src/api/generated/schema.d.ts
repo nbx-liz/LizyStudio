@@ -923,19 +923,22 @@ export interface components {
             dtype: string;
             /** Unique Count */
             unique_count: number;
-            /** Suggested Type */
-            suggested_type: string;
+            /**
+             * Suggested Type
+             * @enum {string}
+             */
+            suggested_type: "numeric" | "categorical";
             /** Suggested Excluded */
             suggested_excluded: boolean;
             /** Exclude Reason */
-            exclude_reason?: string | null;
+            exclude_reason?: ("id" | "constant") | null;
         };
         /** ColumnsResponseModel */
         ColumnsResponseModel: {
             /** Target */
             target: string | null;
             /** Suggested Task */
-            suggested_task?: string | null;
+            suggested_task?: ("binary" | "multiclass" | "regression") | null;
             /** Columns */
             columns: components["schemas"]["ColumnInfoResponse"][];
         };
@@ -969,10 +972,18 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** DataPathRequest */
+        DataPathRequest: {
+            /** Path */
+            path: string;
+        };
         /** DataRefResponse */
         DataRefResponse: {
-            /** Source Type */
-            source_type: string;
+            /**
+             * Source Type
+             * @enum {string}
+             */
+            source_type: "path" | "upload";
             /** Path */
             path: string;
             /** Filename */
@@ -986,8 +997,11 @@ export interface components {
         };
         /** DataSource */
         DataSource: {
-            /** Source Type */
-            source_type: string;
+            /**
+             * Source Type
+             * @enum {string}
+             */
+            source_type: "path" | "upload";
             /** Path */
             path: string;
         };
@@ -1002,8 +1016,11 @@ export interface components {
         };
         /** ExportRequest */
         ExportRequest: {
-            /** Export Type */
-            export_type: string;
+            /**
+             * Export Type
+             * @enum {string}
+             */
+            export_type: "model" | "report";
             /** Output Path */
             output_path: string;
         };
@@ -1036,12 +1053,18 @@ export interface components {
         JobDetailResponse: {
             /** Job Id */
             job_id: string;
-            /** Status */
-            status: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "running" | "completed" | "failed" | "cancelled";
             /** Backend Name */
             backend_name: string;
-            /** Job Type */
-            job_type: string;
+            /**
+             * Job Type
+             * @enum {string}
+             */
+            job_type: "fit" | "tune";
             /** Created At */
             created_at: string;
             /** Completed At */
@@ -1076,12 +1099,18 @@ export interface components {
         JobSummaryResponse: {
             /** Job Id */
             job_id: string;
-            /** Status */
-            status: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "running" | "completed" | "failed" | "cancelled";
             /** Backend Name */
             backend_name: string;
-            /** Job Type */
-            job_type: string;
+            /**
+             * Job Type
+             * @enum {string}
+             */
+            job_type: "fit" | "tune";
             /** Created At */
             created_at: string;
             /** Completed At */
@@ -1242,9 +1271,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
+                "application/json": components["schemas"]["DataPathRequest"];
             };
         };
         responses: {

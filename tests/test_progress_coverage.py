@@ -20,6 +20,8 @@ import pytest
 
 from lizystudio.ws.progress import ProgressBroadcaster, websocket_progress
 
+pytestmark = pytest.mark.unit
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

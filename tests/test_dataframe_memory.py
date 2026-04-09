@@ -14,6 +14,8 @@ import pytest
 from lizystudio.api.errors import FileInvalidError
 from lizystudio.security import check_dataframe_memory
 
+pytestmark = pytest.mark.unit
+
 
 class TestCheckDataframeMemory:
     """Unit tests for check_dataframe_memory."""

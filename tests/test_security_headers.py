@@ -14,6 +14,8 @@ from fastapi.testclient import TestClient
 
 from lizystudio.server import create_app
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture()
 def prod_client(

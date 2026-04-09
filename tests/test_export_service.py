@@ -11,6 +11,8 @@ from lizystudio.backends.types import DataRef, FitSummary, PlotData
 from lizystudio.services.export import export_model, export_report
 from lizystudio.services.jobs import Job, JobStore
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture()
 def job_store(tmp_path: Path) -> JobStore:

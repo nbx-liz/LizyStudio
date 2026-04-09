@@ -7,6 +7,8 @@ import pytest
 
 from lizystudio.services.data import get_column_value_counts
 
+pytestmark = pytest.mark.unit
+
 
 def test_basic_value_counts() -> None:
     df = pd.DataFrame({"color": ["red", "blue", "red", "green", "blue", "red"]})

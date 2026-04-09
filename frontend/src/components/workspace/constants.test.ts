@@ -62,8 +62,8 @@ describe("METRICS_BY_TASK", () => {
 });
 
 describe("CALIBRATION_DEFAULTS", () => {
-  it("has method platt and n_splits 5", () => {
-    expect(CALIBRATION_DEFAULTS.method).toBe("platt");
+  it("has method isotonic and n_splits 5", () => {
+    expect(CALIBRATION_DEFAULTS.method).toBe("isotonic");
     expect(CALIBRATION_DEFAULTS.n_splits).toBe(5);
   });
 });

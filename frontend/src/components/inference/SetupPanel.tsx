@@ -1,6 +1,7 @@
 import { Upload } from "lucide-react";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
+import { getErrorMessage } from "@/api/errors";
 import type { InferenceRecord } from "@/api/inference";
 import { uploadInferenceData } from "@/api/inference";
 import type { JobSummary } from "@/api/types";
@@ -67,9 +68,7 @@ export function SetupPanel({
         setDataPath(result.upload_path);
         toast.success(`Uploaded: ${result.filename}`);
       } catch (err) {
-        toast.error(
-          `Upload failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        toast.error(`Upload failed: ${getErrorMessage(err)}`);
       } finally {
         setUploading(false);
       }

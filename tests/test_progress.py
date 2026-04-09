@@ -8,6 +8,8 @@ import pytest
 
 from lizystudio.ws.progress import ProgressBroadcaster
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture()
 def broadcaster() -> ProgressBroadcaster:

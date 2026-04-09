@@ -44,7 +44,7 @@ describe("CalibrationSection", () => {
   });
 
   describe("ON state (calibration is an object)", () => {
-    const defaultCalibration = { method: "platt", n_splits: 5, params: {} };
+    const defaultCalibration = { method: "isotonic", n_splits: 5, params: {} };
 
     it("switch is on when calibration is set", () => {
       renderCalibration(defaultCalibration, vi.fn());
@@ -70,13 +70,16 @@ describe("CalibrationSection", () => {
       const switchEl = screen.getByRole("switch");
       fireEvent.click(switchEl);
       expect(onChange).toHaveBeenCalledWith(
-        expect.objectContaining({ method: "platt", n_splits: 5 }),
+        expect.objectContaining({ method: "isotonic", n_splits: 5 }),
       );
     });
 
     it("toggling OFF calls onChange with null", () => {
       const onChange = vi.fn();
-      renderCalibration({ method: "platt", n_splits: 5, params: {} }, onChange);
+      renderCalibration(
+        { method: "isotonic", n_splits: 5, params: {} },
+        onChange,
+      );
       const switchEl = screen.getByRole("switch");
       fireEvent.click(switchEl);
       expect(onChange).toHaveBeenCalledWith(null);

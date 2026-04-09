@@ -9,6 +9,8 @@ import pytest
 from lizystudio.backends.types import DataRef, FitSummary
 from lizystudio.services.jobs import JobStore
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture()
 def job_store(tmp_path: Path) -> JobStore:

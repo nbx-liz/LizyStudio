@@ -1,18 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { MetricEntry } from "@/api/types";
-import { metricEntryName } from "@/api/types";
 import {
   Accordion,
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import { Badge } from "@/components/ui/badge";
-import { Label } from "@/components/ui/label";
-import { CompactStepper } from "./CompactStepper";
 import { groupToCategory, SearchSpaceTable } from "./SearchSpaceTable";
-import { SegmentGroup } from "./SegmentGroup";
+import { TuneEvaluationSection } from "./TuneEvaluationSection";
 import { TuneSettings } from "./TuneSettings";
+import {
+  extractOptunaField,
+  extractTuningField,
+  updateOptunaField,
+} from "./tune-config-utils";
+
+// Re-export helpers so existing imports from TuneTab continue to work
+export {
+  extractOptunaField,
+  extractTuningField,
+  updateOptunaField,
+  updateTuningField,
+} from "./tune-config-utils";
 
 interface TuneTabProps {
   config: Record<string, unknown>;
@@ -20,50 +29,6 @@ interface TuneTabProps {
   task: string | null;
   uiSchema?: import("@/api/types").UiSchema;
   columns?: string[];
-}
-
-/** Update tuning.optuna.{params|space} (NOT evaluation — that goes to tuning.evaluation). */
-function updateOptunaField(
-  config: Record<string, unknown>,
-  path: "params" | "space",
-  value: unknown,
-): Record<string, unknown> {
-  const tuning = (config.tuning as Record<string, unknown>) ?? {};
-  const optuna = (tuning.optuna as Record<string, unknown>) ?? {};
-  return {
-    ...config,
-    tuning: { ...tuning, optuna: { ...optuna, [path]: value } },
-  };
-}
-
-/** Update tuning.{field} (e.g. tuning.evaluation — Widget conformance). */
-function updateTuningField(
-  config: Record<string, unknown>,
-  field: string,
-  value: unknown,
-): Record<string, unknown> {
-  const tuning = (config.tuning as Record<string, unknown>) ?? {};
-  return { ...config, tuning: { ...tuning, [field]: value } };
-}
-
-function extractOptunaField<T>(
-  config: Record<string, unknown>,
-  field: string,
-  fallback: T,
-): T {
-  const tuning = config.tuning as Record<string, unknown> | undefined;
-  const optuna = tuning?.optuna as Record<string, unknown> | undefined;
-  return (optuna?.[field] as T) ?? fallback;
-}
-
-/** Extract tuning.{field} (for evaluation — Widget conformance). */
-function extractTuningField<T>(
-  config: Record<string, unknown>,
-  field: string,
-  fallback: T,
-): T {
-  const tuning = config.tuning as Record<string, unknown> | undefined;
-  return (tuning?.[field] as T) ?? fallback;
 }
 
 export function TuneTab({
@@ -103,14 +68,21 @@ export function TuneTab({
     if (!catalogEntries) return;
     const defaultSpace: Record<string, unknown> = {};
     for (const entry of catalogEntries) {
-      if (entry.default_mode !== "range" || !entry.default_range) continue;
-      defaultSpace[entry.key] = {
-        type: entry.paramType === "integer" ? "int" : "float",
-        low: entry.default_range.low,
-        high: entry.default_range.high,
-        log: entry.default_range.log,
-        category: groupToCategory(entry.group ?? "model_params"),
-      };
+      if (entry.default_mode === "range" && entry.default_range) {
+        defaultSpace[entry.key] = {
+          type: entry.paramType === "integer" ? "int" : "float",
+          low: entry.default_range.low,
+          high: entry.default_range.high,
+          log: entry.default_range.log,
+          category: groupToCategory(entry.group ?? "model_params"),
+        };
+      } else if (entry.default_mode === "choice" && entry.default_choices) {
+        defaultSpace[entry.key] = {
+          type: "categorical",
+          choices: entry.default_choices.map(String),
+          category: groupToCategory(entry.group ?? "model_params"),
+        };
+      }
     }
     if (Object.keys(defaultSpace).length > 0) {
       spaceInitialized.current = true;
@@ -175,22 +147,6 @@ export function TuneTab({
     return result;
   }, [task, uiSchema]);
 
-  // Current evaluation metrics from config
-  const evalMetrics = evaluation.metrics ?? [];
-  // Widget conformance: fall back to first available metric option
-  const optimizationMetric = evalMetrics[0]
-    ? metricEntryName(evalMetrics[0])
-    : (metricOptions[0] ?? "");
-  const additionalMetricNames = evalMetrics.slice(1).map(metricEntryName);
-
-  // Auto-determine direction from metric_direction mapping
-  const autoDirection = useMemo(() => {
-    if (!task || !optimizationMetric || !metricDirection) return "";
-    const taskDirs = metricDirection[task];
-    if (!taskDirs) return "minimize";
-    return taskDirs[optimizationMetric] ?? "minimize";
-  }, [task, optimizationMetric, metricDirection]);
-
   const handleParamsChange = (params: Record<string, unknown>) => {
     onChange(updateOptunaField(config, "params", params));
   };
@@ -206,115 +162,6 @@ export function TuneTab({
       onChange({ ...config, model: { ...model, params: newParams } });
     },
     [config, modelParams, onChange],
-  );
-
-  // Build a MetricEntry — use dict form for precision_at_k
-  const buildEntry = useCallback((name: string, k?: number): MetricEntry => {
-    if (name === "precision_at_k") {
-      return { precision_at_k: { k: k ?? 10 } };
-    }
-    return name;
-  }, []);
-
-  // Get precision_at_k k-value from current tune evaluation metrics
-  const tuneKValue = useMemo(() => {
-    for (const entry of evalMetrics) {
-      if (
-        typeof entry === "object" &&
-        entry !== null &&
-        "precision_at_k" in entry
-      ) {
-        const k = entry.precision_at_k?.k;
-        return typeof k === "number" ? k : 10;
-      }
-    }
-    return 10;
-  }, [evalMetrics]);
-
-  const handleOptimizationMetricChange = useCallback(
-    (metric: string) => {
-      // Set as first metric, keep additional metrics that aren't the new optimization metric
-      const filtered = evalMetrics
-        .slice(1)
-        .filter((e) => metricEntryName(e) !== metric);
-      const newEval = {
-        ...evaluation,
-        metrics: [buildEntry(metric), ...filtered],
-      };
-      // Set direction in optuna params (no "metric" key — Widget conformance)
-      const dir = (() => {
-        if (!task || !metricDirection) return "minimize";
-        const taskDirs = metricDirection[task];
-        return taskDirs?.[metric] ?? "minimize";
-      })();
-      const newParams = { ...tuningParams, direction: dir };
-      // Update both: tuning.evaluation and tuning.optuna.params
-      const tuning = (config.tuning as Record<string, unknown>) ?? {};
-      const optuna = (tuning.optuna as Record<string, unknown>) ?? {};
-      onChange({
-        ...config,
-        tuning: {
-          ...tuning,
-          evaluation: newEval,
-          optuna: { ...optuna, params: newParams },
-        },
-      });
-    },
-    [
-      evalMetrics,
-      evaluation,
-      buildEntry,
-      config,
-      task,
-      metricDirection,
-      tuningParams,
-      onChange,
-    ],
-  );
-
-  const handleAdditionalMetricsChange = useCallback(
-    (metric: string) => {
-      const isSelected = additionalMetricNames.includes(metric);
-      const newAdditional = isSelected
-        ? evalMetrics.slice(1).filter((e) => metricEntryName(e) !== metric)
-        : [...evalMetrics.slice(1), buildEntry(metric)];
-      const first = evalMetrics[0] ?? buildEntry(optimizationMetric);
-      const newEval = {
-        ...evaluation,
-        metrics: [first, ...newAdditional].filter(Boolean),
-      };
-      onChange(updateTuningField(config, "evaluation", newEval));
-    },
-    [
-      additionalMetricNames,
-      evalMetrics,
-      evaluation,
-      optimizationMetric,
-      buildEntry,
-      config,
-      onChange,
-    ],
-  );
-
-  // Handle k-value change for precision_at_k in tune evaluation
-  const handleTuneKChange = useCallback(
-    (k: number) => {
-      const newMetrics = evalMetrics.map((entry) => {
-        if (metricEntryName(entry) === "precision_at_k") {
-          return { precision_at_k: { k } };
-        }
-        return entry;
-      });
-      const newEval = { ...evaluation, metrics: newMetrics };
-      onChange(updateTuningField(config, "evaluation", newEval));
-    },
-    [evalMetrics, evaluation, config, onChange],
-  );
-
-  // Available metrics for Additional Metrics (exclude optimization metric)
-  const additionalMetricOptions = useMemo(
-    () => metricOptions.filter((m) => m !== optimizationMetric),
-    [metricOptions, optimizationMetric],
   );
 
   return (
@@ -357,87 +204,15 @@ export function TuneTab({
           Evaluation
         </AccordionTrigger>
         <AccordionContent>
-          <div className="lzs-form space-y-1.5 pl-[18px] px-1">
-            {/* Optimization Metric */}
-            {task && metricOptions.length > 0 && (
-              <div>
-                <Label className="text-sm text-muted-foreground mb-1.5 block">
-                  Optimization Metric
-                </Label>
-                <SegmentGroup
-                  options={metricOptions}
-                  value={optimizationMetric}
-                  onChange={handleOptimizationMetricChange}
-                />
-                {optimizationMetric && autoDirection && (
-                  <div className="flex items-center gap-1.5 mt-1.5">
-                    <span className="text-xs text-muted-foreground">
-                      Direction:
-                    </span>
-                    <Badge variant="secondary" className="text-xs">
-                      {autoDirection}
-                    </Badge>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Additional Metrics */}
-            {task &&
-              additionalMetricOptions.length > 0 &&
-              optimizationMetric && (
-                <div>
-                  <Label className="text-sm text-muted-foreground mb-1.5 block">
-                    Additional Metrics
-                  </Label>
-                  <div className="flex flex-wrap gap-1.5">
-                    {additionalMetricOptions.map((m) => {
-                      const selected = additionalMetricNames.includes(m);
-                      return (
-                        <button
-                          key={m}
-                          type="button"
-                          onClick={() => handleAdditionalMetricsChange(m)}
-                        >
-                          <Badge
-                            variant={selected ? "default" : "outline"}
-                            className="cursor-pointer text-xs"
-                          >
-                            {m}
-                          </Badge>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-            {/* precision_at_k k-value input (H-0034) */}
-            {evalMetrics.some(
-              (e) => metricEntryName(e) === "precision_at_k",
-            ) && (
-              <div className="flex items-center gap-2 mt-1.5">
-                <Label className="text-xs text-muted-foreground">k</Label>
-                <CompactStepper
-                  inputId="tune-precision-k"
-                  value={tuneKValue}
-                  onChange={(v) => {
-                    if (v !== undefined) handleTuneKChange(v);
-                  }}
-                  min={1}
-                  max={100}
-                  step={1}
-                />
-              </div>
-            )}
-
-            {/* No task selected */}
-            {!task && (
-              <p className="text-xs text-muted-foreground">
-                Select a task to configure evaluation metrics.
-              </p>
-            )}
-          </div>
+          <TuneEvaluationSection
+            config={config}
+            onChange={onChange}
+            task={task}
+            metricOptions={metricOptions}
+            metricDirection={metricDirection}
+            evaluation={evaluation}
+            tuningParams={tuningParams}
+          />
         </AccordionContent>
       </AccordionItem>
     </Accordion>
