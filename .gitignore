@@ -30,6 +30,7 @@ Thumbs.db
 # Data
 *.csv
 *.png
+!docs/images/*.png
 
 # Environment
 .env
