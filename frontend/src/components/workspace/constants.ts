@@ -29,7 +29,7 @@ export const METRICS_BY_TASK: Record<
 
 /** Default calibration config when toggled ON. */
 export const CALIBRATION_DEFAULTS = {
-  method: "platt",
+  method: "isotonic",
   n_splits: 5,
   params: {},
 } as const;

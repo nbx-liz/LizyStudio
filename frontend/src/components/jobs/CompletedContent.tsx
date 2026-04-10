@@ -8,7 +8,6 @@ import {
   fetchJobSplitSummary,
 } from "@/api/jobs";
 import type { JobDetail, MetricEntry } from "@/api/types";
-import { metricEntryName } from "@/api/types";
 import { MetricCards } from "@/components/shared/MetricCards";
 import {
   Accordion,
@@ -107,8 +106,9 @@ export function CompletedContent({
 
   const { data: importancePlot, isLoading: isImportancePlotLoading } = useQuery(
     {
-      queryKey: ["job-plot", job.job_id, "importance"],
-      queryFn: () => fetchJobPlot(job.job_id, "importance"),
+      queryKey: ["job-plot", job.job_id, "importance", importanceKind],
+      queryFn: () =>
+        fetchJobPlot(job.job_id, "importance", { kind: importanceKind }),
       enabled: importanceEnabled,
     },
   );
@@ -141,26 +141,27 @@ export function CompletedContent({
 
   const evalConfig = (job.config?.evaluation as Record<string, unknown>) ?? {};
 
-  // Extract metric names for LC filter chips (H-0051).
-  const evalMetricNames = useMemo(() => {
-    const entries = Array.isArray(evalConfig.metrics)
-      ? (evalConfig.metrics as MetricEntry[])
-      : [];
-    const names = entries.map(metricEntryName);
-    if (names.length > 0) return names;
-    return metrics ? Object.keys(metrics) : [];
-  }, [evalConfig.metrics, metrics]);
+  // LC filter uses model.params.metric (LightGBM internal metric names)
+  // which match the subplot titles in the learning curve plot.
+  const modelConfig = (job.config?.model as Record<string, unknown>) ?? {};
+  const lcAvailableMetrics = useMemo(() => {
+    const m = (modelConfig.params as Record<string, unknown>)?.metric;
+    if (Array.isArray(m)) return m as string[];
+    if (typeof m === "string") return [m];
+    return [];
+  }, [modelConfig.params]);
 
-  // Initialize LC filter to first metric (single-select)
+  // Initialize LC filter to first metric (single-select).
+  // When only 1 metric exists, lcMetric stays null (no filter needed).
   useEffect(() => {
     if (lcInitialized.current) return;
-    if (evalMetricNames.length > 1) {
+    if (lcAvailableMetrics.length > 1) {
       lcInitialized.current = true;
-      setLcMetric(evalMetricNames[0]);
-    } else if (evalMetricNames.length === 1) {
+      setLcMetric(lcAvailableMetrics[0]);
+    } else if (lcAvailableMetrics.length >= 1) {
       lcInitialized.current = true;
     }
-  }, [evalMetricNames]);
+  }, [lcAvailableMetrics]);
 
   const annotateMetric = (name: string): string => {
     if (name === "precision_at_k") {
@@ -221,7 +222,7 @@ export function CompletedContent({
           isError={isPlotError}
           lcMetric={lcMetric}
           onLcMetricChange={setLcMetric}
-          availableEvalMetrics={evalMetricNames}
+          availableEvalMetrics={lcAvailableMetrics}
           importanceKinds={importanceKinds}
           selectedImportanceKind={importanceKind}
           onImportanceKindChange={setImportanceKind}

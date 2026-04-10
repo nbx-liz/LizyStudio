@@ -82,6 +82,7 @@ export function SearchSpaceTable({
       paramType: c.paramType,
       group: c.group ?? "model_params",
       defaultRange: c.default_range,
+      defaultChoices: c.default_choices,
     }));
   }, [catalog]);
 
@@ -99,6 +100,7 @@ export function SearchSpaceTable({
         defaultRange: undefined as
           | { low: number; high: number; log: boolean }
           | undefined,
+        defaultChoices: undefined as (string | number)[] | undefined,
       }));
     return [...effectiveCatalog, ...extraEntries];
   }, [effectiveCatalog, addedParams]);
@@ -143,6 +145,10 @@ export function SearchSpaceTable({
       // Boolean params always get true/false options (Widget conformance)
       const paramEntry = fullCatalog.find((p) => p.key === key);
       if (paramEntry?.paramType === "boolean") return ["true", "false"];
+      // Use default_choices from catalog if available
+      if (paramEntry?.defaultChoices) {
+        return paramEntry.defaultChoices.map(String);
+      }
       // No known options — signal free-text mode
       return undefined;
     },
@@ -165,9 +171,12 @@ export function SearchSpaceTable({
       setExpandedRows((prev) => new Set([...prev, key]));
     } else if (mode === "choice") {
       const param = fullCatalog.find((p) => p.key === key);
-      // Boolean params start with both options; others start empty
-      const initChoices =
-        param?.paramType === "boolean" ? ["true", "false"] : [];
+      // Use default_choices from catalog, boolean fallback, or empty
+      const initChoices = param?.defaultChoices
+        ? param.defaultChoices.map(String)
+        : param?.paramType === "boolean"
+          ? ["true", "false"]
+          : [];
       const entry: SpaceEntry = {
         type: "categorical",
         choices: initChoices,

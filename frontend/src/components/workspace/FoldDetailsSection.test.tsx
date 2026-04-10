@@ -80,7 +80,10 @@ describe("FoldDetailsSection", () => {
       const fitResult: FitResult = {
         metrics: {},
         fold_count: 1,
-        params: [{ learning_rate: 0.01, max_depth: 6 }],
+        params: [
+          { parameter: "learning_rate", value: 0.01 },
+          { parameter: "max_depth", value: 6 },
+        ],
       };
       renderSection({
         fitResult,
@@ -89,9 +92,9 @@ describe("FoldDetailsSection", () => {
       });
       expect(screen.getByText("Parameters")).toBeInTheDocument();
       expect(screen.getByText("learning_rate")).toBeInTheDocument();
-      expect(screen.getByText("0.01")).toBeInTheDocument();
+      expect(screen.getByText("0.0100")).toBeInTheDocument();
       expect(screen.getByText("max_depth")).toBeInTheDocument();
-      expect(screen.getByText("6")).toBeInTheDocument();
+      expect(screen.getByText("6.0000")).toBeInTheDocument();
     });
 
     it("does not render when fitResult.params is empty", () => {

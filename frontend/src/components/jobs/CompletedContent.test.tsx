@@ -79,7 +79,10 @@ function makeFitJob(overrides?: Partial<JobDetail>): JobDetail {
         },
       },
       fold_count: 5,
-      params: [{ n_estimators: 100, learning_rate: 0.1 }],
+      params: [
+        { parameter: "n_estimators", value: 100 },
+        { parameter: "learning_rate", value: 0.1 },
+      ],
     },
     tune_result: null,
     model_path: "/models/j1",
@@ -189,9 +192,9 @@ describe("CompletedContent — tune result", () => {
     );
     expect(screen.getByText("Best Params")).toBeInTheDocument();
     expect(screen.getByText("n_estimators")).toBeInTheDocument();
-    expect(screen.getByText("200")).toBeInTheDocument();
+    expect(screen.getByText("200.0000")).toBeInTheDocument();
     expect(screen.getByText("learning_rate")).toBeInTheDocument();
-    expect(screen.getByText("0.05")).toBeInTheDocument();
+    expect(screen.getByText("0.0500")).toBeInTheDocument();
   });
 });
 

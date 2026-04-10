@@ -122,10 +122,15 @@ export interface JobDetail extends JobSummary {
   model_path: string | null;
 }
 
+export interface FitResultParam {
+  parameter: string;
+  value: unknown;
+}
+
 export interface FitResult {
   metrics: Record<string, unknown>;
   fold_count: number;
-  params: Record<string, unknown>[];
+  params: FitResultParam[];
 }
 
 export interface TuneResult {
@@ -245,6 +250,8 @@ export interface SearchSpaceCatalogEntry {
   default_mode?: "fixed" | "range" | "choice";
   /** Default range values when switching to range mode. */
   default_range?: { low: number; high: number; log: boolean };
+  /** Default choices when switching to choice mode. */
+  default_choices?: (string | number)[];
 }
 
 export interface UiSchema {

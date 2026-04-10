@@ -49,6 +49,33 @@ export function resetCvState(strategy: string): CvState {
   return { ...INITIAL_CV_STATE, strategy };
 }
 
+const GROUP_STRATEGIES = new Set([
+  "group_kfold",
+  "stratified_group_kfold",
+  "group_time_series",
+  "blocked_group_kfold",
+]);
+
+const TIME_STRATEGIES = new Set([
+  "time_series",
+  "purged_time_series",
+  "group_time_series",
+]);
+
+/** Filter inner_valid options based on the outer CV strategy. */
+export function filterInnerValidOptions(
+  options: string[],
+  strategy: string,
+): string[] {
+  const hasGroup = GROUP_STRATEGIES.has(strategy);
+  const hasTime = TIME_STRATEGIES.has(strategy);
+  return options.filter((opt) => {
+    if (opt === "group_holdout") return hasGroup;
+    if (opt === "time_holdout") return hasTime;
+    return true; // holdout is always allowed
+  });
+}
+
 /** Recommend the inner validation method based on outer CV strategy. */
 export function recommendedInnerValid(strategy: string): string {
   switch (strategy) {

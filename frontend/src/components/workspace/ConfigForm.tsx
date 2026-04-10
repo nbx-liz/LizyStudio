@@ -22,6 +22,7 @@ import {
   type SchemaProperty,
   setNestedValue,
 } from "./config-utils";
+import { filterInnerValidOptions } from "./cv-state";
 import { FeatureWeightsEditor } from "./FeatureWeightsEditor";
 import { FormField } from "./FormField";
 import { renderField } from "./field-renderers";
@@ -92,6 +93,29 @@ export function ConfigForm({
   const innerValid =
     (trainingConfig.inner_valid as Record<string, unknown>) ?? {};
   const innerValidRatio = (innerValid.ratio as number) ?? 0.2;
+
+  // Filter inner_valid options by CV strategy
+  const splitConfig = (config.split as Record<string, unknown>) ?? {};
+  const cvStrategy = (splitConfig.method as string) ?? "kfold";
+  const filteredInnerValidOptions = useMemo(
+    () =>
+      filterInnerValidOptions(
+        (uiSchema?.inner_valid_options as string[]) ?? [],
+        cvStrategy,
+      ),
+    [uiSchema?.inner_valid_options, cvStrategy],
+  );
+
+  // Auto-reset inner_valid when current selection is not in filtered options
+  const currentInnerValid = (innerValid.method as string) ?? "holdout";
+  useEffect(() => {
+    if (
+      filteredInnerValidOptions.length > 0 &&
+      !filteredInnerValidOptions.includes(currentInnerValid)
+    ) {
+      handleFieldChange(["training", "inner_valid", "method"], "holdout");
+    }
+  }, [filteredInnerValidOptions, currentInnerValid, handleFieldChange]);
 
   // Calibration
   const calibration =
@@ -178,7 +202,7 @@ export function ConfigForm({
       handleFieldChange(["model", "params", "objective"], objOpts[0]);
     }
 
-    // Metric: multi-select, pick first option
+    // Metric: multi-select, use parameter_hints default for task
     const metricOpts = uiSchema.option_sets.model_metric?.[task] ?? [];
     if (metricOpts.length > 0) {
       const cur = modelParams.metric;
@@ -187,9 +211,21 @@ export function ConfigForm({
         cur === null ||
         (Array.isArray(cur) && cur.length === 0);
       if (empty) {
+        const metricHint = uiSchema.parameter_hints?.find(
+          (h: { key: string }) => h.key === "metric",
+        );
+        const hintDefault = (
+          metricHint?.default as Record<string, unknown> | undefined
+        )?.[task];
+        const defaults = Array.isArray(hintDefault)
+          ? (hintDefault as unknown[]).filter(
+              (m): m is string =>
+                typeof m === "string" && metricOpts.includes(m),
+            )
+          : [];
         handleFieldChange(
           ["model", "params", "metric"],
-          metricOpts.slice(0, 1),
+          defaults.length > 0 ? defaults : metricOpts.slice(0, 1),
         );
       }
     }
@@ -370,7 +406,7 @@ export function ConfigForm({
 
                   {/* Training section: inner validation */}
                   {sectionName === "training" &&
-                    uiSchema?.inner_valid_options &&
+                    filteredInnerValidOptions.length > 0 &&
                     (trainingConfig.early_stopping as Record<string, unknown>)
                       ?.enabled === true && (
                       <FormField
@@ -397,7 +433,7 @@ export function ConfigForm({
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            {uiSchema.inner_valid_options.map((opt: string) => (
+                            {filteredInnerValidOptions.map((opt) => (
                               <SelectItem key={opt} value={opt}>
                                 {opt}
                               </SelectItem>

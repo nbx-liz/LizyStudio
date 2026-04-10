@@ -78,17 +78,21 @@ export function FoldDetailsSection({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {fitResult.params.map((row, i) =>
-                  Object.entries(row).map(([k, v]) => (
-                    <TableRow
-                      key={`param-${i}-${k}`}
-                      className="hover:bg-muted/50 even:bg-muted/20"
-                    >
-                      <TableCell className="text-xs font-mono">{k}</TableCell>
-                      <TableCell className="text-xs">{String(v)}</TableCell>
-                    </TableRow>
-                  )),
-                )}
+                {fitResult.params.map((row, i) => (
+                  <TableRow
+                    key={`param-${i}`}
+                    className="hover:bg-muted/50 even:bg-muted/20"
+                  >
+                    <TableCell className="text-xs font-mono">
+                      {String(row.parameter ?? "")}
+                    </TableCell>
+                    <TableCell className="text-xs">
+                      {typeof row.value === "number"
+                        ? formatNum(row.value)
+                        : String(row.value ?? "")}
+                    </TableCell>
+                  </TableRow>
+                ))}
               </TableBody>
             </Table>
           </AccordionContent>

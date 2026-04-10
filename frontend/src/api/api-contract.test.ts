@@ -272,7 +272,7 @@ describe("JobDetail", () => {
       fit_result: {
         metrics: { auc: 0.92, logloss: 0.3 },
         fold_count: 5,
-        params: [{ learning_rate: 0.1 }],
+        params: [{ parameter: "learning_rate", value: 0.1 }],
       },
       tune_result: null,
       model_path: "/models/job-detail-1.pkl",
@@ -291,10 +291,13 @@ describe("FitResult", () => {
     const result: FitResult = {
       metrics: { auc: 0.95, logloss: 0.2 },
       fold_count: 5,
-      params: [{ learning_rate: 0.1, num_leaves: 31 }],
+      params: [
+        { parameter: "learning_rate", value: 0.1 },
+        { parameter: "num_leaves", value: 31 },
+      ],
     };
     expect(result.fold_count).toBe(5);
-    expect(result.params).toHaveLength(1);
+    expect(result.params).toHaveLength(2);
     expect(result.metrics.auc).toBe(0.95);
   });
 });
