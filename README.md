@@ -13,7 +13,7 @@ LizyStudio wraps ML backend libraries (starting with
 same interface works across different backends.
 
 <p align="center">
-  <img src="v3-workspace-initial.png" alt="Workspace" width="80%">
+  <img src="docs/images/workspace.png" alt="Workspace" width="80%">
 </p>
 
 ## Features
@@ -32,7 +32,7 @@ without leaving the page. Results appear in real-time via WebSocket.
 ### Jobs — training lifecycle management
 
 <p align="center">
-  <img src="v3-jobs-page.png" alt="Jobs" width="80%">
+  <img src="docs/images/jobs.png" alt="Jobs" width="80%">
 </p>
 
 Browse all fit and tune jobs. Inspect metrics, feature importance, learning
@@ -46,7 +46,7 @@ curves, and confusion matrices. Export trained models or standalone Python code.
 ### Tune — hyperparameter optimization
 
 <p align="center">
-  <img src="v3-tune-tab.png" alt="Tune" width="80%">
+  <img src="docs/images/tune.png" alt="Tune" width="80%">
 </p>
 
 Define search spaces with fixed/range modes, run Optuna-powered hyperparameter
