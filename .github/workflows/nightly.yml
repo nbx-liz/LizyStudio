@@ -30,20 +30,22 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
     steps:
       - uses: actions/checkout@v6
         with:
           ref: develop
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 10.31.0
-          package_json_file: frontend/package.json
       - uses: actions/setup-node@v6
         with:
           node-version: "20"
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
-      - run: cd frontend && pnpm install --frozen-lockfile
-      - run: cd frontend && pnpm check
-      - run: cd frontend && pnpm build
-      - run: cd frontend && pnpm vitest run --coverage
+      - name: Enable corepack and activate pnpm from packageManager field
+        run: |
+          corepack enable
+          corepack prepare --activate
+          pnpm --version
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm build
+      - run: pnpm vitest run --coverage
