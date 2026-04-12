@@ -503,6 +503,184 @@ def test_tune_pruned_trial_with_none_score_does_not_crash() -> None:
     assert summary.trials[0]["state"] == "pruned"
 
 
+def test_tune_re_tune_empty_dict_is_valid() -> None:
+    """An empty re_tune={} should behave like re_tune=None (single round)."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    adapter.tune(mock_model, re_tune={})
+    mock_model.tune.assert_called_once()
+    assert "resume" not in mock_model.tune.call_args.kwargs
+
+
+def test_tune_re_tune_expand_boundary_false_forwarded() -> None:
+    """expand_boundary=False must be forwarded, not coerced or dropped."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    adapter.tune(
+        mock_model,
+        re_tune={"n_rounds": 2, "expand_boundary": False},
+    )
+    second = mock_model.tune.call_args_list[1].kwargs
+    assert second["resume"] is True
+    assert second["expand_boundary"] is False
+
+
+def test_tune_re_tune_threshold_lower_boundary_zero_accepted() -> None:
+    """boundary_threshold=0.0 is the inclusive lower bound and must be accepted."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    adapter.tune(
+        mock_model,
+        re_tune={"n_rounds": 2, "boundary_threshold": 0.0},
+    )
+    second = mock_model.tune.call_args_list[1].kwargs
+    assert second["boundary_threshold"] == 0.0
+
+
+def test_tune_re_tune_threshold_upper_bound_exclusive() -> None:
+    """boundary_threshold=0.499 is just under the exclusive upper bound."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    adapter.tune(
+        mock_model,
+        re_tune={"n_rounds": 2, "boundary_threshold": 0.499},
+    )
+    second = mock_model.tune.call_args_list[1].kwargs
+    assert second["boundary_threshold"] == 0.499
+
+
+def test_tune_re_tune_threshold_exact_0_5_rejected() -> None:
+    """boundary_threshold=0.5 hits the exclusive upper bound and must raise."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    with pytest.raises(ValueError, match="boundary_threshold"):
+        adapter.tune(
+            mock_model,
+            re_tune={"n_rounds": 2, "boundary_threshold": 0.5},
+        )
+
+
+def test_tune_re_tune_nones_use_defaults() -> None:
+    """Explicit None values in re_tune fall back to lizyml defaults."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    adapter.tune(
+        mock_model,
+        re_tune={
+            "n_rounds": 2,
+            "n_trials": None,
+            "expand_boundary": None,
+            "boundary_threshold": None,
+        },
+    )
+    second = mock_model.tune.call_args_list[1].kwargs
+    assert second["resume"] is True
+    # None-valued keys should not be forwarded
+    assert "n_trials" not in second
+    assert "expand_boundary" not in second
+    assert "boundary_threshold" not in second
+
+
+def test_tune_serializes_search_dim_from_round_snapshot() -> None:
+    """Round.space_snapshot entries are serialized via _serialize_search_dim."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+
+    # Simulate a lizyml SearchDim with a numeric range
+    dim_numeric = MagicMock()
+    dim_numeric.name = "lr"
+    dim_numeric.type = "float"
+    dim_numeric.low = 1e-4
+    dim_numeric.high = 1e-1
+    dim_numeric.log = True
+    dim_numeric.step = None
+    # Avoid choices attr for numeric dim
+    del dim_numeric.choices
+
+    # Simulate a lizyml SearchDim with categorical choices
+    dim_cat = MagicMock()
+    dim_cat.name = "optim"
+    dim_cat.type = "categorical"
+    dim_cat.choices = ("adam", "sgd")
+    # Numeric attrs absent for categorical
+    del dim_cat.low
+    del dim_cat.high
+    del dim_cat.log
+    del dim_cat.step
+
+    r1 = _make_round(
+        1,
+        n_trials=10,
+        best_after=0.9,
+        expanded=(),
+        space=(dim_numeric, dim_cat),
+    )
+
+    mock_model.tune.return_value = _fake_lizyml_tuning_result(rounds=(r1,))
+
+    summary = adapter.tune(mock_model, re_tune={"n_rounds": 1})
+
+    assert summary.rounds is not None
+    snapshot = summary.rounds[0]["space_snapshot"]
+    assert len(snapshot) == 2
+
+    numeric = snapshot[0]
+    assert numeric["name"] == "lr"
+    assert numeric["type"] == "float"
+    assert numeric["low"] == 1e-4
+    assert numeric["high"] == 1e-1
+    assert numeric["log"] is True
+    assert "choices" not in numeric  # attr was deleted
+
+    cat = snapshot[1]
+    assert cat["name"] == "optim"
+    assert cat["type"] == "categorical"
+    assert cat["choices"] == ["adam", "sgd"]  # tuple → list
+    assert "low" not in cat
+
+
+def test_tune_serialize_empty_trials_yields_empty_list() -> None:
+    """Empty trial list is preserved as an empty list, not None."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result(trials=[])
+
+    summary = adapter.tune(mock_model)
+    assert summary.trials == []
+
+
+def test_tune_best_score_zero_float_preserved() -> None:
+    """best_score=0.0 must be preserved and not treated as missing."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result(best_score=0.0)
+
+    summary = adapter.tune(mock_model)
+    assert summary.best_score == 0.0
+
+
+def test_tune_re_tune_invalid_n_rounds_error_message_includes_value() -> None:
+    """ValueError carries the offending value for debugging."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    with pytest.raises(ValueError, match="1.5"):
+        adapter.tune(mock_model, re_tune={"n_rounds": 1.5})
+
+
 def test_tune_boundary_report_edge_none_preserved_as_none() -> None:
     """Edge value None is preserved, not coerced to the literal string 'None'."""
     adapter = LizyMLAdapter()

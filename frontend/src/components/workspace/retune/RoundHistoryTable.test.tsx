@@ -74,6 +74,26 @@ describe("RoundHistoryTable", () => {
     expect(cell.className).toContain("emerald");
   });
 
+  it("uses neutral color when delta is exactly zero", () => {
+    render(
+      <RoundHistoryTable
+        rounds={[
+          {
+            ...baseRound,
+            round: 2,
+            best_score_before: 0.85,
+            best_score_after: 0.85,
+          },
+        ]}
+      />,
+    );
+    // delta === 0 has no sign prefix
+    const cell = screen.getByText("0.0000");
+    expect(cell.className).toContain("muted-foreground");
+    expect(cell.className).not.toContain("emerald");
+    expect(cell.className).not.toContain("rose");
+  });
+
   it("colors delta rose for regression", () => {
     render(
       <RoundHistoryTable

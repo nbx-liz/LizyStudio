@@ -106,6 +106,42 @@ describe("BoundaryExpansionPanel", () => {
     expect(screen.getAllByText("\u2013")).toHaveLength(2);
   });
 
+  it("renders categorical best_value as its string representation", () => {
+    render(
+      <BoundaryExpansionPanel
+        report={makeReport([
+          {
+            ...baseDim,
+            name: "optimizer",
+            best_value: "adam",
+            low: null,
+            high: null,
+          },
+        ])}
+      />,
+    );
+    expect(screen.getByText("adam")).toBeInTheDocument();
+  });
+
+  it("renders 0% position when position_pct is exactly 0", () => {
+    render(
+      <BoundaryExpansionPanel
+        report={makeReport([{ ...baseDim, position_pct: 0 }])}
+      />,
+    );
+    // Both md+ and md- variants render a literal "0%"
+    expect(screen.getAllByText("0%").length).toBeGreaterThan(0);
+  });
+
+  it("renders em-dash for best_value when it is null", () => {
+    render(
+      <BoundaryExpansionPanel
+        report={makeReport([{ ...baseDim, best_value: null }])}
+      />,
+    );
+    expect(screen.getAllByText("\u2014").length).toBeGreaterThan(0);
+  });
+
   it("renders em-dash instead of '—%' when position_pct is null", () => {
     render(
       <BoundaryExpansionPanel

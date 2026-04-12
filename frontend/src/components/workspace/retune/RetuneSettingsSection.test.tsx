@@ -120,6 +120,23 @@ describe("RetuneSettingsSection", () => {
     expect(threshold).not.toBeDisabled();
   });
 
+  it("toggles expand_boundary via checkbox click when enabled", () => {
+    const onChange = vi.fn();
+    const config = {
+      tuning: { re_tune: { n_rounds: 3, expand_boundary: true } },
+    };
+    renderWithAccordion(config, onChange);
+    const checkbox = screen.getByLabelText(
+      /expand boundary between rounds/i,
+    ) as HTMLButtonElement;
+    fireEvent.click(checkbox);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const patched = onChange.mock.calls[0][0] as {
+      tuning: { re_tune: { expand_boundary: boolean } };
+    };
+    expect(patched.tuning.re_tune.expand_boundary).toBe(false);
+  });
+
   it("preserves other tuning fields when writing re_tune", () => {
     const onChange = vi.fn();
     const config = {

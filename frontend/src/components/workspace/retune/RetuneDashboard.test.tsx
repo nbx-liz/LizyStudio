@@ -66,6 +66,13 @@ describe("RetuneDashboard", () => {
     ).toBeInTheDocument();
   });
 
+  it("returns null when rounds is an empty array and boundaryReport is null", () => {
+    const { container } = render(
+      <RetuneDashboard rounds={[]} boundaryReport={null} />,
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
   it("renders only boundary panel when rounds are null", () => {
     render(<RetuneDashboard rounds={null} boundaryReport={boundaryReport} />);
     expect(

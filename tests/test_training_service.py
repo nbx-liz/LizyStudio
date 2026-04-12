@@ -634,6 +634,19 @@ class TestExtractReTune:
     def test_non_dict_re_tune_yields_none(self) -> None:
         assert _extract_re_tune({"tuning": {"re_tune": "bad"}}) is None
 
+    def test_explicit_null_tuning_yields_none(self) -> None:
+        # Some persisted configs explicitly set tuning to null.
+        assert _extract_re_tune({"tuning": None}) is None
+
+    def test_non_dict_tuning_yields_none(self) -> None:
+        # Defensive: lists / scalars where a dict is expected bail out cleanly.
+        assert _extract_re_tune({"tuning": []}) is None
+        assert _extract_re_tune({"tuning": "invalid"}) is None
+
+    def test_empty_re_tune_block_returned_as_empty_dict(self) -> None:
+        # Empty dict is a valid re_tune block (adapter will fall back to defaults).
+        assert _extract_re_tune({"tuning": {"re_tune": {}}}) == {}
+
 
 def test_run_tune_forwards_re_tune_to_backend(
     job_store: JobStore,

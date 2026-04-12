@@ -64,6 +64,8 @@ export function RetuneSettingsSection({
   };
 
   const handleExpandBoundaryChange = (checked: boolean | "indeterminate") => {
+    // Radix Checkbox's type signature allows "indeterminate" but a
+    // controlled boolean checkbox never emits it — ignore defensively.
     if (checked === "indeterminate") return;
     update({ expand_boundary: checked });
   };
