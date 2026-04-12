@@ -22,7 +22,7 @@
     "check:api-types": "bash scripts/check-api-types.sh"
   },
   "dependencies": {
-    "@tanstack/react-query": "^5.90.21",
+    "@tanstack/react-query": "^5.98.0",
     "autoprefixer": "^10.4.27",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -42,7 +42,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.10.3",
-    "@biomejs/biome": "^2.4.6",
+    "@biomejs/biome": "^2.4.11",
     "@playwright/test": "^1.59.1",
     "@storybook/addon-a11y": "^8.6.18",
     "@storybook/addon-essentials": "8",
@@ -57,9 +57,9 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@types/react-plotly.js": "^2.6.4",
-    "@vitejs/plugin-react": "^5.1.4",
+    "@vitejs/plugin-react": "^5.2.0",
     "@vitest/coverage-istanbul": "^4.1.2",
-    "jsdom": "^25.0.1",
+    "jsdom": "^29.0.2",
     "msw": "^2.12.14",
     "openapi-typescript": "^7.13.0",
     "storybook": "^8.6.18",

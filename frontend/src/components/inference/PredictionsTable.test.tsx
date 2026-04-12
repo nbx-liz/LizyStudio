@@ -104,7 +104,7 @@ describe("PredictionsTable", () => {
   it("formats integer and float cell values correctly", async () => {
     vi.mocked(fetchInferencePredictions).mockResolvedValueOnce({
       columns: ["int_col", "float_col", "str_col"],
-      data: [{ int_col: 42, float_col: 3.14159, str_col: "hello" }],
+      data: [{ int_col: 42, float_col: Math.PI, str_col: "hello" }],
       total_rows: 1,
     });
 
