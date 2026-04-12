@@ -204,6 +204,22 @@ def _prepare_autofit_config(
     return result
 
 
+def _extract_re_tune(config: dict[str, Any]) -> dict[str, Any] | None:
+    """Extract the H-0061 ``re_tune`` block from a tune request config.
+
+    Returns ``None`` when the client did not request multi-round tuning,
+    so legacy single-round behaviour is unaffected.  The returned dict
+    is a shallow copy to avoid leaking mutations back into the caller.
+    """
+    tuning = config.get("tuning")
+    if not isinstance(tuning, dict):
+        return None
+    re_tune = tuning.get("re_tune")
+    if not isinstance(re_tune, dict):
+        return None
+    return dict(re_tune)
+
+
 def _prepare_tune_config(config: dict[str, Any]) -> dict[str, Any]:
     """Merge tuning-specific overrides into the top-level config for LizyML.
 
@@ -304,10 +320,13 @@ def run_tune(
 ) -> Job:
     """Execute a tune job: tune -> auto-fit with best params (H-0002 B)."""
     tune_config = _prepare_tune_config(config)
+    re_tune = _extract_re_tune(config)
 
     def execute(cb: ProgressCallback) -> tuple[FitSummary, TuningSummary | None, str]:
         model = backend.create_model(tune_config, dataframe)
-        tune_result: TuningSummary = backend.tune(model, on_progress=cb)
+        tune_result: TuningSummary = backend.tune(
+            model, on_progress=cb, re_tune=re_tune
+        )
 
         # Capture tuning plot from the tune model before creating model2.
         # The exported model2 (fit with best params) loses tuning history.
