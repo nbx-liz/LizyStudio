@@ -14,6 +14,7 @@ import {
   type BlockedGroupKFoldState,
   INITIAL_BLOCKED_STATE,
 } from "./BlockedGroupKFoldEditor";
+
 export { type BlockedGroupKFoldState, INITIAL_BLOCKED_STATE };
 
 import { CV_STRATEGY_FIELDS, CV_STRATEGY_LABELS } from "./constants";
