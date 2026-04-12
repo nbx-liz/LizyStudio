@@ -1,25 +1,88 @@
 version: 2
 updates:
-  # Python (uv/pip)
-  - package-ecosystem: "pip"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    target-branch: "develop"
-    open-pull-requests-limit: 10
-
   # Frontend (npm/pnpm)
   - package-ecosystem: "npm"
     directory: "/frontend"
+    target-branch: "develop"
     schedule:
       interval: "weekly"
-    target-branch: "develop"
-    open-pull-requests-limit: 10
+      day: "monday"
+    open-pull-requests-limit: 5
+    # Delay brand-new releases so breaking patch/minor fixes land upstream first.
+    cooldown:
+      default-days: 5
+      semver-major-days: 14
+    groups:
+      # Keep react + react-dom + their types in lock-step.
+      react-ecosystem:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+          - "react-router"
+          - "react-router-*"
+      # Test infra tends to ship coordinated breaking changes; bundle it.
+      testing:
+        patterns:
+          - "msw"
+          - "vitest"
+          - "@vitest/*"
+          - "@testing-library/*"
+          - "@playwright/*"
+          - "playwright"
+          - "@axe-core/*"
+          - "jsdom"
+      linting:
+        patterns:
+          - "@biomejs/*"
+      storybook:
+        patterns:
+          - "storybook"
+          - "@storybook/*"
+      # Everything else: one weekly PR per production/development split.
+      dev-minor-patch:
+        dependency-type: "development"
+        update-types:
+          - "minor"
+          - "patch"
+      prod-minor-patch:
+        dependency-type: "production"
+        update-types:
+          - "minor"
+          - "patch"
 
-  # GitHub Actions
+  # GitHub Actions — majors stay ungrouped so action-setup-style footguns get an isolated PR.
   - package-ecosystem: "github-actions"
     directory: "/"
+    target-branch: "develop"
     schedule:
       interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    groups:
+      actions-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Python (uv/pip)
+  - package-ecosystem: "pip"
+    directory: "/"
     target-branch: "develop"
+    schedule:
+      interval: "weekly"
+      day: "monday"
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 5
+      semver-major-days: 14
+    groups:
+      python-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
