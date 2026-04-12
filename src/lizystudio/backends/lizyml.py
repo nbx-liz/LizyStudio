@@ -355,6 +355,12 @@ class LizyMLAdapter:
 # Tune / re-tune helpers (H-0061)
 # ---------------------------------------------------------------------------
 
+# Hard upper bounds act as a DoS guard: the frontend clamps n_rounds to 10
+# and n_trials implicitly via Search Space, but a direct API client could
+# otherwise request millions of trials and tie up the single-job queue.
+_MAX_RE_TUNE_ROUNDS = 20
+_MAX_RE_TUNE_TRIALS_PER_ROUND = 10_000
+
 
 def _parse_re_tune(
     re_tune: dict[str, Any] | None,
@@ -377,6 +383,10 @@ def _parse_re_tune(
     n_rounds = n_rounds_raw
     if n_rounds < 1:
         raise ValueError(f"re_tune.n_rounds must be >= 1, got {n_rounds}")
+    if n_rounds > _MAX_RE_TUNE_ROUNDS:
+        raise ValueError(
+            f"re_tune.n_rounds must be <= {_MAX_RE_TUNE_ROUNDS}, got {n_rounds}"
+        )
 
     extra_kwargs: dict[str, Any] = {}
     if "n_trials" in re_tune and re_tune["n_trials"] is not None:
@@ -388,14 +398,29 @@ def _parse_re_tune(
             )
         if n_trials_raw < 1:
             raise ValueError(f"re_tune.n_trials must be >= 1, got {n_trials_raw}")
+        if n_trials_raw > _MAX_RE_TUNE_TRIALS_PER_ROUND:
+            raise ValueError(
+                f"re_tune.n_trials must be <= {_MAX_RE_TUNE_TRIALS_PER_ROUND}, "
+                f"got {n_trials_raw}"
+            )
         extra_kwargs["n_trials"] = n_trials_raw
     if "expand_boundary" in re_tune and re_tune["expand_boundary"] is not None:
         extra_kwargs["expand_boundary"] = bool(re_tune["expand_boundary"])
     if "boundary_threshold" in re_tune and re_tune["boundary_threshold"] is not None:
-        threshold = float(re_tune["boundary_threshold"])
-        if not (0.0 <= threshold < 0.5):
+        threshold_raw = re_tune["boundary_threshold"]
+        # Same strict numeric check as n_rounds / n_trials (reject bool, str).
+        if isinstance(threshold_raw, bool) or not isinstance(
+            threshold_raw, (int, float)
+        ):
             raise ValueError(
-                f"re_tune.boundary_threshold must be in [0.0, 0.5), got {threshold}"
+                f"re_tune.boundary_threshold must be a number, got {threshold_raw!r}"
+            )
+        threshold = float(threshold_raw)
+        # lizyml 0.9.0 Model.tune enforces strict (0.0, 0.5); mirror that so
+        # errors surface here instead of deep inside lizyml.
+        if not (0.0 < threshold < 0.5):
+            raise ValueError(
+                f"re_tune.boundary_threshold must be in (0.0, 0.5), got {threshold}"
             )
         extra_kwargs["boundary_threshold"] = threshold
     return n_rounds, extra_kwargs
@@ -483,21 +508,44 @@ def _serialize_boundary_report(report: Any) -> dict[str, Any] | None:
     }
 
 
+def _search_dim_type_label(dim: Any) -> str:
+    """Map a lizyml ``SearchDim`` dataclass to a short type label.
+
+    lizyml 0.9.0 uses three concrete frozen dataclasses — FloatDim, IntDim,
+    CategoricalDim — and does not expose a ``type`` field.  Derive the
+    label from the class name so the UI can distinguish numeric dims
+    (with low/high/log) from categorical dims (with choices).
+    """
+    cls = type(dim).__name__
+    if cls == "FloatDim":
+        return "float"
+    if cls == "IntDim":
+        return "int"
+    if cls == "CategoricalDim":
+        return "categorical"
+    return cls.lower().removesuffix("dim") or "unknown"
+
+
 def _serialize_search_dim(dim: Any) -> dict[str, Any]:
     """Serialize a lizyml ``SearchDim`` into a plain dict.
 
     The snapshot captures just enough to render a Search Space Evolution
-    view — type/name/range — without pulling backend-specific objects
-    into Studio's common type boundary.
+    view — type, name, category, and the type-specific range — without
+    pulling backend-specific objects into Studio's common type boundary.
+    Missing attributes are omitted rather than emitted as ``None`` so
+    the UI can use ``"low" in dim`` to discriminate numeric vs categorical.
     """
     result: dict[str, Any] = {
         "name": getattr(dim, "name", None),
-        "type": getattr(dim, "type", None),
+        "type": _search_dim_type_label(dim),
+        "category": getattr(dim, "category", None),
     }
-    for attr in ("low", "high", "log", "step", "choices"):
+    # Numeric dims (FloatDim / IntDim) carry low/high/log.
+    for attr in ("low", "high", "log"):
         if hasattr(dim, attr):
-            value = getattr(dim, attr)
-            if attr == "choices" and value is not None:
-                value = list(value)
-            result[attr] = value
+            result[attr] = getattr(dim, attr)
+    # Categorical dims carry choices as a tuple; convert to list for JSON.
+    if hasattr(dim, "choices"):
+        choices = dim.choices
+        result["choices"] = list(choices) if choices is not None else None
     return result

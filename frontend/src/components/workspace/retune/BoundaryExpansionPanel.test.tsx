@@ -89,21 +89,19 @@ describe("BoundaryExpansionPanel", () => {
     expect(screen.getAllByText(/\u2014/).length).toBeGreaterThan(0);
   });
 
-  it("renders edge symbol for upper/lower/none/mid", () => {
+  it("renders edge symbol for upper/lower/none", () => {
     render(
       <BoundaryExpansionPanel
         report={makeReport([
           { ...baseDim, name: "a", edge: "upper", expanded: true },
           { ...baseDim, name: "b", edge: "lower", expanded: true },
           { ...baseDim, name: "c", edge: "none" },
-          { ...baseDim, name: "d", edge: "mid" },
         ])}
       />,
     );
     expect(screen.getByText("\u25b2")).toBeInTheDocument();
     expect(screen.getByText("\u25bc")).toBeInTheDocument();
-    // Both "none" and "mid" rows fall through to the dash glyph.
-    expect(screen.getAllByText("\u2013")).toHaveLength(2);
+    expect(screen.getByText("\u2013")).toBeInTheDocument();
   });
 
   it("renders categorical best_value as its string representation", () => {

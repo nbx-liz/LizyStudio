@@ -60,14 +60,18 @@ describe("ConvergenceSignalPanel", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("returns null when no expansion but improvement >= 0.001", () => {
-    const { container } = render(
-      <ConvergenceSignalPanel rounds={[roundNoExpansionButImproving]} />,
-    );
-    expect(container.firstChild).toBeNull();
+  it("renders a stabilising banner when no expansion but improvement >= 0.001", () => {
+    render(<ConvergenceSignalPanel rounds={[roundNoExpansionButImproving]} />);
+    expect(screen.getByText(/stabilising/i)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/search space converged/i),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /apply best params to fit/i }),
+    ).not.toBeInTheDocument();
   });
 
-  it("returns null when no expansion but score regressed significantly", () => {
+  it("renders a stabilising banner when no expansion but score regressed significantly", () => {
     // Uses Math.abs() so a regression of 0.1 is still >= 0.001 → not converged.
     const regressedRound: TuneRound = {
       round: 2,
@@ -76,10 +80,8 @@ describe("ConvergenceSignalPanel", () => {
       best_score_after: 0.8,
       expanded_dims: [],
     };
-    const { container } = render(
-      <ConvergenceSignalPanel rounds={[regressedRound]} />,
-    );
-    expect(container.firstChild).toBeNull();
+    render(<ConvergenceSignalPanel rounds={[regressedRound]} />);
+    expect(screen.getByText(/stabilising/i)).toBeInTheDocument();
   });
 
   it("uses last round for convergence decision", () => {

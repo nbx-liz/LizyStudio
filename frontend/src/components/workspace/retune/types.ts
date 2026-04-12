@@ -13,7 +13,8 @@ export interface BoundaryDimStatus {
   low: number | null;
   high: number | null;
   position_pct: number | null;
-  edge: "lower" | "upper" | "mid" | "none";
+  // lizyml 0.9.0 emits only "lower" | "upper" | "none"
+  edge: "lower" | "upper" | "none";
   expanded: boolean;
   new_low: number | null;
   new_high: number | null;

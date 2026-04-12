@@ -70,5 +70,23 @@ export function ConvergenceSignalPanel({
     );
   }
 
-  return null;
+  // Search space is stable (no expansion) but the score is still moving —
+  // treat as a soft "stabilising" signal rather than leaving the slot blank.
+  return (
+    <div
+      role="status"
+      className="flex items-start gap-3 rounded-md border bg-card p-3"
+    >
+      <span className="mt-0.5 text-muted-foreground" aria-hidden="true">
+        ·
+      </span>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-foreground">Stabilising</p>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          Search space is stable but the best score is still improving. Another
+          round may still pay off.
+        </p>
+      </div>
+    </div>
+  );
 }

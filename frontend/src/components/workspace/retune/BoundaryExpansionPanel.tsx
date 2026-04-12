@@ -20,6 +20,8 @@ function formatRange(low: number | null, high: number | null): string {
 }
 
 function edgeSymbol(dim: BoundaryDimStatus): string {
+  // lizyml 0.9.0 emits "lower" | "upper" | "none" — anything else
+  // (defensive) falls through to the neutral dash.
   if (dim.edge === "upper") return "\u25b2";
   if (dim.edge === "lower") return "\u25bc";
   return "\u2013";
