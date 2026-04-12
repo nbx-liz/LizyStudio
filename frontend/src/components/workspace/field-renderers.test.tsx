@@ -28,7 +28,7 @@ describe("renderField", () => {
   it("returns null for const properties", () => {
     const prop: SchemaProperty = { const: "fixed_value" };
     const { container } = renderNode(
-      <>{renderField(prop, "mode", ["mode"], undefined, noop, emptyDefs)}</>,
+      renderField(prop, "mode", ["mode"], undefined, noop, emptyDefs),
     );
     expect(container.innerHTML).toBe("");
   });
@@ -37,16 +37,14 @@ describe("renderField", () => {
   it('returns null for GLOBALLY_HIDDEN name "validation_ratio"', () => {
     const prop: SchemaProperty = { type: "number" };
     const { container } = renderNode(
-      <>
-        {renderField(
-          prop,
-          "validation_ratio",
-          ["validation_ratio"],
-          0.2,
-          noop,
-          emptyDefs,
-        )}
-      </>,
+      renderField(
+        prop,
+        "validation_ratio",
+        ["validation_ratio"],
+        0.2,
+        noop,
+        emptyDefs,
+      ),
     );
     expect(container.innerHTML).toBe("");
   });
@@ -54,16 +52,7 @@ describe("renderField", () => {
   it('returns null for GLOBALLY_HIDDEN name "inner_valid"', () => {
     const prop: SchemaProperty = { type: "boolean" };
     const { container } = renderNode(
-      <>
-        {renderField(
-          prop,
-          "inner_valid",
-          ["inner_valid"],
-          true,
-          noop,
-          emptyDefs,
-        )}
-      </>,
+      renderField(prop, "inner_valid", ["inner_valid"], true, noop, emptyDefs),
     );
     expect(container.innerHTML).toBe("");
   });
@@ -72,9 +61,7 @@ describe("renderField", () => {
   it("renders enum as Select with options", () => {
     const prop: SchemaProperty = { enum: ["gini", "entropy", "log_loss"] };
     renderNode(
-      <>
-        {renderField(prop, "criterion", ["criterion"], "gini", noop, emptyDefs)}
-      </>,
+      renderField(prop, "criterion", ["criterion"], "gini", noop, emptyDefs),
     );
     expect(screen.getByText("Criterion")).toBeInTheDocument();
     // The SelectTrigger should display the current value
@@ -85,9 +72,7 @@ describe("renderField", () => {
   it("renders boolean as Switch", () => {
     const prop: SchemaProperty = { type: "boolean", default: false };
     renderNode(
-      <>
-        {renderField(prop, "use_cache", ["use_cache"], true, noop, emptyDefs)}
-      </>,
+      renderField(prop, "use_cache", ["use_cache"], true, noop, emptyDefs),
     );
     expect(screen.getByText("Use Cache")).toBeInTheDocument();
     const switchEl = screen.getByRole("switch");
@@ -99,16 +84,14 @@ describe("renderField", () => {
   it("renders number with NumberInput", () => {
     const prop: SchemaProperty = { type: "number", default: 0.01 };
     renderNode(
-      <>
-        {renderField(
-          prop,
-          "learning_rate",
-          ["learning_rate"],
-          0.05,
-          noop,
-          emptyDefs,
-        )}
-      </>,
+      renderField(
+        prop,
+        "learning_rate",
+        ["learning_rate"],
+        0.05,
+        noop,
+        emptyDefs,
+      ),
     );
     expect(screen.getByText("Learning Rate")).toBeInTheDocument();
     // NumberInput renders Increment/Decrement buttons
@@ -125,16 +108,14 @@ describe("renderField", () => {
     const onChange = vi.fn();
     const prop: SchemaProperty = { type: "integer" };
     renderNode(
-      <>
-        {renderField(
-          prop,
-          "n_estimators",
-          ["n_estimators"],
-          100,
-          onChange,
-          emptyDefs,
-        )}
-      </>,
+      renderField(
+        prop,
+        "n_estimators",
+        ["n_estimators"],
+        100,
+        onChange,
+        emptyDefs,
+      ),
     );
     // Click increment: value should go from 100 to 101 (step=1)
     fireEvent.click(screen.getByRole("button", { name: "Increment" }));
@@ -145,16 +126,14 @@ describe("renderField", () => {
   it("renders string as text Input (fallback)", () => {
     const prop: SchemaProperty = { type: "string" };
     renderNode(
-      <>
-        {renderField(
-          prop,
-          "output_dir",
-          ["output_dir"],
-          "/tmp/out",
-          noop,
-          emptyDefs,
-        )}
-      </>,
+      renderField(
+        prop,
+        "output_dir",
+        ["output_dir"],
+        "/tmp/out",
+        noop,
+        emptyDefs,
+      ),
     );
     expect(screen.getByText("Output Dir")).toBeInTheDocument();
     const input = screen.getByDisplayValue("/tmp/out");
@@ -170,16 +149,14 @@ describe("renderField", () => {
       },
     };
     renderNode(
-      <>
-        {renderField(
-          prop,
-          "early_stopping",
-          ["early_stopping"],
-          { patience: 10 },
-          noop,
-          emptyDefs,
-        )}
-      </>,
+      renderField(
+        prop,
+        "early_stopping",
+        ["early_stopping"],
+        { patience: 10 },
+        noop,
+        emptyDefs,
+      ),
     );
     expect(screen.getByText("Early Stopping")).toBeInTheDocument();
     expect(screen.getByText("Patience")).toBeInTheDocument();
@@ -192,16 +169,7 @@ describe("renderField", () => {
       additionalProperties: true,
     };
     const { container } = renderNode(
-      <>
-        {renderField(
-          prop,
-          "extra_params",
-          ["extra_params"],
-          {},
-          noop,
-          emptyDefs,
-        )}
-      </>,
+      renderField(prop, "extra_params", ["extra_params"], {}, noop, emptyDefs),
     );
     expect(container.innerHTML).toBe("");
   });
@@ -210,16 +178,14 @@ describe("renderField", () => {
   it('humanize converts snake_case (e.g. "early_stopping" renders as "Early Stopping")', () => {
     const prop: SchemaProperty = { type: "string" };
     renderNode(
-      <>
-        {renderField(
-          prop,
-          "early_stopping",
-          ["early_stopping"],
-          "",
-          noop,
-          emptyDefs,
-        )}
-      </>,
+      renderField(
+        prop,
+        "early_stopping",
+        ["early_stopping"],
+        "",
+        noop,
+        emptyDefs,
+      ),
     );
     expect(screen.getByText("Early Stopping")).toBeInTheDocument();
   });
@@ -230,7 +196,7 @@ describe("renderField", () => {
       type: "number",
       title: "Learning Rate (alpha)",
     };
-    renderNode(<>{renderField(prop, "lr", ["lr"], 0.01, noop, emptyDefs)}</>);
+    renderNode(renderField(prop, "lr", ["lr"], 0.01, noop, emptyDefs));
     expect(screen.getByText("Learning Rate (alpha)")).toBeInTheDocument();
   });
 
@@ -244,16 +210,14 @@ describe("renderField", () => {
       },
     };
     renderNode(
-      <>
-        {renderField(
-          prop,
-          "early_stopping",
-          ["early_stopping"],
-          {},
-          noop,
-          emptyDefs,
-        )}
-      </>,
+      renderField(
+        prop,
+        "early_stopping",
+        ["early_stopping"],
+        {},
+        noop,
+        emptyDefs,
+      ),
     );
     // Should use humanized name, not the Config title
     expect(screen.getByText("Early Stopping")).toBeInTheDocument();
@@ -270,17 +234,15 @@ describe("renderBooleanField", () => {
   it("switch toggles onChange", () => {
     const onChange = vi.fn();
     renderNode(
-      <>
-        {renderBooleanField(
-          "verbose",
-          "Verbose",
-          undefined,
-          ["verbose"],
-          false,
-          false,
-          onChange,
-        )}
-      </>,
+      renderBooleanField(
+        "verbose",
+        "Verbose",
+        undefined,
+        ["verbose"],
+        false,
+        false,
+        onChange,
+      ),
     );
     const switchEl = screen.getByRole("switch");
     expect(switchEl).not.toBeChecked();
@@ -298,18 +260,16 @@ describe("renderEnumField", () => {
   it("selecting value calls onChange", () => {
     const onChange = vi.fn();
     renderNode(
-      <>
-        {renderEnumField(
-          "solver",
-          "Solver",
-          undefined,
-          ["lbfgs", "sgd", "adam"],
-          ["solver"],
-          "lbfgs",
-          "lbfgs",
-          onChange,
-        )}
-      </>,
+      renderEnumField(
+        "solver",
+        "Solver",
+        undefined,
+        ["lbfgs", "sgd", "adam"],
+        ["solver"],
+        "lbfgs",
+        "lbfgs",
+        onChange,
+      ),
     );
     expect(screen.getByText("Solver")).toBeInTheDocument();
     // Verify trigger shows current value
@@ -330,17 +290,15 @@ describe("renderNumberField", () => {
       maximum: 1,
     };
     renderNode(
-      <>
-        {renderNumberField(
-          "threshold",
-          "Threshold",
-          "Decision threshold",
-          prop,
-          ["threshold"],
-          0.5,
-          noop,
-        )}
-      </>,
+      renderNumberField(
+        "threshold",
+        "Threshold",
+        "Decision threshold",
+        prop,
+        ["threshold"],
+        0.5,
+        noop,
+      ),
     );
     expect(screen.getByText("Threshold")).toBeInTheDocument();
     expect(screen.getByText("0~1")).toBeInTheDocument();
@@ -352,17 +310,15 @@ describe("renderNumberField", () => {
       type: "number",
     };
     renderNode(
-      <>
-        {renderNumberField(
-          "alpha",
-          "Alpha",
-          undefined,
-          prop,
-          ["alpha"],
-          0.5,
-          noop,
-        )}
-      </>,
+      renderNumberField(
+        "alpha",
+        "Alpha",
+        undefined,
+        prop,
+        ["alpha"],
+        0.5,
+        noop,
+      ),
     );
     expect(screen.getByText("Alpha")).toBeInTheDocument();
     expect(screen.queryByText(/~$/)).not.toBeInTheDocument();
@@ -377,17 +333,15 @@ describe("renderNumberField", () => {
       maximum: 10,
     };
     renderNode(
-      <>
-        {renderNumberField(
-          "depth",
-          "Depth",
-          undefined,
-          prop,
-          ["depth"],
-          5,
-          onChange,
-        )}
-      </>,
+      renderNumberField(
+        "depth",
+        "Depth",
+        undefined,
+        prop,
+        ["depth"],
+        5,
+        onChange,
+      ),
     );
     expect(screen.getByText("1~10")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Increment" }));
@@ -406,9 +360,7 @@ describe("renderField — array fields", () => {
       items: { type: "string" },
     };
     renderNode(
-      <>
-        {renderField(prop, "tags", ["tags"], ["a", "b", "c"], noop, emptyDefs)}
-      </>,
+      renderField(prop, "tags", ["tags"], ["a", "b", "c"], noop, emptyDefs),
     );
     expect(screen.getByText("Tags")).toBeInTheDocument();
     expect(screen.getByDisplayValue("a, b, c")).toBeInTheDocument();
@@ -420,9 +372,7 @@ describe("renderField — array fields", () => {
       type: "array",
       items: { type: "string" },
     };
-    renderNode(
-      <>{renderField(prop, "tags", ["tags"], ["a"], onChange, emptyDefs)}</>,
-    );
+    renderNode(renderField(prop, "tags", ["tags"], ["a"], onChange, emptyDefs));
     const input = screen.getByDisplayValue("a");
     fireEvent.change(input, { target: { value: "x, y, z" } });
     expect(onChange).toHaveBeenCalledWith(["tags"], ["x", "y", "z"]);
@@ -440,16 +390,14 @@ describe("renderField — array fields", () => {
       },
     };
     renderNode(
-      <>
-        {renderField(
-          prop,
-          "items",
-          ["items"],
-          [{ name: "foo", value: 42 }],
-          noop,
-          emptyDefs,
-        )}
-      </>,
+      renderField(
+        prop,
+        "items",
+        ["items"],
+        [{ name: "foo", value: 42 }],
+        noop,
+        emptyDefs,
+      ),
     );
     expect(screen.getByText("Items")).toBeInTheDocument();
     expect(screen.getByText("Item 1")).toBeInTheDocument();
@@ -468,9 +416,7 @@ describe("renderField — array fields", () => {
         },
       },
     };
-    renderNode(
-      <>{renderField(prop, "list", ["list"], [], onChange, emptyDefs)}</>,
-    );
+    renderNode(renderField(prop, "list", ["list"], [], onChange, emptyDefs));
     fireEvent.click(screen.getByText("+ Add item"));
     expect(onChange).toHaveBeenCalledWith(["list"], [{ name: "new" }]);
   });
@@ -487,16 +433,14 @@ describe("renderField — array fields", () => {
       },
     };
     renderNode(
-      <>
-        {renderField(
-          prop,
-          "list",
-          ["list"],
-          [{ name: "a" }, { name: "b" }],
-          onChange,
-          emptyDefs,
-        )}
-      </>,
+      renderField(
+        prop,
+        "list",
+        ["list"],
+        [{ name: "a" }, { name: "b" }],
+        onChange,
+        emptyDefs,
+      ),
     );
     const removeButtons = screen.getAllByText("Remove");
     fireEvent.click(removeButtons[0]);
@@ -509,9 +453,7 @@ describe("renderField — array fields", () => {
       items: { type: "string" },
       default: ["default1", "default2"],
     };
-    renderNode(
-      <>{renderField(prop, "arr", ["arr"], undefined, noop, emptyDefs)}</>,
-    );
+    renderNode(renderField(prop, "arr", ["arr"], undefined, noop, emptyDefs));
     expect(screen.getByDisplayValue("default1, default2")).toBeInTheDocument();
   });
 });
@@ -530,16 +472,14 @@ describe("renderField — object fields", () => {
       },
     };
     renderNode(
-      <>
-        {renderField(
-          prop,
-          "retry_config",
-          ["retry_config"],
-          { enabled: true, timeout: 30 },
-          noop,
-          emptyDefs,
-        )}
-      </>,
+      renderField(
+        prop,
+        "retry_config",
+        ["retry_config"],
+        { enabled: true, timeout: 30 },
+        noop,
+        emptyDefs,
+      ),
     );
     expect(screen.getByText("Retry Config")).toBeInTheDocument();
     expect(screen.getByText("Enabled")).toBeInTheDocument();
@@ -554,7 +494,7 @@ describe("renderField — object fields", () => {
       },
     };
     const { container } = renderNode(
-      <>{renderField(prop, "obj", ["obj"], {}, noop, emptyDefs)}</>,
+      renderField(prop, "obj", ["obj"], {}, noop, emptyDefs),
     );
     expect(container.innerHTML).toBe("");
   });
@@ -567,7 +507,7 @@ describe("renderField — object fields", () => {
         key1: { type: "string" },
       },
     };
-    renderNode(<>{renderField(prop, "obj", ["obj"], null, noop, emptyDefs)}</>);
+    renderNode(renderField(prop, "obj", ["obj"], null, noop, emptyDefs));
     expect(screen.getByDisplayValue("val1")).toBeInTheDocument();
   });
 });
@@ -580,17 +520,7 @@ describe("renderField — max depth", () => {
   it("renders JSON textarea at MAX_DEPTH", () => {
     const prop: SchemaProperty = { type: "object", properties: {} };
     renderNode(
-      <>
-        {renderField(
-          prop,
-          "deep",
-          ["deep"],
-          { nested: true },
-          noop,
-          emptyDefs,
-          5,
-        )}
-      </>,
+      renderField(prop, "deep", ["deep"], { nested: true }, noop, emptyDefs, 5),
     );
     // At max depth, it renders a textarea fallback
     const textarea = screen.getByRole("textbox");
@@ -602,9 +532,7 @@ describe("renderField — max depth", () => {
     const onChange = vi.fn();
     const prop: SchemaProperty = { type: "string" };
     renderNode(
-      <>
-        {renderField(prop, "deep", ["deep"], { a: 1 }, onChange, emptyDefs, 5)}
-      </>,
+      renderField(prop, "deep", ["deep"], { a: 1 }, onChange, emptyDefs, 5),
     );
     const textarea = screen.getByRole("textbox");
     fireEvent.change(textarea, { target: { value: '{"b":2}' } });
@@ -615,9 +543,7 @@ describe("renderField — max depth", () => {
     const onChange = vi.fn();
     const prop: SchemaProperty = { type: "string" };
     renderNode(
-      <>
-        {renderField(prop, "deep", ["deep"], undefined, onChange, emptyDefs, 5)}
-      </>,
+      renderField(prop, "deep", ["deep"], undefined, onChange, emptyDefs, 5),
     );
     const textarea = screen.getByRole("textbox");
     fireEvent.change(textarea, { target: { value: "not json" } });
@@ -654,16 +580,14 @@ describe("renderField — discriminated union", () => {
       ],
     };
     renderNode(
-      <>
-        {renderField(
-          prop,
-          "strategy",
-          ["strategy"],
-          { mode: "a", value_a: 10 },
-          noop,
-          emptyDefs,
-        )}
-      </>,
+      renderField(
+        prop,
+        "strategy",
+        ["strategy"],
+        { mode: "a", value_a: 10 },
+        noop,
+        emptyDefs,
+      ),
     );
     expect(screen.getByText("Strategy")).toBeInTheDocument();
   });
@@ -679,9 +603,7 @@ describe("renderField — $ref resolution", () => {
       MyEnum: { enum: ["fast", "slow"], type: "string" },
     };
     const prop: SchemaProperty = { $ref: "#/$defs/MyEnum" };
-    renderNode(
-      <>{renderField(prop, "speed", ["speed"], "fast", noop, defs)}</>,
-    );
+    renderNode(renderField(prop, "speed", ["speed"], "fast", noop, defs));
     expect(screen.getByText("Speed")).toBeInTheDocument();
     expect(screen.getByText("fast")).toBeInTheDocument();
   });
@@ -696,7 +618,7 @@ describe("renderField — string fallback onChange", () => {
     const onChange = vi.fn();
     const prop: SchemaProperty = { type: "string" };
     renderNode(
-      <>{renderField(prop, "tag", ["tag"], "initial", onChange, emptyDefs)}</>,
+      renderField(prop, "tag", ["tag"], "initial", onChange, emptyDefs),
     );
     const input = screen.getByDisplayValue("initial");
     fireEvent.change(input, { target: { value: "updated" } });
@@ -705,9 +627,7 @@ describe("renderField — string fallback onChange", () => {
 
   it("string fallback uses defaultValue when value is undefined", () => {
     const prop: SchemaProperty = { type: "string", default: "default_val" };
-    renderNode(
-      <>{renderField(prop, "name", ["name"], undefined, noop, emptyDefs)}</>,
-    );
+    renderNode(renderField(prop, "name", ["name"], undefined, noop, emptyDefs));
     expect(screen.getByDisplayValue("default_val")).toBeInTheDocument();
   });
 });
@@ -722,18 +642,16 @@ describe("renderEnumField — onValueChange", () => {
     // Render in a way that triggers the onValueChange handler directly
     // by calling renderEnumField and simulating a select change
     renderNode(
-      <>
-        {renderEnumField(
-          "criterion",
-          "Criterion",
-          undefined,
-          ["gini", "entropy", "log_loss"],
-          ["criterion"],
-          "gini",
-          "gini",
-          onChange,
-        )}
-      </>,
+      renderEnumField(
+        "criterion",
+        "Criterion",
+        undefined,
+        ["gini", "entropy", "log_loss"],
+        ["criterion"],
+        "gini",
+        "gini",
+        onChange,
+      ),
     );
 
     // The select trigger is present; verify onChange is wired by checking
@@ -744,18 +662,16 @@ describe("renderEnumField — onValueChange", () => {
 
   it("uses defaultValue when value is undefined", () => {
     renderNode(
-      <>
-        {renderEnumField(
-          "solver",
-          "Solver",
-          "Choose solver",
-          ["lbfgs", "sgd"],
-          ["solver"],
-          undefined,
-          "lbfgs",
-          noop,
-        )}
-      </>,
+      renderEnumField(
+        "solver",
+        "Solver",
+        "Choose solver",
+        ["lbfgs", "sgd"],
+        ["solver"],
+        undefined,
+        "lbfgs",
+        noop,
+      ),
     );
     // defaultValue "lbfgs" should be shown
     expect(screen.getByText("lbfgs")).toBeInTheDocument();
@@ -791,16 +707,14 @@ describe("renderField — discriminated union onValueChange", () => {
     };
     const onChange = vi.fn();
     renderNode(
-      <>
-        {renderField(
-          prop,
-          "layout",
-          ["layout"],
-          { mode: "flat" },
-          onChange,
-          emptyDefs,
-        )}
-      </>,
+      renderField(
+        prop,
+        "layout",
+        ["layout"],
+        { mode: "flat" },
+        onChange,
+        emptyDefs,
+      ),
     );
     // The select trigger should show the active alternative title
     expect(screen.getByText("Layout")).toBeInTheDocument();
@@ -830,16 +744,14 @@ describe("renderField — discriminated union onValueChange", () => {
       ],
     };
     renderNode(
-      <>
-        {renderField(
-          prop,
-          "config_mode",
-          ["config_mode"],
-          { mode: "simple" },
-          noop,
-          emptyDefs,
-        )}
-      </>,
+      renderField(
+        prop,
+        "config_mode",
+        ["config_mode"],
+        { mode: "simple" },
+        noop,
+        emptyDefs,
+      ),
     );
     expect(screen.getByText("Config Mode")).toBeInTheDocument();
     expect(screen.getByText("Simple")).toBeInTheDocument();
