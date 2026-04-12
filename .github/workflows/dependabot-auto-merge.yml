@@ -1,0 +1,31 @@
+name: Dependabot auto-merge
+
+# Enables "merge when ready" on dependabot PRs so they flow through the
+# required merge queue. Without this, the queue rejects dependabot's
+# direct-merge attempts and PRs pile up.
+#
+# Only minor/patch updates are auto-merged. Majors stay open for human
+# review (pnpm/action-setup v5→v6 class of footguns).
+
+on:
+  pull_request_target:
+    branches: [develop]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  dependabot:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+      - name: Enable auto-merge for minor/patch updates
+        if: steps.meta.outputs.update-type == 'version-update:semver-minor' || steps.meta.outputs.update-type == 'version-update:semver-patch'
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
