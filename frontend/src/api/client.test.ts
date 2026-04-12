@@ -1,13 +1,9 @@
 import { HttpResponse, http } from "msw";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { server } from "../test/mocks/server";
 import { ApiError, apiFetch } from "./client";
 
 describe("apiFetch", () => {
-  beforeAll(() => server.listen({ onUnhandledRequest: "bypass" }));
-  afterEach(() => server.resetHandlers());
-  afterAll(() => server.close());
-
   it("makes a GET request and parses JSON response", async () => {
     server.use(
       http.get("/api/test-endpoint", () =>
