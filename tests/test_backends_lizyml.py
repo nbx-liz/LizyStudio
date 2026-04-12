@@ -289,6 +289,285 @@ def test_tune_no_progress_callback_skips_bridge() -> None:
     mock_model.tune.assert_called_once_with(progress_callback=None)
 
 
+# --- re-tune (H-0061) ---
+
+
+def _fake_lizyml_tuning_result(
+    best_score: float = 0.9,
+    rounds: Any = None,
+    boundary_report: Any = None,
+    trials: list[Any] | None = None,
+) -> MagicMock:
+    """Build a MagicMock that mimics a lizyml TuningResult."""
+    result = MagicMock()
+    result.best_params = {"lr": 0.1}
+    result.best_score = best_score
+    result.trials = trials if trials is not None else []
+    result.metric_name = "auc"
+    result.direction = "maximize"
+    result.rounds = rounds
+    result.boundary_report = boundary_report
+    return result
+
+
+def _make_round(
+    round_no: int,
+    *,
+    n_trials: int = 10,
+    best_before: float | None = None,
+    best_after: float = 0.85,
+    expanded: tuple[str, ...] = (),
+    space: tuple[Any, ...] = (),
+) -> MagicMock:
+    r = MagicMock()
+    r.round = round_no
+    r.n_trials = n_trials
+    r.best_score_before = best_before
+    r.best_score_after = best_after
+    r.expanded_dims = expanded
+    r.space_snapshot = space
+    return r
+
+
+def test_tune_re_tune_runs_multi_round_loop() -> None:
+    """re_tune.n_rounds=3 triggers three calls to model.tune()."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    adapter.tune(mock_model, re_tune={"n_rounds": 3})
+
+    assert mock_model.tune.call_count == 3
+    # Round 1 — no resume
+    first_kwargs = mock_model.tune.call_args_list[0].kwargs
+    assert "resume" not in first_kwargs
+    # Rounds 2 and 3 — resume=True
+    for call in mock_model.tune.call_args_list[1:]:
+        assert call.kwargs["resume"] is True
+
+
+def test_tune_re_tune_forwards_expand_and_threshold_kwargs() -> None:
+    """expand_boundary / boundary_threshold are passed to rounds 2..N only."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    adapter.tune(
+        mock_model,
+        re_tune={
+            "n_rounds": 2,
+            "expand_boundary": True,
+            "boundary_threshold": 0.1,
+            "n_trials": 20,
+        },
+    )
+
+    first = mock_model.tune.call_args_list[0].kwargs
+    second = mock_model.tune.call_args_list[1].kwargs
+    # First round does not receive resume kwargs
+    assert "resume" not in first
+    assert "expand_boundary" not in first
+    # Second round receives resume + expand kwargs
+    assert second["resume"] is True
+    assert second["expand_boundary"] is True
+    assert second["boundary_threshold"] == 0.1
+    assert second["n_trials"] == 20
+
+
+def test_tune_re_tune_n_rounds_1_matches_legacy_call() -> None:
+    """re_tune.n_rounds=1 is equivalent to legacy tune (single call)."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    adapter.tune(mock_model, re_tune={"n_rounds": 1})
+    mock_model.tune.assert_called_once()
+    assert "resume" not in mock_model.tune.call_args.kwargs
+
+
+@pytest.mark.parametrize("bad", [0, -1, "abc", 1.5, True, False])
+def test_tune_re_tune_invalid_n_rounds_raises(bad: Any) -> None:
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+    with pytest.raises(ValueError, match="n_rounds"):
+        adapter.tune(mock_model, re_tune={"n_rounds": bad})
+
+
+@pytest.mark.parametrize("bad", [0, -1, "abc", 1.5, True, False])
+def test_tune_re_tune_invalid_n_trials_raises(bad: Any) -> None:
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+    with pytest.raises(ValueError, match="n_trials"):
+        adapter.tune(mock_model, re_tune={"n_rounds": 2, "n_trials": bad})
+
+
+def test_tune_re_tune_invalid_threshold_raises() -> None:
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+    with pytest.raises(ValueError, match="boundary_threshold"):
+        adapter.tune(
+            mock_model,
+            re_tune={"n_rounds": 2, "boundary_threshold": 0.9},
+        )
+
+
+def test_tune_serializes_rounds_and_boundary_report() -> None:
+    """When lizyml returns rounds/boundary_report, they appear in the summary."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+
+    r1 = _make_round(1, n_trials=30, best_before=None, best_after=0.85, expanded=())
+    r2 = _make_round(
+        2, n_trials=20, best_before=0.85, best_after=0.87, expanded=("lr",)
+    )
+    dim = MagicMock(
+        name="lr",
+        best_value=0.03,
+        low=0.001,
+        high=0.1,
+        position_pct=0.25,
+        edge="none",
+        expanded=False,
+        new_low=None,
+        new_high=None,
+    )
+    # Override the automatic .name attribute from MagicMock(name=...)
+    dim.name = "lr"
+    report = MagicMock()
+    report.dims = (dim,)
+    report.expanded_names = ("lr",)
+
+    trial = MagicMock()
+    trial.number = 0
+    trial.params = {"lr": 0.03}
+    trial.score = 0.87
+    trial.state = "complete"
+    trial.round = 2
+
+    mock_model.tune.return_value = _fake_lizyml_tuning_result(
+        best_score=0.87,
+        rounds=(r1, r2),
+        boundary_report=report,
+        trials=[trial],
+    )
+
+    summary = adapter.tune(mock_model, re_tune={"n_rounds": 2})
+
+    assert summary.rounds is not None
+    assert len(summary.rounds) == 2
+    assert summary.rounds[0]["round"] == 1
+    assert summary.rounds[0]["best_score_before"] is None
+    assert summary.rounds[1]["expanded_dims"] == ["lr"]
+
+    assert summary.boundary_report is not None
+    assert summary.boundary_report["expanded_names"] == ["lr"]
+    assert len(summary.boundary_report["dims"]) == 1
+    assert summary.boundary_report["dims"][0]["name"] == "lr"
+
+    assert summary.trials[0]["round"] == 2
+
+
+def test_tune_legacy_single_round_leaves_rounds_none() -> None:
+    """Legacy single-round tune leaves rounds/boundary_report as None."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result(
+        rounds=None,
+        boundary_report=None,
+    )
+
+    summary = adapter.tune(mock_model)
+    assert summary.rounds is None
+    assert summary.boundary_report is None
+
+
+def test_tune_pruned_trial_with_none_score_does_not_crash() -> None:
+    """Optuna PRUNED/FAIL trials carry score=None; serialization must preserve it."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+
+    pruned = MagicMock()
+    pruned.number = 0
+    pruned.params = {"lr": 0.01}
+    pruned.score = None
+    pruned.state = "pruned"
+    pruned.round = 1
+
+    mock_model.tune.return_value = _fake_lizyml_tuning_result(trials=[pruned])
+
+    summary = adapter.tune(mock_model)
+    assert summary.trials[0]["score"] is None
+    assert summary.trials[0]["state"] == "pruned"
+
+
+def test_tune_boundary_report_edge_none_preserved_as_none() -> None:
+    """Edge value None is preserved, not coerced to the literal string 'None'."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+
+    dim = MagicMock()
+    dim.name = "param_a"
+    dim.best_value = 0.5
+    dim.low = 0.0
+    dim.high = 1.0
+    dim.position_pct = 0.5
+    dim.edge = None
+    dim.expanded = False
+    dim.new_low = None
+    dim.new_high = None
+
+    report = MagicMock()
+    report.dims = (dim,)
+    report.expanded_names = ()
+
+    mock_model.tune.return_value = _fake_lizyml_tuning_result(
+        boundary_report=report,
+    )
+
+    summary = adapter.tune(mock_model)
+    assert summary.boundary_report is not None
+    assert summary.boundary_report["dims"][0]["edge"] is None
+
+
+def test_tune_re_tune_progress_emits_round_field() -> None:
+    """Progress callbacks from multi-round tune carry round metadata."""
+    adapter = LizyMLAdapter()
+
+    trial_calls: list[dict[str, Any]] = []
+
+    def _progress(*, current: int, total: int, message: str, **extra: Any) -> None:
+        trial_calls.append({"current": current, "total": total, **extra})
+
+    # Fake model.tune emits progress_callback invocations
+    def fake_tune(*, progress_callback: Any = None, **_: Any) -> Any:
+        if progress_callback is not None:
+            info = MagicMock()
+            info.current_trial = 1
+            info.total_trials = 5
+            info.best_score = 0.8
+            info.latest_score = 0.8
+            info.latest_state = "complete"
+            progress_callback(info)
+        return _fake_lizyml_tuning_result()
+
+    mock_model = MagicMock()
+    mock_model.tune = fake_tune
+
+    adapter.tune(
+        mock_model,
+        on_progress=_progress,
+        re_tune={"n_rounds": 2},
+    )
+
+    # At least one trial callback from each round should carry round=1/2
+    round_values = {c.get("round") for c in trial_calls if "round" in c}
+    assert 1 in round_values
+    assert 2 in round_values
+
+
 def test_model_info_returns_target() -> None:
     adapter = LizyMLAdapter()
     model = _make_mock_model(task="binary", target="price")

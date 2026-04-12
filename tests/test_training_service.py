@@ -15,6 +15,7 @@ from lizystudio.backends.types import (
 )
 from lizystudio.services.jobs import JobStore
 from lizystudio.services.training import (
+    _extract_re_tune,
     _prepare_autofit_config,
     _prepare_tune_config,
     run_fit,
@@ -596,3 +597,105 @@ def test_concurrent_tune_blocked(
     assert "Another job is already running" in (result.error or "")
 
     job_store.release_active("existing_job")
+
+
+# ---------------------------------------------------------------------------
+# _extract_re_tune + run_tune re_tune pass-through (H-0061)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractReTune:
+    def test_returns_none_when_no_tuning_section(self) -> None:
+        assert _extract_re_tune({"task": "binary"}) is None
+
+    def test_returns_none_when_tuning_has_no_re_tune(self) -> None:
+        assert _extract_re_tune({"tuning": {"optuna": {}}}) is None
+
+    def test_returns_shallow_copy_of_re_tune_block(self) -> None:
+        config = {
+            "tuning": {
+                "re_tune": {
+                    "n_rounds": 3,
+                    "expand_boundary": True,
+                    "boundary_threshold": 0.05,
+                }
+            }
+        }
+        result = _extract_re_tune(config)
+        assert result == {
+            "n_rounds": 3,
+            "expand_boundary": True,
+            "boundary_threshold": 0.05,
+        }
+        assert result is not None
+        result["n_rounds"] = 999
+        assert config["tuning"]["re_tune"]["n_rounds"] == 3
+
+    def test_non_dict_re_tune_yields_none(self) -> None:
+        assert _extract_re_tune({"tuning": {"re_tune": "bad"}}) is None
+
+
+def test_run_tune_forwards_re_tune_to_backend(
+    job_store: JobStore,
+    sample_data_ref: DataRef,
+    sample_df: pd.DataFrame,
+    mock_backend: MagicMock,
+) -> None:
+    config = {
+        "task": "binary",
+        "model": {"name": "lgbm", "params": {}},
+        "tuning": {
+            "re_tune": {
+                "n_rounds": 3,
+                "expand_boundary": True,
+                "boundary_threshold": 0.1,
+            }
+        },
+    }
+    job = job_store.create(
+        backend_name="lizyml",
+        config=config,
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )
+    run_tune(
+        job=job,
+        job_store=job_store,
+        backend=mock_backend,
+        config=config,
+        dataframe=sample_df,
+    )
+    mock_backend.tune.assert_called_once()
+    call_kwargs = mock_backend.tune.call_args.kwargs
+    assert call_kwargs["re_tune"] == {
+        "n_rounds": 3,
+        "expand_boundary": True,
+        "boundary_threshold": 0.1,
+    }
+
+
+def test_run_tune_without_re_tune_passes_none(
+    job_store: JobStore,
+    sample_data_ref: DataRef,
+    sample_df: pd.DataFrame,
+    mock_backend: MagicMock,
+) -> None:
+    config = {
+        "task": "binary",
+        "model": {"name": "lgbm", "params": {}},
+    }
+    job = job_store.create(
+        backend_name="lizyml",
+        config=config,
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )
+    run_tune(
+        job=job,
+        job_store=job_store,
+        backend=mock_backend,
+        config=config,
+        dataframe=sample_df,
+    )
+    mock_backend.tune.assert_called_once()
+    assert mock_backend.tune.call_args.kwargs["re_tune"] is None
