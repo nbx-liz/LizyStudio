@@ -1,8 +1,13 @@
-name: CI
+name: Nightly
+
+# Runs the full check suite against develop every night so transitive
+# breakage (e.g. a dependency combination that only fails when multiple
+# dependabot PRs are merged) is caught without waiting for the next PR.
 
 on:
-  pull_request:
-    branches: [main, develop]
+  schedule:
+    - cron: "0 17 * * *" # 02:00 JST
+  workflow_dispatch:
 
 jobs:
   backend:
@@ -12,6 +17,8 @@ jobs:
         python-version: ["3.10", "3.11"]
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: develop
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
@@ -28,6 +35,8 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: develop
       - uses: actions/setup-node@v6
         with:
           node-version: "20"

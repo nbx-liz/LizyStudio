@@ -1,5 +1,5 @@
-allowBuilds:
-  "@swc/core": true
-  "es5-ext": true
-  esbuild: true
-  msw: true
+onlyBuiltDependencies:
+  - "@swc/core"
+  - "es5-ext"
+  - esbuild
+  - msw
