@@ -1453,3 +1453,44 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
 - **Alternatives:** なし
 - **Acceptance Criteria:** BLUEPRINT に Undo/Redo/Preset 仕様と Execution Log 表示方式が記載されている
 - **Decision:** 2026-04-07 accepted — 実装追認
+
+---
+
+### H-0061: Re-tune Dashboard — Round History / Boundary Expansion / Convergence Signal の可視化（Phase A）
+- **Status:** accepted
+- **Scope:** API | Frontend | Backend | Adapter
+- **Related:** BLUEPRINT.md §3.3.1 (TuningSummary), §4.2.2 (Tune Tab), §5.2 (Workspace API), Issue #59, LizyML H-0068 (re-tune + boundary expansion), LizyML-Widget P-027/P-028
+- **Context:** LizyML 0.9.0 で H-0068 が `Model.tune(resume, n_trials, expand_boundary, boundary_threshold)` を追加し、追加ラウンド実行時に Optuna study を継続し搜索空間を動的に拡張する機能をリリースした。LizyStudio 側ではこの機能がまだ GUI から利用できない。Issue #59 は Round History / Search Space Evolution / Convergence Signal / Boundary Detail の4ビューを要求している。
+
+  Studio の既存ジョブ実行モデルは「1 Tune Job = 1 Model インスタンス → 完了時に Model 破棄・TuningSummary のみ永続化」で、別ジョブから Optuna study を引き継ぐ真の "resume from previous job" は Model pickle 化 + Job lineage という大きな変更を要する。段階的アプローチとして、Phase A（本提案）では **単一ジョブ内の multi-round 実行** を導入し、Phase B（将来別 Proposal）で真の Job 間 resume を追加する。
+- **Proposal:**
+  1. **共通型拡張** ([backends/types.py](src/lizystudio/backends/types.py)): `TuningSummary` に以下を追記（いずれも optional, None デフォルトで後方互換）:
+     - `rounds: list[dict] | None` — 各ラウンドの n_trials / best_score_before / best_score_after / expanded_dims / space_snapshot
+     - `boundary_report: dict | None` — 最終ラウンド後の BoundaryReport（per-dim: best_value / position_pct / edge / expanded / new_low / new_high）
+  2. **Adapter 拡張** ([backends/lizyml.py](src/lizystudio/backends/lizyml.py)): `LizyMLAdapter.tune()` に `re_tune` パラメータを受け取るオプションを追加。`re_tune={"n_rounds": int, "expand_boundary": bool, "boundary_threshold": float}` が与えられた場合、`model.tune(n_trials=...)` → `model.tune(resume=True, n_trials=..., expand_boundary=..., boundary_threshold=...)` を n_rounds 回ループ実行し、lizyml の `TuningResult.rounds` / `boundary_report` を Studio `TuningSummary` にシリアライズする。
+  3. **API 拡張** ([api/workspace.py](src/lizystudio/api/workspace.py), [api/models.py](src/lizystudio/api/models.py)): `POST /api/workspace/tune` のリクエストボディ（Config JSON 経由）に `tuning.re_tune: {n_rounds, expand_boundary, boundary_threshold} | None` を許容する。既存呼び出しは影響を受けない。
+  4. **UI 新設** ([frontend/src/components/workspace/](frontend/src/components/workspace/)): 以下の新規コンポーネントを追加し、既存 Tune 結果画面 ([TuneTrialsSection.tsx](frontend/src/components/workspace/TuneTrialsSection.tsx)) に統合する:
+     - `RoundHistoryTable.tsx` — rounds 配列を表示する shadcn/ui Table
+     - `BoundaryExpansionPanel.tsx` — boundary_report を per-dim 表示（LizyML-Widget 実装を参考に shadcn/ui で再実装）
+     - `ConvergenceSignalPanel.tsx` — 最終ラウンドの expanded_dims が空かつ improvement < 閾値 のとき「Fit に進む」を推奨するバナー
+     - `TuneTab.tsx` の Accordion に Re-tune 設定セクション（n_rounds / expand_boundary / boundary_threshold 入力）
+  5. **依存バージョン**: `pyproject.toml` の lizyml pin を `>=0.7.0,<0.10.0` → `>=0.9.0,<0.10.0` に引き上げる。
+- **Impact:**
+  - Backend: [backends/types.py](src/lizystudio/backends/types.py), [backends/lizyml.py](src/lizystudio/backends/lizyml.py), [backends/base.py](src/lizystudio/backends/base.py) (Protocol doc 更新), [api/models.py](src/lizystudio/api/models.py), [api/workspace.py](src/lizystudio/api/workspace.py), [services/training.py](src/lizystudio/services/training.py) (re_tune 引数パススルー)
+  - Frontend: [TuneTab.tsx](frontend/src/components/workspace/TuneTab.tsx), [TuneTrialsSection.tsx](frontend/src/components/workspace/TuneTrialsSection.tsx), [ResultsCompletedView.tsx](frontend/src/components/workspace/ResultsCompletedView.tsx), 新規 retune/ ディレクトリ 4 コンポーネント, `frontend/src/api/types.ts` (自動生成)
+  - Docs: BLUEPRINT.md §3.3.1 TuningSummary フィールド追記, §4.2.2 Tune Tab UI 追記
+  - Version: pyproject.toml lizyml pin
+- **Compatibility:** 非破壊的。追加フィールドは all optional（None デフォルト）。既存の Tune Job / 古い TuningSummary JSON は `rounds=None, boundary_report=None` として読み込まれる。`re_tune` 未指定時は従来の単一ラウンド tune として振る舞う。
+- **Alternatives:**
+  - **C1: Model pickle + Job lineage** — 別ジョブから前ジョブの Model を復元して `tune(resume=True)` 実行。Issue #59 の "[Re-tune (+N trials)]" ボタンを事後操作として実現できる。ただし pickle バージョン整合性・subprocess 実行モード・Job 親子関係の lifecycle・並行制御など実装コストが大きく、MVP として重すぎる。Phase B で別 Proposal として提案予定。
+  - **C2: In-memory model registry** — Studio プロセス内に `dict[job_id, Model]` を保持。プロセス再起動で消失・subprocess 非互換。除外。
+  - **弱い resume (best_params を initial_params として引き継ぐ)** — Optuna study は継続しないので H-0068 の核心（boundary expansion）を活かせない。採用せず。
+- **Acceptance Criteria:**
+  1. `POST /api/workspace/tune` に `tuning.re_tune={n_rounds: 3, expand_boundary: true, boundary_threshold: 0.05}` を含む Config を送信すると、lizyml の multi-round 実行が走り、`TuningSummary.rounds` が長さ 3 のリストで返る
+  2. `TuningSummary.boundary_report` が最終ラウンドの BoundaryReport を含む
+  3. Tune 結果画面に Round History Table / Boundary Expansion Panel / Convergence Signal Panel が表示される
+  4. 最終ラウンドの `expanded_dims` が空 かつ rounds.length >= 2 のとき Convergence Signal に「Converged — proceed to Fit」が表示される
+  5. `re_tune` 未指定の従来 Tune は影響を受けず動作する（既存テスト緑）
+  6. pytest / mypy / ruff / vitest / Biome / pnpm build がすべて緑
+  7. Backend カバレッジ 80%+ を維持
+- **Decision:** 2026-04-13 accepted — ユーザ承認済、Phase A 実装開始
