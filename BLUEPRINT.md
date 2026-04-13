@@ -257,10 +257,12 @@ class DataRef:
 ```
 {jobs_dir}/
 ├── job_001/
-│   ├── meta.json              # job_id, status, config, data_ref, timestamps
+│   ├── meta.json              # job_id, status, config, data_ref, timestamps, parent_job_id (H-0062)
 │   ├── model/                 # BackendAdapter.export_model() の出力
-│   ├── fit_result.json         # FitSummary のシリアライズ（Fit/Tune 共通）
-│   └── tune_result.json        # TuningSummary のシリアライズ（Tune Job のみ）
+│   ├── fit_result.json        # FitSummary のシリアライズ（Fit/Tune 共通）
+│   ├── tune_result.json       # TuningSummary のシリアライズ（Tune Job のみ）
+│   ├── model.pkl              # cloudpickle checkpoint (Tune Job のみ, H-0062)
+│   └── model_meta.json        # pickle schema + lizyml/lightgbm/optuna version info (H-0062)
 ├── job_002/
 │   └── ...
 └── ...
@@ -269,6 +271,11 @@ class DataRef:
 - デフォルト: `.lizystudio/jobs/`（カレントディレクトリ相対）
 - CLI オプション `lizystudio --jobs-dir /path/to/jobs` で変更可能
 - 設定ファイルでも指定可能
+
+**H-0062 Phase B 追加ファイル:**
+- `model.pkl`: Tune 実行中に各 trial 完了毎に atomic rename で上書き保存される。再tune / resume 時はこのファイルから `load_checkpoint()` でモデル状態（Optuna study 含む）を復元する。
+- `model_meta.json`: pickle schema version + saved_at + lizyml/lightgbm/optuna のバージョン記録。メジャーバージョン不一致時は `PICKLE_INCOMPATIBLE` で load を拒否する。
+- `meta.json.parent_job_id`: Re-tune / Resume の child job では parent の job_id を参照する。非 child job では `null`。
 
 #### 3.4.5 Inference 履歴（永続・ディスク）
 
@@ -1687,6 +1694,34 @@ Optimization History → Best Params → Score → Learning Curve → Plots（�
 
 **注:** Jobs 画面での Best Params セクションには `Apply to Fit` ボタンを表示しない。代わりにアクションバーの `Re-fit` を使用する。
 
+##### Re-tune / Resume アクション（H-0062 Phase B）
+
+完了した Tune Job と失敗した Tune Job には、既存の Action Bar ボタン群に加えて以下のアクションが表示される:
+
+| 状態 | ボタン | 説明 | 無効化条件 |
+|------|--------|------|-----------|
+| Completed (tune) | `Re-tune (+N trials)` | Optuna study を継続して追加 N trials を実行。child job として記録 | parent_job_id が既にあるとき（grandchild 禁止）、model.pkl が存在しないとき |
+| Failed (tune) | `Resume (X trials remaining)` | 最後の checkpoint から study を復元し残り trials を実行 | 同上 |
+
+いずれのボタンもクリックするとダイアログが開き、n_trials を入力する（デフォルトは元 tune の n_trials / 残り trials）。送信すると `POST /api/jobs/{id}/retune` または `POST /api/jobs/{id}/resume` が呼ばれ、新しい child job が作成される。child job は `parent_job_id` で parent を参照する。
+
+**無効化ルール (MVP)**: `parent_job_id` を既に持つ job（Re-tune / Resume の子）に対する Re-tune / Resume は**サポートしない**。ボタンは disabled + tooltip で理由を表示する。将来の Proposal で多世代 resume を検討する。
+
+##### Lineage Tree 表示（H-0062 Phase B）
+
+`GET /api/jobs/{id}/lineage` は parent ↔ children の関係を表すツリー構造を返す。Jobs 画面では shadcn Collapsible を使った簡易ツリービュー (`JobLineageTree`) で表示する。各ノードは job_id / status バッジ / type ラベルを持ち、クリックで対象 job を選択できる。ツリーの最大深度は 20（cascade delete の再帰ガードと一致）。
+
+##### Cascade Delete (H-0062 Phase B)
+
+`DELETE /api/jobs/{id}` は cascade クエリパラメータで動作を切り替える:
+
+| cascade | 動作 |
+|---------|------|
+| `false`（デフォルト） | 指定 job のみ削除。children は orphan として残る。ただし active な children（pending/running）がある場合は `PARENT_HAS_ACTIVE_CHILDREN` (409) で拒否 |
+| `true` | 指定 job と全 descendant を再帰的に削除。active children は先に cancel を要求してから削除 |
+
+レスポンスには削除された全 job_id のリストが含まれる。UI はこのリストを元にローカル状態を更新する。
+
 ##### Running ジョブ
 
 **Tune Running:**
@@ -2538,6 +2573,12 @@ Workspace の `workspace_result` は完了時に自動更新される。
 | `PATH_NOT_FOUND` | 指定されたローカルパスが存在しない | 400 |
 | `BACKEND_ERROR` | バックエンドライブラリの内部エラー | 500 |
 | `INTERNAL_ERROR` | 予期しないエラー | 500 |
+| `PICKLE_PREFLIGHT_FAILED` | Tune 開始前の pickle 事前検証失敗（書き込み権限/picklable 検査）(H-0062) | 400 |
+| `PICKLE_INCOMPATIBLE` | 保存された checkpoint のバージョンが現行 runtime と非互換 (H-0062) | 400 |
+| `PARENT_LOCKED` | 同一 parent への Re-tune/Resume が既に実行中 (H-0062) | 409 |
+| `PARENT_HAS_ACTIVE_CHILDREN` | DELETE 対象 parent に active children がある（cascade=true 必須）(H-0062) | 409 |
+| `CHECKPOINT_MISSING` | Re-tune/Resume 対象 job に model.pkl が存在しない (H-0062) | 400 |
+| `JOB_NOT_FAILED` | Resume は failed tune job のみ対象 (H-0062) | 400 |
 
 ### 6.2 バックエンドエラーの伝播
 

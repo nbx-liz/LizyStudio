@@ -49,6 +49,7 @@ Phase 0〜30 は v1 で完了済み。バックエンド（Python / FastAPI / Ad
 | v3-9 | Jobs 詳細画面の統一（KPI + LC フィルター + Importance） | H-0050, H-0051, H-0052 | v3-5 | ✅ |
 | v3-10 | Search Space デフォルト Range 自動ポピュレート | H-0053 | v3-3 | ✅ |
 | v3-11 | Re-tune Dashboard Phase A（Study Resume + Boundary Expansion 可視化） | H-0061 | v3-6 | ✅ |
+| v3-12 | Re-tune Dashboard Phase B（Job lineage + Incremental checkpoint + Re-tune/Resume actions） | H-0062 | v3-11 | ✅ |
 
 ---
 
@@ -1062,3 +1063,58 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 - 完了ジョブからの Re-tune (+N trials) ボタン（Job 間 resume）
 - Model pickle 永続化 + `parent_job_id` によるジョブ系譜
 - Lineage ツリー表示 UI
+
+---
+
+## Phase v3-12: Re-tune Dashboard Phase B（H-0062）
+
+**対象:** H-0062
+
+**依存:** v3-11（Phase A 完了が前提）, lizyml >= 0.9.0（H-0068）
+
+**方針:** Phase A の単一ジョブ内 multi-round 実行を、**Job 間 resume + Incremental checkpoint** に拡張する。Tune 実行中の各 trial 完了時に model.pkl を atomic rename で保存することで、途中クラッシュからの復旧と完了済みジョブからの追加実行を同一の経路で実現する。
+
+**成果物:**
+- `BackendAdapter.save_checkpoint` / `load_checkpoint` Protocol 追加
+- `LizyMLAdapter` での cloudpickle ベース実装 + atomic rename
+- `model_meta.json` (pickle schema + version info) の永続化
+- `preflight_pickle_check` (tune 開始前の最小限検査)
+- `Job.parent_job_id` フィールド + lineage ツリー / cascade delete
+- 同一 parent からの並行 Re-tune を防ぐ exclusive lock
+- `POST /api/jobs/{id}/retune` / `POST /api/jobs/{id}/resume` エンドポイント
+- `DELETE /api/jobs/{id}?cascade=bool` 拡張
+- 4 新エラーコード（PICKLE_PREFLIGHT_FAILED / PICKLE_INCOMPATIBLE / PARENT_LOCKED / PARENT_HAS_ACTIVE_CHILDREN）
+- Frontend: `RetuneActionButton` / `ResumeActionButton` / `JobLineageTree`
+- BLUEPRINT §3.4.4 / §4.3 / §6.1 への仕様反映
+
+**タスク:**
+1. cloudpickle を pyproject.toml に明示宣言
+2. Protocol に `save_checkpoint` / `load_checkpoint` 追加
+3. LizyMLAdapter で cloudpickle + atomic rename 実装、`_bridge` callback で trial 完了時に hook
+4. Pre-flight check 実装
+5. `Job.parent_job_id` 追加 + JobStore lineage helpers (get_child_job_ids / get_lineage_tree / has_active_children)
+6. Per-parent exclusive lock (in-memory)
+7. Cascade delete + 4 新エラーコード
+8. 新 API endpoints (retune / resume / lineage / cascade DELETE)
+9. `start_retune_async` ヘルパー (parent pickle を child にコピー → load → tune resume)
+10. Frontend: 3 新コンポーネント + ResultsCompletedView / ResultsPanel への統合
+11. 品質ゲート通過
+
+**DoD:**
+- [x] Tune 実行中、各 trial 完了時に `{job_id}/model.pkl` が atomic rename で更新される
+- [x] SIGKILL されても直前までの trial は無傷で残る (incremental checkpoint)
+- [x] Pre-flight が書き込み権限/picklable 検査で tune 前に失敗を検出
+- [x] `model_meta.json` に lizyml/lightgbm/optuna バージョンと pickle schema が記録される
+- [x] Re-tune/Resume 時のメジャーバージョン不一致が `PICKLE_INCOMPATIBLE` で拒否される
+- [x] `POST /api/jobs/{id}/retune` が completed tune job から child job を作成
+- [x] `POST /api/jobs/{id}/resume` が failed tune job から child job を作成し、残り trials を実行
+- [x] 同一 parent への 2つ目の Re-tune/Resume が `PARENT_LOCKED` (409) で拒否される
+- [x] Cascade delete が parent と全 descendant を再帰的に削除
+- [x] Active children がある parent への DELETE は `?cascade=true` 必須
+- [x] `[Re-tune (+N trials)]` ボタンが Tune 完了画面に表示
+- [x] `[Resume (X trials remaining)]` ボタンが Failed Tune 画面に表示
+- [x] `parent_job_id` を持つ child job では両ボタンが disabled + tooltip
+- [x] Lineage tree が Jobs 画面で parent ↔ children 関係を表示
+- [x] Phase A の re_tune 実行が影響を受けない（後方互換）
+- [x] pytest / mypy / ruff / vitest / biome / pnpm build がすべて緑
+- [x] BLUEPRINT §3.4.4 / §4.3 / §6.1 に仕様が反映されている

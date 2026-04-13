@@ -1499,7 +1499,7 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
 ---
 
 ### H-0062: Re-tune Dashboard Phase B — Job lineage + Incremental checkpoint + [Re-tune (+N trials)] / [Resume] actions
-- **Status:** accepted
+- **Status:** implemented
 - **Scope:** API | Frontend | Backend | Persistence
 - **Related:** H-0061 (Phase A, implemented), Issue #59 要求 4a ([Re-tune (+N trials)] ボタン), LizyML H-0068 (Study Resume), BLUEPRINT §3.4.4 (Job 永続化), H-0036 (subprocess tune 実行)
 - **Context:** H-0061 Phase A は **単一ジョブ内の multi-round 実行** を導入したが、Issue #59 の残る要求 4a「完了済みの Tune ジョブから追加 N trials を走らせる [Re-tune (+N trials)] ボタン」と、Tune 実行中のクラッシュ耐性は未対応のままだった。Studio の既存永続化モデルは「1 Tune Job = 1 Model インスタンス → 完了時に Model 破棄」だったため、別ジョブ間での Study Resume が不可能で、途中クラッシュ時はすべての trial が失われていた。
@@ -1575,3 +1575,4 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   15. **品質ゲート:** pytest / mypy / ruff / vitest / biome / pnpm build がすべて緑
   16. **Coverage:** Backend 80%+ / Frontend 80%+
 - **Decision:** 2026-04-13 accepted — ユーザレビュー済、ユーザ回答により Q1〜Q7 および追加質問 (Pre-flight minimization / Incremental checkpoint / Resume UI) を確定。本 Proposal accepted 後、PLAN.md に `v3-12` として実装フェーズを追加する。
+- **Implemented:** 2026-04-13 in branch `feat/h0062-phase-b-job-lineage-resume` (8 commits). 全 16 受入条件達成、869 backend tests + 1239 frontend tests 緑、mypy / ruff / biome clean。BLUEPRINT §3.4.4 / §4.3 / §6.1 と PLAN v3-12 に仕様反映済。
