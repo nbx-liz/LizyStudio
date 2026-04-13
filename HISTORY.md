@@ -1520,8 +1520,8 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   4. **Job lineage:** `Job` dataclass に `parent_job_id: str | None` を追加。Re-tune / Resume で生成される child job が parent を参照する。child の `config` は parent を copy + `tuning.re_tune` をオーバーライド。API レスポンス (`JobDetail`) には `parent_job_id` と `child_job_ids: list[str]` を含める。
   5. **排他ロック (Q6):** 同一 parent から同時に複数 Re-tune / Resume を起動できないようにする。`JobStore` に `{parent_job_id → child_job_id}` の in-memory lock を持ち、child job 完了/失敗/キャンセル時に解放する。ロック取得失敗時は `PARENT_LOCKED` (409) を返す。プロセス再起動時は全ロックが解放される（running 中の child は Studio 再起動で `failed` 扱いになるため整合性は維持）。
   6. **新 API:**
-     - `POST /api/jobs/{job_id}/retune` — body `{n_trials: int, expand_boundary?: bool, boundary_threshold?: float}`。parent の model.pkl を child job ディレクトリにコピー → `adapter.tune(resume=True, re_tune=...)` を subprocess で実行 → 新 Job を作成して TuningSummary を永続化。Completed Tune Job のみが対象。
-     - `POST /api/jobs/{job_id}/resume` — body `{n_trials?: int}` (省略時は残り trials を自動計算)。Failed Tune Job で model.pkl が残っているもののみが対象。child job として実行される。
+     - `POST /api/jobs/{job_id}/retune` — body `{n_trials: int, expand_boundary?: bool, boundary_threshold?: float}`。parent の model.pkl を child job ディレクトリにコピー → `adapter.tune(resume=True, re_tune=...)` を実行 → 完了後に best_params で auto-fit を実行（Phase A `run_tune` と同じパイプラインで `FitSummary` も生成） → 新 Job を作成して `TuningSummary` と `FitSummary` の両方を永続化。Completed Tune Job のみが対象。
+     - `POST /api/jobs/{job_id}/resume` — body `{n_trials?: int}` (省略時は残り trials を自動計算)。Failed Tune Job で model.pkl が残っているもののみが対象。child job として実行される。完了後の auto-fit は Re-tune と同じ。
   7. **Cancellation semantics (Q3-detail (a)):** Parent Job の DELETE API は active な child が存在する場合、child を先にキャンセルしてから parent を削除する。DELETE リクエストに `?cascade=true` を必須とし、明示的でない場合は `PARENT_HAS_ACTIVE_CHILDREN` (409) を返す。UI 側は delete 確認ダイアログに "This will also cancel N active Re-tune/Resume jobs" を表示する。
   8. **Cascade 削除 (Q4):** Parent Job の完全削除時は children も再帰的に cascade 削除する。API レスポンスには削除された job_id のリストを含める。
   9. **Tree lineage UI (Q5):** Jobs 画面に lineage ツリー表示を追加する。shadcn/ui の Collapsible を入れ子にして親から子へ展開する簡易ビューを実装。大規模（深さ 5 以上 / 幅 10 以上）な場合のスクロール/折りたたみは含めない。
@@ -1529,7 +1529,7 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
       - `ResultsCompletedView` の Completed Tune 表示に `[Re-tune (+N trials)]` ボタン (n_trials は直前ラウンドと同じがデフォルト、上限 10,000)
       - `ResultsPanel` の Failed Tune 表示に `[Resume (X trials remaining)]` ボタン (n_trials は残数自動計算)
       - 両ボタンとも model.pkl が存在しない job では無効化
-      - parent_job_id が **既にある** child job では両ボタンとも **非表示**（孫世代を防ぐため MVP では禁止）
+      - parent_job_id が **既にある** child job では両ボタンとも **disabled + tooltip** で理由を表示する（孫世代を防ぐため MVP では禁止。ユーザ Q5 回答により tooltip 方式を採用、孫世代 Re-tune の必要性は将来別 Proposal で再評価）
   11. **Restart 時の自動 resume は行わない (Q-new-1 (a)):** Studio 起動時に failed tune job を検出して自動的にキューに入れることはしない。ユーザーが明示的に Resume ボタンをクリックする必要がある。
   12. **Resume と Re-tune は UI 上区別する (Q-new-2 (b)):** 内部コードパスは共有するが、ラベル・文脈・デフォルト値が異なるため UI ボタンは分離する。
 - **Impact:**
@@ -1569,7 +1569,7 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   9. **Active children 保護:** Active children がある parent の DELETE は `?cascade=true` 無しで 409 を返す
   10. **UI Re-tune ボタン:** Completed Tune Job に `[Re-tune (+N trials)]` が表示され、クリックで child job が起動する
   11. **UI Resume ボタン:** Failed Tune Job (model.pkl あり) に `[Resume (X trials remaining)]` が表示され、クリックで残り trials が実行される
-  12. **UI 無効化:** model.pkl が存在しない job / 既に parent_job_id を持つ child job では両ボタンが表示されない
+  12. **UI 無効化:** model.pkl が存在しない job / 既に parent_job_id を持つ child job では両ボタンが disabled + tooltip で表示される
   13. **Lineage tree:** Jobs 画面から parent ↔ children の関係がツリー表示でたどれる
   14. **後方互換:** Phase A の `re_tune` 同一ジョブ multi-round 実行が影響を受けない
   15. **品質ゲート:** pytest / mypy / ruff / vitest / biome / pnpm build がすべて緑

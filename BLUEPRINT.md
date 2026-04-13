@@ -2838,3 +2838,12 @@ LizyStudio は localhost 専用のデスクトップツールであるが、以�
 - CSRF トークン
 - Rate limiting
 - HTTPS 強制
+
+### 11.6 Pickle 永続化と Re-tune (H-0062)
+
+Phase B では `{jobs_dir}/{job_id}/model.pkl` に cloudpickle で Tune Job のモデル状態を保存する。pickle はコード実行を伴うため以下の前提を**明示的な信頼境界**として扱う:
+
+- **書き込み権限**: `jobs_dir` 配下への書き込みは Studio プロセスのオーナーユーザーのみ。マルチユーザー環境で同一 `jobs_dir` を共有することは想定しない。同一マシンの別ユーザーが `model.pkl` を差し替えられる構成は権限昇格として扱う（OS レベルで `chmod 700 jobs_dir` を推奨）。
+- **API 経路**: pickle ファイルは HTTP リクエスト経由でアップロード/参照されない。`POST /api/jobs/{id}/retune` と `POST /api/jobs/{id}/resume` は `job_id` をパスから受け取り、`validate_path_within` で `jobs_dir` 内に解決されることを保証してから、その配下の `model.pkl` を `cloudpickle.load()` する。
+- **DoS 観点**: lineage tree / cascade delete の幅は無制限だが、子作成は per-parent 排他ロックで直列化されるため self-DoS のみが現実的なリスク。BLUEPRINT §11.5 と同じく、ローカル前提に基づき rate limiting は導入しない。
+- **エラー情報**: `PARENT_LOCKED` / `PARENT_HAS_ACTIVE_CHILDREN` のレスポンスには他 child の `job_id` を含めるが、シングルユーザー前提のもと意図的な情報露出として扱う。

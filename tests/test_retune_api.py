@@ -345,3 +345,102 @@ def test_auto_remaining_trials_clamped_when_overshoot(
     parent = job_store.get(parent_id)
     assert parent is not None
     assert _auto_remaining_trials(parent) == 1
+
+
+def test_auto_remaining_trials_with_no_tune_result(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    """Trial-0 crash: tune failed before any trial committed.
+
+    When ``tune_result`` is None the subtraction must still return at
+    least 1 so the dialog shows a sensible default.
+    """
+    from lizystudio.api.jobs import _auto_remaining_trials
+
+    app = client.app  # type: ignore[union-attr]
+    job_store: JobStore = app.state.job_store
+    job = job_store.create(
+        backend_name="lizyml",
+        config={
+            "task": "binary",
+            "target": "y",
+            "tuning": {"optuna": {"params": {"n_trials": 100}}},
+        },
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )
+    job.status = "failed"
+    job.tune_result = None
+    job_store.update(job)
+
+    parent = job_store.get(job.job_id)
+    assert parent is not None
+    assert _auto_remaining_trials(parent) == 100
+
+
+def test_lineage_tree_marks_truncated_at_max_depth(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    """Lineage tree exposes ``truncated: true`` for nodes beyond max depth.
+
+    The intent is that the UI surfaces an explicit indicator instead of
+    silently dropping descendants. Build a synthetic 22-deep chain and
+    assert the depth-20 node is flagged.
+    """
+    app = client.app  # type: ignore[union-attr]
+    job_store: JobStore = app.state.job_store
+
+    # Create a 22-level chain.
+    parent_id: str | None = None
+    chain: list[str] = []
+    for _ in range(22):
+        job = job_store.create(
+            backend_name="lizyml",
+            config={},
+            data_ref=sample_data_ref,
+            job_type="tune",
+            parent_job_id=parent_id,
+        )
+        chain.append(job.job_id)
+        parent_id = job.job_id
+
+    res = client.get(f"/api/jobs/{chain[0]}/lineage")
+    assert res.status_code == 200
+    tree = res.json()["tree"]
+
+    # Walk to depth 20.
+    node: dict[str, object] = tree
+    for _ in range(20):
+        children = node.get("children")
+        assert isinstance(children, list)
+        assert len(children) == 1
+        node = children[0]  # type: ignore[assignment]
+
+    # Depth 20 node has descendants but the tree was truncated there.
+    assert node.get("truncated") is True
+    assert node.get("children") == []
+
+
+def test_retune_returns_409_when_concurrent(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    """A second Re-tune on the same parent returns PARENT_LOCKED.
+
+    We pre-acquire the parent lock manually to simulate an in-flight
+    retune child without having to actually run a tune.
+    """
+    parent_id = _make_completed_tune_job(client, sample_data_ref)
+    app = client.app  # type: ignore[union-attr]
+    job_store: JobStore = app.state.job_store
+    job_store.acquire_parent_lock(parent_id, "child_synthetic")
+
+    try:
+        res = client.post(f"/api/jobs/{parent_id}/retune", json={"n_trials": 10})
+        assert res.status_code == 409
+        body = res.json()
+        assert body["error"]["code"] == "PARENT_LOCKED"
+        # Holder is exposed in details for the UI to surface.
+        assert body["error"]["details"]["parent_job_id"] == parent_id
+        assert body["error"]["details"]["holder"] == "child_synthetic"
+    finally:
+        job_store.release_parent_lock(parent_id)

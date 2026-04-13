@@ -73,12 +73,34 @@ def _collect_pickle_versions() -> dict[str, str]:
 
 
 def _major_minor(version: str) -> tuple[int, int] | None:
-    """Parse ``'0.9.1'`` into ``(0, 9)`` for version-compat comparison."""
-    parts = version.split(".")
+    """Parse ``'0.9.1'`` into ``(0, 9)`` for version-compat comparison.
+
+    Strips PEP 440 local / dev / pre-release suffixes so that the
+    base ``major.minor`` is compared even for builds like
+    ``'0.9.1.dev3+local'`` or ``'0.9.0a1'``. The strictness comes from
+    the major/minor equality check in ``verify_pickle_compatibility``;
+    if a dev build's pickle format diverges from the matching stable
+    release, the fix is to bump ``_PICKLE_SCHEMA_VERSION``.
+    """
+    # Drop everything after the first non-numeric character in any
+    # component (handles 0.9.0a1 / 0.9.0rc1 / 0.9.0.dev3 / 0.9.0+local).
+    cleaned = version.split("+", 1)[0]
+    parts = cleaned.split(".")
     if len(parts) < 2:
         return None
+    numeric_parts: list[str] = []
+    for raw in parts[:2]:
+        digits = ""
+        for ch in raw:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        numeric_parts.append(digits)
+    if not numeric_parts[0] or not numeric_parts[1]:
+        return None
     try:
-        return int(parts[0]), int(parts[1])
+        return int(numeric_parts[0]), int(numeric_parts[1])
     except ValueError:
         return None
 
@@ -366,6 +388,16 @@ class LizyMLAdapter:
         optuna versions so later loads can reject incompatible runtimes.
         All failures (filesystem, pickling) are swallowed with a WARNING
         log so that a flaky checkpoint cannot crash an in-flight tune.
+
+        Atomicity note: ``model.pkl`` and ``model_meta.json`` are
+        rewritten as two separate atomic renames, not a combined
+        transaction. A reader interleaving between the two replaces
+        would briefly see a fresh ``model.pkl`` paired with a stale
+        ``model_meta.json``. Inside a single Studio process this cannot
+        cause a real problem because the only consumer (``load_checkpoint``
+        from the Re-tune / Resume launcher) runs in the same interpreter
+        as the writer and shares the same lizyml / lightgbm / optuna
+        versions, so the sidecar comparison is trivially compatible.
         """
         target_dir = Path(path)
         try:

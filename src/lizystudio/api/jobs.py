@@ -12,7 +12,7 @@ from typing import Any, Literal  # noqa: UP035
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from lizystudio.api.errors import (
     BackendError,
@@ -223,11 +223,20 @@ def cancel_job(
 # --- H-0062: Re-tune / Resume / Lineage ---
 
 
+# DoS guard for the new endpoints. Intentionally aligned with
+# lizyml._MAX_RE_TUNE_TRIALS_PER_ROUND so a Re-tune child cannot smuggle
+# a larger workload than a Phase A re_tune round could.
 _MAX_RETUNE_TRIALS = 10_000
 
 
 class RetuneRequest(BaseModel):
-    """Body of ``POST /api/jobs/{id}/retune``."""
+    """Body of ``POST /api/jobs/{id}/retune``.
+
+    Uses ``extra='forbid'`` so unknown fields are rejected rather than
+    silently dropped (CLAUDE.md Python security rule, H-0062 review).
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     n_trials: int
     expand_boundary: bool | None = None
@@ -236,6 +245,8 @@ class RetuneRequest(BaseModel):
 
 class ResumeRequest(BaseModel):
     """Body of ``POST /api/jobs/{id}/resume``."""
+
+    model_config = ConfigDict(extra="forbid")
 
     n_trials: int | None = None
 
@@ -311,6 +322,11 @@ def retune_job(
     _validate_n_trials(body.n_trials)
 
     _claim_retune_slot(job_id, job_store)
+    # Single try/except so a failure path never double-releases. On a
+    # successful start_retune_async return the lock stays held and is
+    # released by the launcher's own finally block when the worker
+    # thread eventually finishes (success / failure / cancellation).
+    started = False
     try:
         child = job_store.create(
             backend_name=parent.backend_name,
@@ -324,26 +340,21 @@ def retune_job(
         job_store.release_parent_lock(parent.job_id)
         job_store.acquire_parent_lock(parent.job_id, child.job_id)
 
-        try:
-            start_retune_async(
-                ws=ws,
-                job_store=job_store,
-                broadcaster=_get_broadcaster(request),
-                parent_job=parent,
-                child_job=child,
-                n_trials=body.n_trials,
-                expand_boundary=body.expand_boundary,
-                boundary_threshold=body.boundary_threshold,
-                mode="retune",
-            )
-        except Exception:
+        start_retune_async(
+            ws=ws,
+            job_store=job_store,
+            broadcaster=_get_broadcaster(request),
+            parent_job=parent,
+            child_job=child,
+            n_trials=body.n_trials,
+            expand_boundary=body.expand_boundary,
+            boundary_threshold=body.boundary_threshold,
+            mode="retune",
+        )
+        started = True
+    finally:
+        if not started:
             job_store.release_parent_lock(parent.job_id)
-            raise
-    except Exception:
-        # Any failure between placeholder and real child means we must
-        # release the placeholder so the parent can be retried later.
-        job_store.release_parent_lock(parent.job_id)
-        raise
     return {"job_id": child.job_id, "parent_job_id": parent.job_id}
 
 
@@ -373,6 +384,7 @@ def resume_job(
     _validate_n_trials(n_trials)
 
     _claim_retune_slot(job_id, job_store)
+    started = False
     try:
         child = job_store.create(
             backend_name=parent.backend_name,
@@ -384,24 +396,21 @@ def resume_job(
         job_store.release_parent_lock(parent.job_id)
         job_store.acquire_parent_lock(parent.job_id, child.job_id)
 
-        try:
-            start_retune_async(
-                ws=ws,
-                job_store=job_store,
-                broadcaster=_get_broadcaster(request),
-                parent_job=parent,
-                child_job=child,
-                n_trials=n_trials,
-                expand_boundary=None,
-                boundary_threshold=None,
-                mode="resume",
-            )
-        except Exception:
+        start_retune_async(
+            ws=ws,
+            job_store=job_store,
+            broadcaster=_get_broadcaster(request),
+            parent_job=parent,
+            child_job=child,
+            n_trials=n_trials,
+            expand_boundary=None,
+            boundary_threshold=None,
+            mode="resume",
+        )
+        started = True
+    finally:
+        if not started:
             job_store.release_parent_lock(parent.job_id)
-            raise
-    except Exception:
-        job_store.release_parent_lock(parent.job_id)
-        raise
     return {"job_id": child.job_id, "parent_job_id": parent.job_id}
 
 

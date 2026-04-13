@@ -101,6 +101,13 @@ export interface LineageNode {
   status: string;
   job_type: string;
   children: LineageNode[];
+  /**
+   * H-0062: when true, this node hit the lineage depth guard (20) and
+   * has additional descendants on the server that are not included in
+   * the tree. The UI should surface this so the user knows the view is
+   * incomplete.
+   */
+  truncated?: boolean;
 }
 
 export function retuneJob(

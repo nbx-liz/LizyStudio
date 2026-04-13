@@ -201,8 +201,11 @@ class JobStore:
     def get_lineage_tree(self, root_job_id: str) -> dict[str, Any] | None:
         """Return ``{job_id, status, children: [...]}`` rooted at *root_job_id*.
 
-        Returns ``None`` when the root does not exist.  Iterative BFS
-        with a depth guard (20) to avoid runaway lineages.
+        Returns ``None`` when the root does not exist.  Walks the tree
+        recursively with a depth guard (20) to avoid runaway lineages.
+        Nodes that hit the depth cap are returned with ``children: []``
+        AND ``truncated: True`` so the UI can surface the cut-off
+        explicitly instead of silently dropping descendants.
         """
         root = self.get(root_job_id)
         if root is None:
@@ -215,8 +218,13 @@ class JobStore:
                 "status": job.status,
                 "job_type": job.job_type,
                 "children": [],
+                "truncated": False,
             }
             if depth >= max_depth:
+                # Mark truncated only if the node actually has children
+                # we are about to drop; otherwise it is a real leaf.
+                if self.get_child_job_ids(job.job_id):
+                    node["truncated"] = True
                 return node
             for cid in self.get_child_job_ids(job.job_id):
                 child = self.get(cid)

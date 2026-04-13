@@ -64,6 +64,14 @@ function NodeRow({ node, depth, onSelect }: NodeRowProps) {
         <span className="text-[10px] text-muted-foreground">
           {node.job_type}
         </span>
+        {node.truncated && (
+          <span
+            className="text-[10px] text-amber-600 dark:text-amber-400"
+            title="More descendants exist beyond the lineage depth guard (20)."
+          >
+            ... truncated
+          </span>
+        )}
       </div>
       {expanded && hasChildren && (
         <ul className="list-none">
