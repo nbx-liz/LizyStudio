@@ -82,4 +82,36 @@ describe("RetuneDashboard", () => {
       screen.queryByRole("heading", { name: /round history/i }),
     ).not.toBeInTheDocument();
   });
+
+  it("shows Search Space Evolution when any round carries a snapshot", () => {
+    const withSnapshot: TuneRound[] = [
+      {
+        ...rounds[0],
+        space_snapshot: [
+          {
+            name: "lr",
+            type: "float",
+            category: "model",
+            low: 0.01,
+            high: 0.1,
+            log: true,
+          },
+        ],
+      },
+      rounds[1],
+    ];
+    render(
+      <RetuneDashboard rounds={withSnapshot} boundaryReport={boundaryReport} />,
+    );
+    expect(
+      screen.getByRole("heading", { name: /search space evolution/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("hides Search Space Evolution when no round carries a snapshot", () => {
+    render(<RetuneDashboard rounds={rounds} boundaryReport={boundaryReport} />);
+    expect(
+      screen.queryByRole("heading", { name: /search space evolution/i }),
+    ).not.toBeInTheDocument();
+  });
 });

@@ -1457,7 +1457,7 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
 ---
 
 ### H-0061: Re-tune Dashboard — Round History / Boundary Expansion / Convergence Signal の可視化（Phase A）
-- **Status:** accepted
+- **Status:** implemented
 - **Scope:** API | Frontend | Backend | Adapter
 - **Related:** BLUEPRINT.md §3.3.1 (TuningSummary), §4.2.2 (Tune Tab), §5.2 (Workspace API), Issue #59, LizyML H-0068 (re-tune + boundary expansion), LizyML-Widget P-027/P-028
 - **Context:** LizyML 0.9.0 で H-0068 が `Model.tune(resume, n_trials, expand_boundary, boundary_threshold)` を追加し、追加ラウンド実行時に Optuna study を継続し搜索空間を動的に拡張する機能をリリースした。LizyStudio 側ではこの機能がまだ GUI から利用できない。Issue #59 は Round History / Search Space Evolution / Convergence Signal / Boundary Detail の4ビューを要求している。
@@ -1494,3 +1494,49 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   6. pytest / mypy / ruff / vitest / Biome / pnpm build がすべて緑
   7. Backend カバレッジ 80%+ を維持
 - **Decision:** 2026-04-13 accepted — ユーザ承認済、Phase A 実装開始
+- **Implemented:** 2026-04-13 in PR #72 (develop commits 5b14d6a..eac1936). BLUEPRINT §3.3.1 / §4.2.2 への仕様反映と Search Space Evolution パネル追加は後続 PR で対応。Phase B（Job lineage + Re-tune (+N trials) ボタン）は H-0062 として別 Proposal で起案する。
+
+---
+
+### H-0062: Re-tune Dashboard Phase B — Job lineage + [Re-tune (+N trials)] action (draft)
+- **Status:** draft
+- **Accepted:** no
+- **Scope:** API | Frontend | Backend | Persistence
+- **Related:** H-0061 (Phase A, implemented), Issue #59 要求 4a ([Re-tune (+N trials)] ボタン), LizyML H-0068 (Study Resume), BLUEPRINT §3.4.4 (Job 永続化)
+- **Context:** H-0061 Phase A は **単一ジョブ内の multi-round 実行** を導入した。Issue #59 の残る要求 4a 「完了済みの Tune ジョブから追加 N trials を走らせる [Re-tune (+N trials)] ボタン」は **別ジョブ間での Study Resume** を必要とし、Studio の既存永続化モデル「1 Tune Job = 1 Model インスタンス → 完了時に Model 破棄」では実現できない。Phase B では Model の永続化 + Job lineage を導入する。
+
+  なお Issue #59 要求 4b 「[Fit with best params] ボタン」は Phase A の `ConvergenceSignalPanel.onApplyToFit` および `TuneTrialsSection` の Apply to Fit 動線（Tune 時の全 Config snapshot を Fit タブに復元）で既にカバーされているため、Phase B のスコープからは除外する。
+- **Proposal (draft, 要検討):**
+  1. **Model pickle 永続化:** Tune Job 完了時に `{jobs_dir}/{job_id}/model.pkl` を書き出す。LizyML `Model` が cloudpickle 可能かを先行調査する必要がある（Optuna study / LGBM booster を含むため注意）。
+  2. **Job lineage:** `Job` dataclass に `parent_job_id: str | None` を追加。Re-tune 起動で生成される child job が parent を参照する。child の `config` は parent を copy + `tuning.re_tune` をオーバーライド。
+  3. **新 API:** `POST /api/jobs/{job_id}/retune` — body `{n_trials: int, expand_boundary?: bool, boundary_threshold?: float}`。既存 Job の model.pkl を load → `adapter.tune(re_tune=...)` を実行 → 新 Job を作成して TuningSummary を永続化。
+  4. **UI:**
+     - `ResultsCompletedView` の Tune 完了画面に `[Re-tune (+N trials)]` ボタン追加（parent_job_id のない Tune Job のみで有効）
+     - Jobs 詳細画面に lineage ツリー表示（parent ↔ children をたどれる簡易 UI）
+  5. **共通型:** `Job` Protocol / `JobDetail` 型に `parent_job_id`, `child_job_ids` を追加。
+- **Impact (draft):**
+  - Backend: `services/jobs.py` (persist pickle / parent_job_id), `api/jobs.py` (new retune endpoint), `backends/lizyml.py` (load_model_pickle helper), `backends/base.py` (optional `persist_model` API?)
+  - Frontend: `ResultsCompletedView.tsx`, 新 API helper, Jobs page lineage view
+  - Persistence: ディスク使用量増。model.pkl は通常数 MB〜数百 MB を想定
+- **Compatibility:** 非破壊的であること。parent_job_id は optional。既存 Tune Job（model.pkl を持たない）は Re-tune ボタン無効化でフォールバック。
+- **Open Questions:**
+  1. **Pickle 互換性:** LizyML / LightGBM / Optuna のバージョンアップ時に既存 pickle が読めなくなる可能性。pickle schema version を meta.json に記録し、ミスマッチ時は明確にエラー表示する？
+  2. **Subprocess 実行モード:** H-0036 で subprocess 実行がある。子プロセスで model を ivre して親 API から load する経路の互換性。
+  3. **Cancellation semantics:** 親 Re-tune ジョブ実行中に parent が削除された場合の挙動。
+  4. **Garbage collection:** 親 Job 削除時に children を cascade 削除するのか、orphan にするのか、削除を禁止するのか。
+  5. **Lineage ツリー UI:** シンプルなリスト vs. 木構造ビューア。MVP として何を採用するか。
+  6. **並行制御:** 同一 parent から同時に複数 re-tune を走らせると Optuna study が競合する。排他ロックが必要か、n_active_retune 制限か。
+  7. **ディスク使用量:** model.pkl を全 Tune Job で保存するか、Re-tune 対象だけオプトインか。
+- **Alternatives:**
+  - **A1: Weak resume (best_params を initial_params として新 Tune)** — Optuna study を継続しないので `expand_boundary` が機能しない。Phase A で既に却下済み。
+  - **A2: In-memory model registry** — Studio プロセス再起動で消失するため実用性なし。
+  - **A3: Model serialize via adapter.export_model()** — 既存 export_code API と同じ経路。Tune 状態（Optuna study）が含まれないため、単なる Fit モデルの復元にしかならない。
+- **Acceptance Criteria (placeholder, ユーザ承認時に確定):**
+  - [ ] Tune Job 完了後に `{jobs_dir}/{job_id}/model.pkl` が書き出される
+  - [ ] `POST /api/jobs/{id}/retune` が parent model を load して child Tune Job を起動する
+  - [ ] `[Re-tune (+N trials)]` ボタンが Tune 完了画面に表示され、クリックで child job が生成される
+  - [ ] `JobDetail.parent_job_id` が child で parent を参照できる
+  - [ ] Jobs 詳細画面から lineage がたどれる
+  - [ ] Pickle バージョンミスマッチ時に明確なエラーメッセージを表示
+  - [ ] Phase A の `re_tune` 同一ジョブ multi-round 実行が影響を受けない（後方互換）
+- **Decision:** draft — ユーザレビュー待ち。本 Proposal が accepted になり次第、PLAN.md に `v3-12` として実装フェーズを追加する。

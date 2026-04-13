@@ -1,6 +1,7 @@
 import { BoundaryExpansionPanel } from "./BoundaryExpansionPanel";
 import { ConvergenceSignalPanel } from "./ConvergenceSignalPanel";
 import { RoundHistoryTable } from "./RoundHistoryTable";
+import { SearchSpaceEvolutionPanel } from "./SearchSpaceEvolutionPanel";
 import type { BoundaryReport, TuneRound } from "./types";
 
 export interface RetuneDashboardProps {
@@ -17,6 +18,11 @@ export function RetuneDashboard({
   const showConvergence = rounds != null && rounds.length >= 2;
   const showHistory = rounds != null && rounds.length > 0;
   const showBoundary = boundaryReport != null;
+  // showEvolution implies showHistory (a non-empty space_snapshot requires
+  // at least one round), so it does not need its own early-return clause.
+  const showEvolution =
+    rounds != null &&
+    rounds.some((r) => r.space_snapshot != null && r.space_snapshot.length > 0);
 
   if (!showConvergence && !showHistory && !showBoundary) {
     return null;
@@ -28,6 +34,12 @@ export function RetuneDashboard({
         <ConvergenceSignalPanel rounds={rounds} onApplyToFit={onApplyToFit} />
       )}
       {showHistory && <RoundHistoryTable rounds={rounds} />}
+      {showEvolution && (
+        <SearchSpaceEvolutionPanel
+          rounds={rounds}
+          boundaryReport={boundaryReport}
+        />
+      )}
       {showBoundary && <BoundaryExpansionPanel report={boundaryReport} />}
     </div>
   );
