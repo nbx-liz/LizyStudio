@@ -15,7 +15,7 @@ import traceback
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from lizystudio.backends.base import BackendAdapter, ProgressCallback
 from lizystudio.backends.types import FitSummary, TuningSummary
@@ -495,3 +495,149 @@ def start_tune_async(
     with ws._lock:
         ws._job_thread = t
     return job.job_id
+
+
+# --- H-0062: Re-tune / Resume launcher ------------------------------------
+
+
+def _copy_checkpoint_to_child(parent_dir: Path, child_dir: Path) -> None:
+    """Copy the parent's model.pkl and model_meta.json into the child dir."""
+    import shutil
+
+    child_dir.mkdir(parents=True, exist_ok=True)
+    for filename in ("model.pkl", "model_meta.json"):
+        src = parent_dir / filename
+        if src.exists():
+            shutil.copy2(src, child_dir / filename)
+
+
+def run_retune(
+    *,
+    parent_job: Job,
+    child_job: Job,
+    job_store: JobStore,
+    backend: BackendAdapter,
+    dataframe: Any,
+    n_trials: int,
+    expand_boundary: bool | None,
+    boundary_threshold: float | None,
+    broadcaster: ProgressBroadcaster | None = None,
+) -> Job:
+    """Execute a Re-tune / Resume child job (H-0062).
+
+    Copies the parent's ``model.pkl`` into the child's job directory,
+    loads it via the adapter's ``load_checkpoint``, then calls
+    ``backend.tune`` with a ``re_tune`` override so the Optuna study is
+    continued for the requested n_trials. Subsequent trials are saved
+    back to the child's own checkpoint via the standard bridge callback.
+    """
+    parent_dir = job_store.jobs_dir / parent_job.job_id
+    child_dir = job_store.jobs_dir / child_job.job_id
+    _copy_checkpoint_to_child(parent_dir, child_dir)
+
+    def execute(
+        cb: ProgressCallback,
+    ) -> tuple[FitSummary, TuningSummary | None, str]:
+        model = backend.load_checkpoint(child_dir)
+        re_tune_block: dict[str, Any] = {
+            "n_rounds": 1,
+            "n_trials": n_trials,
+        }
+        if expand_boundary is not None:
+            re_tune_block["expand_boundary"] = expand_boundary
+        if boundary_threshold is not None:
+            re_tune_block["boundary_threshold"] = boundary_threshold
+
+        tune_result: TuningSummary = backend.tune(
+            model,
+            on_progress=cb,
+            re_tune=re_tune_block,
+            checkpoint_dir=child_dir,
+        )
+
+        _save_tuning_plot(backend, model, child_dir)
+
+        fit_config = _prepare_autofit_config(child_job.config, tune_result.best_params)
+        model2 = backend.create_model(fit_config, dataframe)
+        fit_result: FitSummary = backend.fit(model2, on_progress=cb)
+        model_dir = str(child_dir / "model")
+        backend.export_model(model2, model_dir)
+        return fit_result, tune_result, model_dir
+
+    return _run_job_core(
+        job=child_job,
+        job_store=job_store,
+        broadcaster=broadcaster,
+        execute_fn=execute,
+    )
+
+
+def start_retune_async(
+    *,
+    ws: WorkspaceState,
+    job_store: JobStore,
+    broadcaster: ProgressBroadcaster,
+    parent_job: Job,
+    child_job: Job,
+    n_trials: int,
+    expand_boundary: bool | None,
+    boundary_threshold: float | None,
+    mode: Literal["retune", "resume"],
+) -> str:
+    """Spawn a background thread for Re-tune / Resume (H-0062).
+
+    Holds a per-parent lock that was already acquired by the API layer
+    and releases it when the child thread finishes regardless of
+    success / failure. The *mode* string is used in log messages to
+    distinguish the two semantic cases even though they share the
+    same code path.
+    """
+    _join_previous_thread(ws)
+
+    if ws.dataframe is None:
+        # No data loaded — mark child failed immediately so the lock
+        # can be released and the UI surfaces the error.
+        child_job.status = "failed"
+        child_job.error = "No data loaded in workspace; cannot re-tune"
+        child_job.completed_at = datetime.now(timezone.utc).isoformat()
+        job_store.update(child_job)
+        job_store.release_parent_lock(parent_job.job_id)
+        if broadcaster is not None:
+            broadcaster.send_error(child_job.job_id, child_job.error)
+        return child_job.job_id
+
+    dataframe = ws.dataframe
+
+    def _run() -> None:
+        try:
+            finished = run_retune(
+                parent_job=parent_job,
+                child_job=child_job,
+                job_store=job_store,
+                backend=ws.backend,
+                dataframe=dataframe,
+                n_trials=n_trials,
+                expand_boundary=expand_boundary,
+                boundary_threshold=boundary_threshold,
+                broadcaster=broadcaster,
+            )
+            with ws._lock:
+                ws.workspace_fit_result = finished.fit_result
+                ws.workspace_tune_result = finished.tune_result
+                ws.current_job_id = finished.job_id
+        finally:
+            # Always release the per-parent lock, even when run_retune
+            # raised (cancellation, pickle mismatch, etc.).
+            job_store.release_parent_lock(parent_job.job_id)
+            _logger.info(
+                "event='retune.finished' mode=%s parent=%s child=%s",
+                mode,
+                parent_job.job_id,
+                child_job.job_id,
+            )
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    with ws._lock:
+        ws._job_thread = t
+    return child_job.job_id
