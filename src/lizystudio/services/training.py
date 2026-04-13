@@ -622,11 +622,15 @@ def start_retune_async(
 
     if ws.dataframe is None:
         # No data loaded — mark child failed immediately so the lock
-        # can be released and the UI surfaces the error.
+        # can be released and the UI surfaces the error. Still point
+        # the workspace at the child so the Results Panel shows the
+        # failure rather than leaving the selection on the parent.
         child_job.status = "failed"
         child_job.error = "No data loaded in workspace; cannot re-tune"
         child_job.completed_at = datetime.now(timezone.utc).isoformat()
         job_store.update(child_job)
+        with ws._lock:
+            ws.current_job_id = child_job.job_id
         job_store.release_parent_lock(parent_job.job_id)
         if broadcaster is not None:
             broadcaster.send_error(child_job.job_id, child_job.error)

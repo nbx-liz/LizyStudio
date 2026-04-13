@@ -118,4 +118,66 @@ describe("RetuneActionButton", () => {
     expect(submit).toBeDisabled();
     expect(screen.getByText(/must be between 1/i)).toBeInTheDocument();
   });
+
+  it("shows a destructive toast when retuneJob rejects", async () => {
+    const { toast } = await import("sonner");
+    mockRetuneJob.mockRejectedValueOnce(new Error("server exploded"));
+    const onStarted = vi.fn();
+
+    renderButton({ onStarted });
+    await userEvent.click(
+      screen.getByRole("button", { name: /Re-tune with additional trials/i }),
+    );
+    await screen.findByRole("spinbutton");
+    await userEvent.click(
+      screen.getByRole("button", { name: /Start Re-tune/i }),
+    );
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringContaining("server exploded"),
+      );
+    });
+    expect(onStarted).not.toHaveBeenCalled();
+  });
+
+  it("rejects n_trials above the MAX_TRIALS cap", async () => {
+    renderButton();
+    await userEvent.click(
+      screen.getByRole("button", { name: /Re-tune with additional trials/i }),
+    );
+    const input = await screen.findByRole("spinbutton");
+    await userEvent.clear(input);
+    await userEvent.type(input, "20000");
+
+    const submit = screen.getByRole("button", { name: /Start Re-tune/i });
+    expect(submit).toBeDisabled();
+    expect(screen.getByText(/must be between 1/i)).toBeInTheDocument();
+  });
+
+  it("rejects non-numeric n_trials", async () => {
+    renderButton();
+    await userEvent.click(
+      screen.getByRole("button", { name: /Re-tune with additional trials/i }),
+    );
+    const input = await screen.findByRole("spinbutton");
+    await userEvent.clear(input);
+    // Cannot type letters into a number input; simulate programmatically.
+    await userEvent.type(input, "-5");
+
+    const submit = screen.getByRole("button", { name: /Start Re-tune/i });
+    expect(submit).toBeDisabled();
+  });
+
+  it("cancel button closes the dialog without sending a request", async () => {
+    renderButton();
+    await userEvent.click(
+      screen.getByRole("button", { name: /Re-tune with additional trials/i }),
+    );
+    await screen.findByRole("spinbutton");
+    const cancelBtn = screen.getAllByRole("button", { name: /^Cancel$/ })[0];
+    await userEvent.click(cancelBtn);
+
+    expect(mockRetuneJob).not.toHaveBeenCalled();
+  });
 });

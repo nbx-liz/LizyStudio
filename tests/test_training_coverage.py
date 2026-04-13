@@ -25,8 +25,10 @@ from lizystudio.services.training import (
     _make_cancel_aware_cb,
     _run_job_core,
     run_fit,
+    run_retune,
     run_tune,
     start_fit_async,
+    start_retune_async,
     start_tune_async,
 )
 from lizystudio.services.workspace import WorkspaceState
@@ -1331,3 +1333,280 @@ class TestPrepareAutofitConfig:
         result = _prepare_autofit_config(config, {"learning_rate": 0.001})
         assert result["model"]["params"]["learning_rate"] == 0.001
         assert result["model"]["params"]["n_estimators"] == 100
+
+
+# ---------------------------------------------------------------------------
+# H-0062: run_retune + start_retune_async tests
+# ---------------------------------------------------------------------------
+
+
+def _make_tune_parent_with_checkpoint(
+    job_store: JobStore,
+    sample_data_ref: DataRef,
+) -> Any:
+    """Create a completed tune parent with a fake model.pkl + meta."""
+    parent = job_store.create(
+        backend_name="lizyml",
+        config={
+            "task": "binary",
+            "model": {"name": "lgbm", "params": {}},
+            "tuning": {"optuna": {"params": {"n_trials": 50}}},
+        },
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )
+    parent.status = "completed"
+    job_store.update(parent)
+    # Drop a fake checkpoint next to the meta.
+    parent_dir = job_store.jobs_dir / parent.job_id
+    (parent_dir / "model.pkl").write_bytes(b"fake")
+    return parent
+
+
+def test_run_retune_copies_checkpoint_and_returns_completed_job(
+    job_store: JobStore,
+    sample_data_ref: DataRef,
+    sample_df: pd.DataFrame,
+    mock_backend: MagicMock,
+) -> None:
+    """run_retune must copy the parent checkpoint into the child dir,
+    call adapter.load_checkpoint, run tune with resume=True, then
+    auto-fit and export. On success the job status is "completed"."""
+    parent = _make_tune_parent_with_checkpoint(job_store, sample_data_ref)
+    child = job_store.create(
+        backend_name="lizyml",
+        config=parent.config,
+        data_ref=sample_data_ref,
+        job_type="tune",
+        parent_job_id=parent.job_id,
+    )
+
+    # load_checkpoint returns a mock model used by the tune call.
+    loaded_model = MagicMock(name="loaded_model")
+    mock_backend.load_checkpoint.return_value = loaded_model
+
+    result = run_retune(
+        parent_job=parent,
+        child_job=child,
+        job_store=job_store,
+        backend=mock_backend,
+        dataframe=sample_df,
+        n_trials=10,
+        expand_boundary=True,
+        boundary_threshold=0.05,
+        broadcaster=None,
+    )
+
+    assert result.status == "completed"
+    assert result.tune_result is not None
+    assert result.fit_result is not None
+
+    # Verify the adapter was called with resume=True and the child dir.
+    mock_backend.load_checkpoint.assert_called_once()
+    load_arg = mock_backend.load_checkpoint.call_args[0][0]
+    assert load_arg == job_store.jobs_dir / child.job_id
+
+    tune_calls = mock_backend.tune.call_args_list
+    assert len(tune_calls) == 1
+    tune_kwargs = tune_calls[0].kwargs
+    assert tune_kwargs.get("resume") is True
+    assert tune_kwargs.get("checkpoint_dir") == job_store.jobs_dir / child.job_id
+    re_tune_block = tune_kwargs.get("re_tune")
+    assert re_tune_block["n_rounds"] == 1
+    assert re_tune_block["n_trials"] == 10
+    assert re_tune_block["expand_boundary"] is True
+    assert re_tune_block["boundary_threshold"] == 0.05
+
+    # The child directory must now contain the copied model.pkl so a
+    # subsequent load would succeed on its own.
+    assert (job_store.jobs_dir / child.job_id / "model.pkl").exists()
+
+
+def test_run_retune_marks_child_failed_when_load_checkpoint_raises(
+    job_store: JobStore,
+    sample_data_ref: DataRef,
+    sample_df: pd.DataFrame,
+    mock_backend: MagicMock,
+) -> None:
+    """A PickleIncompatibleError bubbling up from load_checkpoint must
+    be captured by _run_job_core and stored in child.error."""
+    from lizystudio.backends.lizyml import PickleIncompatibleError
+
+    parent = _make_tune_parent_with_checkpoint(job_store, sample_data_ref)
+    child = job_store.create(
+        backend_name="lizyml",
+        config=parent.config,
+        data_ref=sample_data_ref,
+        job_type="tune",
+        parent_job_id=parent.job_id,
+    )
+
+    mock_backend.load_checkpoint.side_effect = PickleIncompatibleError(
+        "simulated version mismatch"
+    )
+
+    result = run_retune(
+        parent_job=parent,
+        child_job=child,
+        job_store=job_store,
+        backend=mock_backend,
+        dataframe=sample_df,
+        n_trials=10,
+        expand_boundary=None,
+        boundary_threshold=None,
+        broadcaster=None,
+    )
+
+    assert result.status == "failed"
+    assert result.error is not None
+    assert "simulated version mismatch" in result.error
+
+
+def test_start_retune_async_fails_fast_when_ws_dataframe_none(
+    job_store: JobStore,
+    sample_data_ref: DataRef,
+    mock_backend: MagicMock,
+    mock_broadcaster: MagicMock,
+) -> None:
+    """When ws.dataframe is None, start_retune_async must not spawn a
+    thread — it marks the child as failed inline, releases the parent
+    lock, and sets ws.current_job_id to the child."""
+    parent = _make_tune_parent_with_checkpoint(job_store, sample_data_ref)
+    child = job_store.create(
+        backend_name="lizyml",
+        config=parent.config,
+        data_ref=sample_data_ref,
+        job_type="tune",
+        parent_job_id=parent.job_id,
+    )
+    ws = _make_workspace(mock_backend)
+    # No dataframe loaded.
+    assert ws.dataframe is None
+
+    job_store.acquire_parent_lock(parent.job_id, "placeholder")
+
+    returned_id = start_retune_async(
+        ws=ws,
+        job_store=job_store,
+        broadcaster=mock_broadcaster,
+        parent_job=parent,
+        child_job=child,
+        n_trials=5,
+        expand_boundary=None,
+        boundary_threshold=None,
+        mode="retune",
+    )
+
+    assert returned_id == child.job_id
+    refreshed = job_store.get(child.job_id)
+    assert refreshed is not None
+    assert refreshed.status == "failed"
+    assert refreshed.error is not None and "No data" in refreshed.error
+    # Lock released, workspace selection on the child.
+    assert job_store.get_locked_child(parent.job_id) is None
+    assert ws.current_job_id == child.job_id
+    mock_broadcaster.send_error.assert_called_once()
+
+
+def test_start_retune_async_spawns_thread_and_updates_workspace(
+    job_store: JobStore,
+    sample_data_ref: DataRef,
+    sample_df: pd.DataFrame,
+    mock_backend: MagicMock,
+    mock_broadcaster: MagicMock,
+) -> None:
+    """Full happy path: ws.dataframe is set, run_retune returns a
+    completed child, workspace fit/tune results are updated, and the
+    parent lock is released in the finally block."""
+    parent = _make_tune_parent_with_checkpoint(job_store, sample_data_ref)
+    child = job_store.create(
+        backend_name="lizyml",
+        config=parent.config,
+        data_ref=sample_data_ref,
+        job_type="tune",
+        parent_job_id=parent.job_id,
+    )
+    ws = _make_workspace(mock_backend)
+    ws.dataframe = sample_df
+
+    loaded_model = MagicMock(name="loaded_model")
+    mock_backend.load_checkpoint.return_value = loaded_model
+
+    job_store.acquire_parent_lock(parent.job_id, "placeholder")
+
+    returned_id = start_retune_async(
+        ws=ws,
+        job_store=job_store,
+        broadcaster=mock_broadcaster,
+        parent_job=parent,
+        child_job=child,
+        n_trials=10,
+        expand_boundary=None,
+        boundary_threshold=None,
+        mode="retune",
+    )
+    assert returned_id == child.job_id
+
+    # Wait for the background thread to finish; _JOIN_TIMEOUT is 30s
+    # which is plenty for the mocked adapter path.
+    thread = ws._job_thread
+    assert thread is not None
+    thread.join(timeout=15)
+    assert not thread.is_alive(), "retune thread did not finish in time"
+
+    refreshed = job_store.get(child.job_id)
+    assert refreshed is not None
+    assert refreshed.status == "completed"
+    assert ws.current_job_id == child.job_id
+    assert ws.workspace_fit_result is not None
+    assert ws.workspace_tune_result is not None
+    # Lock released in the finally block.
+    assert job_store.get_locked_child(parent.job_id) is None
+
+
+def test_start_retune_async_releases_lock_even_on_run_retune_error(
+    job_store: JobStore,
+    sample_data_ref: DataRef,
+    sample_df: pd.DataFrame,
+    mock_backend: MagicMock,
+    mock_broadcaster: MagicMock,
+) -> None:
+    """If run_retune raises inside the worker thread, the finally
+    block must still release the per-parent lock."""
+    parent = _make_tune_parent_with_checkpoint(job_store, sample_data_ref)
+    child = job_store.create(
+        backend_name="lizyml",
+        config=parent.config,
+        data_ref=sample_data_ref,
+        job_type="tune",
+        parent_job_id=parent.job_id,
+    )
+    ws = _make_workspace(mock_backend)
+    ws.dataframe = sample_df
+
+    # Make load_checkpoint raise inside the thread; run_retune catches
+    # it via _run_job_core and marks the child failed.
+    mock_backend.load_checkpoint.side_effect = RuntimeError("boom")
+
+    job_store.acquire_parent_lock(parent.job_id, "placeholder")
+
+    start_retune_async(
+        ws=ws,
+        job_store=job_store,
+        broadcaster=mock_broadcaster,
+        parent_job=parent,
+        child_job=child,
+        n_trials=5,
+        expand_boundary=None,
+        boundary_threshold=None,
+        mode="retune",
+    )
+    thread = ws._job_thread
+    assert thread is not None
+    thread.join(timeout=15)
+    assert not thread.is_alive()
+
+    refreshed = job_store.get(child.job_id)
+    assert refreshed is not None
+    assert refreshed.status == "failed"
+    assert job_store.get_locked_child(parent.job_id) is None

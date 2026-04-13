@@ -75,4 +75,58 @@ describe("ResumeActionButton", () => {
       screen.getByRole("button", { name: /Resume tuning from checkpoint/i }),
     ).toBeDisabled();
   });
+
+  it("fires onStarted with the new child job id on success", async () => {
+    mockResumeJob.mockResolvedValue({
+      job_id: "job_child_resume",
+      parent_job_id: "job_parent",
+    });
+    const onStarted = vi.fn();
+    renderButton({ onStarted });
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /Resume tuning from checkpoint/i }),
+    );
+    await screen.findByRole("spinbutton");
+    await userEvent.click(
+      screen.getByRole("button", { name: /Start Resume/i }),
+    );
+
+    await waitFor(() => {
+      expect(onStarted).toHaveBeenCalledWith("job_child_resume");
+    });
+  });
+
+  it("shows a destructive toast when resumeJob rejects", async () => {
+    const { toast } = await import("sonner");
+    mockResumeJob.mockRejectedValueOnce(new Error("server exploded"));
+
+    renderButton();
+    await userEvent.click(
+      screen.getByRole("button", { name: /Resume tuning from checkpoint/i }),
+    );
+    await screen.findByRole("spinbutton");
+    await userEvent.click(
+      screen.getByRole("button", { name: /Start Resume/i }),
+    );
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringContaining("server exploded"),
+      );
+    });
+  });
+
+  it("blocks submission when n_trials is 0", async () => {
+    renderButton();
+    await userEvent.click(
+      screen.getByRole("button", { name: /Resume tuning from checkpoint/i }),
+    );
+    const input = await screen.findByRole("spinbutton");
+    await userEvent.clear(input);
+    await userEvent.type(input, "0");
+
+    const submit = screen.getByRole("button", { name: /Start Resume/i });
+    expect(submit).toBeDisabled();
+  });
 });
