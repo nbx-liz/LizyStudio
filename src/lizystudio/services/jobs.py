@@ -58,6 +58,13 @@ class JobStore:
         self._cancel_lock = threading.Lock()
         self._active_job_id: str | None = None
         self._active_lock = threading.Lock()
+        # H-0062: per-parent exclusive lock for Re-tune / Resume children.
+        # Maps parent_job_id -> child_job_id currently holding the slot.
+        # In-memory only; cleared naturally on process restart because
+        # any child that was "running" when the old process died is
+        # already marked failed at restart time.
+        self._parent_locks: dict[str, str] = {}
+        self._parent_lock_mutex = threading.Lock()
 
     def _job_dir(self, job_id: str) -> Path:
         """Resolve job directory with traversal guard."""
@@ -228,6 +235,37 @@ class JobStore:
             if child.status in ("pending", "running"):
                 return True
         return False
+
+    # --- H-0062 per-parent exclusive retune / resume lock ---
+
+    def acquire_parent_lock(self, parent_job_id: str, child_job_id: str) -> bool:
+        """Try to claim the retune slot for *parent_job_id*.
+
+        Returns ``True`` when the caller now holds the slot, ``False``
+        when another child already has it.  The lock is stored in
+        memory only; a process restart clears all locks (matching the
+        fact that any "running" child from the previous process is
+        already considered failed on the next boot).
+        """
+        with self._parent_lock_mutex:
+            if parent_job_id in self._parent_locks:
+                return False
+            self._parent_locks[parent_job_id] = child_job_id
+            return True
+
+    def release_parent_lock(self, parent_job_id: str) -> None:
+        """Release the retune slot for *parent_job_id* if held.
+
+        Unlocking an already-unlocked parent is a no-op; this lets
+        caller ``finally`` blocks call release unconditionally.
+        """
+        with self._parent_lock_mutex:
+            self._parent_locks.pop(parent_job_id, None)
+
+    def get_locked_child(self, parent_job_id: str) -> str | None:
+        """Return the child job currently holding *parent_job_id*'s lock."""
+        with self._parent_lock_mutex:
+            return self._parent_locks.get(parent_job_id)
 
     def request_cancel(self, job_id: str) -> None:
         """Mark a job for cancellation (H-0011)."""
