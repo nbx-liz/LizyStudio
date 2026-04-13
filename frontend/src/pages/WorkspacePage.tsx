@@ -134,6 +134,12 @@ export function WorkspacePage() {
             setRunning(false);
             notify("LizyStudio", "Job completed");
           }}
+          onJobStarted={(childJobId) => {
+            // H-0062: Re-tune / Resume created a new child job — switch
+            // the workspace selection so the user sees its progress.
+            setCurrentJobId(childJobId);
+            setRunning(true);
+          }}
         />
       </ResizablePanel>
     </ResizablePanelGroup>

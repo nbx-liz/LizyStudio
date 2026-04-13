@@ -30,6 +30,8 @@ interface ResultsCompletedViewProps {
   selectedPlot: string;
   onSelectPlot: (p: string) => void;
   onApplyToFit?: (params: Record<string, unknown>) => void;
+  /** Called when a Re-tune child job is successfully started (H-0062). */
+  onJobStarted?: (childJobId: string) => void;
 }
 
 export function ResultsCompletedView({
@@ -38,6 +40,7 @@ export function ResultsCompletedView({
   modelName,
   selectedPlot,
   onSelectPlot,
+  onJobStarted,
   onApplyToFit,
 }: ResultsCompletedViewProps) {
   const { data: plots } = useQuery({
@@ -243,6 +246,7 @@ export function ResultsCompletedView({
                   ? "Re-tune of a re-tune child is not supported. Start from the original parent job."
                   : null
               }
+              onStarted={onJobStarted}
             />
           )}
           <Button

@@ -35,6 +35,12 @@ export interface ResumeActionButtonProps {
    * blocked the same way Re-tune is — same MVP rule.
    */
   disabledReason?: string | null;
+  /**
+   * Called with the newly-created child job id as soon as the resume
+   * POST succeeds. Used by the parent view to switch the Workspace
+   * selection over to the child (H-0062).
+   */
+  onStarted?: (childJobId: string) => void;
 }
 
 const MAX_TRIALS = 10_000;
@@ -44,6 +50,7 @@ export function ResumeActionButton({
   hasCheckpoint = true,
   remainingTrials,
   disabledReason,
+  onStarted,
 }: ResumeActionButtonProps) {
   const [open, setOpen] = useState(false);
   const [nTrials, setNTrials] = useState<string>(String(remainingTrials));
@@ -63,6 +70,7 @@ export function ResumeActionButton({
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
       queryClient.invalidateQueries({ queryKey: ["job", jobId] });
       setOpen(false);
+      onStarted?.(res.job_id);
     },
     onError: (err: Error) => {
       toast.error(`Resume failed: ${err.message}`);

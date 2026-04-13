@@ -23,6 +23,12 @@ interface ResultsPanelProps {
   hasConfig?: boolean;
   onApplyToFit?: (params: Record<string, unknown>) => void;
   onJobDone?: () => void;
+  /**
+   * Called when a Re-tune / Resume child job has been created so the
+   * parent (WorkspacePage) can switch its selection over to the child
+   * and surface its progress (H-0062).
+   */
+  onJobStarted?: (childJobId: string) => void;
 }
 
 export function ResultsPanel({
@@ -31,6 +37,7 @@ export function ResultsPanel({
   hasConfig = false,
   onApplyToFit,
   onJobDone,
+  onJobStarted,
 }: ResultsPanelProps) {
   const queryClient = useQueryClient();
   const [progress, setProgress] = useState<ProgressMessage | null>(null);
@@ -239,6 +246,7 @@ export function ResultsPanel({
                   ? "Resume of a re-tune child is not supported. Start from the original parent job."
                   : null
               }
+              onStarted={onJobStarted}
             />
           )}
         </div>
@@ -281,6 +289,7 @@ export function ResultsPanel({
       selectedPlot={selectedPlot}
       onSelectPlot={setSelectedPlot}
       onApplyToFit={onApplyToFit}
+      onJobStarted={onJobStarted}
     />
   );
 }

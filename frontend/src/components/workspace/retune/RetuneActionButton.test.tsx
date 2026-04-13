@@ -60,6 +60,28 @@ describe("RetuneActionButton", () => {
     });
   });
 
+  it("fires onStarted with the new child job id on success", async () => {
+    mockRetuneJob.mockResolvedValue({
+      job_id: "job_child_xyz",
+      parent_job_id: "job_parent",
+    });
+    const onStarted = vi.fn();
+
+    renderButton({ onStarted });
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /Re-tune with additional trials/i }),
+    );
+    await screen.findByRole("spinbutton");
+    await userEvent.click(
+      screen.getByRole("button", { name: /Start Re-tune/i }),
+    );
+
+    await waitFor(() => {
+      expect(onStarted).toHaveBeenCalledWith("job_child_xyz");
+    });
+  });
+
   it("disables the trigger when disabledReason is provided", async () => {
     renderButton({
       disabledReason: "Re-tune of a re-tune child is not supported",

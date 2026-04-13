@@ -38,6 +38,12 @@ export interface RetuneActionButtonProps {
    * where tuning left off).
    */
   defaultNTrials: number;
+  /**
+   * Called with the newly-created child job id as soon as the retune
+   * POST succeeds. Used by the parent view to switch the Workspace
+   * selection over to the child so progress is visible (H-0062).
+   */
+  onStarted?: (childJobId: string) => void;
 }
 
 const MAX_TRIALS = 10_000;
@@ -47,6 +53,7 @@ export function RetuneActionButton({
   disabledReason,
   hasCheckpoint = true,
   defaultNTrials,
+  onStarted,
 }: RetuneActionButtonProps) {
   const [open, setOpen] = useState(false);
   const [nTrials, setNTrials] = useState<string>(String(defaultNTrials));
@@ -66,6 +73,10 @@ export function RetuneActionButton({
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
       queryClient.invalidateQueries({ queryKey: ["job", jobId] });
       setOpen(false);
+      // Switch the workspace selection to the child so the user sees
+      // progress immediately. Without this the UI keeps showing the
+      // completed parent and the re-tune appears to do nothing.
+      onStarted?.(res.job_id);
     },
     onError: (err: Error) => {
       toast.error(`Re-tune failed: ${err.message}`);
