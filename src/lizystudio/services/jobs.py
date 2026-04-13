@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import json
 import shutil
 import threading
@@ -34,6 +35,9 @@ class Job:
     tune_result: TuningSummary | None = None
     model_path: str | None = None
     error: str | None = None
+    # H-0062: job lineage for Re-tune / Resume child jobs. Optional so
+    # existing jobs on disk (written before Phase B) continue to load.
+    parent_job_id: str | None = None
 
 
 class JobStore:
@@ -70,8 +74,13 @@ class JobStore:
         config: dict[str, Any],
         data_ref: DataRef,
         job_type: Literal["fit", "tune"],
+        parent_job_id: str | None = None,
     ) -> Job:
-        """Create a new pending job and persist its metadata."""
+        """Create a new pending job and persist its metadata.
+
+        When *parent_job_id* is provided the new job is recorded as a
+        child in the lineage graph (H-0062).
+        """
         job_id = f"job_{uuid4().hex[:8]}"
         job = Job(
             job_id=job_id,
@@ -81,6 +90,7 @@ class JobStore:
             data_ref=data_ref,
             job_type=job_type,
             created_at=datetime.now(timezone.utc).isoformat(),
+            parent_job_id=parent_job_id,
         )
         self._save_meta(job)
         return job
@@ -133,12 +143,90 @@ class JobStore:
                 asdict(job.tune_result),
             )
 
-    def delete(self, job_id: str) -> bool:
-        """Delete a job directory. Returns True if it existed."""
-        job_dir = self._job_dir(job_id)
-        if job_dir.exists():
-            shutil.rmtree(job_dir)
-            return True
+    def delete(self, job_id: str, *, cascade: bool = False) -> builtins.list[str]:
+        """Delete a job directory. Returns the list of removed job IDs.
+
+        When *cascade* is True (H-0062), the entire descendant subtree is
+        removed recursively.  When False only the requested job is
+        removed (existing children become orphaned).  An empty list is
+        returned when the job does not exist.
+        """
+        if not self._job_dir(job_id).exists():
+            return []
+
+        removed: builtins.list[str] = []
+        if cascade:
+            # Iterative BFS to collect all descendants first so we never
+            # rmtree a directory while we still need to enumerate its
+            # siblings.
+            queue: builtins.list[str] = [job_id]
+            while queue:
+                current = queue.pop()
+                removed.append(current)
+                queue.extend(self.get_child_job_ids(current))
+        else:
+            removed.append(job_id)
+
+        for jid in removed:
+            target = self._job_dir(jid)
+            if target.exists():
+                shutil.rmtree(target)
+        return removed
+
+    # --- H-0062 lineage helpers ---
+
+    def get_child_job_ids(self, parent_job_id: str) -> builtins.list[str]:
+        """Return direct children of *parent_job_id* (H-0062)."""
+        children: builtins.list[str] = []
+        if not self.jobs_dir.exists():
+            return children
+        for d in self.jobs_dir.iterdir():
+            if not d.is_dir() or not (d / "meta.json").exists():
+                continue
+            try:
+                meta = self._read_json(d / "meta.json")
+            except (OSError, json.JSONDecodeError):
+                continue
+            if meta.get("parent_job_id") == parent_job_id:
+                children.append(d.name)
+        return children
+
+    def get_lineage_tree(self, root_job_id: str) -> dict[str, Any] | None:
+        """Return ``{job_id, status, children: [...]}`` rooted at *root_job_id*.
+
+        Returns ``None`` when the root does not exist.  Iterative BFS
+        with a depth guard (20) to avoid runaway lineages.
+        """
+        root = self.get(root_job_id)
+        if root is None:
+            return None
+        max_depth = 20
+
+        def _build(job: Job, depth: int) -> dict[str, Any]:
+            node: dict[str, Any] = {
+                "job_id": job.job_id,
+                "status": job.status,
+                "job_type": job.job_type,
+                "children": [],
+            }
+            if depth >= max_depth:
+                return node
+            for cid in self.get_child_job_ids(job.job_id):
+                child = self.get(cid)
+                if child is not None:
+                    node["children"].append(_build(child, depth + 1))
+            return node
+
+        return _build(root, 0)
+
+    def has_active_children(self, parent_job_id: str) -> bool:
+        """Return True when any direct child is pending or running (H-0062)."""
+        for cid in self.get_child_job_ids(parent_job_id):
+            child = self.get(cid)
+            if child is None:
+                continue
+            if child.status in ("pending", "running"):
+                return True
         return False
 
     def request_cancel(self, job_id: str) -> None:
@@ -206,6 +294,7 @@ class JobStore:
             "completed_at": job.completed_at,
             "model_path": job.model_path,
             "error": job.error,
+            "parent_job_id": job.parent_job_id,
         }
         self._write_json(job_dir / "meta.json", meta)
 
@@ -240,6 +329,7 @@ class JobStore:
             tune_result=tune_result,
             model_path=meta.get("model_path"),
             error=meta.get("error"),
+            parent_job_id=meta.get("parent_job_id"),
         )
 
     @staticmethod

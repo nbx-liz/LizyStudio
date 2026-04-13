@@ -163,7 +163,8 @@ def delete_job(
     job = _get_job_or_404(job_id, job_store)
     if job.status == "running":
         raise JobRunningError(job_id)
-    if not job_store.delete(job_id):
+    removed = job_store.delete(job_id)
+    if not removed:
         raise JobNotFoundError(job_id)
     return {"status": "deleted"}
 
