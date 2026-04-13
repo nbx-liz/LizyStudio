@@ -88,20 +88,24 @@ export function BoundaryExpansionPanel({
               </TableCell>
               <TableCell>
                 {dim.position_pct !== null ? (
-                  <>
-                    <div className="hidden md:flex items-center gap-1.5">
-                      <Progress
-                        value={dim.position_pct}
-                        className="h-1.5 w-12"
-                      />
-                      <span className="text-xs tabular-nums text-muted-foreground ml-1.5">
-                        {dim.position_pct.toFixed(0)}%
-                      </span>
-                    </div>
-                    <span className="md:hidden text-xs tabular-nums text-muted-foreground">
-                      {dim.position_pct.toFixed(0)}%
-                    </span>
-                  </>
+                  // lizyml emits position_pct in [0.0, 1.0]; scale to [0, 100]
+                  // for the Progress bar and the percentage label.
+                  (() => {
+                    const pct = dim.position_pct * 100;
+                    return (
+                      <>
+                        <div className="hidden md:flex items-center gap-1.5">
+                          <Progress value={pct} className="h-1.5 w-12" />
+                          <span className="text-xs tabular-nums text-muted-foreground ml-1.5">
+                            {pct.toFixed(0)}%
+                          </span>
+                        </div>
+                        <span className="md:hidden text-xs tabular-nums text-muted-foreground">
+                          {pct.toFixed(0)}%
+                        </span>
+                      </>
+                    );
+                  })()
                 ) : (
                   <span className="text-xs tabular-nums text-muted-foreground">
                     {"\u2014"}

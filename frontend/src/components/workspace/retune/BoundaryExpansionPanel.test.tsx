@@ -8,7 +8,8 @@ const baseDim: BoundaryDimStatus = {
   best_value: 0.05,
   low: 0.001,
   high: 0.1,
-  position_pct: 49.5,
+  // lizyml emits position_pct in [0.0, 1.0]; UI multiplies by 100 for display.
+  position_pct: 0.495,
   edge: "none",
   expanded: false,
   new_low: null,
@@ -129,6 +130,17 @@ describe("BoundaryExpansionPanel", () => {
     );
     // Both md+ and md- variants render a literal "0%"
     expect(screen.getAllByText("0%").length).toBeGreaterThan(0);
+  });
+
+  it("scales lizyml's [0,1] position_pct to a 0-100 percentage label", () => {
+    // 0.732 → 73% (matches end-to-end run with learning_rate at edge=none)
+    render(
+      <BoundaryExpansionPanel
+        report={makeReport([{ ...baseDim, position_pct: 0.732 }])}
+      />,
+    );
+    expect(screen.getAllByText("73%").length).toBeGreaterThan(0);
+    expect(screen.queryByText("1%")).not.toBeInTheDocument();
   });
 
   it("renders em-dash for best_value when it is null", () => {
