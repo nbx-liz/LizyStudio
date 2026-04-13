@@ -70,6 +70,9 @@ function buildTimelines(
 
     for (const r of rounds) {
       const snap = r.space_snapshot;
+      // First match wins — lizyml's SearchDim names are unique within a
+      // single snapshot, so the defensive find() never sees duplicates
+      // in practice.
       const raw = snap?.find(
         (d): d is Record<string, unknown> =>
           typeof d === "object" &&
@@ -147,10 +150,19 @@ function NumericBar({
   expanded,
   bestValue,
 }: NumericBarProps) {
+  // The shared axis is always linear, even when the underlying dim uses
+  // log scale. This slightly underweights log-scale expansions visually
+  // (e.g. 0.01→0.001 looks smaller than it is), which is why the title
+  // surfaces the (log) marker and the exact bounds.
   const span = globalHigh - globalLow || 1;
   const leftPct = ((dim.low - globalLow) / span) * 100;
   const widthPct = ((dim.high - dim.low) / span) * 100;
-  const label = `Round ${round}: [${formatBound(dim.low)}, ${formatBound(dim.high)}]${dim.log ? " (log)" : ""}${expanded ? ` — expanded in round ${round}` : ""}`;
+  const logHint = dim.log ? " (log scale shown on linear axis)" : "";
+  const label = `Round ${round}: [${formatBound(dim.low)}, ${formatBound(dim.high)}]${logHint}${expanded ? ` — expanded in round ${round}` : ""}`;
+  // best_value comes from the final round's boundary_report, so earlier
+  // rounds whose search range excluded that value correctly hide the
+  // tick, while the final round (whose range always contains it by
+  // construction) renders it.
   const bestLeftPct =
     bestValue !== null && bestValue >= dim.low && bestValue <= dim.high
       ? ((bestValue - globalLow) / span) * 100
