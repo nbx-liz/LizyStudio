@@ -622,7 +622,7 @@ def test_run_tune_cancelled_via_cancel_flag(
     """If cancellation is requested before tune is called, job ends as cancelled."""
 
     def tune_side_effect(
-        model: Any, *, on_progress: Any, re_tune: Any = None
+        model: Any, *, on_progress: Any, re_tune: Any = None, **_: Any
     ) -> TuningSummary:
         on_progress(current=0, total=50, message="tuning")
         return MagicMock()  # never reached
@@ -658,7 +658,7 @@ def test_run_tune_multi_round_cancelled_between_rounds(
     call_count = {"n": 0}
 
     def tune_side_effect(
-        model: Any, *, on_progress: Any, re_tune: Any = None
+        model: Any, *, on_progress: Any, re_tune: Any = None, **_: Any
     ) -> TuningSummary:
         call_count["n"] += 1
         # First round completes normally

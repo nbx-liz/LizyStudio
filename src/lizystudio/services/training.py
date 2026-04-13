@@ -321,11 +321,16 @@ def run_tune(
     """Execute a tune job: tune -> auto-fit with best params (H-0002 B)."""
     tune_config = _prepare_tune_config(config)
     re_tune = _extract_re_tune(config)
+    # H-0062: checkpoint directory for incremental trial persistence.
+    checkpoint_dir = job_store.jobs_dir / job.job_id
 
     def execute(cb: ProgressCallback) -> tuple[FitSummary, TuningSummary | None, str]:
         model = backend.create_model(tune_config, dataframe)
         tune_result: TuningSummary = backend.tune(
-            model, on_progress=cb, re_tune=re_tune
+            model,
+            on_progress=cb,
+            re_tune=re_tune,
+            checkpoint_dir=checkpoint_dir,
         )
 
         # Capture tuning plot from the tune model before creating model2.

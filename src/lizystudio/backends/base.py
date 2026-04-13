@@ -81,6 +81,7 @@ class BackendAdapter(Protocol):
         *,
         on_progress: ProgressCallback | None = None,
         re_tune: dict[str, Any] | None = None,
+        checkpoint_dir: Any = None,
     ) -> TuningSummary:
         """Run hyperparameter tuning.
 
@@ -94,6 +95,11 @@ class BackendAdapter(Protocol):
           round boundaries (bool, default True)
         - ``boundary_threshold``: relative distance from search-space
           boundary that triggers expansion (float in [0, 0.5))
+
+        When *checkpoint_dir* is a writable :class:`~pathlib.Path`, the
+        adapter writes an incremental checkpoint after each completed
+        trial (H-0062).  Checkpoint save failures are swallowed so tune
+        execution is not aborted by transient filesystem errors.
 
         Legacy single-round tuning leaves ``TuningSummary.rounds`` and
         ``TuningSummary.boundary_report`` as ``None``.
@@ -130,6 +136,28 @@ class BackendAdapter(Protocol):
         or drops duplicates during training.
         """
         return []
+
+    # --- Checkpoint persistence (H-0062) ---
+
+    def save_checkpoint(self, model: Any, path: Any) -> None:
+        """Atomically persist an in-flight *model* into *path* as a pickle.
+
+        Adapters should use ``path/model.pkl.tmp`` -> ``path/model.pkl``
+        via ``os.replace`` to avoid partial writes, and write a sidecar
+        ``path/model_meta.json`` capturing version info for compatibility
+        checks on load.  Failures must be swallowed (logged only) so a
+        flaky filesystem cannot abort an otherwise healthy tune.
+        """
+        raise NotImplementedError
+
+    def load_checkpoint(self, path: Any) -> Any:
+        """Load a previously saved checkpoint from *path*.
+
+        Raises :class:`FileNotFoundError` when ``path/model.pkl`` does not
+        exist.  Adapters should call their own pickle-version verification
+        before returning and raise a descriptive error on mismatch.
+        """
+        raise NotImplementedError
 
     def confusion_matrix(
         self, model: Any, threshold: float = 0.5

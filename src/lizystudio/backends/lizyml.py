@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import os
+from datetime import datetime, timezone
 from pathlib import Path
+from pickle import PicklingError
 from typing import Any
 
+import cloudpickle
 import pandas as pd
 import yaml
 
@@ -21,6 +26,122 @@ from lizystudio.backends.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# --- H-0062: Phase B checkpoint persistence -------------------------------
+
+
+class PicklePreflightError(RuntimeError):
+    """Raised before tune starts when the job dir is not usable for
+    pickle persistence (no write perms, SELinux denial, or unpicklable
+    skeleton)."""
+
+
+class PickleIncompatibleError(RuntimeError):
+    """Raised by ``load_checkpoint`` / ``verify_pickle_compatibility`` when
+    the on-disk ``model_meta.json`` points at a schema or major backend
+    version the current Studio cannot safely deserialize."""
+
+
+_PICKLE_SCHEMA_VERSION = 1
+_MODEL_PKL = "model.pkl"
+_MODEL_PKL_TMP = "model.pkl.tmp"
+_MODEL_META = "model_meta.json"
+_MODEL_META_TMP = "model_meta.json.tmp"
+
+
+def _collect_pickle_versions() -> dict[str, str]:
+    """Snapshot the lizyml / lightgbm / optuna versions for the sidecar."""
+    import lizyml
+
+    versions: dict[str, str] = {
+        "lizyml_version": getattr(lizyml, "__version__", "unknown"),
+    }
+    try:
+        import lightgbm
+
+        versions["lightgbm_version"] = getattr(lightgbm, "__version__", "unknown")
+    except ImportError:  # pragma: no cover - lightgbm is a hard dep
+        versions["lightgbm_version"] = "unknown"
+    try:
+        import optuna
+
+        versions["optuna_version"] = getattr(optuna, "__version__", "unknown")
+    except ImportError:  # pragma: no cover - optuna is a hard dep
+        versions["optuna_version"] = "unknown"
+    return versions
+
+
+def _major_minor(version: str) -> tuple[int, int] | None:
+    """Parse ``'0.9.1'`` into ``(0, 9)`` for version-compat comparison."""
+    parts = version.split(".")
+    if len(parts) < 2:
+        return None
+    try:
+        return int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
+
+
+def verify_pickle_compatibility(meta: dict[str, Any]) -> None:
+    """Reject a checkpoint whose sidecar points at an incompatible runtime.
+
+    The check is intentionally strict: we only accept the exact pickle
+    schema version and an exact lizyml major.minor match.  Anything else
+    raises so the caller can show a clear error to the user rather than
+    silently loading a bad model state.
+    """
+    schema = meta.get("pickle_schema")
+    if schema != _PICKLE_SCHEMA_VERSION:
+        raise PickleIncompatibleError(
+            f"Unsupported pickle_schema: expected {_PICKLE_SCHEMA_VERSION}, "
+            f"got {schema!r}"
+        )
+
+    current = _collect_pickle_versions()
+    saved_lizyml = str(meta.get("lizyml_version", ""))
+    current_mm = _major_minor(current["lizyml_version"])
+    saved_mm = _major_minor(saved_lizyml)
+    if current_mm is None or saved_mm is None or current_mm != saved_mm:
+        raise PickleIncompatibleError(
+            "Incompatible lizyml version: checkpoint was saved with "
+            f"{saved_lizyml!r}, current runtime is "
+            f"{current['lizyml_version']!r}"
+        )
+
+
+def preflight_pickle_check(job_dir: Path) -> None:
+    """Fail fast before tune if ``job_dir`` cannot host a pickle file.
+
+    Catches the common 'tune ran for an hour and then pickle save
+    failed' class of bugs by verifying:
+
+    1. The job dir is writable (creates and removes ``.write_test``)
+    2. cloudpickle can round-trip a minimal sentinel object
+
+    Real Model-specific picklability cannot be tested here because it
+    requires the fitted instance, which is exactly what we are trying
+    to produce.  The first real save attempt will surface any remaining
+    pickling issue (logged as WARNING, tune continues).
+    """
+    job_dir.mkdir(parents=True, exist_ok=True)
+    probe = job_dir / ".write_test"
+    try:
+        probe.write_bytes(b"ok")
+    except OSError as exc:
+        raise PicklePreflightError(
+            f"Job directory {job_dir} is not writable: {exc}"
+        ) from exc
+    finally:
+        if probe.exists():
+            with contextlib.suppress(OSError):
+                probe.unlink()
+
+    sentinel: dict[str, Any] = {"_pickle_schema": _PICKLE_SCHEMA_VERSION}
+    try:
+        cloudpickle.loads(cloudpickle.dumps(sentinel))
+    except Exception as exc:  # noqa: BLE001 — cloudpickle can raise many
+        raise PicklePreflightError(f"cloudpickle round-trip failed: {exc}") from exc
 
 
 class LizyMLAdapter:
@@ -141,6 +262,7 @@ class LizyMLAdapter:
         *,
         on_progress: ProgressCallback | None = None,
         re_tune: dict[str, Any] | None = None,
+        checkpoint_dir: Path | None = None,
     ) -> TuningSummary:
         n_rounds, extra_kwargs = _parse_re_tune(re_tune)
 
@@ -148,10 +270,30 @@ class LizyMLAdapter:
         accumulated_trials: list[dict[str, Any]] = []
         current_round = 1
 
-        if on_progress is not None:
+        need_bridge = on_progress is not None or checkpoint_dir is not None
+
+        if need_bridge:
             from lizyml import TuneProgressInfo
 
             def _bridge(info: TuneProgressInfo) -> None:
+                # H-0062: persist an incremental checkpoint BEFORE calling
+                # the user-supplied progress callback so a crash during
+                # the UI push still leaves the trial we just finished on
+                # disk.  save_checkpoint is resilient on its own; we wrap
+                # in try/except anyway so that any latent bug in the
+                # persistence layer cannot abort the in-flight tune.
+                if checkpoint_dir is not None:
+                    try:
+                        self.save_checkpoint(model, checkpoint_dir)
+                    except Exception:  # noqa: BLE001 - intentionally broad
+                        logger.warning(
+                            "checkpoint save raised unexpectedly; tune continues",
+                            exc_info=True,
+                        )
+
+                if on_progress is None:
+                    return
+
                 msg = f"Round {current_round}/{n_rounds} · "
                 msg += f"Trial {info.current_trial}/{info.total_trials}"
                 if info.best_score is not None:
@@ -187,6 +329,8 @@ class LizyMLAdapter:
                     raise KeyboardInterrupt from None
 
             lizyml_callback = _bridge
+
+        if on_progress is not None:
             # total=0 signals indeterminate until first trial callback
             # provides the real total.
             on_progress(current=0, total=0, message="Starting tuning...")
@@ -212,6 +356,79 @@ class LizyMLAdapter:
             total = len(tune_result.trials) or 1
             on_progress(current=total, total=total, message="Tuning complete.")
         return _serialize_tuning_result(tune_result)
+
+    # -- Checkpoint persistence (H-0062) --
+
+    def save_checkpoint(self, model: Any, path: Path) -> None:
+        """Atomically persist *model* as ``path/model.pkl`` via temp+rename.
+
+        Writes a ``model_meta.json`` sidecar capturing lizyml / lightgbm /
+        optuna versions so later loads can reject incompatible runtimes.
+        All failures (filesystem, pickling) are swallowed with a WARNING
+        log so that a flaky checkpoint cannot crash an in-flight tune.
+        """
+        target_dir = Path(path)
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logger.warning("checkpoint: cannot create %s: %s", target_dir, exc)
+            return
+
+        tmp_path = target_dir / _MODEL_PKL_TMP
+        final_path = target_dir / _MODEL_PKL
+        try:
+            with tmp_path.open("wb") as fh:
+                cloudpickle.dump(model, fh)
+            os.replace(tmp_path, final_path)
+        except (OSError, PicklingError, RecursionError) as exc:
+            logger.warning(
+                "checkpoint save failed at %s: %s",
+                final_path,
+                exc,
+            )
+            # Best-effort cleanup of the partial temp file
+            with contextlib.suppress(OSError):
+                tmp_path.unlink(missing_ok=True)
+            return
+
+        # Meta sidecar — if this fails we still keep the pickle, but log.
+        meta_tmp = target_dir / _MODEL_META_TMP
+        meta_final = target_dir / _MODEL_META
+        try:
+            meta_payload: dict[str, Any] = {
+                "pickle_schema": _PICKLE_SCHEMA_VERSION,
+                "saved_at": datetime.now(timezone.utc).isoformat(),
+                **_collect_pickle_versions(),
+            }
+            meta_tmp.write_text(
+                json.dumps(meta_payload, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            os.replace(meta_tmp, meta_final)
+        except OSError as exc:
+            logger.warning("checkpoint meta write failed at %s: %s", meta_final, exc)
+            with contextlib.suppress(OSError):
+                meta_tmp.unlink(missing_ok=True)
+
+    def load_checkpoint(self, path: Path) -> Any:
+        """Load ``path/model.pkl`` after verifying ``model_meta.json``.
+
+        Raises :class:`FileNotFoundError` when no pickle exists, and
+        :class:`PickleIncompatibleError` when the sidecar reports a
+        schema or lizyml-major mismatch.
+        """
+        target_dir = Path(path)
+        pkl_path = target_dir / _MODEL_PKL
+        if not pkl_path.exists():
+            raise FileNotFoundError(f"No checkpoint at {pkl_path}")
+
+        meta_path = target_dir / _MODEL_META
+        if meta_path.exists():
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            verify_pickle_compatibility(meta)
+
+        with pkl_path.open("rb") as fh:
+            return cloudpickle.load(fh)
 
     def predict(
         self,
