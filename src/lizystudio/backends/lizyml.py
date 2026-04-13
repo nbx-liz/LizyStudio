@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-import logging  # noqa: F401
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -140,23 +140,28 @@ class LizyMLAdapter:
         model: Any,
         *,
         on_progress: ProgressCallback | None = None,
+        re_tune: dict[str, Any] | None = None,
     ) -> TuningSummary:
+        n_rounds, extra_kwargs = _parse_re_tune(re_tune)
+
         lizyml_callback: Any = None
+        accumulated_trials: list[dict[str, Any]] = []
+        current_round = 1
+
         if on_progress is not None:
             from lizyml import TuneProgressInfo
 
-            accumulated_trials: list[dict[str, Any]] = []
-
             def _bridge(info: TuneProgressInfo) -> None:
-                msg = f"Trial {info.current_trial}/{info.total_trials}"
+                msg = f"Round {current_round}/{n_rounds} · "
+                msg += f"Trial {info.current_trial}/{info.total_trials}"
                 if info.best_score is not None:
                     msg += f" | Best: {info.best_score:.4f}"
                 if info.latest_score is not None:
                     msg += f" | Latest: {info.latest_score:.4f} ({info.latest_state})"
-                # Accumulate all trial results (including pruned/failed)
                 accumulated_trials.append(
                     {
-                        "number": info.current_trial - 1,
+                        "number": len(accumulated_trials),
+                        "round": current_round,
                         "score": float(info.latest_score)
                         if info.latest_score is not None
                         else None,
@@ -171,6 +176,8 @@ class LizyMLAdapter:
                         current=info.current_trial,
                         total=info.total_trials,
                         message=msg,
+                        round=current_round,
+                        total_rounds=n_rounds,
                         trial_results=list(accumulated_trials),
                     )
                 except Exception:
@@ -185,25 +192,26 @@ class LizyMLAdapter:
             on_progress(current=0, total=0, message="Starting tuning...")
 
         tune_result = model.tune(progress_callback=lizyml_callback)
+        for round_idx in range(2, n_rounds + 1):
+            current_round = round_idx
+            if on_progress is not None:
+                on_progress(
+                    current=0,
+                    total=0,
+                    message=f"Starting round {round_idx}/{n_rounds}...",
+                    round=round_idx,
+                    total_rounds=n_rounds,
+                )
+            tune_result = model.tune(
+                progress_callback=lizyml_callback,
+                resume=True,
+                **extra_kwargs,
+            )
 
         if on_progress is not None:
             total = len(tune_result.trials) or 1
             on_progress(current=total, total=total, message="Tuning complete.")
-        return TuningSummary(
-            best_params=dict(tune_result.best_params),
-            best_score=float(tune_result.best_score),
-            trials=[
-                {
-                    "number": t.number,
-                    "params": dict(t.params),
-                    "score": float(t.score),
-                    "state": t.state,
-                }
-                for t in tune_result.trials
-            ],
-            metric_name=tune_result.metric_name,
-            direction=tune_result.direction,
-        )
+        return _serialize_tuning_result(tune_result)
 
     def predict(
         self,
@@ -240,6 +248,39 @@ class LizyMLAdapter:
     def importance_kinds(self, model: Any) -> list[str]:
         """Return valid importance kinds for LizyML models."""
         return ["split", "gain", "shap"]
+
+    def learning_curve_metrics(self, model: Any) -> list[str]:
+        """Return metric names actually recorded in the learning curve history.
+
+        Walks ``fit_result.history[*]["eval_history"][dataset][metric]``,
+        mirroring the matching logic in
+        ``lizyml.plots.learning_curve.plot_learning_curve``. This is the
+        source of truth for the UI's metric filter — it reflects what the
+        backend actually trained on, not what the user requested in config.
+
+        Returns an empty list when no eval history is recorded (e.g. early
+        stopping disabled or legacy runs without history).
+        """
+        fit_result = getattr(model, "fit_result", None)
+        if fit_result is None:
+            return []
+        history = getattr(fit_result, "history", None) or []
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for fold_hist in history:
+            eval_hist = (
+                fold_hist.get("eval_history") if isinstance(fold_hist, dict) else None
+            )
+            if not eval_hist:
+                continue
+            for ds_metrics in eval_hist.values():
+                if not isinstance(ds_metrics, dict):
+                    continue
+                for metric_name in ds_metrics:
+                    if metric_name not in seen:
+                        seen.add(metric_name)
+                        ordered.append(metric_name)
+        return ordered
 
     def confusion_matrix(self, model: Any, threshold: float = 0.5) -> dict[str, Any]:
         result = model.confusion_matrix(threshold=threshold)
@@ -341,3 +382,203 @@ class LizyMLAdapter:
             fold_count=len(fit_result.splits.outer),
             params=params,
         )
+
+
+# ---------------------------------------------------------------------------
+# Tune / re-tune helpers (H-0061)
+# ---------------------------------------------------------------------------
+
+# Hard upper bounds act as a DoS guard: the frontend clamps n_rounds to 10
+# and n_trials implicitly via Search Space, but a direct API client could
+# otherwise request millions of trials and tie up the single-job queue.
+_MAX_RE_TUNE_ROUNDS = 20
+_MAX_RE_TUNE_TRIALS_PER_ROUND = 10_000
+
+
+def _parse_re_tune(
+    re_tune: dict[str, Any] | None,
+) -> tuple[int, dict[str, Any]]:
+    """Validate a ``re_tune`` config block from the request.
+
+    Returns ``(n_rounds, extra_kwargs)`` where ``extra_kwargs`` are the
+    keyword arguments passed to ``model.tune(resume=True, ...)`` on
+    rounds 2..n_rounds.  The first round always uses the Config-driven
+    ``tuning.optuna`` settings (n_trials, space, sampler, ...).
+    """
+    if re_tune is None:
+        return 1, {}
+
+    n_rounds_raw = re_tune.get("n_rounds", 1)
+    # Accept plain int only; reject float to avoid silent truncation (1.5 -> 1)
+    # and reject bool (Python bools are ints but not meaningful here).
+    if isinstance(n_rounds_raw, bool) or not isinstance(n_rounds_raw, int):
+        raise ValueError(f"re_tune.n_rounds must be an integer, got {n_rounds_raw!r}")
+    n_rounds = n_rounds_raw
+    if n_rounds < 1:
+        raise ValueError(f"re_tune.n_rounds must be >= 1, got {n_rounds}")
+    if n_rounds > _MAX_RE_TUNE_ROUNDS:
+        raise ValueError(
+            f"re_tune.n_rounds must be <= {_MAX_RE_TUNE_ROUNDS}, got {n_rounds}"
+        )
+
+    extra_kwargs: dict[str, Any] = {}
+    if "n_trials" in re_tune and re_tune["n_trials"] is not None:
+        n_trials_raw = re_tune["n_trials"]
+        # Same strict-int check as n_rounds: reject bool and non-int.
+        if isinstance(n_trials_raw, bool) or not isinstance(n_trials_raw, int):
+            raise ValueError(
+                f"re_tune.n_trials must be an integer, got {n_trials_raw!r}"
+            )
+        if n_trials_raw < 1:
+            raise ValueError(f"re_tune.n_trials must be >= 1, got {n_trials_raw}")
+        if n_trials_raw > _MAX_RE_TUNE_TRIALS_PER_ROUND:
+            raise ValueError(
+                f"re_tune.n_trials must be <= {_MAX_RE_TUNE_TRIALS_PER_ROUND}, "
+                f"got {n_trials_raw}"
+            )
+        extra_kwargs["n_trials"] = n_trials_raw
+    if "expand_boundary" in re_tune and re_tune["expand_boundary"] is not None:
+        extra_kwargs["expand_boundary"] = bool(re_tune["expand_boundary"])
+    if "boundary_threshold" in re_tune and re_tune["boundary_threshold"] is not None:
+        threshold_raw = re_tune["boundary_threshold"]
+        # Same strict numeric check as n_rounds / n_trials (reject bool, str).
+        if isinstance(threshold_raw, bool) or not isinstance(
+            threshold_raw, (int, float)
+        ):
+            raise ValueError(
+                f"re_tune.boundary_threshold must be a number, got {threshold_raw!r}"
+            )
+        threshold = float(threshold_raw)
+        # lizyml 0.9.0 Model.tune enforces strict (0.0, 0.5); mirror that so
+        # errors surface here instead of deep inside lizyml.
+        if not (0.0 < threshold < 0.5):
+            raise ValueError(
+                f"re_tune.boundary_threshold must be in (0.0, 0.5), got {threshold}"
+            )
+        extra_kwargs["boundary_threshold"] = threshold
+    return n_rounds, extra_kwargs
+
+
+def _serialize_tuning_result(tune_result: Any) -> TuningSummary:
+    """Convert lizyml ``TuningResult`` into Studio ``TuningSummary``.
+
+    Populates the optional ``rounds`` and ``boundary_report`` fields
+    when the lizyml result carries H-0068 data.  Legacy results without
+    those fields produce a summary with ``rounds=None`` and
+    ``boundary_report=None``.
+    """
+    rounds = _serialize_rounds(getattr(tune_result, "rounds", None))
+    boundary = _serialize_boundary_report(getattr(tune_result, "boundary_report", None))
+    return TuningSummary(
+        best_params=dict(tune_result.best_params),
+        best_score=float(tune_result.best_score),
+        trials=[
+            {
+                "number": t.number,
+                "params": dict(t.params),
+                # Optuna PRUNED/FAIL trials carry score=None.
+                "score": float(t.score) if t.score is not None else None,
+                "state": t.state,
+                "round": getattr(t, "round", 1),
+            }
+            for t in tune_result.trials
+        ],
+        metric_name=tune_result.metric_name,
+        direction=tune_result.direction,
+        rounds=rounds,
+        boundary_report=boundary,
+    )
+
+
+def _serialize_rounds(rounds: Any) -> list[dict[str, Any]] | None:
+    """Serialize a lizyml ``tuple[RoundSummary, ...]`` to plain dicts."""
+    if not rounds:
+        return None
+    out: list[dict[str, Any]] = []
+    for r in rounds:
+        out.append(
+            {
+                "round": int(r.round),
+                "n_trials": int(r.n_trials),
+                "best_score_before": (
+                    float(r.best_score_before)
+                    if r.best_score_before is not None
+                    else None
+                ),
+                "best_score_after": float(r.best_score_after),
+                "expanded_dims": list(r.expanded_dims),
+                "space_snapshot": [
+                    _serialize_search_dim(dim) for dim in r.space_snapshot
+                ],
+            }
+        )
+    return out
+
+
+def _serialize_boundary_report(report: Any) -> dict[str, Any] | None:
+    """Serialize a lizyml ``BoundaryReport`` to a plain dict."""
+    if report is None:
+        return None
+    dims = getattr(report, "dims", ())
+    return {
+        "dims": [
+            {
+                "name": str(d.name),
+                "best_value": d.best_value,
+                "low": d.low,
+                "high": d.high,
+                "position_pct": (
+                    float(d.position_pct) if d.position_pct is not None else None
+                ),
+                "edge": str(d.edge) if d.edge is not None else None,
+                "expanded": bool(d.expanded),
+                "new_low": d.new_low,
+                "new_high": d.new_high,
+            }
+            for d in dims
+        ],
+        "expanded_names": list(getattr(report, "expanded_names", ())),
+    }
+
+
+def _search_dim_type_label(dim: Any) -> str:
+    """Map a lizyml ``SearchDim`` dataclass to a short type label.
+
+    lizyml 0.9.0 uses three concrete frozen dataclasses — FloatDim, IntDim,
+    CategoricalDim — and does not expose a ``type`` field.  Derive the
+    label from the class name so the UI can distinguish numeric dims
+    (with low/high/log) from categorical dims (with choices).
+    """
+    cls = type(dim).__name__
+    if cls == "FloatDim":
+        return "float"
+    if cls == "IntDim":
+        return "int"
+    if cls == "CategoricalDim":
+        return "categorical"
+    return cls.lower().removesuffix("dim") or "unknown"
+
+
+def _serialize_search_dim(dim: Any) -> dict[str, Any]:
+    """Serialize a lizyml ``SearchDim`` into a plain dict.
+
+    The snapshot captures just enough to render a Search Space Evolution
+    view — type, name, category, and the type-specific range — without
+    pulling backend-specific objects into Studio's common type boundary.
+    Missing attributes are omitted rather than emitted as ``None`` so
+    the UI can use ``"low" in dim`` to discriminate numeric vs categorical.
+    """
+    result: dict[str, Any] = {
+        "name": getattr(dim, "name", None),
+        "type": _search_dim_type_label(dim),
+        "category": getattr(dim, "category", None),
+    }
+    # Numeric dims (FloatDim / IntDim) carry low/high/log.
+    for attr in ("low", "high", "log"):
+        if hasattr(dim, attr):
+            result[attr] = getattr(dim, attr)
+    # Categorical dims carry choices as a tuple; convert to list for JSON.
+    if hasattr(dim, "choices"):
+        choices = dim.choices
+        result["choices"] = list(choices) if choices is not None else None
+    return result

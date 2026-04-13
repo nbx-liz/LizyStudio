@@ -80,7 +80,25 @@ class BackendAdapter(Protocol):
         model: Any,
         *,
         on_progress: ProgressCallback | None = None,
-    ) -> TuningSummary: ...
+        re_tune: dict[str, Any] | None = None,
+    ) -> TuningSummary:
+        """Run hyperparameter tuning.
+
+        When *re_tune* is provided, the adapter performs a multi-round
+        tuning session on the same model instance, continuing the Optuna
+        study across rounds and optionally expanding the search space at
+        round boundaries.  The ``re_tune`` dict may contain:
+
+        - ``n_rounds``: total number of tuning rounds (>= 1)
+        - ``expand_boundary``: whether to expand the search space at
+          round boundaries (bool, default True)
+        - ``boundary_threshold``: relative distance from search-space
+          boundary that triggers expansion (float in [0, 0.5))
+
+        Legacy single-round tuning leaves ``TuningSummary.rounds`` and
+        ``TuningSummary.boundary_report`` as ``None``.
+        """
+        ...
 
     def predict(
         self,
@@ -101,6 +119,17 @@ class BackendAdapter(Protocol):
     def importance_kinds(self, model: Any) -> list[str]:
         """Return the list of valid importance kind identifiers."""
         return ["split"]
+
+    def learning_curve_metrics(self, model: Any) -> list[str]:
+        """Return the metric names present in the learning curve history.
+
+        The returned names are the exact values accepted by
+        ``plot(model, "learning-curve", metrics=[...])``. They come from the
+        actual training eval history, not from the user config — the two
+        can diverge when the backend routes some metrics to feval callables
+        or drops duplicates during training.
+        """
+        return []
 
     def confusion_matrix(
         self, model: Any, threshold: float = 0.5

@@ -621,7 +621,9 @@ def test_run_tune_cancelled_via_cancel_flag(
 ) -> None:
     """If cancellation is requested before tune is called, job ends as cancelled."""
 
-    def tune_side_effect(model: Any, *, on_progress: Any) -> TuningSummary:
+    def tune_side_effect(
+        model: Any, *, on_progress: Any, re_tune: Any = None
+    ) -> TuningSummary:
         on_progress(current=0, total=50, message="tuning")
         return MagicMock()  # never reached
 
@@ -640,6 +642,56 @@ def test_run_tune_cancelled_via_cancel_flag(
         job_store=job_store,
         backend=mock_backend,
         config={},
+        dataframe=sample_df,
+    )
+
+    assert result.status == "cancelled"
+
+
+def test_run_tune_multi_round_cancelled_between_rounds(
+    job_store: JobStore,
+    sample_data_ref: DataRef,
+    sample_df: pd.DataFrame,
+    mock_backend: MagicMock,
+) -> None:
+    """Cancelling mid-round propagates through the next round-boundary callback."""
+    call_count = {"n": 0}
+
+    def tune_side_effect(
+        model: Any, *, on_progress: Any, re_tune: Any = None
+    ) -> TuningSummary:
+        call_count["n"] += 1
+        # First round completes normally
+        if call_count["n"] == 1:
+            on_progress(current=10, total=10, message="round 1 done")
+            return TuningSummary(
+                best_params={"lr": 0.1},
+                best_score=0.9,
+                trials=[],
+                metric_name="auc",
+                direction="maximize",
+            )
+        # Before second round starts, the cb call should raise CancelledError
+        on_progress(current=0, total=0, message="starting round 2")
+        raise AssertionError("should not reach here — cancellation should hit first")
+
+    mock_backend.tune.side_effect = tune_side_effect
+
+    job = job_store.create(
+        backend_name="lizyml",
+        config={"tuning": {"re_tune": {"n_rounds": 3}}},
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )
+    # Request cancel before the job starts so the first round's
+    # progress cb fires the check.
+    job_store.request_cancel(job.job_id)
+
+    result = run_tune(
+        job=job,
+        job_store=job_store,
+        backend=mock_backend,
+        config={"tuning": {"re_tune": {"n_rounds": 3}}},
         dataframe=sample_df,
     )
 

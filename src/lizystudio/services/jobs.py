@@ -295,6 +295,12 @@ def get_importance_kinds(job: Job, backend: BackendAdapter) -> list[str]:
     return backend.importance_kinds(model)
 
 
+def get_learning_curve_metrics(job: Job, backend: BackendAdapter) -> list[str]:
+    """Get the list of metric names available in the learning curve history."""
+    model = load_job_model(job, backend)
+    return backend.learning_curve_metrics(model)
+
+
 def _get_jobs_dir(job: Job) -> Path | None:
     """Derive the jobs directory from a job's model_path."""
     if job.model_path:

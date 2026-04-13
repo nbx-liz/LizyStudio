@@ -36,6 +36,7 @@ from lizystudio.services.jobs import (
     get_importance_kinds,
     get_job_plot,
     get_job_store,
+    get_learning_curve_metrics,
     get_metrics_table,
     get_split_summary,
 )
@@ -244,6 +245,26 @@ def get_job_importance_kinds_endpoint(
     _require_completed(job)
     try:
         return get_importance_kinds(job, ws.backend)
+    except Exception as exc:
+        raise BackendError(exc) from exc
+
+
+@router.get("/{job_id}/learning-curve/metrics")
+def get_job_learning_curve_metrics_endpoint(
+    job_id: str,
+    job_store: JobStore = Depends(get_job_store),
+    ws: WorkspaceState = Depends(get_workspace),
+) -> list[str]:
+    """Get the metric names recorded in the learning curve history.
+
+    These are the values accepted by the learning-curve plot's ``metrics``
+    filter. Sourced from the actual training eval history — they may
+    differ from the user's configured evaluation metrics.
+    """
+    job = _get_job_or_404(job_id, job_store)
+    _require_completed(job)
+    try:
+        return get_learning_curve_metrics(job, ws.backend)
     except Exception as exc:
         raise BackendError(exc) from exc
 

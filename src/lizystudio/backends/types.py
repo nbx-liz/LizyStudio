@@ -39,13 +39,28 @@ class FitSummary:
 
 @dataclass
 class TuningSummary:
-    """Hyperparameter tuning result summary."""
+    """Hyperparameter tuning result summary.
+
+    The optional ``rounds`` and ``boundary_report`` fields are populated
+    when tuning is executed via the multi-round re-tune path (H-0061);
+    legacy single-round tuning leaves them as ``None``.
+    """
 
     best_params: dict[str, Any]
     best_score: float
     trials: list[dict[str, Any]]  # Trial history (list of rows)
     metric_name: str
     direction: str  # "minimize" | "maximize"
+    # Per-round summaries. Each entry contains at least:
+    #   round (1-indexed int), n_trials (int),
+    #   best_score_before (float | None), best_score_after (float),
+    #   expanded_dims (list[str]), space_snapshot (dict[str, Any]).
+    rounds: list[dict[str, Any]] | None = None
+    # Final-round BoundaryReport. Keys:
+    #   dims: list of per-dim status (name, best_value, low, high,
+    #         position_pct, edge, expanded, new_low, new_high),
+    #   expanded_names: list[str].
+    boundary_report: dict[str, Any] | None = None
 
 
 @dataclass

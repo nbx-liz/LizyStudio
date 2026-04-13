@@ -8,9 +8,9 @@ conventions, and quality gates you need to know.
 ### Prerequisites
 
 - Python 3.10+
-- Node.js 20+
+- Node.js 20+ (pinned via `.nvmrc`; use [fnm](https://github.com/Schniz/fnm) or [nvm](https://github.com/nvm-sh/nvm) to auto-switch)
 - [uv](https://docs.astral.sh/uv/) (Python package manager)
-- [pnpm](https://pnpm.io/) v9 (frontend package manager)
+- [pnpm](https://pnpm.io/) (frontend package manager — activated via Node corepack from `packageManager` field)
 
 ### Development setup
 

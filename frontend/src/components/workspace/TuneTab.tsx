@@ -6,6 +6,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
+import { RetuneSettingsSection } from "./retune";
 import { groupToCategory, SearchSpaceTable } from "./SearchSpaceTable";
 import { TuneEvaluationSection } from "./TuneEvaluationSection";
 import { TuneSettings } from "./TuneSettings";
@@ -167,7 +168,7 @@ export function TuneTab({
   return (
     <Accordion
       type="multiple"
-      defaultValue={["settings", "search-space", "evaluation"]}
+      defaultValue={["settings", "search-space", "evaluation", "retune"]}
     >
       <TuneSettings
         tuningParams={tuningParams}
@@ -215,6 +216,7 @@ export function TuneTab({
           />
         </AccordionContent>
       </AccordionItem>
+      <RetuneSettingsSection config={config} onChange={onChange} />
     </Accordion>
   );
 }

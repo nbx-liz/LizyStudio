@@ -76,6 +76,7 @@ class TestProtocolSurface:
             "split_summary",
             "importance",
             "importance_kinds",
+            "learning_curve_metrics",
             "confusion_matrix",
             "plot",
             "available_plots",

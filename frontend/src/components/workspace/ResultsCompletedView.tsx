@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { Download } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   fetchJobImportance,
   fetchJobImportanceKinds,
+  fetchJobLearningCurveMetrics,
   fetchJobPlot,
   fetchJobPlots,
   fetchJobSplitSummary,
@@ -57,29 +58,58 @@ export function ResultsCompletedView({
     retry: false,
   });
 
-  // Learning curve metrics filter (H-0034)
-  // Default to first metric only to avoid cramped subplots when multiple exist
+  // Learning curve metrics filter (H-0034).
+  // The available list comes from the backend — it reflects the actual
+  // eval_history keys, not the user-requested metric config, which can
+  // diverge when lizyml routes some metrics through feval callables.
   const [lcMetric, setLcMetric] = useState<string | null>(null);
   const lcInitialized = useRef(false);
+  const lcEnabled =
+    selectedPlot === "learning-curve" &&
+    (plots?.includes("learning-curve") ?? false);
 
-  const { data: learningCurve, isError: isLcError } = useQuery({
+  const { data: lcAvailableMetrics, isError: isLcMetricsError } = useQuery({
+    queryKey: ["job-learning-curve-metrics", job.job_id],
+    queryFn: () => fetchJobLearningCurveMetrics(job.job_id),
+    enabled: lcEnabled,
+  });
+
+  const { data: learningCurve, isError: isLcPlotError } = useQuery({
     queryKey: ["job-plot", job.job_id, "learning-curve", lcMetric],
     queryFn: () =>
       fetchJobPlot(job.job_id, "learning-curve", {
         metrics: lcMetric ?? undefined,
       }),
-    enabled:
-      selectedPlot === "learning-curve" &&
-      (plots?.includes("learning-curve") ?? false),
+    enabled: lcEnabled,
     retry: false,
   });
 
-  // If LC filter fails (e.g. feval-only metric), fall back to unfiltered view
+  const isLcError = isLcMetricsError || isLcPlotError;
+
+  // When the user switches to a different job within the same mounted
+  // component instance, any previously selected lcMetric must be
+  // cleared before the new job's metrics list arrives — otherwise the
+  // plot query fires with a name that isn't valid for the new job.
+  const lastJobIdRef = useRef(job.job_id);
   useEffect(() => {
-    if (isLcError && lcMetric !== null) {
+    if (lastJobIdRef.current !== job.job_id) {
+      lastJobIdRef.current = job.job_id;
       setLcMetric(null);
+      lcInitialized.current = false;
     }
-  }, [isLcError, lcMetric]);
+  }, [job.job_id]);
+
+  // If the persisted lcMetric is no longer a valid option (e.g. legacy
+  // state from a previous job), drop it so PlotSection falls back to the
+  // first available metric. LC fetch errors are left to PlotSection to
+  // surface — silently resetting state masked real bugs (H-0061).
+  useEffect(() => {
+    if (!lcAvailableMetrics) return;
+    if (lcMetric !== null && !lcAvailableMetrics.includes(lcMetric)) {
+      setLcMetric(null);
+      lcInitialized.current = false;
+    }
+  }, [lcAvailableMetrics, lcMetric]);
 
   const [importanceKind, setImportanceKind] = useState("split");
   const importanceEnabled = plots?.includes("importance") ?? false;
@@ -143,22 +173,11 @@ export function ResultsCompletedView({
   // evalConfig is used by annotateMetric() for precision_at_k k-value display.
   const evalConfig = (job.config?.evaluation as Record<string, unknown>) ?? {};
 
-  // LC filter uses model.params.metric (LightGBM internal metric names)
-  // which match the subplot titles in the learning curve plot.
-  // If metric is unset in job config (e.g. legacy jobs), lcAvailableMetrics
-  // is empty and the filter is hidden — all subplots are shown unfiltered.
-  const modelConfig = (job.config?.model as Record<string, unknown>) ?? {};
-  const lcAvailableMetrics = useMemo(() => {
-    const m = (modelConfig.params as Record<string, unknown>)?.metric;
-    if (Array.isArray(m)) return m as string[];
-    if (typeof m === "string") return [m];
-    return [];
-  }, [modelConfig.params]);
-
   // Initialize LC filter to first metric (avoid cramped subplots).
   // When only 1 metric exists, lcMetric stays null (no filter needed).
   useEffect(() => {
     if (lcInitialized.current) return;
+    if (!lcAvailableMetrics) return;
     if (lcAvailableMetrics.length > 1) {
       lcInitialized.current = true;
       setLcMetric(lcAvailableMetrics[0]);
@@ -259,10 +278,10 @@ export function ResultsCompletedView({
               ? isImportancePlotLoading
               : isPlotLoading
           }
-          isError={isPlotError}
+          isError={selectedPlot === "learning-curve" ? isLcError : isPlotError}
           lcMetric={lcMetric}
           onLcMetricChange={setLcMetric}
-          availableEvalMetrics={lcAvailableMetrics}
+          availableEvalMetrics={lcAvailableMetrics ?? []}
           importanceKinds={importanceKinds}
           selectedImportanceKind={importanceKind}
           onImportanceKindChange={setImportanceKind}
