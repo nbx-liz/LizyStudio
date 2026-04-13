@@ -82,6 +82,7 @@ class BackendAdapter(Protocol):
         on_progress: ProgressCallback | None = None,
         re_tune: dict[str, Any] | None = None,
         checkpoint_dir: Any = None,
+        resume: bool = False,
     ) -> TuningSummary:
         """Run hyperparameter tuning.
 
@@ -100,6 +101,12 @@ class BackendAdapter(Protocol):
         adapter writes an incremental checkpoint after each completed
         trial (H-0062).  Checkpoint save failures are swallowed so tune
         execution is not aborted by transient filesystem errors.
+
+        When *resume* is True (H-0062 Phase B), the first round is
+        started against the model's existing Optuna study instead of
+        a fresh one, so trials accumulated in a previous tune / checkpoint
+        are preserved. The ``re_tune`` kwargs are applied to that first
+        round as well.
 
         Legacy single-round tuning leaves ``TuningSummary.rounds`` and
         ``TuningSummary.boundary_report`` as ``None``.

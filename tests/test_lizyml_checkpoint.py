@@ -272,3 +272,57 @@ def test_tune_checkpoint_failure_does_not_abort(tmp_path: Path) -> None:
     # Must complete without raising.
     result = adapter.tune(mock_model, checkpoint_dir=tmp_path)
     assert result.best_score == 0.9
+
+
+def test_tune_resume_forwards_resume_and_n_trials_to_first_round(
+    tmp_path: Path,
+) -> None:
+    """H-0062: when resume=True the first model.tune() call must carry
+    resume=True and the requested n_trials so Optuna continues the
+    existing study instead of starting over."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = MagicMock(
+        best_params={"lr": 0.1},
+        best_score=0.9,
+        trials=[],
+        metric_name="auc",
+        direction="maximize",
+        rounds=[],
+        boundary_report=None,
+    )
+
+    adapter.tune(
+        mock_model,
+        re_tune={"n_rounds": 1, "n_trials": 25},
+        resume=True,
+    )
+
+    mock_model.tune.assert_called_once()
+    _, kwargs = mock_model.tune.call_args
+    assert kwargs.get("resume") is True
+    assert kwargs.get("n_trials") == 25
+
+
+def test_tune_resume_false_does_not_touch_existing_study(tmp_path: Path) -> None:
+    """Phase A guard: resume defaults to False and the first model.tune()
+    call must not pass resume=True, keeping backwards compatibility with
+    jobs that expect a fresh Optuna study."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = MagicMock(
+        best_params={"lr": 0.1},
+        best_score=0.9,
+        trials=[],
+        metric_name="auc",
+        direction="maximize",
+        rounds=[],
+        boundary_report=None,
+    )
+
+    adapter.tune(mock_model)  # no resume kwarg -> default False
+
+    mock_model.tune.assert_called_once()
+    _, kwargs = mock_model.tune.call_args
+    assert "resume" not in kwargs or kwargs["resume"] is False
+    assert "n_trials" not in kwargs

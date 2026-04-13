@@ -560,6 +560,10 @@ def run_retune(
         cb: ProgressCallback,
     ) -> tuple[FitSummary, TuningSummary | None, str]:
         model = backend.load_checkpoint(child_dir)
+        # H-0062: single-round resume. We pass resume=True so the loaded
+        # Optuna study is continued for the requested n_trials instead
+        # of being thrown away. n_trials and the boundary-expand kwargs
+        # are applied to the FIRST round (which is the only round here).
         re_tune_block: dict[str, Any] = {
             "n_rounds": 1,
             "n_trials": n_trials,
@@ -574,6 +578,7 @@ def run_retune(
             on_progress=cb,
             re_tune=re_tune_block,
             checkpoint_dir=child_dir,
+            resume=True,
         )
 
         _save_tuning_plot(backend, model, child_dir)

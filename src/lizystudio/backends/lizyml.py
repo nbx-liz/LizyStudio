@@ -285,7 +285,16 @@ class LizyMLAdapter:
         on_progress: ProgressCallback | None = None,
         re_tune: dict[str, Any] | None = None,
         checkpoint_dir: Path | None = None,
+        resume: bool = False,
     ) -> TuningSummary:
+        """Run hyperparameter tuning via lizyml's Model.tune().
+
+        When *resume* is True (H-0062 Phase B), the first round is
+        started with ``resume=True`` so the provided *model* continues
+        its existing Optuna study instead of throwing it away. The
+        ``re_tune`` kwargs (n_trials, expand_boundary, boundary_threshold)
+        are applied to the first round as well in that case.
+        """
         n_rounds, extra_kwargs = _parse_re_tune(re_tune)
 
         lizyml_callback: Any = None
@@ -357,7 +366,18 @@ class LizyMLAdapter:
             # provides the real total.
             on_progress(current=0, total=0, message="Starting tuning...")
 
-        tune_result = model.tune(progress_callback=lizyml_callback)
+        # First round. When resume=True we continue the existing Optuna
+        # study from the checkpoint (H-0062) and pass the re_tune kwargs
+        # (n_trials / expand_boundary / boundary_threshold) that would
+        # otherwise only apply from round 2 onwards.
+        first_round_kwargs: dict[str, Any] = {}
+        if resume:
+            first_round_kwargs["resume"] = True
+            first_round_kwargs.update(extra_kwargs)
+        tune_result = model.tune(
+            progress_callback=lizyml_callback,
+            **first_round_kwargs,
+        )
         for round_idx in range(2, n_rounds + 1):
             current_round = round_idx
             if on_progress is not None:
