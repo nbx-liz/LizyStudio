@@ -71,8 +71,60 @@ export function cancelJob(jobId: string): Promise<{ status: string }> {
   return apiFetch(`/jobs/${jobId}/cancel`, { method: "POST" });
 }
 
-export function deleteJob(jobId: string): Promise<{ status: string }> {
-  return apiFetch(`/jobs/${jobId}`, { method: "DELETE" });
+export function deleteJob(
+  jobId: string,
+  options: { cascade?: boolean } = {},
+): Promise<{ status: string; removed_job_ids?: string[] }> {
+  const qs = options.cascade ? "?cascade=true" : "";
+  return apiFetch(`/jobs/${jobId}${qs}`, { method: "DELETE" });
+}
+
+// --- H-0062: Re-tune / Resume / Lineage ---
+
+export interface RetuneRequestBody {
+  n_trials: number;
+  expand_boundary?: boolean;
+  boundary_threshold?: number;
+}
+
+export interface ResumeRequestBody {
+  n_trials?: number;
+}
+
+export interface RetuneResponse {
+  job_id: string;
+  parent_job_id: string;
+}
+
+export interface LineageNode {
+  job_id: string;
+  status: string;
+  job_type: string;
+  children: LineageNode[];
+}
+
+export function retuneJob(
+  jobId: string,
+  body: RetuneRequestBody,
+): Promise<RetuneResponse> {
+  return apiFetch(`/jobs/${encodeURIComponent(jobId)}/retune`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function resumeJob(
+  jobId: string,
+  body: ResumeRequestBody = {},
+): Promise<RetuneResponse> {
+  return apiFetch(`/jobs/${encodeURIComponent(jobId)}/resume`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function fetchJobLineage(jobId: string): Promise<{ tree: LineageNode }> {
+  return apiFetch(`/jobs/${encodeURIComponent(jobId)}/lineage`);
 }
 
 export function exportJob(

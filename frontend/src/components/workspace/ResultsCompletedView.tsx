@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { pivotMetrics } from "@/lib/metrics";
 import { FoldDetailsSection } from "./FoldDetailsSection";
 import { PlotSection } from "./PlotSection";
+import { RetuneActionButton } from "./retune/RetuneActionButton";
 import {
   TrialResultsAccordionItem,
   TuneTrialsSection,
@@ -232,7 +233,18 @@ export function ResultsCompletedView({
           Completed
         </Badge>
         {primaryMetric && <Badge variant="secondary">{primaryMetric}</Badge>}
-        <div className="ml-auto">
+        <div className="ml-auto flex gap-2">
+          {job.job_type === "tune" && tuneResult && (
+            <RetuneActionButton
+              jobId={job.job_id}
+              defaultNTrials={_defaultRetuneTrials(job)}
+              disabledReason={
+                job.parent_job_id
+                  ? "Re-tune of a re-tune child is not supported. Start from the original parent job."
+                  : null
+              }
+            />
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -304,4 +316,17 @@ export function ResultsCompletedView({
       </Accordion>
     </div>
   );
+}
+
+/** H-0062: pick a sensible default n_trials for the Re-tune dialog. */
+function _defaultRetuneTrials(job: JobDetail): number {
+  const config = job.config as Record<string, unknown> | undefined;
+  const tuning = config?.tuning as Record<string, unknown> | undefined;
+  const optuna = tuning?.optuna as Record<string, unknown> | undefined;
+  const params = optuna?.params as Record<string, unknown> | undefined;
+  const raw = params?.n_trials;
+  if (typeof raw === "number" && raw > 0) {
+    return raw;
+  }
+  return 50;
 }

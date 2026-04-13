@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { ResultsCompletedView } from "./ResultsCompletedView";
 import { ResultsRunningView } from "./ResultsRunningView";
+import { ResumeActionButton } from "./retune/ResumeActionButton";
 
 interface ResultsPanelProps {
   jobId: string | null;
@@ -213,6 +214,7 @@ export function ResultsPanel({
   }
 
   if (job.status === "failed") {
+    const remaining = _computeRemainingTrials(job);
     return (
       <div className="flex h-full flex-col p-6">
         <div className="mb-4 flex items-center justify-between">
@@ -224,14 +226,22 @@ export function ResultsPanel({
         <div className="rounded-md border border-destructive/30 bg-destructive/10 p-4">
           <p className="text-sm font-mono">{job.error ?? "Unknown error"}</p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          className="mt-4 w-fit"
-          onClick={() => setLogOpen(true)}
-        >
-          View Full Log
-        </Button>
+        <div className="mt-4 flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => setLogOpen(true)}>
+            View Full Log
+          </Button>
+          {job.job_type === "tune" && (
+            <ResumeActionButton
+              jobId={job.job_id}
+              remainingTrials={remaining}
+              disabledReason={
+                job.parent_job_id
+                  ? "Resume of a re-tune child is not supported. Start from the original parent job."
+                  : null
+              }
+            />
+          )}
+        </div>
         <LogDialog
           open={logOpen}
           onOpenChange={setLogOpen}
@@ -302,4 +312,23 @@ function LogDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+/** H-0062: compute remaining trials for a failed tune job's Resume dialog. */
+function _computeRemainingTrials(job: JobDetail): number {
+  const config = job.config as Record<string, unknown> | undefined;
+  const tuning = config?.tuning as Record<string, unknown> | undefined;
+  const optuna = tuning?.optuna as Record<string, unknown> | undefined;
+  const params = optuna?.params as Record<string, unknown> | undefined;
+  const originalRaw = params?.n_trials;
+  const original =
+    typeof originalRaw === "number" && originalRaw > 0 ? originalRaw : 50;
+  const tuneResult = job.tune_result as
+    | { trials?: unknown[] | null }
+    | null
+    | undefined;
+  const completed = Array.isArray(tuneResult?.trials)
+    ? (tuneResult?.trials?.length ?? 0)
+    : 0;
+  return Math.max(1, original - completed);
 }

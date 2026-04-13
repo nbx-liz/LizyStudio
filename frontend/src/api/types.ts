@@ -120,6 +120,9 @@ export interface JobDetail extends JobSummary {
   fit_result: FitResult | null;
   tune_result: TuneResult | null;
   model_path: string | null;
+  // H-0062: optional parent lineage link. null for standalone jobs and
+  // for legacy jobs written before Phase B.
+  parent_job_id?: string | null;
 }
 
 export interface FitResultParam {
