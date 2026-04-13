@@ -24,6 +24,9 @@ from lizystudio.api.errors import (
     ParentLockedError,
     StudioError,
 )
+from lizystudio.api.errors import (
+    PickleIncompatibleError as PickleIncompatibleApiError,
+)
 from lizystudio.api.models import (
     JobDetailResponse,
     JobSummaryResponse,
@@ -263,6 +266,14 @@ def _validate_n_trials(n_trials: int) -> int:
 
 
 def _require_tune_job_with_checkpoint(parent: Job, job_store: JobStore) -> None:
+    """Validate that *parent* can host a Re-tune / Resume child (H-0062).
+
+    Beyond the structural checks (tune type, no nested retune, model.pkl
+    present), this also reads the checkpoint sidecar and runs the
+    pickle compatibility check synchronously. Doing it in the API layer
+    means a version mismatch surfaces as ``PICKLE_INCOMPATIBLE`` (400)
+    on the POST itself rather than as a failed background child job.
+    """
     if parent.job_type != "tune":
         raise StudioError(
             "INVALID_PARAM",
@@ -274,7 +285,8 @@ def _require_tune_job_with_checkpoint(parent: Job, job_store: JobStore) -> None:
             f"Job {parent.job_id} is itself a retune/resume child; "
             "nested retune is not supported",
         )
-    checkpoint = job_store.jobs_dir / parent.job_id / "model.pkl"
+    parent_dir = job_store.jobs_dir / parent.job_id
+    checkpoint = parent_dir / "model.pkl"
     if not checkpoint.exists():
         raise StudioError(
             "CHECKPOINT_MISSING",
@@ -283,6 +295,25 @@ def _require_tune_job_with_checkpoint(parent: Job, job_store: JobStore) -> None:
                 "re-tune/resume unavailable"
             ),
         )
+    # H-0062: check pickle metadata if present. Missing meta is
+    # tolerated (legacy / pre-H-0062 checkpoints) — only the explicit
+    # mismatch case raises.
+    meta_path = parent_dir / "model_meta.json"
+    if meta_path.exists():
+        import json as _json
+
+        from lizystudio.backends.lizyml import (
+            PickleIncompatibleError as _AdapterIncompatible,
+        )
+        from lizystudio.backends.lizyml import (
+            verify_pickle_compatibility,
+        )
+
+        try:
+            meta = _json.loads(meta_path.read_text(encoding="utf-8"))
+            verify_pickle_compatibility(meta)
+        except _AdapterIncompatible as exc:
+            raise PickleIncompatibleApiError(str(exc)) from exc
 
 
 def _claim_retune_slot(parent_job_id: str, job_store: JobStore) -> str | None:

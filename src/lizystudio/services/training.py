@@ -309,6 +309,25 @@ def _prepare_tune_config(config: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _run_pickle_preflight(job_dir: Path) -> None:
+    """Run the H-0062 pre-flight check before tune launches.
+
+    Translates the adapter-level :class:`PicklePreflightError` into a
+    Studio-domain :class:`PicklePreflightFailedError` so the API layer
+    can return the standard JSON envelope with ``PICKLE_PREFLIGHT_FAILED``.
+    """
+    from lizystudio.api.errors import PicklePreflightFailedError
+    from lizystudio.backends.lizyml import (
+        PicklePreflightError,
+        preflight_pickle_check,
+    )
+
+    try:
+        preflight_pickle_check(job_dir)
+    except PicklePreflightError as exc:
+        raise PicklePreflightFailedError(str(exc)) from exc
+
+
 def run_tune(
     *,
     job: Job,
@@ -323,6 +342,7 @@ def run_tune(
     re_tune = _extract_re_tune(config)
     # H-0062: checkpoint directory for incremental trial persistence.
     checkpoint_dir = job_store.jobs_dir / job.job_id
+    _run_pickle_preflight(checkpoint_dir)
 
     def execute(cb: ProgressCallback) -> tuple[FitSummary, TuningSummary | None, str]:
         model = backend.create_model(tune_config, dataframe)
@@ -534,6 +554,7 @@ def run_retune(
     parent_dir = job_store.jobs_dir / parent_job.job_id
     child_dir = job_store.jobs_dir / child_job.job_id
     _copy_checkpoint_to_child(parent_dir, child_dir)
+    _run_pickle_preflight(child_dir)
 
     def execute(
         cb: ProgressCallback,
