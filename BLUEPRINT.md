@@ -111,6 +111,10 @@ class TuningSummary:
     trials: list[dict[str, Any]]       # trial history (行のリスト)
     metric_name: str                   # 最適化対象メトリクス名 (H-0013)
     direction: str                     # "minimize" | "maximize" (H-0013)
+    # Re-tune (Phase A) — いずれも後方互換のため optional。
+    # re_tune 未指定の単一ラウンド tune では None が入る (H-0061)。
+    rounds: list[dict[str, Any]] | None = None         # 各ラウンドの n_trials / best_score_before / best_score_after / expanded_dims / space_snapshot
+    boundary_report: dict[str, Any] | None = None      # 最終ラウンド後の BoundaryReport（per-dim: best_value / position_pct / edge / expanded / new bounds）
 
 @dataclass
 class PredictionSummary:
@@ -781,6 +785,20 @@ SegmentedControl: プリセット値をボタン群で表示し、「カスタ�
 
 > 注: `direction` は廃止。Optimization Metric の選択に応じて `ui_schema.option_sets.metric_direction[task][metric]` から自動判定する（H-0031）。
 
+**Re-tune Settings セクション（config.tuning.re_tune, H-0061 Phase A）:**
+
+LizyML 0.9.0 (H-0068) の **Study Resume + Boundary Expansion** を GUI から利用するためのセクション。
+`re_tune` を有効化すると、単一の Tune ジョブ内で Optuna study を継続しつつ、最大 N ラウンドにわたって探索空間を動的に拡張する。`re_tune` 未指定時は従来の単一ラウンド tune として振る舞う。
+
+| 要素 | コンポーネント | Config パス | 選択肢 / 範囲 | デフォルト |
+|------|-------------|------------|--------------|----------|
+| enabled | Switch | `tuning.re_tune` (null/object) | OFF=null / ON=object | OFF |
+| n_rounds | NumberInput (int) | `tuning.re_tune.n_rounds` | 1–10 | 3 |
+| expand_boundary | Switch | `tuning.re_tune.expand_boundary` | ON/OFF | ON |
+| boundary_threshold | NumberInput (float) | `tuning.re_tune.boundary_threshold` | (0, 0.5) | 0.05 |
+
+> **DoS ガード**: バックエンドは `n_rounds <= 20` および `n_trials <= 10,000` を強制する (H-0061)。GUI 側は n_rounds 10 で上限、実際の API は 20 まで許容するが通常利用はしない。
+
 **Search Space セクション（config.tuning.optuna.space）:**
 
 Search Space は `model.params` のキーに対応する探索範囲を定義する。`tuning.optuna.space` は以下の形式の辞書:
@@ -1446,6 +1464,27 @@ Fit 完了と同じ評価項目に加え、探索結果（Best Params・収束�
 **Learning Curve:** Best Params モデルの学習曲線。Fit 完了と同じ仕様。
 
 **Plots（評価プロット）:** Fit 完了と同じ仕様・同じ選択肢。Best Params モデルの評価プロット。
+
+**Re-tune Dashboard（H-0061 Phase A）:**
+
+`TuningSummary.rounds` が非 null の場合（=`re_tune` 有効で実行された Tune ジョブ）、Optimization History の直下に Re-tune Dashboard を表示する。4 つのパネルで構成し、ユーザーがチューニングの収束状況を直感的に把握できるようにする。
+
+| パネル | コンポーネント | データソース | 表示条件 |
+|--------|-------------|-------------|---------|
+| Round History | `RoundHistoryTable` | `rounds[*].{n_rounds, best_score_before, best_score_after, expanded_dims}` | `rounds.length >= 1` |
+| Search Space Evolution | `SearchSpaceEvolutionPanel` | `rounds[*].space_snapshot` + `boundary_report` | 少なくとも 1 ラウンドが非 null の `space_snapshot` を持つ |
+| Boundary Expansion | `BoundaryExpansionPanel` | `boundary_report.dims[*].{best_value, position_pct, edge, expanded, new_low, new_high}` | `boundary_report != null` |
+| Convergence Signal | `ConvergenceSignalPanel` | 最終ラウンドの `expanded_dims` + `rounds[*].best_score_after` 推移 | `rounds.length >= 1` |
+
+**Convergence の判定ロジック（Studio 側の責務）:**
+
+| 条件 | 表示 |
+|------|------|
+| 最終ラウンドの `expanded_dims` が空 かつ `rounds.length >= 2` かつ 最終ラウンドの改善量 < `boundary_threshold` | "Converged — proceed to Fit" バナー（緑） |
+| 最終ラウンドの `expanded_dims` が非空 | "Active exploration — re-tune may help" バナー（青） |
+| それ以外（まだ安定化中） | "Stabilising — consider one more round" ソフトバナー |
+
+**Apply to Fit の動線**: Convergence Signal パネルから直接 `onApplyToFit` コールバックで Tune 時の全 Config を Fit タブに復元できる（既存 Apply to Fit と同じ挙動）。
 
 **Accordion セクション:**
 

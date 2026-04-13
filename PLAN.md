@@ -48,6 +48,7 @@ Phase 0〜30 は v1 で完了済み。バックエンド（Python / FastAPI / Ad
 | v3-8 | BlockedGroupKFold 専用 2軸エディタ | H-0045 | v3-7 | ✅ |
 | v3-9 | Jobs 詳細画面の統一（KPI + LC フィルター + Importance） | H-0050, H-0051, H-0052 | v3-5 | ✅ |
 | v3-10 | Search Space デフォルト Range 自動ポピュレート | H-0053 | v3-3 | ✅ |
+| v3-11 | Re-tune Dashboard Phase A（Study Resume + Boundary Expansion 可視化） | H-0061 | v3-6 | ✅ |
 
 ---
 
@@ -1012,3 +1013,52 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 - [ ] Studio の SearchSpaceTable が Adapter 契約から Range デフォルトを取得する
 - [ ] Studio の `RANGE_DEFAULTS` ハードコードが削除されている
 - [ ] 既存テストが全パス + 新規テスト追加
+
+---
+
+## Phase v3-11: Re-tune Dashboard Phase A（H-0061）
+
+**対象:** H-0061
+
+**依存:** v3-6（Workspace UX 改善完了が前提）、lizyml >= 0.9.0（H-0068）
+
+**方針:** LizyML 0.9.0 の Study Resume + Boundary Expansion（H-0068）を Studio の GUI から利用できるようにする。Phase A では **単一ジョブ内の multi-round 実行** に絞り、真の Job 間 resume（Model pickle + Job lineage）は Phase B（H-0062）で別 Proposal として扱う。
+
+**成果物:**
+- `TuningSummary` に `rounds` / `boundary_report` フィールド追加（後方互換）
+- `LizyMLAdapter.tune()` の `re_tune` パラメータ対応（multi-round ループ + `TuningResult` シリアライズ）
+- `POST /api/workspace/tune` で `tuning.re_tune` を受理
+- Re-tune Settings アコーディオン（`RetuneSettingsSection.tsx`）
+- Re-tune Dashboard（`RetuneDashboard.tsx` + 4 子パネル）
+  - `RoundHistoryTable.tsx`
+  - `SearchSpaceEvolutionPanel.tsx`
+  - `BoundaryExpansionPanel.tsx`
+  - `ConvergenceSignalPanel.tsx`
+- `BLUEPRINT.md` §3.3.1 / §4.2.2 への仕様反映
+
+**タスク:**
+1. lizyml 依存を `>=0.9.0,<0.10.0` に pin 引き上げ
+2. 共通型 `TuningSummary` に optional フィールド追加 + Adapter Protocol 更新
+3. `LizyMLAdapter.tune()` の re_tune ループ実装 + n_rounds/n_trials の DoS ガード (20/10_000)
+4. API モデルで `re_tune` Pydantic スキーマ追加
+5. Frontend retune/ 配下に 5 コンポーネント新設（TDD 駆動）
+6. `ResultsCompletedView` / `TuneTrialsSection` への Dashboard 統合
+7. Learning Curve metric filter のバックエンド駆動化（H-0061 に巻き込まれた pre-existing bug）
+8. BLUEPRINT / HISTORY / PLAN の仕様同期
+9. 品質ゲート通過（pytest / mypy / ruff / vitest / biome / pnpm build）
+
+**DoD:**
+- [x] `TuningSummary` に `rounds` / `boundary_report` が追加されている（いずれも optional）
+- [x] `POST /api/workspace/tune` に `tuning.re_tune={n_rounds, expand_boundary, boundary_threshold}` を含む Config を送信すると multi-round 実行が走る
+- [x] Re-tune Dashboard 4 パネルが Tune 完了画面に表示される
+- [x] 最終ラウンドで `expanded_dims` が空かつ改善量が閾値未満なら "Converged — proceed to Fit" バナーが表示される
+- [x] `re_tune` 未指定の従来 Tune に影響がない
+- [x] Learning Curve metric filter が backend の `fit_result.history` ベースに修正されている（副次修正）
+- [x] pytest / mypy / ruff / vitest / biome / pnpm build がすべて緑
+- [x] Backend カバレッジ 80%+ を維持
+- [x] BLUEPRINT §3.3.1 / §4.2.2 に仕様が反映されている
+
+**Phase B (H-0062) で対応する項目:**
+- 完了ジョブからの Re-tune (+N trials) ボタン（Job 間 resume）
+- Model pickle 永続化 + `parent_job_id` によるジョブ系譜
+- Lineage ツリー表示 UI

@@ -1457,7 +1457,7 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
 ---
 
 ### H-0061: Re-tune Dashboard — Round History / Boundary Expansion / Convergence Signal の可視化（Phase A）
-- **Status:** accepted
+- **Status:** implemented
 - **Scope:** API | Frontend | Backend | Adapter
 - **Related:** BLUEPRINT.md §3.3.1 (TuningSummary), §4.2.2 (Tune Tab), §5.2 (Workspace API), Issue #59, LizyML H-0068 (re-tune + boundary expansion), LizyML-Widget P-027/P-028
 - **Context:** LizyML 0.9.0 で H-0068 が `Model.tune(resume, n_trials, expand_boundary, boundary_threshold)` を追加し、追加ラウンド実行時に Optuna study を継続し搜索空間を動的に拡張する機能をリリースした。LizyStudio 側ではこの機能がまだ GUI から利用できない。Issue #59 は Round History / Search Space Evolution / Convergence Signal / Boundary Detail の4ビューを要求している。
@@ -1494,3 +1494,4 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   6. pytest / mypy / ruff / vitest / Biome / pnpm build がすべて緑
   7. Backend カバレッジ 80%+ を維持
 - **Decision:** 2026-04-13 accepted — ユーザ承認済、Phase A 実装開始
+- **Implemented:** 2026-04-13 in PR #72 (develop commits 5b14d6a..eac1936). BLUEPRINT §3.3.1 / §4.2.2 への仕様反映と Search Space Evolution パネル追加は後続 PR で対応。Phase B（Job lineage + Re-tune (+N trials) ボタン）は H-0062 として別 Proposal で起案する。
