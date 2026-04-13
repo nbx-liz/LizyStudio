@@ -120,6 +120,17 @@ class BackendAdapter(Protocol):
         """Return the list of valid importance kind identifiers."""
         return ["split"]
 
+    def learning_curve_metrics(self, model: Any) -> list[str]:
+        """Return the metric names present in the learning curve history.
+
+        The returned names are the exact values accepted by
+        ``plot(model, "learning-curve", metrics=[...])``. They come from the
+        actual training eval history, not from the user config — the two
+        can diverge when the backend routes some metrics to feval callables
+        or drops duplicates during training.
+        """
+        return []
+
     def confusion_matrix(
         self, model: Any, threshold: float = 0.5
     ) -> dict[str, Any]: ...

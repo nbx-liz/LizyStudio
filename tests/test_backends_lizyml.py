@@ -1117,6 +1117,80 @@ def test_importance_kinds_returns_list() -> None:
     assert "shap" in result
 
 
+# --- learning_curve_metrics ---
+
+
+def _model_with_history(history: list[Any]) -> MagicMock:
+    mock_model = MagicMock()
+    mock_model.fit_result.history = history
+    return mock_model
+
+
+def test_learning_curve_metrics_collects_from_eval_history() -> None:
+    """learning_curve_metrics() returns metric names from fit_result.history."""
+    adapter = LizyMLAdapter()
+    history = [
+        {
+            "eval_history": {
+                "valid_0": {"f1": [0.1, 0.2, 0.3]},
+            }
+        },
+        {
+            "eval_history": {
+                "valid_0": {"f1": [0.2, 0.3], "auc": [0.7, 0.8]},
+            }
+        },
+    ]
+    model = _model_with_history(history)
+
+    result = adapter.learning_curve_metrics(model)
+
+    assert result == ["f1", "auc"]
+
+
+def test_learning_curve_metrics_deduplicates_across_datasets() -> None:
+    """Names appearing under multiple datasets are deduplicated."""
+    adapter = LizyMLAdapter()
+    history = [
+        {
+            "eval_history": {
+                "valid_0": {"binary_logloss": [0.5]},
+                "valid_1": {"binary_logloss": [0.6], "auc": [0.9]},
+            }
+        },
+    ]
+    model = _model_with_history(history)
+
+    result = adapter.learning_curve_metrics(model)
+
+    assert sorted(result) == ["auc", "binary_logloss"]
+
+
+def test_learning_curve_metrics_empty_when_no_history() -> None:
+    """Returns empty list when history is missing or empty."""
+    adapter = LizyMLAdapter()
+    assert adapter.learning_curve_metrics(_model_with_history([])) == []
+
+    mock_model = MagicMock()
+    mock_model.fit_result = None
+    assert adapter.learning_curve_metrics(mock_model) == []
+
+
+def test_learning_curve_metrics_skips_folds_without_eval_history() -> None:
+    """Folds with missing/empty eval_history are skipped gracefully."""
+    adapter = LizyMLAdapter()
+    history = [
+        {},
+        {"eval_history": {}},
+        {"eval_history": {"valid_0": {"f1": [0.1]}}},
+    ]
+    model = _model_with_history(history)
+
+    result = adapter.learning_curve_metrics(model)
+
+    assert result == ["f1"]
+
+
 # --- confusion_matrix ---
 
 

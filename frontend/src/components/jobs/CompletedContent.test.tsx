@@ -12,6 +12,7 @@ vi.mock("@/api/jobs", () => ({
   fetchJobPlot: vi.fn().mockResolvedValue({ plotly_json: "{}" }),
   fetchJobImportance: vi.fn().mockResolvedValue({}),
   fetchJobImportanceKinds: vi.fn().mockResolvedValue([]),
+  fetchJobLearningCurveMetrics: vi.fn().mockResolvedValue([]),
   fetchJobSplitSummary: vi.fn().mockResolvedValue([]),
 }));
 

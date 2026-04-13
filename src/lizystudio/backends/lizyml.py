@@ -249,6 +249,39 @@ class LizyMLAdapter:
         """Return valid importance kinds for LizyML models."""
         return ["split", "gain", "shap"]
 
+    def learning_curve_metrics(self, model: Any) -> list[str]:
+        """Return metric names actually recorded in the learning curve history.
+
+        Walks ``fit_result.history[*]["eval_history"][dataset][metric]``,
+        mirroring the matching logic in
+        ``lizyml.plots.learning_curve.plot_learning_curve``. This is the
+        source of truth for the UI's metric filter — it reflects what the
+        backend actually trained on, not what the user requested in config.
+
+        Returns an empty list when no eval history is recorded (e.g. early
+        stopping disabled or legacy runs without history).
+        """
+        fit_result = getattr(model, "fit_result", None)
+        if fit_result is None:
+            return []
+        history = getattr(fit_result, "history", None) or []
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for fold_hist in history:
+            eval_hist = (
+                fold_hist.get("eval_history") if isinstance(fold_hist, dict) else None
+            )
+            if not eval_hist:
+                continue
+            for ds_metrics in eval_hist.values():
+                if not isinstance(ds_metrics, dict):
+                    continue
+                for metric_name in ds_metrics:
+                    if metric_name not in seen:
+                        seen.add(metric_name)
+                        ordered.append(metric_name)
+        return ordered
+
     def confusion_matrix(self, model: Any, threshold: float = 0.5) -> dict[str, Any]:
         result = model.confusion_matrix(threshold=threshold)
         return {

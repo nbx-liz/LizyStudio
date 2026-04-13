@@ -638,6 +638,59 @@ def test_get_job_importance_kinds_backend_error(
     assert res.json()["error"]["code"] == "BACKEND_ERROR"
 
 
+# --- Learning curve metrics ---
+
+
+def test_get_job_learning_curve_metrics(
+    client: TestClient, sample_data_ref: DataRef, tmp_path: Path
+) -> None:
+    """GET /api/jobs/{job_id}/learning-curve/metrics returns list of names."""
+    job_id = _create_completed_job_with_model(
+        client, sample_data_ref, str(tmp_path / "model")
+    )
+    mock_backend = _make_mock_backend()
+    mock_backend.learning_curve_metrics.return_value = ["f1"]  # type: ignore[union-attr]
+
+    app = client.app  # type: ignore[union-attr]
+    original = app.state.workspace.backend
+    app.state.workspace.backend = mock_backend
+    try:
+        res = client.get(f"/api/jobs/{job_id}/learning-curve/metrics")
+    finally:
+        app.state.workspace.backend = original
+
+    assert res.status_code == 200
+    assert res.json() == ["f1"]
+
+
+def test_get_job_learning_curve_metrics_backend_error(
+    client: TestClient, sample_data_ref: DataRef, tmp_path: Path
+) -> None:
+    """Propagates BackendError when the backend raises."""
+    job_id = _create_completed_job_with_model(
+        client, sample_data_ref, str(tmp_path / "model")
+    )
+    mock_backend = _make_mock_backend()
+    mock_backend.learning_curve_metrics.side_effect = RuntimeError("boom")  # type: ignore[union-attr]
+
+    app = client.app  # type: ignore[union-attr]
+    original = app.state.workspace.backend
+    app.state.workspace.backend = mock_backend
+    try:
+        res = client.get(f"/api/jobs/{job_id}/learning-curve/metrics")
+    finally:
+        app.state.workspace.backend = original
+
+    assert res.status_code == 500
+    assert res.json()["error"]["code"] == "BACKEND_ERROR"
+
+
+def test_get_job_learning_curve_metrics_not_found(client: TestClient) -> None:
+    """404 when job does not exist."""
+    res = client.get("/api/jobs/nonexistent/learning-curve/metrics")
+    assert res.status_code == 404
+
+
 # --- Available plots ---
 
 
