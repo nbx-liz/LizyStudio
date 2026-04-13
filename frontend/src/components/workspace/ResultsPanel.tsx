@@ -74,7 +74,13 @@ export function ResultsPanel({
     | undefined;
 
   useEffect(() => {
-    if (!jobId || (job?.status !== "running" && job?.status !== "pending"))
+    if (!jobId) return;
+    // H-0062: allow WebSocket to start even when job is still undefined
+    // (child job just selected but its first fetch has not resolved).
+    // If the job is already terminal we still skip — no progress to
+    // subscribe to. When the job is undefined, optimistically connect
+    // so a fast-completing re-tune child does not lose its events.
+    if (job?.status && job.status !== "running" && job.status !== "pending")
       return;
 
     const disconnect = connectJobProgress(jobId, {
@@ -108,21 +114,37 @@ export function ResultsPanel({
     return () => disconnect();
   }, [jobId, job?.status, queryClient, onJobDone]);
 
-  // Polling fallback: detect completion if WebSocket misses it
+  // Polling fallback: detect completion if WebSocket misses it.
+  // H-0062: also handle the "jobId changed and the child is already
+  // completed / failed / cancelled" case, which happens when the
+  // backend finishes a short re-tune before the frontend could even
+  // subscribe. In that case prev was undefined (fresh selection) and
+  // we still need to flip running=false on the WorkspacePage.
   const prevStatusRef = useRef<string | undefined>(undefined);
+  const prevJobIdRef = useRef<string | null>(null);
   useEffect(() => {
+    // Reset the cached status whenever the selected job id changes so
+    // a transition from one job to another is not misread as a status
+    // transition on the same job.
+    if (prevJobIdRef.current !== jobId) {
+      prevJobIdRef.current = jobId;
+      prevStatusRef.current = undefined;
+    }
     const prev = prevStatusRef.current;
     prevStatusRef.current = job?.status;
-    if (
-      (prev === "running" || prev === "pending") &&
-      job?.status &&
-      job.status !== "running" &&
-      job.status !== "pending"
-    ) {
+    const reached_terminal =
+      job?.status === "completed" ||
+      job?.status === "failed" ||
+      job?.status === "cancelled";
+    if (!reached_terminal) return;
+    // Only notify when we transition TO a terminal state from a
+    // non-terminal one, OR when this is the first observation of a
+    // job that is already terminal (child selection edge case).
+    if (prev === undefined || prev === "running" || prev === "pending") {
       setProgress(null);
       onJobDone?.();
     }
-  }, [job?.status, onJobDone]);
+  }, [jobId, job?.status, onJobDone]);
 
   const handleCancel = useCallback(async () => {
     if (!jobId) return;

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import builtins
 import json
+import logging
 import shutil
 import threading
 from dataclasses import asdict, dataclass
@@ -17,6 +18,8 @@ from fastapi import Request
 from lizystudio.backends.base import BackendAdapter
 from lizystudio.backends.types import DataRef, FitSummary, TuningSummary
 from lizystudio.security import validate_path_within  # noqa: E402
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -228,14 +231,34 @@ class JobStore:
                 return node
             for cid in self.get_child_job_ids(job.job_id):
                 child = self.get(cid)
-                if child is not None:
-                    node["children"].append(_build(child, depth + 1))
+                if child is None:
+                    # Meta.json missing / corrupt. Log rather than
+                    # silently dropping so a broken child is visible
+                    # in the server log instead of the UI claiming a
+                    # clean lineage.
+                    _logger.warning(
+                        "lineage: child %s listed under %s but cannot be loaded",
+                        cid,
+                        job.job_id,
+                    )
+                    continue
+                node["children"].append(_build(child, depth + 1))
             return node
 
         return _build(root, 0)
 
     def has_active_children(self, parent_job_id: str) -> bool:
-        """Return True when any direct child is pending or running (H-0062)."""
+        """Return True when any direct child is pending or running (H-0062).
+
+        Only walks direct children, not the whole descendant tree. This
+        matches the Phase B MVP invariant that nested Re-tune is
+        rejected server-side (``_require_tune_job_with_checkpoint``
+        blocks grandchild creation), so no grandchildren can exist and
+        a direct-child scan is complete. If the nested-retune
+        restriction is ever relaxed, this helper must be rewritten as a
+        full subtree walk, otherwise cascade-delete guards will miss
+        running grandchildren and silently destroy their work.
+        """
         for cid in self.get_child_job_ids(parent_job_id):
             child = self.get(cid)
             if child is None:

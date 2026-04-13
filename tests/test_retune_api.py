@@ -378,6 +378,69 @@ def test_auto_remaining_trials_with_no_tune_result(
     assert _auto_remaining_trials(parent) == 100
 
 
+def test_auto_remaining_trials_multi_round_uses_n_rounds(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    """H-0062 CRITICAL-2: Phase A multi-round parents must compute
+    ``expected_total = n_rounds * n_trials`` so a crash mid-round-2 does
+    not produce the absurd "1 remaining" that the naive single-round
+    subtraction yields.
+
+    Scenario: n_rounds=3 x n_trials=50 = 150 expected trials, the tune
+    failed after 80 cumulative trials (round 2 partial). Remaining must
+    be 70, not 1.
+    """
+    from lizystudio.api.jobs import _auto_remaining_trials
+
+    app = client.app  # type: ignore[union-attr]
+    job_store: JobStore = app.state.job_store
+    job = job_store.create(
+        backend_name="lizyml",
+        config={
+            "task": "binary",
+            "target": "y",
+            "tuning": {
+                "optuna": {"params": {"n_trials": 50}},
+                "re_tune": {"n_rounds": 3},
+            },
+        },
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )
+    job.status = "failed"
+    job.tune_result = TuningSummary(
+        best_params={"lr": 0.1},
+        best_score=0.7,
+        trials=[{"number": i} for i in range(80)],
+        metric_name="auc",
+        direction="maximize",
+    )
+    job_store.update(job)
+
+    parent = job_store.get(job.job_id)
+    assert parent is not None
+    assert _auto_remaining_trials(parent) == 70
+
+
+def test_auto_remaining_trials_legacy_single_round_unchanged(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    """Legacy parents without re_tune still behave as n_rounds=1."""
+    from lizystudio.api.jobs import _auto_remaining_trials
+
+    parent_id = _make_failed_tune_job(
+        client,
+        sample_data_ref,
+        completed_trials=42,
+        original_n_trials=100,
+    )
+    app = client.app  # type: ignore[union-attr]
+    job_store: JobStore = app.state.job_store
+    parent = job_store.get(parent_id)
+    assert parent is not None
+    assert _auto_remaining_trials(parent) == 58
+
+
 def test_lineage_tree_marks_truncated_at_max_depth(
     client: TestClient, sample_data_ref: DataRef
 ) -> None:

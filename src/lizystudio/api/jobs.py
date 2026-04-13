@@ -448,20 +448,30 @@ def resume_job(
 def _auto_remaining_trials(parent: Job) -> int:
     """Compute remaining trials for a failed Tune Job (H-0062).
 
-    Walks the parent's config for the originally-requested n_trials,
-    subtracts the number of trials already recorded in tune_result when
-    available, and clamps the result to at least 1.
+    For Phase A multi-round parents, the "original" trial count is
+    ``n_rounds * n_trials_per_round``. ``tune_result.trials`` contains
+    the cumulative count across every round that actually ran, so the
+    remainder is ``(expected_total - completed)`` clamped at >= 1.
+
+    For legacy single-round parents ``n_rounds`` defaults to 1 and
+    the math reduces to ``n_trials - completed``.
     """
     config = parent.config or {}
     tuning = config.get("tuning") or {}
     optuna = tuning.get("optuna") or {}
     params = optuna.get("params") or {}
-    original = int(params.get("n_trials", 50))
+    per_round = int(params.get("n_trials", 50))
+    re_tune = tuning.get("re_tune") or {}
+    n_rounds_raw = re_tune.get("n_rounds", 1) if isinstance(re_tune, dict) else 1
+    try:
+        n_rounds = max(1, int(n_rounds_raw))
+    except (TypeError, ValueError):
+        n_rounds = 1
+    expected_total = per_round * n_rounds
     completed = 0
     if parent.tune_result is not None and parent.tune_result.trials:
         completed = len(parent.tune_result.trials)
-    remaining = max(1, original - completed)
-    return remaining
+    return max(1, expected_total - completed)
 
 
 @router.get("/{job_id}/lineage")

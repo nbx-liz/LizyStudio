@@ -635,6 +635,11 @@ def start_retune_async(
     dataframe = ws.dataframe
 
     def _run() -> None:
+        # H-0062: always point the workspace at the child so a failed /
+        # cancelled / crashed retune still surfaces through the Workspace
+        # Results Panel instead of leaving the selection on the parent.
+        with ws._lock:
+            ws.current_job_id = child_job.job_id
         try:
             finished = run_retune(
                 parent_job=parent_job,
