@@ -1,5 +1,7 @@
 import { cleanup, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { JobDetail } from "@/api/types";
 import { makeJob, renderWithQuery } from "@/test/helpers";
 import { ResultsCompletedView } from "./ResultsCompletedView";
 
@@ -34,15 +36,9 @@ vi.mock("./TuneTrialsSection", () => ({
   TrialResultsAccordionItem: () => <div data-testid="trial-results" />,
 }));
 
-async function renderView(lcMetrics: string[]) {
-  plotSectionCalls.length = 0;
-  const jobs = await import("@/api/jobs");
-  (
-    jobs.fetchJobLearningCurveMetrics as ReturnType<typeof vi.fn>
-  ).mockResolvedValue(lcMetrics);
-
-  const job = makeJob({
-    job_id: "job_test",
+function buildJob(jobId: string): JobDetail {
+  return makeJob({
+    job_id: jobId,
     config: {
       model: {
         name: "LightGBM",
@@ -56,6 +52,16 @@ async function renderView(lcMetrics: string[]) {
       params: [],
     } as unknown as import("@/api/types").FitResult,
   });
+}
+
+async function renderView(lcMetrics: string[]) {
+  plotSectionCalls.length = 0;
+  const jobs = await import("@/api/jobs");
+  (
+    jobs.fetchJobLearningCurveMetrics as ReturnType<typeof vi.fn>
+  ).mockResolvedValue(lcMetrics);
+
+  const job = buildJob("job_test");
 
   renderWithQuery(
     <ResultsCompletedView
@@ -135,6 +141,76 @@ describe("ResultsCompletedView — learning curve metrics filter", () => {
     // Restore default so subsequent tests aren't affected.
     (jobs.fetchJobPlot as ReturnType<typeof vi.fn>).mockResolvedValue({
       plotly_json: '{"data":[],"layout":{}}',
+    });
+  });
+
+  it("surfaces lcAvailableMetrics fetch errors via isError as well", async () => {
+    plotSectionCalls.length = 0;
+    const jobs = await import("@/api/jobs");
+    (
+      jobs.fetchJobLearningCurveMetrics as ReturnType<typeof vi.fn>
+    ).mockRejectedValueOnce(new Error("metrics boom"));
+
+    const job = buildJob("job_err");
+    renderWithQuery(
+      <ResultsCompletedView
+        job={job}
+        headerLabel="Test"
+        selectedPlot="learning-curve"
+        onSelectPlot={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      const props = latestProps();
+      expect(props.isError).toBe(true);
+    });
+  });
+
+  it("resets lcMetric when the job_id changes within the same mounted component", async () => {
+    plotSectionCalls.length = 0;
+    const jobs = await import("@/api/jobs");
+    const fetchMetrics = jobs.fetchJobLearningCurveMetrics as ReturnType<
+      typeof vi.fn
+    >;
+    fetchMetrics.mockImplementation(async (jobId: string) =>
+      jobId === "job_a" ? ["auc", "f1"] : ["logloss"],
+    );
+
+    function Harness() {
+      const [jobId, setJobId] = useState("job_a");
+      return (
+        <>
+          <button type="button" onClick={() => setJobId("job_b")}>
+            switch
+          </button>
+          <ResultsCompletedView
+            job={buildJob(jobId)}
+            headerLabel="Test"
+            selectedPlot="learning-curve"
+            onSelectPlot={vi.fn()}
+          />
+        </>
+      );
+    }
+
+    renderWithQuery(<Harness />);
+
+    await waitFor(() => {
+      const props = latestProps();
+      expect(props.availableEvalMetrics).toEqual(["auc", "f1"]);
+      expect(props.lcMetric).toBe("auc");
+    });
+
+    screen.getByRole("button", { name: "switch" }).click();
+
+    // After the switch, lcMetric must not remain as "auc" (which isn't
+    // a valid option for job_b). The reset-on-job-change effect should
+    // clear it so the initialization effect can pick the new default.
+    await waitFor(() => {
+      const props = latestProps();
+      expect(props.availableEvalMetrics).toEqual(["logloss"]);
+      expect(props.lcMetric).not.toBe("auc");
     });
   });
 });

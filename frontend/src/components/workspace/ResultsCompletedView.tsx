@@ -68,13 +68,13 @@ export function ResultsCompletedView({
     selectedPlot === "learning-curve" &&
     (plots?.includes("learning-curve") ?? false);
 
-  const { data: lcAvailableMetrics } = useQuery({
+  const { data: lcAvailableMetrics, isError: isLcMetricsError } = useQuery({
     queryKey: ["job-learning-curve-metrics", job.job_id],
     queryFn: () => fetchJobLearningCurveMetrics(job.job_id),
     enabled: lcEnabled,
   });
 
-  const { data: learningCurve, isError: isLcError } = useQuery({
+  const { data: learningCurve, isError: isLcPlotError } = useQuery({
     queryKey: ["job-plot", job.job_id, "learning-curve", lcMetric],
     queryFn: () =>
       fetchJobPlot(job.job_id, "learning-curve", {
@@ -83,6 +83,21 @@ export function ResultsCompletedView({
     enabled: lcEnabled,
     retry: false,
   });
+
+  const isLcError = isLcMetricsError || isLcPlotError;
+
+  // When the user switches to a different job within the same mounted
+  // component instance, any previously selected lcMetric must be
+  // cleared before the new job's metrics list arrives — otherwise the
+  // plot query fires with a name that isn't valid for the new job.
+  const lastJobIdRef = useRef(job.job_id);
+  useEffect(() => {
+    if (lastJobIdRef.current !== job.job_id) {
+      lastJobIdRef.current = job.job_id;
+      setLcMetric(null);
+      lcInitialized.current = false;
+    }
+  }, [job.job_id]);
 
   // If the persisted lcMetric is no longer a valid option (e.g. legacy
   // state from a previous job), drop it so PlotSection falls back to the
