@@ -129,9 +129,17 @@ def _run_job_core(
         job_store.clear_cancel(job.job_id)
         job_logger.removeHandler(handler)
         handler.close()
-        log_path = job_store.jobs_dir / job.job_id / "execution.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text(log_buffer.getvalue(), encoding="utf-8")
+        # Persist captured logs. An OSError here must not propagate out of
+        # the finally block — doing so would short-circuit the job runner
+        # thread and leave ``ws._job_thread`` pointing at a zombie.
+        try:
+            log_path = job_store.jobs_dir / job.job_id / "execution.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text(log_buffer.getvalue(), encoding="utf-8")
+        except OSError:
+            _logger.warning(
+                "Failed to persist execution log for job %s", job.job_id, exc_info=True
+            )
 
     return job
 

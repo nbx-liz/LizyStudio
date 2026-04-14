@@ -118,15 +118,28 @@ class JobStore:
         status: str | None = None,
         sort: str = "created_at",
     ) -> list[Job]:
-        """List all jobs, optionally filtered/sorted."""
+        """List all jobs, optionally filtered/sorted.
+
+        Entries that disappear or become unreadable between ``iterdir``
+        and ``_load_job`` (concurrent delete, partial write, corrupted
+        meta.json) are skipped with a warning rather than crashing the
+        whole listing.
+        """
         jobs: list[Job] = []
         if not self.jobs_dir.exists():
             return jobs
         for d in self.jobs_dir.iterdir():
-            if d.is_dir() and (d / "meta.json").exists():
+            if not d.is_dir() or not (d / "meta.json").exists():
+                continue
+            try:
                 job = self._load_job(d.name)
-                if status is None or job.status == status:
-                    jobs.append(job)
+            except (FileNotFoundError, OSError, json.JSONDecodeError, KeyError):
+                _logger.warning(
+                    "Skipping unreadable job directory %s", d.name, exc_info=True
+                )
+                continue
+            if status is None or job.status == status:
+                jobs.append(job)
         _SORTABLE_FIELDS = {
             "created_at",
             "completed_at",

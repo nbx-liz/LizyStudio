@@ -240,13 +240,16 @@ def inference_comparison(
     """Compare two inference runs."""
     store = _get_inf_store(job_store)
 
-    # Resolve task type from the job's config
+    # Resolve task type from the job's config.
+    # ``task`` lives at the top level of the LizyML config — the previous
+    # lookup path ``config["model"]["task"]`` always fell through to the
+    # ``"regression"`` default, silently masking binary jobs.
     task = "regression"
     record = store.get(job_id, inf_id)
     if record is not None:
         job = job_store.get(record.job_id)
         if job is not None:
-            task = job.config.get("model", {}).get("task", "regression")
+            task = job.config.get("task", "regression")
 
     try:
         return get_comparison_stats(store, job_id, inf_id, other_inf_id, task=task)

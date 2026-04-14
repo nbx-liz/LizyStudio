@@ -221,6 +221,10 @@ class LizyMLAdapter:
         if need_bridge:
             from lizyml import TuneProgressInfo
 
+            # Imported inline to avoid a circular import with services.training
+            # at module load (adapter is pulled in via backends/__init__).
+            from lizystudio.services.training import CancelledError
+
             def _bridge(info: TuneProgressInfo) -> None:
                 # H-0062: persist an incremental checkpoint BEFORE calling
                 # the user-supplied progress callback so a crash during
@@ -268,10 +272,13 @@ class LizyMLAdapter:
                         total_rounds=n_rounds,
                         trial_results=list(accumulated_trials),
                     )
-                except Exception:
-                    # CancelledError from _make_cancel_aware_cb is caught by
-                    # Optuna internally.  Re-raise as KeyboardInterrupt which
-                    # Optuna honours to abort the study gracefully.
+                except CancelledError:
+                    # CancelledError from _make_cancel_aware_cb must be
+                    # converted to KeyboardInterrupt so Optuna honours the
+                    # cancel request and aborts the study gracefully. Any
+                    # other exception (RuntimeError, TypeError, ...) is a
+                    # genuine bug in the progress path and must propagate
+                    # with its original traceback intact.
                     raise KeyboardInterrupt from None
 
             lizyml_callback = _bridge
