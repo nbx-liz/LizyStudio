@@ -862,6 +862,58 @@ describe("DataPanel — handleTargetChange", () => {
     });
   });
 
+  // Regression for H-0063: data load + target select caused a race between
+  // syncConfig (fired by useEffect on target change) and handleTargetChange's
+  // fetchConfigDefaults flow. The earlier syncConfig PUT shipped a partial
+  // config (fetchConfig returned {}) and the backend responded with
+  // "config_version: Field required" etc. After the fix, updateConfig must be
+  // called exactly once per target selection and the payload must come from
+  // fetchConfigDefaults (i.e. contain config_version).
+  it("does not emit a partial updateConfig PUT during target selection", async () => {
+    mockFetchConfig.mockResolvedValue({});
+    mockFetchConfigDefaults.mockResolvedValue({
+      config_version: 1,
+      task: "binary",
+      data: { target: "target" },
+      features: {},
+      split: { method: "kfold", n_splits: 5 },
+      model: { name: "lgbm", params: {} },
+      training: {},
+    });
+    mockUpdateConfig.mockResolvedValue({
+      config: {},
+      errors: [],
+      saved: true,
+    });
+
+    render(<DataPanel onDataChanged={vi.fn()} />);
+    await loadDataViaPath();
+
+    mockFetchColumns.mockClear();
+    mockFetchColumns.mockResolvedValue({
+      columns: COLUMNS_BINARY,
+      suggested_task: "binary",
+      target: "target",
+    });
+    mockUpdateConfig.mockClear();
+
+    await selectTarget("target");
+
+    await waitFor(() => {
+      expect(mockFetchConfigDefaults).toHaveBeenCalledWith("binary", "target");
+    });
+    await waitFor(() => {
+      expect(mockUpdateConfig).toHaveBeenCalled();
+    });
+
+    // No partial PUT: every updateConfig call during target selection must
+    // carry config_version (i.e. be based on fetchConfigDefaults output).
+    for (const call of mockUpdateConfig.mock.calls) {
+      const payload = call[0] as Record<string, unknown>;
+      expect(payload.config_version).toBe(1);
+    }
+  });
+
   it("does not call fetchConfigDefaults when suggested_task is null", async () => {
     mockFetchConfig.mockResolvedValue({});
     mockFetchConfigDefaults.mockResolvedValue({});
