@@ -78,7 +78,10 @@ def run_retune(
     def execute(
         cb: ProgressCallback,
     ) -> tuple[FitSummary, TuningSummary | None, str]:
-        model = backend.load_checkpoint(child_dir)
+        # CRITICAL-1: constrain cloudpickle deserialization to the
+        # studio's own jobs directory so a compromised checkpoint file
+        # elsewhere on disk cannot trigger arbitrary code execution.
+        model = backend.load_checkpoint(child_dir, allowed_root=job_store.jobs_dir)
         # H-0062: single-round resume. We pass resume=True so the loaded
         # Optuna study is continued for the requested n_trials instead
         # of being thrown away. n_trials and the boundary-expand kwargs

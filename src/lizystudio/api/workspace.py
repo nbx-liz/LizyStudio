@@ -119,21 +119,30 @@ def data_load_path(
     body: DataPathRequest,
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, Any]:
-    """Load data from a local file path."""
-    path = body.path
+    """Load data from a local file path.
+
+    Uses the resolved path from ``validate_path_within`` for the
+    subsequent exists / read operations so a symlink swap between the
+    allow-list check and the actual load cannot redirect to a file
+    outside ``ALLOWED_FILES_ROOT``.
+    """
     try:
-        validate_path_within(Path(path), security.ALLOWED_FILES_ROOT)
+        resolved = validate_path_within(Path(body.path), security.ALLOWED_FILES_ROOT)
     except ValueError as exc:
         raise PathNotFoundError(str(exc)) from exc
-    if not Path(path).exists():
-        raise PathNotFoundError(path)
+    if not resolved.exists():
+        raise PathNotFoundError(str(resolved))
     try:
-        df = load_dataframe(path)
-    except Exception as exc:
+        df = load_dataframe(str(resolved))
+    except (FileNotFoundError, OSError) as exc:
+        # File vanished between the exists() check and the read, or the
+        # filesystem rejected the access outright.
+        raise PathNotFoundError(str(resolved)) from exc
+    except Exception as exc:  # noqa: BLE001 - pandas raises a wide variety
         raise FileInvalidError(str(exc)) from exc
     memory_usage_bytes = check_dataframe_memory(df)
     data_ref = make_data_ref(
-        df, source_type="path", path=path, filename=Path(path).name
+        df, source_type="path", path=str(resolved), filename=resolved.name
     )
     ws.set_data(df, data_ref)
     return {"data_ref": asdict(data_ref), "memory_usage_bytes": memory_usage_bytes}

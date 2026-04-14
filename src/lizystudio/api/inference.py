@@ -96,6 +96,13 @@ def inference_run(
         return {"inf_id": record.inf_id, "job_id": record.job_id}
     except Exception as exc:
         raise BackendError(exc) from exc
+    finally:
+        # HIGH-8: one-shot upload cleanup. Uploaded files previously
+        # lingered in /tmp until ws.reset() ran, exhausting disk on
+        # repeated 100 MB uploads. Path-mode runs leave the user's own
+        # files alone.
+        if body.data.source_type == "upload":
+            ws.consume_temp_file(body.data.path)
 
 
 @router.post("/upload")

@@ -57,6 +57,21 @@ class WorkspaceState:
         with self._lock:
             self._temp_files.append(path)
 
+    def consume_temp_file(self, path: str) -> bool:
+        """Delete a previously tracked temp file and drop it from the list.
+
+        Returns ``True`` when *path* was tracked (whether or not the
+        unlink succeeded). Inference consumers call this right after a
+        single-shot upload so ``/tmp`` does not fill up waiting for
+        ``reset()``.
+        """
+        with self._lock:
+            if path not in self._temp_files:
+                return False
+            self._temp_files.remove(path)
+        Path(path).unlink(missing_ok=True)
+        return True
+
     def set_data(self, dataframe: pd.DataFrame, data_ref: DataRef) -> None:
         """Load data into the workspace."""
         with self._lock:

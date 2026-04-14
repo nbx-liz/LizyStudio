@@ -136,12 +136,18 @@ def _build_report_html(
             f"<table border='1' cellpadding='4'><tr>{header}</tr>{rows_html}</table>"
         )
 
-    # Plotly divs
+    # Plotly divs. ``</script>`` inside a JSON string is perfectly valid
+    # JSON, but drops out of the HTML <script> context and enables
+    # script-injection via plot labels or traces. Escape the ``/`` so the
+    # serialized payload cannot terminate the surrounding script block.
+    def _js_safe(payload: Any) -> str:
+        return json.dumps(payload).replace("</", "<\\/")
+
     plot_divs = ""
     for i, pj in enumerate(plot_jsons):
         parsed = json.loads(pj)
-        data_js = json.dumps(parsed.get("data", []))
-        layout_js = json.dumps(parsed.get("layout", {}))
+        data_js = _js_safe(parsed.get("data", []))
+        layout_js = _js_safe(parsed.get("layout", {}))
         plot_divs += f"""
         <div id="plot-{i}" style="width:100%;height:500px;margin-bottom:20px;"></div>
         <script>
@@ -149,10 +155,23 @@ def _build_report_html(
         </script>
         """
 
+    # HIGH-5: Plotly is pulled from a CDN because bundling ~4 MB of JS
+    # into every HTML report is wasteful. We constrain what that CDN is
+    # allowed to execute via a CSP that only permits the CDN origin for
+    # scripts, and disallow every other active content source. A future
+    # Issue tracks migrating to a locally-bundled plotly with SRI.
+    csp = (
+        "default-src 'none'; "
+        "script-src https://cdn.plot.ly 'unsafe-inline'; "
+        "style-src 'unsafe-inline'; "
+        "img-src data:;"
+    )
+
     return f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="{csp}">
     <title>{title}</title>
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"
             crossorigin="anonymous"></script>
