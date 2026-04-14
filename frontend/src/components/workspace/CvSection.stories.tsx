@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react";
-import { fn } from "@storybook/test";
+import { fn } from "storybook/test";
 import { CvSection, type CvState, INITIAL_CV_STATE } from "./CvSection";
 
 const meta: Meta<typeof CvSection> = {
