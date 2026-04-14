@@ -429,12 +429,22 @@ def workspace_tune(
         raise WorkspaceNoConfigError()
     if ws.dataframe is None or ws.data_ref is None:
         raise WorkspaceNoDataError()
-    # Inject default tuning config if not set (H-0025) — immutable copy
+    # Inject default tuning config if not set (H-0025) — immutable copy.
+    #
+    # Direction is intentionally NOT hardcoded here (Bug 2026-04-14): a
+    # ``minimize`` default would override the AUC / R2 / accuracy class
+    # of metrics that should be maximized, and ``_prepare_tune_config``'s
+    # auto-resolve was guarded by ``"direction" not in params`` so the
+    # wrong value silently propagated to Optuna. The auto-resolve in
+    # ``_prepare_tune_config`` is now the single source of truth — it
+    # reads ``evaluation.metrics`` and picks ``maximize`` / ``minimize``
+    # from the maximize-set table. Leaving direction unset here lets that
+    # resolver fire on every fresh tune.
     if ws.config.get("tuning") is None:
         config_with_tuning = copy.deepcopy(ws.config)
         config_with_tuning["tuning"] = {
             "optuna": {
-                "params": {"n_trials": 50, "direction": "minimize", "timeout": None},
+                "params": {"n_trials": 50, "timeout": None},
                 "space": {},
             }
         }

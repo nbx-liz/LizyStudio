@@ -375,6 +375,59 @@ class TestPrepareTuneConfig:
         result = _prepare_tune_config(config)
         assert result["tuning"]["optuna"]["params"]["direction"] == "minimize"
 
+    def test_overrides_stale_minimize_direction_for_auc(self) -> None:
+        """Bug 2026-04-14: when ``direction`` is already in params but
+        contradicts the evaluation metric (e.g. ``auc`` paired with a
+        leftover ``minimize`` from the workspace inject path), the
+        helper must overwrite it with the correct direction. The old
+        ``"direction" not in params`` guard let the wrong value pass
+        through and Optuna optimized AUC as if low-is-better.
+        """
+        config = {
+            "task": "binary",
+            "evaluation": {"metrics": ["auc"]},
+            "tuning": {
+                "optuna": {
+                    "params": {"n_trials": 3, "direction": "minimize"},
+                }
+            },
+        }
+        result = _prepare_tune_config(config)
+        assert result["tuning"]["optuna"]["params"]["direction"] == "maximize"
+
+    def test_overrides_stale_maximize_direction_for_rmse(self) -> None:
+        """Symmetric to the auc case: a stray ``direction: maximize``
+        on a regression+rmse config must be normalized to ``minimize``."""
+        config = {
+            "task": "regression",
+            "evaluation": {"metrics": ["rmse"]},
+            "tuning": {
+                "optuna": {
+                    "params": {"n_trials": 3, "direction": "maximize"},
+                }
+            },
+        }
+        result = _prepare_tune_config(config)
+        assert result["tuning"]["optuna"]["params"]["direction"] == "minimize"
+
+    def test_keeps_consistent_direction_unchanged(self) -> None:
+        """When the supplied ``direction`` already matches the metric's
+        natural direction, the helper is a no-op for that field. This
+        is important so users who explicitly override the auto-resolved
+        direction (e.g. minimize a custom auc-based loss) are not
+        silently overruled when the metric/direction *do* line up."""
+        config = {
+            "task": "binary",
+            "evaluation": {"metrics": ["auc"]},
+            "tuning": {
+                "optuna": {
+                    "params": {"n_trials": 3, "direction": "maximize"},
+                }
+            },
+        }
+        result = _prepare_tune_config(config)
+        assert result["tuning"]["optuna"]["params"]["direction"] == "maximize"
+
     def test_strips_non_optuna_keys(self) -> None:
         """Tuning section is cleaned to keep only optuna."""
         config = {

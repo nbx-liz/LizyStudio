@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { MetricEntry } from "@/api/types";
 import { metricEntryName } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
@@ -49,6 +49,44 @@ export function TuneEvaluationSection({
     if (!taskDirs) return "minimize";
     return taskDirs[optimizationMetric] ?? "minimize";
   }, [task, optimizationMetric, metricDirection]);
+
+  // Bug 2026-04-14 defensive sync: keep ``optuna.params.direction`` in
+  // step with ``autoDirection`` whenever the metric or task changes.
+  // Without this, a user who never clicks a metric chip can leave the
+  // config carrying a stale direction (the workspace inject path used
+  // to hardcode ``minimize``, and the AUC class of metrics needs
+  // ``maximize``). The backend ``_prepare_tune_config`` also reconciles
+  // this server-side, but having the UI stay consistent avoids the
+  // confusing case where the badge shows ``maximize`` while the raw
+  // config dialog still shows ``minimize``.
+  //
+  // Implementation note: ``config`` and ``onChange`` are pulled through
+  // refs so the effect's dep list can stay narrow (only the resolved
+  // direction). Including ``config`` directly would re-fire on every
+  // edit because we write back to ``config`` ourselves -> infinite loop.
+  const configRef = useRef(config);
+  const onChangeRef = useRef(onChange);
+  configRef.current = config;
+  onChangeRef.current = onChange;
+
+  useEffect(() => {
+    if (!autoDirection) return;
+    const currentCfg = configRef.current;
+    const tuning = (currentCfg.tuning as Record<string, unknown>) ?? {};
+    const optuna = (tuning.optuna as Record<string, unknown>) ?? {};
+    const params = (optuna.params as Record<string, unknown>) ?? {};
+    if (params.direction === autoDirection) return;
+    onChangeRef.current({
+      ...currentCfg,
+      tuning: {
+        ...tuning,
+        optuna: {
+          ...optuna,
+          params: { ...params, direction: autoDirection },
+        },
+      },
+    });
+  }, [autoDirection]);
 
   // Get precision_at_k k-value from current tune evaluation metrics
   const tuneKValue = useMemo(() => {
