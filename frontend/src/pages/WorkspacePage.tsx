@@ -89,6 +89,20 @@ export function WorkspacePage() {
     [queryClient],
   );
 
+  // HIGH-3: stable handler references so ResultsPanel's effect does not
+  // tear down and re-subscribe its WebSocket every WorkspacePage render.
+  const handleJobDone = useCallback(() => {
+    setRunning(false);
+    notify("LizyStudio", "Job completed");
+  }, [notify]);
+
+  const handleJobStarted = useCallback((childJobId: string) => {
+    // H-0062: Re-tune / Resume created a new child job — switch
+    // the workspace selection so the user sees its progress.
+    setCurrentJobId(childJobId);
+    setRunning(true);
+  }, []);
+
   const shortcuts = useMemo(
     () => [
       { key: "Enter", ctrl: true, action: () => handleFit() },
@@ -130,16 +144,8 @@ export function WorkspacePage() {
           hasData={hasData}
           hasConfig={hasData && config != null}
           onApplyToFit={handleApplyToFit}
-          onJobDone={() => {
-            setRunning(false);
-            notify("LizyStudio", "Job completed");
-          }}
-          onJobStarted={(childJobId) => {
-            // H-0062: Re-tune / Resume created a new child job — switch
-            // the workspace selection so the user sees its progress.
-            setCurrentJobId(childJobId);
-            setRunning(true);
-          }}
+          onJobDone={handleJobDone}
+          onJobStarted={handleJobStarted}
         />
       </ResizablePanel>
     </ResizablePanelGroup>

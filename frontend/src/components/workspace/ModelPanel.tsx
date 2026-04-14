@@ -41,6 +41,7 @@ import { useConfigHistory } from "@/hooks/useConfigHistory";
 import { useConfigPresets } from "@/hooks/useConfigPresets";
 import { ConfigForm } from "./ConfigForm";
 import { RawConfigDialog } from "./RawConfigDialog";
+import { SavePresetDialog } from "./SavePresetDialog";
 import { TuneTab } from "./TuneTab";
 
 interface ModelPanelProps {
@@ -69,6 +70,7 @@ export function ModelPanel({
     onActiveTabChange?.(tab);
   };
   const [errors, setErrors] = useState<ConfigError[]>([]);
+  const [savePresetOpen, setSavePresetOpen] = useState(false);
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const history = useConfigHistory();
@@ -189,10 +191,13 @@ export function ModelPanel({
 
   const handleSavePreset = () => {
     if (!config) return;
-    const name = prompt("Preset name:");
-    if (!name?.trim()) return;
-    savePreset(name.trim(), config);
-    toast.success(`Preset "${name.trim()}" saved`);
+    setSavePresetOpen(true);
+  };
+
+  const confirmSavePreset = (name: string) => {
+    if (!config) return;
+    savePreset(name, config);
+    toast.success(`Preset "${name}" saved`);
   };
 
   const handleLoadPreset = (name: string) => {
@@ -429,6 +434,12 @@ export function ModelPanel({
           />
         </div>
       </div>
+      <SavePresetDialog
+        open={savePresetOpen}
+        onOpenChange={setSavePresetOpen}
+        onSave={confirmSavePreset}
+        existingNames={presets.map((p) => p.name)}
+      />
     </div>
   );
 }

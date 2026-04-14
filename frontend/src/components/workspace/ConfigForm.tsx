@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   Accordion,
   AccordionContent,
@@ -57,12 +57,22 @@ export function ConfigForm({
   uiSchema,
   columns = [],
 }: ConfigFormProps) {
+  // HIGH-5: keep a ref to the latest config so field-change updates
+  // always apply on top of the freshest snapshot. Previously the
+  // inner_valid reset effect and the objective/metric auto-select
+  // effect could both capture the same ``config`` closure in a single
+  // render. When both fired the second call would rebuild the config
+  // from the stale snapshot and wipe the first effect's write.
+  const configRef = useRef(config);
+  configRef.current = config;
+
   const handleFieldChange = useCallback(
     (path: string[], value: unknown) => {
-      const updated = setNestedValue(config, path, value);
+      const updated = setNestedValue(configRef.current, path, value);
+      configRef.current = updated;
       onChange(updated);
     },
-    [config, onChange],
+    [onChange],
   );
 
   const defs = useMemo(
