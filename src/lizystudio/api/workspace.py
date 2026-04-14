@@ -393,8 +393,6 @@ def workspace_fit(
     job_store: JobStore = Depends(get_job_store),
 ) -> dict[str, Any]:
     """Create a fit job (thread managed by Service layer)."""
-    if job_store.has_active_job():
-        raise JobConflictError(job_store.active_job_id or "unknown")
     if not ws.config:
         raise WorkspaceNoConfigError()
     if ws.dataframe is None or ws.data_ref is None:
@@ -402,12 +400,18 @@ def workspace_fit(
     errors = validate_config(ws, ws.config)
     if errors:
         raise ValidationError(errors)
-    job = job_store.create(
+    # CRITICAL-2: atomically claim the active slot and create the job
+    # metadata in a single critical section so two concurrent
+    # /fit requests cannot race past the has_active_job check and
+    # leave an orphan "failed" job on disk.
+    job = job_store.create_and_claim_active(
         backend_name=get_backend_name(ws),
         config=ws.config,
         data_ref=ws.data_ref,
         job_type="fit",
     )
+    if job is None:
+        raise JobConflictError(job_store.active_job_id or "unknown")
     try:
         job_id = start_fit_async(
             ws=ws,
@@ -421,7 +425,13 @@ def workspace_fit(
         job.status = "failed"
         job.error = "Previous job still running"
         job_store.update(job)
+        job_store.release_active(job.job_id)
         raise JobConflictError(job.job_id) from None
+    except Exception:
+        # Any other failure after we claimed the slot must release it,
+        # otherwise the slot stays held until server restart.
+        job_store.release_active(job.job_id)
+        raise
     return {"job_id": job_id}
 
 
@@ -432,8 +442,6 @@ def workspace_tune(
     job_store: JobStore = Depends(get_job_store),
 ) -> dict[str, Any]:
     """Create a tune job (thread managed by Service layer)."""
-    if job_store.has_active_job():
-        raise JobConflictError(job_store.active_job_id or "unknown")
     if not ws.config:
         raise WorkspaceNoConfigError()
     if ws.dataframe is None or ws.data_ref is None:
@@ -461,12 +469,15 @@ def workspace_tune(
     errors = validate_config(ws, ws.config)
     if errors:
         raise ValidationError(errors)
-    job = job_store.create(
+    # CRITICAL-2: atomic create + slot claim, see workspace_fit above.
+    job = job_store.create_and_claim_active(
         backend_name=get_backend_name(ws),
         config=ws.config,
         data_ref=ws.data_ref,
         job_type="tune",
     )
+    if job is None:
+        raise JobConflictError(job_store.active_job_id or "unknown")
     try:
         job_id = start_tune_async(
             ws=ws,
@@ -480,5 +491,9 @@ def workspace_tune(
         job.status = "failed"
         job.error = "Previous job still running"
         job_store.update(job)
+        job_store.release_active(job.job_id)
         raise JobConflictError(job.job_id) from None
+    except Exception:
+        job_store.release_active(job.job_id)
+        raise
     return {"job_id": job_id}
