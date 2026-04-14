@@ -324,8 +324,11 @@ export function useDataPanel({
         try {
           const stats = await fetchColumnStats(colName);
           setColStats((prev) => ({ ...prev, [colName]: stats }));
-        } catch {
-          // Silently fail — bar just won't show
+        } catch (err) {
+          // HIGH-1: surface the failure instead of silently dropping
+          // the bar so the user has a chance to understand why the
+          // column statistics never rendered.
+          toast.error(`Failed to load column stats: ${getErrorMessage(err)}`);
         }
       }
     },

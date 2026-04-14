@@ -1147,7 +1147,12 @@ describe("DataPanel — handleColumnExpand (column statistics)", () => {
     expect(mockFetchColumnStats).toHaveBeenCalledTimes(1);
   });
 
-  it("silently ignores fetchColumnStats errors (no toast shown)", async () => {
+  it("surfaces fetchColumnStats errors via toast (HIGH-1)", async () => {
+    // Before the fix, fetchColumnStats failures were silently dropped
+    // and users only saw "the bar never renders" with no explanation.
+    // The contract now is: a toast is shown so the failure is visible,
+    // and the distribution bar remains hidden so UI state is still
+    // consistent with the missing stats.
     mockFetchColumnStats.mockRejectedValue(new Error("stats API down"));
     const { toast } = await import("sonner");
 
@@ -1155,14 +1160,15 @@ describe("DataPanel — handleColumnExpand (column statistics)", () => {
 
     await userEvent.click(screen.getByTestId("column-row-age"));
 
-    // Wait briefly to let the rejection settle
     await waitFor(() => {
       expect(mockFetchColumnStats).toHaveBeenCalled();
     });
 
-    // No error toast should be shown — errors are silently swallowed per spec
-    expect(toast.error).not.toHaveBeenCalled();
-    // Distribution bar should not appear
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to load column stats"),
+      );
+    });
     expect(screen.queryByTestId("column-dist-age")).not.toBeInTheDocument();
   });
 });
