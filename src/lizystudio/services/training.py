@@ -276,30 +276,37 @@ def _prepare_tune_config(config: dict[str, Any]) -> dict[str, Any]:
         if default_metric:
             result["evaluation"] = {"metrics": [default_metric]}
 
-    # Resolve direction from evaluation metrics if not explicitly set
+    # Resolve direction from evaluation metrics. Bug 2026-04-14: the
+    # previous ``"direction" not in params`` guard let stale / wrong
+    # values pass through unchanged. The workspace inject path used to
+    # hardcode ``direction: minimize`` and old persisted configs from a
+    # broken state could carry a direction that no longer matches the
+    # evaluation metric. We now ALWAYS recompute the natural direction
+    # from the optimization metric and overwrite when it disagrees,
+    # using ``maximize_metrics`` as the single source of truth.
     if "tuning" in result:
         optuna = result["tuning"].get("optuna", {})
         params = optuna.get("params", {})
-        if "direction" not in params:
-            final_metrics = (result.get("evaluation") or {}).get("metrics", [])
-            if final_metrics:
-                first_metric = (
-                    final_metrics[0]
-                    if isinstance(final_metrics[0], str)
-                    else next(iter(final_metrics[0]), "")
-                )
-                maximize_metrics = {
-                    "auc",
-                    "auc_pr",
-                    "r2",
-                    "accuracy",
-                    "f1",
-                    "auc_mu",
-                }
-                direction = (
-                    "maximize" if first_metric in maximize_metrics else "minimize"
-                )
-                optuna["params"] = {**params, "direction": direction}
+        final_metrics = (result.get("evaluation") or {}).get("metrics", [])
+        if final_metrics:
+            first_metric = (
+                final_metrics[0]
+                if isinstance(final_metrics[0], str)
+                else next(iter(final_metrics[0]), "")
+            )
+            maximize_metrics = {
+                "auc",
+                "auc_pr",
+                "r2",
+                "accuracy",
+                "f1",
+                "auc_mu",
+            }
+            correct_direction = (
+                "maximize" if first_metric in maximize_metrics else "minimize"
+            )
+            if params.get("direction") != correct_direction:
+                optuna["params"] = {**params, "direction": correct_direction}
                 result["tuning"]["optuna"] = optuna
 
     # Clean tuning section: keep only optuna (params + space)

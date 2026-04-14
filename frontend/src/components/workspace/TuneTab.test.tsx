@@ -623,7 +623,24 @@ describe("TuneTab", () => {
     fe.click(pakButtons[0].closest("button") ?? pakButtons[0]);
 
     expect(onChange).toHaveBeenCalled();
-    const updated = onChange.mock.calls[0][0] as Record<string, unknown>;
+    // Bug 2026-04-14 (4) — Fix 3: TuneEvaluationSection now also runs a
+    // defensive useEffect that syncs ``optuna.params.direction`` to the
+    // resolved metric direction on mount/metric-change. That effect can
+    // fire BEFORE the user's click, so ``mock.calls[0]`` is the
+    // direction-sync update and the click result lives later in the
+    // call history. Pick the latest call that actually carries an
+    // updated ``evaluation.metrics`` to assert against.
+    const callsWithMetricsUpdate = onChange.mock.calls.filter((c) => {
+      const t = (c[0] as Record<string, unknown>).tuning as
+        | Record<string, unknown>
+        | undefined;
+      const evalSection = t?.evaluation as { metrics?: unknown[] } | undefined;
+      return evalSection?.metrics !== undefined;
+    });
+    expect(callsWithMetricsUpdate.length).toBeGreaterThan(0);
+    const updated = callsWithMetricsUpdate[
+      callsWithMetricsUpdate.length - 1
+    ][0] as Record<string, unknown>;
     const tuning = updated.tuning as Record<string, unknown>;
     const evaluation = tuning.evaluation as { metrics: unknown[] };
     // First entry must be the dict form of precision_at_k
@@ -778,7 +795,20 @@ describe("TuneTab", () => {
     fireEvent.click(f1Buttons[0].closest("button") ?? f1Buttons[0]);
 
     expect(onChange).toHaveBeenCalled();
-    const updated = onChange.mock.calls[0][0] as Record<string, unknown>;
+    // Bug 2026-04-14 (4) — Fix 3: pick the click-induced call, not the
+    // direction-sync useEffect that fires on mount. See the matching
+    // comment in the precision_at_k test above.
+    const callsWithMetricsUpdate = onChange.mock.calls.filter((c) => {
+      const t = (c[0] as Record<string, unknown>).tuning as
+        | Record<string, unknown>
+        | undefined;
+      const evalSection = t?.evaluation as { metrics?: unknown[] } | undefined;
+      return evalSection?.metrics !== undefined;
+    });
+    expect(callsWithMetricsUpdate.length).toBeGreaterThan(0);
+    const updated = callsWithMetricsUpdate[
+      callsWithMetricsUpdate.length - 1
+    ][0] as Record<string, unknown>;
     const tuning = updated.tuning as Record<string, unknown>;
     const evaluation = tuning.evaluation as { metrics: unknown[] };
     // "f1" should be the new optimization metric (index 0)

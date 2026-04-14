@@ -1106,8 +1106,19 @@ class TestPrepareTuneConfig:
         result = _prepare_tune_config(config)
         assert result["tuning"]["optuna"]["params"]["direction"] == "minimize"
 
-    def test_preserves_explicit_direction(self) -> None:
-        """User-set direction must NOT be overwritten."""
+    def test_overwrites_inconsistent_direction(self) -> None:
+        """Bug 2026-04-14: a stale ``direction`` that contradicts the
+        evaluation metric must be normalized, not preserved.
+
+        The previous behavior preserved any user-supplied direction
+        (rmse + ``direction: maximize`` was kept as maximize). That
+        sounded reasonable for a hypothetical "power user override"
+        but in practice it let the workspace inject path's hardcoded
+        ``direction: minimize`` slip through for AUC tuning, which
+        produced silently wrong results. The new contract is "metric
+        is the single source of truth" and ``_prepare_tune_config``
+        always reconciles direction with the optimization metric.
+        """
         from lizystudio.services.training import _prepare_tune_config
 
         config: dict[str, Any] = {
@@ -1121,8 +1132,8 @@ class TestPrepareTuneConfig:
             },
         }
         result = _prepare_tune_config(config)
-        # rmse is normally minimize, but user explicitly set maximize
-        assert result["tuning"]["optuna"]["params"]["direction"] == "maximize"
+        # rmse is naturally minimize -- the stale "maximize" is reconciled.
+        assert result["tuning"]["optuna"]["params"]["direction"] == "minimize"
 
     def test_cleans_tuning_section(self) -> None:
         from lizystudio.services.training import _prepare_tune_config
