@@ -74,6 +74,11 @@ export function useDataPanel({
 
   const abortRef = useRef<AbortController | null>(null);
   const prevCvStrategyRef = useRef<string>(cv.strategy);
+  // H-0063: handleTargetChange owns the full config PUT for target selection
+  // (via fetchConfigDefaults). Setting this ref to true makes the
+  // target/task/overrides/cv effect skip one syncConfig run so it does not
+  // race ahead with a partial config derived from an empty fetchConfig().
+  const skipNextSyncRef = useRef(false);
 
   const syncConfig = useCallback(async () => {
     abortRef.current?.abort();
@@ -88,8 +93,17 @@ export function useDataPanel({
         .filter(([, v]) => v.excluded)
         .map(([k]) => k);
 
-      const base = await fetchConfig({ signal: controller.signal });
+      let base = await fetchConfig({ signal: controller.signal });
       if (controller.signal.aborted) return;
+      // H-0063: if the server-side config has not been seeded yet (e.g. the
+      // user just picked a Task for the first time after loading data), fall
+      // back to fetchConfigDefaults so the PUT carries a full validatable
+      // config instead of a partial one that fails Pydantic.
+      const hasConfigVersion =
+        (base as Record<string, unknown>).config_version !== undefined;
+      if (!hasConfigVersion && task && target) {
+        base = await fetchConfigDefaults(task, target);
+      }
 
       const baseData = (base as Record<string, unknown>).data as Record<
         string,
@@ -141,6 +155,13 @@ export function useDataPanel({
     const key = JSON.stringify({ target, task, overrides, cv, blocked });
     if (key === prevSyncKey.current) return;
     prevSyncKey.current = key;
+    // H-0063: suppress syncConfig while handleTargetChange is assembling the
+    // full defaults-backed config. The flag stays set until that flow
+    // finishes so every intermediate render (setTask, setOverrides, setCv)
+    // is skipped, not just the first one after setTarget.
+    if (skipNextSyncRef.current) {
+      return;
+    }
     syncConfig();
   }, [target, task, overrides, cv, blocked, syncConfig]);
 
@@ -198,6 +219,12 @@ export function useDataPanel({
 
   const handleTargetChange = useCallback(
     async (value: string) => {
+      // H-0063: block the target/task/overrides/cv effect from firing
+      // syncConfig while we assemble the full defaults-backed config below.
+      // Without this guard, setTarget(value) schedules syncConfig synchronously
+      // on the next render, which runs ahead with an empty fetchConfig() and
+      // PUTs a partial config that fails Pydantic validation.
+      skipNextSyncRef.current = true;
       setTarget(value);
       try {
         const cols = await fetchColumns(value);
@@ -254,6 +281,10 @@ export function useDataPanel({
         }
       } catch (err) {
         toast.error(`Column detection failed: ${getErrorMessage(err)}`);
+      } finally {
+        // H-0063: release the guard so subsequent legitimate state changes
+        // (e.g. user toggling include/exclude) can trigger syncConfig again.
+        skipNextSyncRef.current = false;
       }
     },
     [task, cv, dataPath, onDataChanged, onTaskChanged],
