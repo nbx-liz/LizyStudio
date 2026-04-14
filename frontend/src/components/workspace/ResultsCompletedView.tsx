@@ -5,9 +5,11 @@ import {
   fetchJobImportance,
   fetchJobImportanceKinds,
   fetchJobLearningCurveMetrics,
+  fetchJobLineage,
   fetchJobPlot,
   fetchJobPlots,
   fetchJobSplitSummary,
+  type LineageNode,
 } from "@/api/jobs";
 import type { JobDetail, MetricEntry } from "@/api/types";
 import { MetricCards } from "@/components/shared/MetricCards";
@@ -17,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { pivotMetrics } from "@/lib/metrics";
 import { FoldDetailsSection } from "./FoldDetailsSection";
 import { PlotSection } from "./PlotSection";
+import { JobLineageTree } from "./retune/JobLineageTree";
 import { RetuneActionButton } from "./retune/RetuneActionButton";
 import {
   TrialResultsAccordionItem,
@@ -161,6 +164,19 @@ export function ResultsCompletedView({
     enabled: job.job_type === "tune",
   });
 
+  // H-0062 acceptance #13: lineage tree wire-in. Only fetch for tune jobs;
+  // silently swallow errors because lineage is auxiliary information.
+  const { data: lineageData } = useQuery({
+    queryKey: ["job-lineage", job.job_id],
+    queryFn: () => fetchJobLineage(job.job_id),
+    enabled: job.job_type === "tune",
+    retry: false,
+  });
+  const lineageRoot: LineageNode | null = lineageData?.tree ?? null;
+  const showLineage =
+    lineageRoot != null &&
+    (lineageRoot.children.length > 0 || job.parent_job_id != null);
+
   useEffect(() => {
     if (plots && plots.length > 0 && !selectedPlot) {
       const first = plots.find((p) => p !== "tuning");
@@ -256,6 +272,16 @@ export function ResultsCompletedView({
           </Button>
         </div>
       </div>
+
+      {/* H-0062 #13: Job lineage tree (only when relations exist).
+          onJobStarted is reused as the node-select handler — the parent
+          WorkspacePage treats it as "switch workspace selection to job_id",
+          which is exactly the behavior we want when clicking a tree node. */}
+      {showLineage && lineageRoot && (
+        <div className="mb-3">
+          <JobLineageTree root={lineageRoot} onSelect={onJobStarted} />
+        </div>
+      )}
 
       {/* Tune results first: Optimization History -> Best Params -> Apply to Fit */}
       {tuneResult && (

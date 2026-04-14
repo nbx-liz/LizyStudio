@@ -18,6 +18,14 @@ vi.mock("@/api/jobs", () => ({
   fetchJobImportanceKinds: vi.fn().mockResolvedValue([]),
   fetchJobLearningCurveMetrics: vi.fn(),
   fetchJobSplitSummary: vi.fn().mockResolvedValue([]),
+  fetchJobLineage: vi.fn().mockResolvedValue({
+    tree: {
+      job_id: "job_test",
+      status: "completed",
+      job_type: "tune",
+      children: [],
+    },
+  }),
 }));
 
 vi.mock("./PlotSection", () => ({
@@ -165,6 +173,223 @@ describe("ResultsCompletedView — learning curve metrics filter", () => {
       const props = latestProps();
       expect(props.isError).toBe(true);
     });
+  });
+
+  it("does not render the JobLineageTree section for a standalone tune job", async () => {
+    plotSectionCalls.length = 0;
+    const jobs = await import("@/api/jobs");
+    (jobs.fetchJobLineage as ReturnType<typeof vi.fn>).mockResolvedValue({
+      tree: {
+        job_id: "job_solo",
+        status: "completed",
+        job_type: "tune",
+        children: [],
+      },
+    });
+
+    const job = makeJob({
+      job_id: "job_solo",
+      job_type: "tune",
+      tune_result: {
+        best_params: {},
+        best_score: 0.9,
+        metric_name: "auc",
+        direction: "maximize",
+        trials: [],
+      } as unknown as import("@/api/types").TuneResult,
+    });
+
+    renderWithQuery(
+      <ResultsCompletedView
+        job={job}
+        headerLabel="Test"
+        selectedPlot="learning-curve"
+        onSelectPlot={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("plot-section")).toBeInTheDocument();
+    });
+    // No lineage relationship → no Lineage panel.
+    expect(screen.queryByText("Lineage")).not.toBeInTheDocument();
+  });
+
+  it("renders the JobLineageTree section when the tune job has children", async () => {
+    plotSectionCalls.length = 0;
+    const jobs = await import("@/api/jobs");
+    (jobs.fetchJobLineage as ReturnType<typeof vi.fn>).mockResolvedValue({
+      tree: {
+        job_id: "job_parent",
+        status: "completed",
+        job_type: "tune",
+        children: [
+          {
+            job_id: "job_child",
+            status: "completed",
+            job_type: "tune",
+            children: [],
+          },
+        ],
+      },
+    });
+
+    const job = makeJob({
+      job_id: "job_parent",
+      job_type: "tune",
+      tune_result: {
+        best_params: {},
+        best_score: 0.9,
+        metric_name: "auc",
+        direction: "maximize",
+        trials: [],
+      } as unknown as import("@/api/types").TuneResult,
+    });
+
+    renderWithQuery(
+      <ResultsCompletedView
+        job={job}
+        headerLabel="Test"
+        selectedPlot="learning-curve"
+        onSelectPlot={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Lineage")).toBeInTheDocument();
+    });
+    expect(screen.getByText("job_parent")).toBeInTheDocument();
+    expect(screen.getByText("job_child")).toBeInTheDocument();
+  });
+
+  it("renders the JobLineageTree section when the tune job is itself a child", async () => {
+    plotSectionCalls.length = 0;
+    const jobs = await import("@/api/jobs");
+    (jobs.fetchJobLineage as ReturnType<typeof vi.fn>).mockResolvedValue({
+      tree: {
+        job_id: "job_root",
+        status: "completed",
+        job_type: "tune",
+        children: [
+          {
+            job_id: "job_self",
+            status: "completed",
+            job_type: "tune",
+            children: [],
+          },
+        ],
+      },
+    });
+
+    const job = makeJob({
+      job_id: "job_self",
+      job_type: "tune",
+      parent_job_id: "job_root",
+      tune_result: {
+        best_params: {},
+        best_score: 0.9,
+        metric_name: "auc",
+        direction: "maximize",
+        trials: [],
+      } as unknown as import("@/api/types").TuneResult,
+    });
+
+    renderWithQuery(
+      <ResultsCompletedView
+        job={job}
+        headerLabel="Test"
+        selectedPlot="learning-curve"
+        onSelectPlot={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Lineage")).toBeInTheDocument();
+    });
+  });
+
+  it("calls onJobStarted when a lineage node is clicked", async () => {
+    plotSectionCalls.length = 0;
+    const jobs = await import("@/api/jobs");
+    (jobs.fetchJobLineage as ReturnType<typeof vi.fn>).mockResolvedValue({
+      tree: {
+        job_id: "job_parent",
+        status: "completed",
+        job_type: "tune",
+        children: [
+          {
+            job_id: "job_child",
+            status: "completed",
+            job_type: "tune",
+            children: [],
+          },
+        ],
+      },
+    });
+
+    const onJobStarted = vi.fn();
+    const job = makeJob({
+      job_id: "job_parent",
+      job_type: "tune",
+      tune_result: {
+        best_params: {},
+        best_score: 0.9,
+        metric_name: "auc",
+        direction: "maximize",
+        trials: [],
+      } as unknown as import("@/api/types").TuneResult,
+    });
+
+    renderWithQuery(
+      <ResultsCompletedView
+        job={job}
+        headerLabel="Test"
+        selectedPlot="learning-curve"
+        onSelectPlot={vi.fn()}
+        onJobStarted={onJobStarted}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("job_child")).toBeInTheDocument();
+    });
+    screen.getByText("job_child").click();
+    expect(onJobStarted).toHaveBeenCalledWith("job_child");
+  });
+
+  it("does not crash or render Lineage panel when fetchJobLineage fails", async () => {
+    plotSectionCalls.length = 0;
+    const jobs = await import("@/api/jobs");
+    (jobs.fetchJobLineage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("lineage boom"),
+    );
+
+    const job = makeJob({
+      job_id: "job_err",
+      job_type: "tune",
+      tune_result: {
+        best_params: {},
+        best_score: 0.9,
+        metric_name: "auc",
+        direction: "maximize",
+        trials: [],
+      } as unknown as import("@/api/types").TuneResult,
+    });
+
+    renderWithQuery(
+      <ResultsCompletedView
+        job={job}
+        headerLabel="Test"
+        selectedPlot="learning-curve"
+        onSelectPlot={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("plot-section")).toBeInTheDocument();
+    });
+    // Lineage panel must NOT appear on error — fail silently as it is auxiliary.
+    expect(screen.queryByText("Lineage")).not.toBeInTheDocument();
   });
 
   it("resets lcMetric when the job_id changes within the same mounted component", async () => {
