@@ -338,7 +338,7 @@ def test_auto_remaining_trials_subtracts_completed(
     client: TestClient, sample_data_ref: DataRef
 ) -> None:
     """_auto_remaining_trials computes N - completed, clamped at >= 1."""
-    from lizystudio.api.jobs import _auto_remaining_trials
+    from lizystudio.api.retune import _auto_remaining_trials
 
     parent_id = _make_failed_tune_job(
         client,
@@ -356,7 +356,7 @@ def test_auto_remaining_trials_subtracts_completed(
 def test_auto_remaining_trials_clamped_when_overshoot(
     client: TestClient, sample_data_ref: DataRef
 ) -> None:
-    from lizystudio.api.jobs import _auto_remaining_trials
+    from lizystudio.api.retune import _auto_remaining_trials
 
     parent_id = _make_failed_tune_job(
         client,
@@ -379,7 +379,7 @@ def test_auto_remaining_trials_with_no_tune_result(
     When ``tune_result`` is None the subtraction must still return at
     least 1 so the dialog shows a sensible default.
     """
-    from lizystudio.api.jobs import _auto_remaining_trials
+    from lizystudio.api.retune import _auto_remaining_trials
 
     app = client.app  # type: ignore[union-attr]
     job_store: JobStore = app.state.job_store
@@ -414,7 +414,7 @@ def test_auto_remaining_trials_multi_round_uses_n_rounds(
     failed after 80 cumulative trials (round 2 partial). Remaining must
     be 70, not 1.
     """
-    from lizystudio.api.jobs import _auto_remaining_trials
+    from lizystudio.api.retune import _auto_remaining_trials
 
     app = client.app  # type: ignore[union-attr]
     job_store: JobStore = app.state.job_store
@@ -450,7 +450,7 @@ def test_auto_remaining_trials_legacy_single_round_unchanged(
     client: TestClient, sample_data_ref: DataRef
 ) -> None:
     """Legacy parents without re_tune still behave as n_rounds=1."""
-    from lizystudio.api.jobs import _auto_remaining_trials
+    from lizystudio.api.retune import _auto_remaining_trials
 
     parent_id = _make_failed_tune_job(
         client,

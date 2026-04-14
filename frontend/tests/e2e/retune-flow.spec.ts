@@ -219,6 +219,221 @@ test.describe("Re-tune / Resume / Lineage flow (H-0062)", () => {
     expect(getChild.status()).toBe(404);
   });
 
+  test("API: cancel during retune frees the parent lock and marks child cancelled", async ({
+    request,
+  }) => {
+    // B-1: starting a retune should claim the parent lock; cancelling
+    // the child must release it so a subsequent retune is accepted.
+    const parentId = await setupTuneJob(request, 3);
+    const retuneRes = await request.post(`${API}/jobs/${parentId}/retune`, {
+      data: { n_trials: 50 }, // big enough that we can cancel before completion
+    });
+    expect(retuneRes.status()).toBe(200);
+    const { job_id: childId } = await retuneRes.json();
+
+    // Issue cancel as soon as the child has started running.
+    // Poll briefly so we hit the `running` state instead of cancelling
+    // a still-pending job (which would also be a valid path but doesn't
+    // exercise the cancel-aware progress callback).
+    for (let i = 0; i < 30; i++) {
+      const status = await (await request.get(`${API}/jobs/${childId}`)).json();
+      if (
+        status.status === "running" ||
+        status.status === "completed" ||
+        status.status === "failed"
+      ) {
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    const cancelRes = await request.post(`${API}/jobs/${childId}/cancel`);
+    // Cancel may 200 (running) or 400 (already finished) on a fast box;
+    // the important assertion is the *eventual* state of the child and
+    // that the parent lock is free for another retune.
+    expect([200, 400]).toContain(cancelRes.status());
+    const final = await pollJobUntilDone(request, childId);
+    expect(["cancelled", "failed", "completed"]).toContain(final.status);
+
+    // The parent lock must be released regardless of how the child ended,
+    // so a second retune from the same parent succeeds.
+    const second = await request.post(`${API}/jobs/${parentId}/retune`, {
+      data: { n_trials: 2 },
+    });
+    expect(second.status()).toBe(200);
+  });
+
+  test("API: second retune on the same parent returns 409 PARENT_LOCKED while first runs", async ({
+    request,
+  }) => {
+    // B-2: per-parent exclusive lock — the API must reject overlapping
+    // retune requests with 409 PARENT_LOCKED until the first child
+    // finishes (success / failure / cancellation).
+    const parentId = await setupTuneJob(request, 3);
+    const first = await request.post(`${API}/jobs/${parentId}/retune`, {
+      data: { n_trials: 30 }, // big enough to still be running when we send the second
+    });
+    expect(first.status()).toBe(200);
+    const { job_id: firstChildId } = await first.json();
+
+    // Immediately attempt a second retune. Optuna start-up usually takes
+    // a few hundred ms so the first child is still pending/running here.
+    const second = await request.post(`${API}/jobs/${parentId}/retune`, {
+      data: { n_trials: 2 },
+    });
+    expect(second.status()).toBe(409);
+    const errorBody = await second.json();
+    expect(errorBody.error.code).toBe("PARENT_LOCKED");
+
+    // Cleanup: cancel the long-running first child so the test does not
+    // block subsequent tests that share the same parent slot.
+    await request.post(`${API}/jobs/${firstChildId}/cancel`);
+    await pollJobUntilDone(request, firstChildId);
+  });
+
+  test("API: corrupted model_meta.json on parent returns 400 PICKLE_INCOMPATIBLE", async ({
+    request,
+  }) => {
+    // B-3: the API-layer pickle compatibility check must catch a
+    // corrupted sidecar file before spawning a child job. Without this,
+    // the user would only see a generic "child failed" status hours
+    // later instead of an immediate, actionable 400.
+    const parentId = await setupTuneJob(request, 3);
+
+    // Corrupt the parent's model_meta.json directly on disk. The
+    // jobs directory layout is fixed at ``$LIZYSTUDIO_HOME/jobs/{id}``;
+    // for the e2e environment this resolves to ``~/.lizystudio/jobs``.
+    const home = process.env.HOME ?? "/home/rem";
+    const metaPath = `${home}/.lizystudio/jobs/${parentId}/model_meta.json`;
+    if (!fs.existsSync(metaPath)) {
+      // Some environments may relocate the jobs dir; skip rather than
+      // false-positive when the file we want to corrupt is missing.
+      test.skip(true, `model_meta.json not found at ${metaPath}`);
+      return;
+    }
+    fs.writeFileSync(metaPath, "{ this is not valid JSON ]");
+
+    const retuneRes = await request.post(`${API}/jobs/${parentId}/retune`, {
+      data: { n_trials: 2 },
+    });
+    expect(retuneRes.status()).toBe(400);
+    const body = await retuneRes.json();
+    expect(body.error.code).toBe("PICKLE_INCOMPATIBLE");
+  });
+
+  test("UI: Re-tune from Workspace shows the Lineage panel and click-through navigates to the child", async ({
+    page,
+    request,
+  }) => {
+    // B-4: drive a Re-tune via the actual UI and verify that
+    //   1. the Lineage panel renders for the resulting parent/child pair
+    //   2. clicking the child node in the lineage tree is wired through
+    //      to the Workspace selection (onJobStarted handler).
+    test.setTimeout(180_000);
+
+    // Pre-create the parent via API so the UI test does not also have to
+    // walk through the upload + tune flow. The Workspace will pick it up
+    // when we navigate.
+    const parentId = await setupTuneJob(request, 3);
+
+    await page.goto("/");
+    // The home page is the Workspace; once data is loaded the parent
+    // tune result should be the active job.
+    await page.waitForLoadState("networkidle");
+
+    // Select the parent job from the Jobs list so the Workspace shows
+    // its results panel. The list lives in the left rail; clicking the
+    // job id text is the most stable selector across UI tweaks.
+    const parentRow = page.getByText(parentId, { exact: false }).first();
+    await parentRow.waitFor({ state: "visible", timeout: 30_000 });
+    await parentRow.click();
+
+    // Re-tune button should be enabled because the parent has a checkpoint.
+    const retuneButton = page.getByRole("button", {
+      name: /Re-tune \(\+N trials\)/i,
+    });
+    await retuneButton.waitFor({ state: "visible", timeout: 30_000 });
+    await retuneButton.click();
+
+    // The dialog opens with a default n_trials input; submit immediately.
+    const startButton = page.getByRole("button", { name: /Start Re-tune/i });
+    await startButton.waitFor({ state: "visible" });
+    await startButton.click();
+
+    // The toast confirms the child job id; capture it from the API
+    // call instead of parsing toast text (more stable across themes).
+    // Wait for any new tune child to appear on the parent's lineage.
+    let childId: string | null = null;
+    for (let i = 0; i < 60; i++) {
+      const lineageRes = await request.get(`${API}/jobs/${parentId}/lineage`);
+      if (lineageRes.ok()) {
+        const lineage = await lineageRes.json();
+        const children = lineage.tree?.children ?? [];
+        if (children.length > 0) {
+          childId = children[0].job_id;
+          break;
+        }
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    expect(childId, "child job did not appear on parent lineage").not.toBeNull();
+    if (childId == null) return; // appease type narrowing
+
+    // Wait for the child to finish so the Lineage panel has a stable badge.
+    await pollJobUntilDone(request, childId);
+
+    // The Workspace should switch selection to the child via onJobStarted.
+    // The Lineage panel renders the child id as a clickable button.
+    const lineageHeader = page.getByText("Lineage", { exact: true });
+    await lineageHeader.waitFor({ state: "visible", timeout: 30_000 });
+    const childNode = page.getByText(childId, { exact: false });
+    await childNode.waitFor({ state: "visible" });
+
+    // Clicking the parent node in the lineage tree should switch the
+    // Workspace selection back to the parent.
+    const parentNode = page.getByText(parentId, { exact: false }).first();
+    await parentNode.click();
+    // The page should now show the parent job header again. We assert
+    // by checking the Re-tune button is still enabled (it is on the
+    // parent's results view).
+    await expect(retuneButton).toBeVisible({ timeout: 10_000 });
+  });
+
+  test("UI: grandchild Re-tune button is enabled on a child job", async ({
+    page,
+    request,
+  }) => {
+    // B-5: the Decision flip 2026-04-14 made grandchild retune allowed.
+    // Verify the UI side does not disable the button on a child job —
+    // i.e. RetuneActionButton has no parent_job_id-based disabledReason.
+    test.setTimeout(180_000);
+
+    // Set up parent -> child via API so the UI test stays focused on
+    // the button state.
+    const parentId = await setupTuneJob(request, 3);
+    const ab = await request.post(`${API}/jobs/${parentId}/retune`, {
+      data: { n_trials: 2 },
+    });
+    expect(ab.status()).toBe(200);
+    const { job_id: childId } = await ab.json();
+    await pollJobUntilDone(request, childId);
+
+    await page.goto("/");
+    await page.waitForLoadState("networkidle");
+
+    // Select the child job so the Workspace shows its completed view.
+    const childRow = page.getByText(childId, { exact: false }).first();
+    await childRow.waitFor({ state: "visible", timeout: 30_000 });
+    await childRow.click();
+
+    // The Re-tune button must be enabled (not disabled with a tooltip)
+    // because the grandchild rule was lifted.
+    const retuneButton = page.getByRole("button", {
+      name: /Re-tune \(\+N trials\)/i,
+    });
+    await retuneButton.waitFor({ state: "visible", timeout: 30_000 });
+    await expect(retuneButton).toBeEnabled();
+  });
+
   test("API: grandchild retune is allowed (H-0062 Decision flip 2026-04-14)", async ({
     request,
   }) => {

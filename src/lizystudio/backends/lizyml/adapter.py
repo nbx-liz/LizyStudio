@@ -1,4 +1,10 @@
-"""LizyML backend adapter."""
+"""LizyML backend adapter — main class.
+
+Extracted from the monolithic ``lizyml.py`` (H-0062 cleanup). Helper
+modules in this package handle pickle compatibility, serialization,
+and config compat checks; this file owns the lifecycle methods that
+talk to lizyml directly (fit / tune / predict / evaluate / plot).
+"""
 
 from __future__ import annotations
 
@@ -25,145 +31,24 @@ from lizystudio.backends.types import (
     TuningSummary,
 )
 
+from .config_compat import (
+    parse_re_tune,
+    strip_internal_keys,
+    task_params_compat_errors,
+)
+from .pickle_compat import (
+    MODEL_META,
+    MODEL_META_TMP,
+    MODEL_PKL,
+    MODEL_PKL_TMP,
+    PICKLE_SCHEMA_VERSION,
+    PickleIncompatibleError,
+    collect_pickle_versions,
+    verify_pickle_compatibility,
+)
+from .serialization import serialize_tuning_result
+
 logger = logging.getLogger(__name__)
-
-
-# --- H-0062: Phase B checkpoint persistence -------------------------------
-
-
-class PicklePreflightError(RuntimeError):
-    """Raised before tune starts when the job dir is not usable for
-    pickle persistence (no write perms, SELinux denial, or unpicklable
-    skeleton)."""
-
-
-class PickleIncompatibleError(RuntimeError):
-    """Raised by ``load_checkpoint`` / ``verify_pickle_compatibility`` when
-    the on-disk ``model_meta.json`` points at a schema or major backend
-    version the current Studio cannot safely deserialize."""
-
-
-_PICKLE_SCHEMA_VERSION = 1
-_MODEL_PKL = "model.pkl"
-_MODEL_PKL_TMP = "model.pkl.tmp"
-_MODEL_META = "model_meta.json"
-_MODEL_META_TMP = "model_meta.json.tmp"
-
-
-def _collect_pickle_versions() -> dict[str, str]:
-    """Snapshot the lizyml / lightgbm / optuna versions for the sidecar."""
-    import lizyml
-
-    versions: dict[str, str] = {
-        "lizyml_version": getattr(lizyml, "__version__", "unknown"),
-    }
-    try:
-        import lightgbm
-
-        versions["lightgbm_version"] = getattr(lightgbm, "__version__", "unknown")
-    except ImportError:  # pragma: no cover - lightgbm is a hard dep
-        versions["lightgbm_version"] = "unknown"
-    try:
-        import optuna
-
-        versions["optuna_version"] = getattr(optuna, "__version__", "unknown")
-    except ImportError:  # pragma: no cover - optuna is a hard dep
-        versions["optuna_version"] = "unknown"
-    return versions
-
-
-def _major_minor(version: str) -> tuple[int, int] | None:
-    """Parse ``'0.9.1'`` into ``(0, 9)`` for version-compat comparison.
-
-    Strips PEP 440 local / dev / pre-release suffixes so that the
-    base ``major.minor`` is compared even for builds like
-    ``'0.9.1.dev3+local'`` or ``'0.9.0a1'``. The strictness comes from
-    the major/minor equality check in ``verify_pickle_compatibility``;
-    if a dev build's pickle format diverges from the matching stable
-    release, the fix is to bump ``_PICKLE_SCHEMA_VERSION``.
-    """
-    # Drop everything after the first non-numeric character in any
-    # component (handles 0.9.0a1 / 0.9.0rc1 / 0.9.0.dev3 / 0.9.0+local).
-    cleaned = version.split("+", 1)[0]
-    parts = cleaned.split(".")
-    if len(parts) < 2:
-        return None
-    numeric_parts: list[str] = []
-    for raw in parts[:2]:
-        digits = ""
-        for ch in raw:
-            if ch.isdigit():
-                digits += ch
-            else:
-                break
-        numeric_parts.append(digits)
-    if not numeric_parts[0] or not numeric_parts[1]:
-        return None
-    try:
-        return int(numeric_parts[0]), int(numeric_parts[1])
-    except ValueError:
-        return None
-
-
-def verify_pickle_compatibility(meta: dict[str, Any]) -> None:
-    """Reject a checkpoint whose sidecar points at an incompatible runtime.
-
-    The check is intentionally strict: we only accept the exact pickle
-    schema version and an exact lizyml major.minor match.  Anything else
-    raises so the caller can show a clear error to the user rather than
-    silently loading a bad model state.
-    """
-    schema = meta.get("pickle_schema")
-    if schema != _PICKLE_SCHEMA_VERSION:
-        raise PickleIncompatibleError(
-            f"Unsupported pickle_schema: expected {_PICKLE_SCHEMA_VERSION}, "
-            f"got {schema!r}"
-        )
-
-    current = _collect_pickle_versions()
-    saved_lizyml = str(meta.get("lizyml_version", ""))
-    current_mm = _major_minor(current["lizyml_version"])
-    saved_mm = _major_minor(saved_lizyml)
-    if current_mm is None or saved_mm is None or current_mm != saved_mm:
-        raise PickleIncompatibleError(
-            "Incompatible lizyml version: checkpoint was saved with "
-            f"{saved_lizyml!r}, current runtime is "
-            f"{current['lizyml_version']!r}"
-        )
-
-
-def preflight_pickle_check(job_dir: Path) -> None:
-    """Fail fast before tune if ``job_dir`` cannot host a pickle file.
-
-    Catches the common 'tune ran for an hour and then pickle save
-    failed' class of bugs by verifying:
-
-    1. The job dir is writable (creates and removes ``.write_test``)
-    2. cloudpickle can round-trip a minimal sentinel object
-
-    Real Model-specific picklability cannot be tested here because it
-    requires the fitted instance, which is exactly what we are trying
-    to produce.  The first real save attempt will surface any remaining
-    pickling issue (logged as WARNING, tune continues).
-    """
-    job_dir.mkdir(parents=True, exist_ok=True)
-    probe = job_dir / ".write_test"
-    try:
-        probe.write_bytes(b"ok")
-    except OSError as exc:
-        raise PicklePreflightError(
-            f"Job directory {job_dir} is not writable: {exc}"
-        ) from exc
-    finally:
-        if probe.exists():
-            with contextlib.suppress(OSError):
-                probe.unlink()
-
-    sentinel: dict[str, Any] = {"_pickle_schema": _PICKLE_SCHEMA_VERSION}
-    try:
-        cloudpickle.loads(cloudpickle.dumps(sentinel))
-    except Exception as exc:  # noqa: BLE001 — cloudpickle can raise many
-        raise PicklePreflightError(f"cloudpickle round-trip failed: {exc}") from exc
 
 
 class LizyMLAdapter:
@@ -221,41 +106,18 @@ class LizyMLAdapter:
         # H-0062 Bugfix 2026-04-14 (3): catch task <-> model.params
         # inconsistency up-front. The original user-facing symptom was
         # "LizyMLError: [TUNING_FAILED] All tuning trials failed. Check
-        # parameter ranges." — technically correct but misleading when
+        # parameter ranges." -- technically correct but misleading when
         # the real cause was an obsolete `objective=multiclass` left on
         # a `task=binary` config after the user briefly switched tasks.
-        errors.extend(_task_params_compat_errors(clean))
+        errors.extend(task_params_compat_errors(clean))
         return errors
 
     @staticmethod
     def _strip_internal_keys(config: dict[str, Any]) -> dict[str, Any]:
-        """Remove UI-internal keys (prefixed with _) and tune-only sections
-        that LizyML's Pydantic schema doesn't accept.
-
-        Defensive against malformed inputs: if ``config`` is not a dict
-        (or ``model`` / ``params`` / ``tuning`` are not dicts), the
-        helper returns a best-effort copy unchanged rather than
-        crashing. The real type errors surface via pydantic validation
-        downstream.
-        """
-        import copy
-
-        if not isinstance(config, dict):
-            return config  # pydantic will reject the type at validate time
-        result = copy.deepcopy(config)
-        # Strip _ keys from model.params (only when model AND params are dicts)
-        model = result.get("model")
-        if isinstance(model, dict):
-            model_params = model.get("params")
-            if isinstance(model_params, dict):
-                model["params"] = {
-                    k: v for k, v in model_params.items() if not k.startswith("_")
-                }
-        # Strip tune-only keys from tuning (evaluation, model_params, training)
-        tuning = result.get("tuning")
-        if isinstance(tuning, dict):
-            result["tuning"] = {k: v for k, v in tuning.items() if k in ("optuna",)}
-        return result
+        """Thin shim around :func:`strip_internal_keys` kept for backward
+        compatibility — older tests reach into ``LizyMLAdapter._strip_internal_keys``
+        directly."""
+        return strip_internal_keys(config)
 
     def load_config_from_file(self, content: bytes, filename: str) -> dict[str, Any]:
         text = content.decode("utf-8")
@@ -315,7 +177,7 @@ class LizyMLAdapter:
         ``re_tune`` kwargs (n_trials, expand_boundary, boundary_threshold)
         are applied to the first round as well in that case.
         """
-        n_rounds, extra_kwargs = _parse_re_tune(re_tune)
+        n_rounds, extra_kwargs = parse_re_tune(re_tune)
 
         lizyml_callback: Any = None
         accumulated_trials: list[dict[str, Any]] = []
@@ -326,7 +188,7 @@ class LizyMLAdapter:
         # accumulated_trials with the parent's trial history. Without
         # this, the Running view table and LiveTrialChart start empty on
         # every Re-tune so the user sees only the *new* trials and the
-        # Best column begins from the first new trial — giving the
+        # Best column begins from the first new trial -- giving the
         # false impression that the parent results were thrown away.
         # The seeded entries carry the parent's best_score as the
         # per-row best so the chart's "Best" trace is flat across the
@@ -490,7 +352,7 @@ class LizyMLAdapter:
         if on_progress is not None:
             total = len(tune_result.trials) or 1
             on_progress(current=total, total=total, message="Tuning complete.")
-        return _serialize_tuning_result(tune_result)
+        return serialize_tuning_result(tune_result)
 
     # -- Checkpoint persistence (H-0062) --
 
@@ -519,8 +381,8 @@ class LizyMLAdapter:
             logger.warning("checkpoint: cannot create %s: %s", target_dir, exc)
             return
 
-        tmp_path = target_dir / _MODEL_PKL_TMP
-        final_path = target_dir / _MODEL_PKL
+        tmp_path = target_dir / MODEL_PKL_TMP
+        final_path = target_dir / MODEL_PKL
         try:
             with tmp_path.open("wb") as fh:
                 cloudpickle.dump(model, fh)
@@ -536,14 +398,14 @@ class LizyMLAdapter:
                 tmp_path.unlink(missing_ok=True)
             return
 
-        # Meta sidecar — if this fails we still keep the pickle, but log.
-        meta_tmp = target_dir / _MODEL_META_TMP
-        meta_final = target_dir / _MODEL_META
+        # Meta sidecar -- if this fails we still keep the pickle, but log.
+        meta_tmp = target_dir / MODEL_META_TMP
+        meta_final = target_dir / MODEL_META
         try:
             meta_payload: dict[str, Any] = {
-                "pickle_schema": _PICKLE_SCHEMA_VERSION,
+                "pickle_schema": PICKLE_SCHEMA_VERSION,
                 "saved_at": datetime.now(timezone.utc).isoformat(),
-                **_collect_pickle_versions(),
+                **collect_pickle_versions(),
             }
             meta_tmp.write_text(
                 json.dumps(meta_payload, ensure_ascii=False),
@@ -563,11 +425,11 @@ class LizyMLAdapter:
         schema or lizyml-major mismatch.
         """
         target_dir = Path(path)
-        pkl_path = target_dir / _MODEL_PKL
+        pkl_path = target_dir / MODEL_PKL
         if not pkl_path.exists():
             raise FileNotFoundError(f"No checkpoint at {pkl_path}")
 
-        meta_path = target_dir / _MODEL_META
+        meta_path = target_dir / MODEL_META
         if meta_path.exists():
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
             verify_pickle_compatibility(meta)
@@ -617,7 +479,7 @@ class LizyMLAdapter:
         Walks ``fit_result.history[*]["eval_history"][dataset][metric]``,
         mirroring the matching logic in
         ``lizyml.plots.learning_curve.plot_learning_curve``. This is the
-        source of truth for the UI's metric filter — it reflects what the
+        source of truth for the UI's metric filter -- it reflects what the
         backend actually trained on, not what the user requested in config.
 
         Returns an empty list when no eval history is recorded (e.g. early
@@ -746,288 +608,6 @@ class LizyMLAdapter:
         )
 
 
-# ---------------------------------------------------------------------------
-# Tune / re-tune helpers (H-0061)
-# ---------------------------------------------------------------------------
-
-# Hard upper bounds act as a DoS guard: the frontend clamps n_rounds to 10
-# and n_trials implicitly via Search Space, but a direct API client could
-# otherwise request millions of trials and tie up the single-job queue.
-_MAX_RE_TUNE_ROUNDS = 20
-_MAX_RE_TUNE_TRIALS_PER_ROUND = 10_000
-
-
-def _parse_re_tune(
-    re_tune: dict[str, Any] | None,
-) -> tuple[int, dict[str, Any]]:
-    """Validate a ``re_tune`` config block from the request.
-
-    Returns ``(n_rounds, extra_kwargs)`` where ``extra_kwargs`` are the
-    keyword arguments passed to ``model.tune(resume=True, ...)`` on
-    rounds 2..n_rounds.  The first round always uses the Config-driven
-    ``tuning.optuna`` settings (n_trials, space, sampler, ...).
-    """
-    if re_tune is None:
-        return 1, {}
-
-    n_rounds_raw = re_tune.get("n_rounds", 1)
-    # Accept plain int only; reject float to avoid silent truncation (1.5 -> 1)
-    # and reject bool (Python bools are ints but not meaningful here).
-    if isinstance(n_rounds_raw, bool) or not isinstance(n_rounds_raw, int):
-        raise ValueError(f"re_tune.n_rounds must be an integer, got {n_rounds_raw!r}")
-    n_rounds = n_rounds_raw
-    if n_rounds < 1:
-        raise ValueError(f"re_tune.n_rounds must be >= 1, got {n_rounds}")
-    if n_rounds > _MAX_RE_TUNE_ROUNDS:
-        raise ValueError(
-            f"re_tune.n_rounds must be <= {_MAX_RE_TUNE_ROUNDS}, got {n_rounds}"
-        )
-
-    extra_kwargs: dict[str, Any] = {}
-    if "n_trials" in re_tune and re_tune["n_trials"] is not None:
-        n_trials_raw = re_tune["n_trials"]
-        # Same strict-int check as n_rounds: reject bool and non-int.
-        if isinstance(n_trials_raw, bool) or not isinstance(n_trials_raw, int):
-            raise ValueError(
-                f"re_tune.n_trials must be an integer, got {n_trials_raw!r}"
-            )
-        if n_trials_raw < 1:
-            raise ValueError(f"re_tune.n_trials must be >= 1, got {n_trials_raw}")
-        if n_trials_raw > _MAX_RE_TUNE_TRIALS_PER_ROUND:
-            raise ValueError(
-                f"re_tune.n_trials must be <= {_MAX_RE_TUNE_TRIALS_PER_ROUND}, "
-                f"got {n_trials_raw}"
-            )
-        extra_kwargs["n_trials"] = n_trials_raw
-    if "expand_boundary" in re_tune and re_tune["expand_boundary"] is not None:
-        extra_kwargs["expand_boundary"] = bool(re_tune["expand_boundary"])
-    if "boundary_threshold" in re_tune and re_tune["boundary_threshold"] is not None:
-        threshold_raw = re_tune["boundary_threshold"]
-        # Same strict numeric check as n_rounds / n_trials (reject bool, str).
-        if isinstance(threshold_raw, bool) or not isinstance(
-            threshold_raw, (int, float)
-        ):
-            raise ValueError(
-                f"re_tune.boundary_threshold must be a number, got {threshold_raw!r}"
-            )
-        threshold = float(threshold_raw)
-        # lizyml 0.9.0 Model.tune enforces strict (0.0, 0.5); mirror that so
-        # errors surface here instead of deep inside lizyml.
-        if not (0.0 < threshold < 0.5):
-            raise ValueError(
-                f"re_tune.boundary_threshold must be in (0.0, 0.5), got {threshold}"
-            )
-        extra_kwargs["boundary_threshold"] = threshold
-    return n_rounds, extra_kwargs
-
-
-def _serialize_tuning_result(tune_result: Any) -> TuningSummary:
-    """Convert lizyml ``TuningResult`` into Studio ``TuningSummary``.
-
-    Populates the optional ``rounds`` and ``boundary_report`` fields
-    when the lizyml result carries H-0068 data.  Legacy results without
-    those fields produce a summary with ``rounds=None`` and
-    ``boundary_report=None``.
-    """
-    rounds = _serialize_rounds(getattr(tune_result, "rounds", None))
-    boundary = _serialize_boundary_report(getattr(tune_result, "boundary_report", None))
-    return TuningSummary(
-        best_params=dict(tune_result.best_params),
-        best_score=float(tune_result.best_score),
-        trials=[
-            {
-                "number": t.number,
-                "params": dict(t.params),
-                # Optuna PRUNED/FAIL trials carry score=None.
-                "score": float(t.score) if t.score is not None else None,
-                "state": t.state,
-                "round": getattr(t, "round", 1),
-            }
-            for t in tune_result.trials
-        ],
-        metric_name=tune_result.metric_name,
-        direction=tune_result.direction,
-        rounds=rounds,
-        boundary_report=boundary,
-    )
-
-
-def _serialize_rounds(rounds: Any) -> list[dict[str, Any]] | None:
-    """Serialize a lizyml ``tuple[RoundSummary, ...]`` to plain dicts."""
-    if not rounds:
-        return None
-    out: list[dict[str, Any]] = []
-    for r in rounds:
-        out.append(
-            {
-                "round": int(r.round),
-                "n_trials": int(r.n_trials),
-                "best_score_before": (
-                    float(r.best_score_before)
-                    if r.best_score_before is not None
-                    else None
-                ),
-                "best_score_after": float(r.best_score_after),
-                "expanded_dims": list(r.expanded_dims),
-                "space_snapshot": [
-                    _serialize_search_dim(dim) for dim in r.space_snapshot
-                ],
-            }
-        )
-    return out
-
-
-def _serialize_boundary_report(report: Any) -> dict[str, Any] | None:
-    """Serialize a lizyml ``BoundaryReport`` to a plain dict."""
-    if report is None:
-        return None
-    dims = getattr(report, "dims", ())
-    return {
-        "dims": [
-            {
-                "name": str(d.name),
-                "best_value": d.best_value,
-                "low": d.low,
-                "high": d.high,
-                "position_pct": (
-                    float(d.position_pct) if d.position_pct is not None else None
-                ),
-                "edge": str(d.edge) if d.edge is not None else None,
-                "expanded": bool(d.expanded),
-                "new_low": d.new_low,
-                "new_high": d.new_high,
-            }
-            for d in dims
-        ],
-        "expanded_names": list(getattr(report, "expanded_names", ())),
-    }
-
-
-def _search_dim_type_label(dim: Any) -> str:
-    """Map a lizyml ``SearchDim`` dataclass to a short type label.
-
-    lizyml 0.9.0 uses three concrete frozen dataclasses — FloatDim, IntDim,
-    CategoricalDim — and does not expose a ``type`` field.  Derive the
-    label from the class name so the UI can distinguish numeric dims
-    (with low/high/log) from categorical dims (with choices).
-    """
-    cls = type(dim).__name__
-    if cls == "FloatDim":
-        return "float"
-    if cls == "IntDim":
-        return "int"
-    if cls == "CategoricalDim":
-        return "categorical"
-    return cls.lower().removesuffix("dim") or "unknown"
-
-
-def _serialize_search_dim(dim: Any) -> dict[str, Any]:
-    """Serialize a lizyml ``SearchDim`` into a plain dict.
-
-    The snapshot captures just enough to render a Search Space Evolution
-    view — type, name, category, and the type-specific range — without
-    pulling backend-specific objects into Studio's common type boundary.
-    Missing attributes are omitted rather than emitted as ``None`` so
-    the UI can use ``"low" in dim`` to discriminate numeric vs categorical.
-    """
-    result: dict[str, Any] = {
-        "name": getattr(dim, "name", None),
-        "type": _search_dim_type_label(dim),
-        "category": getattr(dim, "category", None),
-    }
-    # Numeric dims (FloatDim / IntDim) carry low/high/log.
-    for attr in ("low", "high", "log"):
-        if hasattr(dim, attr):
-            result[attr] = getattr(dim, attr)
-    # Categorical dims carry choices as a tuple; convert to list for JSON.
-    if hasattr(dim, "choices"):
-        choices = dim.choices
-        result["choices"] = list(choices) if choices is not None else None
-    return result
-
-
-# ---------------------------------------------------------------------------
-# H-0062 Bugfix 2026-04-14 (3): task <-> model.params compat checker
-# ---------------------------------------------------------------------------
-
-
-def _task_params_compat_errors(config: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return pydantic-style validation errors for task / objective /
-    metric mismatches.
-
-    Single source of truth for valid objective/metric names per task is
-    the lizyml UI schema ``option_sets``. The lists here are kept in
-    sync by ``tests/test_backends_lizyml.py``. Task is considered
-    unknown (no error) when it is missing or not one of the three
-    recognised values — that case is already covered by the normal
-    pydantic LizyMLConfig validation.
-
-    Defensive against malformed inputs: short-circuit when ``config``,
-    ``model``, or ``params`` are not dicts (H-0062 Bugfix 2026-04-14 (7)).
-    ``validate_config`` runs this helper after pydantic validation, so
-    a caller that passes a malformed config would otherwise see the
-    pydantic errors *plus* an AttributeError crashing the helper.
-    """
-    if not isinstance(config, dict):
-        return []
-    task = config.get("task")
-    if task not in ("binary", "multiclass", "regression"):
-        return []
-    model = config.get("model")
-    if not isinstance(model, dict):
-        return []
-    params = model.get("params")
-    if not isinstance(params, dict):
-        return []
-
-    from lizystudio.backends.lizyml_metrics import get_eval_metrics_by_task
-    from lizystudio.backends.lizyml_ui_schema import build_ui_schema
-
-    option_sets = build_ui_schema(get_eval_metrics_by_task()).get("option_sets", {})
-    allowed_objective = set(option_sets.get("objective", {}).get(task, []))
-    allowed_metric = set(option_sets.get("model_metric", {}).get(task, []))
-
-    errors: list[dict[str, Any]] = []
-
-    objective = params.get("objective")
-    if (
-        isinstance(objective, str)
-        and allowed_objective
-        and objective not in allowed_objective
-    ):
-        errors.append(
-            {
-                "type": "task_objective_mismatch",
-                "loc": ("model", "params", "objective"),
-                "msg": (
-                    f"objective={objective!r} is not valid for task={task!r}; "
-                    f"allowed: {sorted(allowed_objective)}"
-                ),
-                "input": objective,
-            }
-        )
-
-    metric = params.get("metric")
-    # Empty list is OK (backend supplies defaults downstream).
-    if isinstance(metric, list) and metric and allowed_metric:
-        # H-0062 Bugfix 2026-04-14 (7): flag when ANY metric is invalid
-        # for the current task. LightGBM rejects the whole list if any
-        # entry is incompatible (e.g. task=binary + metric=["auc",
-        # "multi_logloss"] → the old "all-invalid only" policy let
-        # this slip through and the user saw "All tuning trials failed"
-        # at run time with no hint at the real cause.
-        bad = [m for m in metric if isinstance(m, str) and m not in allowed_metric]
-        if bad:
-            errors.append(
-                {
-                    "type": "task_metric_mismatch",
-                    "loc": ("model", "params", "metric"),
-                    "msg": (
-                        f"metric={bad!r} is not valid for task={task!r}; "
-                        f"allowed: {sorted(allowed_metric)}"
-                    ),
-                    "input": metric,
-                }
-            )
-
-    return errors
+# Re-export for callers that imported PickleIncompatibleError directly from
+# the adapter module before the H-0062 split.
+__all__ = ["LizyMLAdapter", "PickleIncompatibleError"]
