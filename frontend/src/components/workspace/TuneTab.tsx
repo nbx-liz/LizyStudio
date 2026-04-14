@@ -16,14 +16,6 @@ import {
   updateOptunaField,
 } from "./tune-config-utils";
 
-// Re-export helpers so existing imports from TuneTab continue to work
-export {
-  extractOptunaField,
-  extractTuningField,
-  updateOptunaField,
-  updateTuningField,
-} from "./tune-config-utils";
-
 interface TuneTabProps {
   config: Record<string, unknown>;
   onChange: (config: Record<string, unknown>) => void;

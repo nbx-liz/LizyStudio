@@ -204,12 +204,14 @@ def test_tune_with_checkpoint_dir_saves_after_each_trial(tmp_path: Path) -> None
 
     adapter.save_checkpoint = fake_save  # type: ignore[assignment]
 
+    n_trials = 3
+
     def fake_tune(*, progress_callback: Any = None, **_: Any) -> MagicMock:
         if progress_callback is not None:
-            for trial_idx in range(3):
+            for trial_idx in range(n_trials):
                 info = MagicMock()
                 info.current_trial = trial_idx + 1
-                info.total_trials = 3
+                info.total_trials = n_trials
                 info.best_score = 0.8 + trial_idx * 0.01
                 info.latest_score = 0.8 + trial_idx * 0.005
                 info.latest_state = "COMPLETE"
@@ -228,8 +230,18 @@ def test_tune_with_checkpoint_dir_saves_after_each_trial(tmp_path: Path) -> None
 
     adapter.tune(mock_model, checkpoint_dir=tmp_path)
 
-    # Three trials = three checkpoint saves
-    assert len(save_calls) == 3
+    # n_trials per-trial saves, plus one final save after lizyml's
+    # Model.tune() assigns self._study = study (H-0062: the per-trial
+    # saves predate that assignment so Re-tune / Resume needs the
+    # final save to actually see a populated _study). Expressed as
+    # `n_trials + 1` rather than the magic literal so a future
+    # behaviour change to the bridge save cadence makes the failure
+    # message obvious.
+    expected_saves = n_trials + 1
+    assert len(save_calls) == expected_saves, (
+        f"expected {expected_saves} saves (={n_trials} trials + 1 final), "
+        f"got {len(save_calls)}"
+    )
     # Every save targets the same directory
     assert all(p == tmp_path for p in save_calls)
 

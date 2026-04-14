@@ -873,6 +873,140 @@ describe("ConfigForm — auto-select useEffect", () => {
     );
     expect(objOrMetricCalls.length).toBe(0);
   });
+
+  // H-0062 Bugfix 2026-04-14 (3): task change must drop an objective /
+  // metric that belongs to the old task. The original bug: a user
+  // briefly selected task=multiclass (auto-setting objective=multiclass,
+  // metric=[auc_mu, multi_logloss]) then switched back to task=binary.
+  // The old auto-select useEffect guard was `!modelParams.objective`,
+  // so it never overwrote the stale multiclass values, and the Tune
+  // job failed with "All tuning trials failed" because LGBM rejects
+  // a multiclass objective on a binary target.
+  it("resets objective to new task default when current value is incompatible", () => {
+    const onChange = vi.fn();
+    renderConfigForm({
+      schema: minimalSchema,
+      // Incompatible state: task is binary but objective is multiclass.
+      config: {
+        model: {
+          name: "lgbm",
+          params: { objective: "multiclass" },
+        },
+      },
+      onChange,
+      task: "binary",
+      uiSchema: {
+        parameter_hints: [],
+        option_sets: {
+          objective: {
+            binary: ["binary", "cross_entropy"],
+            multiclass: ["multiclass", "multiclassova"],
+          },
+        },
+      } as unknown as UiSchema,
+    });
+
+    // At least one onChange call must carry a *binary-valid* objective.
+    const resetCall = onChange.mock.calls.find(([cfg]) => {
+      const obj = cfg?.model?.params?.objective;
+      return obj === "binary" || obj === "cross_entropy";
+    });
+    expect(resetCall).toBeDefined();
+  });
+
+  it("resets metric to new task default when every value is incompatible", () => {
+    const onChange = vi.fn();
+    renderConfigForm({
+      schema: minimalSchema,
+      config: {
+        model: {
+          name: "lgbm",
+          // Incompatible state: task is binary but metric is multiclass-only.
+          params: { metric: ["auc_mu", "multi_logloss"] },
+        },
+      },
+      onChange,
+      task: "binary",
+      uiSchema: {
+        parameter_hints: [
+          {
+            key: "metric",
+            kind: "model_metric",
+            default: {
+              binary: ["auc", "binary_logloss"],
+              multiclass: ["auc_mu", "multi_logloss"],
+            },
+          },
+        ],
+        option_sets: {
+          model_metric: {
+            binary: ["auc", "binary_logloss"],
+            multiclass: ["auc_mu", "multi_logloss"],
+          },
+        },
+      } as unknown as UiSchema,
+    });
+
+    // At least one onChange call must reset the metric to the binary
+    // default. We look for *any* call whose metric is exactly the
+    // binary default rather than `metric !== undefined` because the
+    // controlled config keeps the stale value on every render, so the
+    // first "metric defined" call would still be the stale one.
+    const resetCall = onChange.mock.calls.find(([cfg]) => {
+      const m = cfg?.model?.params?.metric;
+      return (
+        Array.isArray(m) &&
+        m.length === 2 &&
+        m[0] === "auc" &&
+        m[1] === "binary_logloss"
+      );
+    });
+    expect(resetCall).toBeDefined();
+  });
+
+  it("keeps objective/metric when they remain compatible with the task", () => {
+    const onChange = vi.fn();
+    renderConfigForm({
+      schema: minimalSchema,
+      config: {
+        model: {
+          name: "lgbm",
+          params: {
+            objective: "cross_entropy",
+            metric: ["binary_logloss"],
+          },
+        },
+      },
+      onChange,
+      task: "binary",
+      uiSchema: {
+        parameter_hints: [],
+        option_sets: {
+          objective: {
+            binary: ["binary", "cross_entropy"],
+          },
+          model_metric: {
+            binary: ["auc", "binary_logloss"],
+          },
+        },
+      } as unknown as UiSchema,
+    });
+
+    // Neither objective nor metric should be overwritten.
+    const overwrittenObj = onChange.mock.calls.find(
+      ([cfg]) =>
+        cfg?.model?.params?.objective !== undefined &&
+        cfg?.model?.params?.objective !== "cross_entropy",
+    );
+    expect(overwrittenObj).toBeUndefined();
+    const overwrittenMetric = onChange.mock.calls.find(
+      ([cfg]) =>
+        cfg?.model?.params?.metric !== undefined &&
+        JSON.stringify(cfg.model.params.metric) !==
+          JSON.stringify(["binary_logloss"]),
+    );
+    expect(overwrittenMetric).toBeUndefined();
+  });
 });
 
 describe("ConfigForm — inner_valid_options (Inner Validation select)", () => {

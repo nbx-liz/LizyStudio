@@ -241,11 +241,6 @@ export function ResultsCompletedView({
             <RetuneActionButton
               jobId={job.job_id}
               defaultNTrials={_defaultRetuneTrials(job)}
-              disabledReason={
-                job.parent_job_id
-                  ? "Re-tune of a re-tune child is not supported. Start from the original parent job."
-                  : null
-              }
               onStarted={onJobStarted}
             />
           )}

@@ -70,3 +70,43 @@ def test_release_only_affects_the_target_parent(job_store: JobStore) -> None:
     job_store.release_parent_lock("parent_a")
     assert job_store.get_locked_child("parent_a") is None
     assert job_store.get_locked_child("parent_b") == "child_2"
+
+
+# H-0062 Bugfix 2026-04-14 (4): atomic rebind of parent lock from
+# placeholder to real child id. Previously api/jobs.py did
+# release -> acquire in two separate calls, which opened a race window
+# where another request could slip in between, silently dropping the
+# caller's lock grant.
+
+
+def test_rebind_parent_lock_succeeds_when_placeholder_is_held(
+    job_store: JobStore,
+) -> None:
+    assert job_store.acquire_parent_lock("parent_a", "pending_parent_a") is True
+    rebound = job_store.rebind_parent_lock("parent_a", "pending_parent_a", "child_real")
+    assert rebound is True
+    assert job_store.get_locked_child("parent_a") == "child_real"
+
+
+def test_rebind_parent_lock_fails_when_holder_is_someone_else(
+    job_store: JobStore,
+) -> None:
+    """The race scenario: while the API was preparing the rebind, a
+    different request re-acquired the slot. The rebind must refuse to
+    overwrite a holder that is not the expected placeholder."""
+    job_store.acquire_parent_lock("parent_a", "other_child")
+    rebound = job_store.rebind_parent_lock("parent_a", "pending_parent_a", "child_real")
+    assert rebound is False
+    # Original holder is preserved.
+    assert job_store.get_locked_child("parent_a") == "other_child"
+
+
+def test_rebind_parent_lock_fails_when_slot_is_empty(
+    job_store: JobStore,
+) -> None:
+    """Defensive case: no holder at all. Rebind must NOT create a new
+    entry out of thin air — only an existing placeholder can be
+    atomically replaced. Callers should always acquire first."""
+    rebound = job_store.rebind_parent_lock("parent_a", "pending_parent_a", "child_real")
+    assert rebound is False
+    assert job_store.get_locked_child("parent_a") is None

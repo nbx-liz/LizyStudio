@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -241,10 +243,17 @@ def test_retune_rejects_not_completed(
     assert res.json()["error"]["code"] == "JOB_NOT_COMPLETED"
 
 
-def test_retune_rejects_grandchild(
+def test_retune_accepts_grandchild(
     client: TestClient, sample_data_ref: DataRef
 ) -> None:
-    """A job that already has a parent_job_id cannot be retuned."""
+    """H-0062 Decision 2026-04-14: a completed retune child may itself
+    be retuned. Each child carries its own model.pkl that continues the
+    Optuna study, so chaining A -> B -> C -> ... is a natural extension
+    of the Re-tune UX and matches user expectations (see Bugfix 2026-04-14
+    for the UX report). The only hard requirement is that the job is a
+    tune job with a checkpoint — there is no upper bound on lineage depth
+    beyond the lineage-tree display truncation at depth 20.
+    """
     parent_id = _make_completed_tune_job(client, sample_data_ref)
     app = client.app  # type: ignore[union-attr]
     job_store: JobStore = app.state.job_store
@@ -256,14 +265,29 @@ def test_retune_rejects_grandchild(
         parent_job_id=parent_id,
     )
     child.status = "completed"
+    child.tune_result = TuningSummary(
+        best_params={"lr": 0.1},
+        best_score=0.9,
+        trials=[],
+        metric_name="auc",
+        direction="maximize",
+    )
     job_store.update(child)
-    # Give the child its own checkpoint so only the parent_job_id rule fires.
+    # Give the child its own checkpoint + sidecar so the full happy path
+    # runs and the API accepts the retune of a retune.
     child_dir = job_store.jobs_dir / child.job_id
-    (child_dir / "model.pkl").write_bytes(b"fake")
+    (child_dir / "model.pkl").write_bytes(b"fake pickle payload")
+    (child_dir / "model_meta.json").write_text(
+        '{"pickle_schema": 1, "lizyml_version": "0.9.1", '
+        '"lightgbm_version": "4.5.0", "optuna_version": "4.0.0", '
+        '"saved_at": "2026-04-14T12:00:00+00:00"}'
+    )
 
     res = client.post(f"/api/jobs/{child.job_id}/retune", json={"n_trials": 10})
-    assert res.status_code == 400
-    assert res.json()["error"]["code"] == "INVALID_PARAM"
+    assert res.status_code == 200
+    body = res.json()
+    assert body["parent_job_id"] == child.job_id
+    assert body["job_id"] != child.job_id
 
 
 def test_retune_rejects_invalid_n_trials(
@@ -645,23 +669,46 @@ def test_retune_rejects_extra_fields_on_body(
 def test_retune_rejects_invalid_boundary_threshold_range(
     client: TestClient, sample_data_ref: DataRef
 ) -> None:
-    """Phase A _parse_re_tune enforces boundary_threshold in (0, 0.5).
-
-    The API layer does not validate this itself; it relies on the
-    adapter raising ValueError during the subprocess thread which
-    flows into job.error. Here we only assert the POST still returns
-    200 (the child gets created, the thread handles the invalid
-    threshold on its own).
-    """
+    """The API layer mirrors lizyml's ``Model.tune`` constraint
+    (boundary_threshold in (0.0, 0.5)) so an out-of-range value fails
+    synchronously with 400 INVALID_PARAM instead of bubbling up as a
+    failed child job. H-0062 Bugfix 2026-04-14 (test gap follow-up):
+    previously this test asserted the 200 + async-fail behaviour, but
+    that was a UX hole (the user only saw the failure after polling
+    the child)."""
     parent_id = _make_completed_tune_job(client, sample_data_ref)
-    # Out-of-range threshold — backend treats it the same as any other
-    # adapter error: child goes to "failed" asynchronously.
     res = client.post(
         f"/api/jobs/{parent_id}/retune",
         json={"n_trials": 3, "boundary_threshold": 0.99},
     )
-    # POST itself succeeds; the failure shows up on the child job later.
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "INVALID_PARAM"
+
+
+def test_retune_accepts_valid_boundary_threshold(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    """Edge case: a valid boundary_threshold in the open interval
+    must NOT be rejected by the new guard."""
+    parent_id = _make_completed_tune_job(client, sample_data_ref)
+    res = client.post(
+        f"/api/jobs/{parent_id}/retune",
+        json={"n_trials": 3, "boundary_threshold": 0.05},
+    )
     assert res.status_code == 200
+
+
+def test_retune_rejects_zero_boundary_threshold(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    """Edge case: 0.0 is rejected (open interval)."""
+    parent_id = _make_completed_tune_job(client, sample_data_ref)
+    res = client.post(
+        f"/api/jobs/{parent_id}/retune",
+        json={"n_trials": 3, "boundary_threshold": 0.0},
+    )
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "INVALID_PARAM"
 
 
 # ---------------------------------------------------------------------------
@@ -791,6 +838,26 @@ def test_retune_rejects_incompatible_pickle_version(
     assert res.json()["error"]["code"] == "PICKLE_INCOMPATIBLE"
 
 
+def test_retune_rejects_corrupted_meta_json(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    """A parent whose model_meta.json is unparseable (truncated write,
+    partial atomic rename failure, manual edit) must surface as a
+    structured 400 PICKLE_INCOMPATIBLE rather than crashing the API
+    with a 500. H-0062 Bugfix 2026-04-14 (test gap follow-up)."""
+    parent_id = _make_completed_tune_job(client, sample_data_ref)
+    app = client.app  # type: ignore[union-attr]
+    job_store: JobStore = app.state.job_store
+
+    meta = job_store.jobs_dir / parent_id / "model_meta.json"
+    # Half-written JSON — common after a partial write.
+    meta.write_text('{"pickle_schema": 1, "lizyml_version":', encoding="utf-8")
+
+    res = client.post(f"/api/jobs/{parent_id}/retune", json={"n_trials": 3})
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "PICKLE_INCOMPATIBLE"
+
+
 def test_retune_missing_meta_is_tolerated(
     client: TestClient, sample_data_ref: DataRef
 ) -> None:
@@ -848,3 +915,111 @@ def test_retune_release_lock_when_child_create_fails(
 
     # The parent lock must not be held by anyone.
     assert job_store.get_locked_child(parent_id) is None
+
+
+# ---------------------------------------------------------------------------
+# End-to-end with real lizyml backend (H-0062 regression)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_retune_end_to_end_with_real_lizyml(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    """Full API round-trip against a real lizyml backend.
+
+    Regression guard for the bug where POST /api/jobs/{id}/retune would
+    fail inside the worker thread with lizyml "Cannot resume tuning: no
+    previous tune() call" because the per-trial checkpoint bridge saved
+    the model before `self._study = study` was assigned. Fix landed in
+    LizyMLAdapter.tune (final save after tune() returns).
+    """
+    import numpy as np
+    import pandas as pd
+
+    from lizystudio.backends.types import DataRef as _DataRef
+    from lizystudio.services.training import run_tune
+    from lizystudio.services.workspace import WorkspaceState
+
+    app = client.app  # type: ignore[union-attr]
+    job_store: JobStore = app.state.job_store
+    ws: WorkspaceState = app.state.workspace
+
+    rng = np.random.default_rng(42)
+    n = 60
+    df = pd.DataFrame(
+        {
+            "x1": rng.normal(size=n),
+            "x2": rng.normal(size=n),
+            "y": rng.integers(0, 2, size=n),
+        }
+    )
+    ws.set_data(
+        df,
+        _DataRef(
+            source_type="upload",
+            path=None,
+            filename="tiny.csv",
+            fingerprint="tiny",
+            shape=df.shape,
+        ),
+    )
+
+    parent_config: dict[str, Any] = {
+        "config_version": 1,
+        "task": "binary",
+        "data": {"target": "y"},
+        "model": {"name": "lgbm", "params": {"verbose": -1}},
+        "split": {"method": "stratified_kfold", "n_splits": 3},
+        "tuning": {
+            "optuna": {
+                "params": {"n_trials": 2, "direction": "maximize"},
+            }
+        },
+    }
+    parent_job = job_store.create(
+        backend_name="lizyml",
+        config=parent_config,
+        data_ref=ws.data_ref,
+        job_type="tune",
+    )
+    run_tune(
+        job=parent_job,
+        job_store=job_store,
+        backend=ws.backend,
+        config=parent_config,
+        dataframe=df,
+    )
+    parent_reloaded = job_store.get(parent_job.job_id)
+    assert parent_reloaded is not None
+    assert parent_reloaded.status == "completed", parent_reloaded.error
+
+    # Hit the real /retune endpoint. The worker runs in a daemon thread;
+    # wait for it to finish so we can assert on the child status.
+    res = client.post(
+        f"/api/jobs/{parent_job.job_id}/retune",
+        json={"n_trials": 1},
+    )
+    assert res.status_code == 200
+    child_id = res.json()["job_id"]
+
+    # Join the worker thread (daemon). Timeout is generous: even a tiny
+    # tune can take a few seconds on first import.
+    with ws._lock:
+        thread = ws._job_thread
+    if thread is not None:
+        thread.join(timeout=60)
+        assert not thread.is_alive(), "retune worker did not finish within 60s"
+
+    child = job_store.get(child_id)
+    assert child is not None
+    assert child.status == "completed", (
+        f"retune child failed: status={child.status} error={child.error}"
+    )
+    assert child.tune_result is not None
+    # The critical regression guard: the child completed at all. Before
+    # the fix, the child would reach "failed" with lizyml error
+    # "Cannot resume tuning: no previous tune() call". We deliberately do
+    # NOT assert an exact trial count because Optuna pruning behaviour
+    # at n_trials=1 is not stable enough for CI.
+    assert child.error is None

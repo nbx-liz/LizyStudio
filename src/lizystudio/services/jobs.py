@@ -293,6 +293,32 @@ class JobStore:
         with self._parent_lock_mutex:
             self._parent_locks.pop(parent_job_id, None)
 
+    def rebind_parent_lock(
+        self, parent_job_id: str, expected_holder: str, new_holder: str
+    ) -> bool:
+        """Atomically swap the lock holder from *expected_holder* to *new_holder*.
+
+        H-0062 Bugfix 2026-04-14 (4): the API layer acquires the parent
+        lock with a placeholder id first, then needs to swap that
+        placeholder for the real child job id after the child is
+        created. Doing it as ``release_parent_lock`` + ``acquire_parent_lock``
+        in two separate calls opens a race window where another
+        request can claim the slot between the two operations, and
+        the second ``acquire_parent_lock`` silently returns ``False``
+        without the caller noticing.
+
+        Returns ``True`` when the slot was successfully rebound.
+        Returns ``False`` when the slot is empty or held by a different
+        holder — in which case the caller must treat their lock grant
+        as lost and abort the retune attempt.
+        """
+        with self._parent_lock_mutex:
+            current = self._parent_locks.get(parent_job_id)
+            if current != expected_holder:
+                return False
+            self._parent_locks[parent_job_id] = new_holder
+            return True
+
     def get_locked_child(self, parent_job_id: str) -> str | None:
         """Return the child job currently holding *parent_job_id*'s lock."""
         with self._parent_lock_mutex:

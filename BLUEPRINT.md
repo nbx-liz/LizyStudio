@@ -273,7 +273,7 @@ class DataRef:
 - 設定ファイルでも指定可能
 
 **H-0062 Phase B 追加ファイル:**
-- `model.pkl`: Tune 実行中に各 trial 完了毎に atomic rename で上書き保存される。再tune / resume 時はこのファイルから `load_checkpoint()` でモデル状態（Optuna study 含む）を復元する。
+- `model.pkl`: Tune 実行中に各 trial 完了毎に atomic rename で上書き保存される（クラッシュ耐性のための best-effort）。加えて `Model.tune()` が `self._study` をセットしてから `return` する前に、**確定版の最終 save を必ず 1 回実行する**。lizyml の `Model.tune()` は study を関数末尾でのみ内部フィールドに代入する契約のため、毎 trial save だけだと pickle に `_study=None` しか残らず、Re-tune / Resume で `load_checkpoint()` した Model が `lizyml: Cannot resume tuning: no previous tune() call` を発生させる（H-0062 Bugfix 2026-04-14）。再tune / resume 時はこの最終 save をソース・オブ・トゥルースとして `load_checkpoint()` でモデル状態（Optuna study 含む）を復元する。
 - `model_meta.json`: pickle schema version + saved_at + lizyml/lightgbm/optuna のバージョン記録。メジャーバージョン不一致時は `PICKLE_INCOMPATIBLE` で load を拒否する。
 - `meta.json.parent_job_id`: Re-tune / Resume の child job では parent の job_id を参照する。非 child job では `null`。
 
@@ -1700,12 +1700,12 @@ Optimization History → Best Params → Score → Learning Curve → Plots（�
 
 | 状態 | ボタン | 説明 | 無効化条件 |
 |------|--------|------|-----------|
-| Completed (tune) | `Re-tune (+N trials)` | Optuna study を継続して追加 N trials を実行。child job として記録 | parent_job_id が既にあるとき（grandchild 禁止）、model.pkl が存在しないとき |
+| Completed (tune) | `Re-tune (+N trials)` | Optuna study を継続して追加 N trials を実行。child job として記録 | model.pkl が存在しないとき |
 | Failed (tune) | `Resume (X trials remaining)` | 最後の checkpoint から study を復元し残り trials を実行 | 同上 |
 
 いずれのボタンもクリックするとダイアログが開き、n_trials を入力する（デフォルトは元 tune の n_trials / 残り trials）。送信すると `POST /api/jobs/{id}/retune` または `POST /api/jobs/{id}/resume` が呼ばれ、新しい child job が作成される。child job は `parent_job_id` で parent を参照する。
 
-**無効化ルール (MVP)**: `parent_job_id` を既に持つ job（Re-tune / Resume の子）に対する Re-tune / Resume は**サポートしない**。ボタンは disabled + tooltip で理由を表示する。将来の Proposal で多世代 resume を検討する。
+**多世代 resume（H-0062 Decision 2026-04-14 で許可）**: `parent_job_id` を既に持つ child に対する Re-tune / Resume は **許可される**。A → B → C → ... と自由に鎖を伸ばして良い。各 child は自分自身の `model.pkl` を持ち、Optuna study をその時点の状態から継続するため技術的制約はない。UX 上、ユーザーが「最新の結果からさらに tune を続ける」という自然な期待に合わせるための変更。Lineage tree の最大深度 20 は維持（cascade delete 再帰ガードのため）。
 
 ##### Lineage Tree 表示（H-0062 Phase B）
 

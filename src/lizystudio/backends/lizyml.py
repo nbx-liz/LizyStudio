@@ -212,25 +212,45 @@ class LizyMLAdapter:
         from pydantic import ValidationError
 
         clean = self._strip_internal_keys(config)
+        errors: list[dict[str, Any]] = []
         try:
             LizyMLConfig.model_validate(clean)
-            return []
         except ValidationError as exc:
-            return exc.errors()  # type: ignore[return-value]
+            errors.extend(exc.errors())  # type: ignore[arg-type]
+
+        # H-0062 Bugfix 2026-04-14 (3): catch task <-> model.params
+        # inconsistency up-front. The original user-facing symptom was
+        # "LizyMLError: [TUNING_FAILED] All tuning trials failed. Check
+        # parameter ranges." — technically correct but misleading when
+        # the real cause was an obsolete `objective=multiclass` left on
+        # a `task=binary` config after the user briefly switched tasks.
+        errors.extend(_task_params_compat_errors(clean))
+        return errors
 
     @staticmethod
     def _strip_internal_keys(config: dict[str, Any]) -> dict[str, Any]:
         """Remove UI-internal keys (prefixed with _) and tune-only sections
-        that LizyML's Pydantic schema doesn't accept."""
+        that LizyML's Pydantic schema doesn't accept.
+
+        Defensive against malformed inputs: if ``config`` is not a dict
+        (or ``model`` / ``params`` / ``tuning`` are not dicts), the
+        helper returns a best-effort copy unchanged rather than
+        crashing. The real type errors surface via pydantic validation
+        downstream.
+        """
         import copy
 
+        if not isinstance(config, dict):
+            return config  # pydantic will reject the type at validate time
         result = copy.deepcopy(config)
-        # Strip _ keys from model.params
-        model_params = (result.get("model") or {}).get("params")
-        if isinstance(model_params, dict):
-            result["model"]["params"] = {
-                k: v for k, v in model_params.items() if not k.startswith("_")
-            }
+        # Strip _ keys from model.params (only when model AND params are dicts)
+        model = result.get("model")
+        if isinstance(model, dict):
+            model_params = model.get("params")
+            if isinstance(model_params, dict):
+                model["params"] = {
+                    k: v for k, v in model_params.items() if not k.startswith("_")
+                }
         # Strip tune-only keys from tuning (evaluation, model_params, training)
         tuning = result.get("tuning")
         if isinstance(tuning, dict):
@@ -300,6 +320,39 @@ class LizyMLAdapter:
         lizyml_callback: Any = None
         accumulated_trials: list[dict[str, Any]] = []
         current_round = 1
+
+        # H-0062 Bugfix 2026-04-14: when resume=True and the loaded Model
+        # already carries a prior ``_tuning_result``, seed the bridge's
+        # accumulated_trials with the parent's trial history. Without
+        # this, the Running view table and LiveTrialChart start empty on
+        # every Re-tune so the user sees only the *new* trials and the
+        # Best column begins from the first new trial — giving the
+        # false impression that the parent results were thrown away.
+        # The seeded entries carry the parent's best_score as the
+        # per-row best so the chart's "Best" trace is flat across the
+        # parent portion until a new trial beats it.
+        if resume:
+            prior_result = getattr(model, "_tuning_result", None)
+            if prior_result is not None and getattr(prior_result, "trials", None):
+                prior_best = (
+                    float(prior_result.best_score)
+                    if getattr(prior_result, "best_score", None) is not None
+                    else None
+                )
+                for t in prior_result.trials:
+                    accumulated_trials.append(
+                        {
+                            "number": getattr(t, "number", len(accumulated_trials)),
+                            "round": getattr(t, "round", 1),
+                            "score": (
+                                float(t.score)
+                                if getattr(t, "score", None) is not None
+                                else None
+                            ),
+                            "state": str(getattr(t, "state", "complete")),
+                            "best_score": prior_best,
+                        }
+                    )
 
         need_bridge = on_progress is not None or checkpoint_dir is not None
 
@@ -393,6 +446,46 @@ class LizyMLAdapter:
                 resume=True,
                 **extra_kwargs,
             )
+
+        # H-0062 final save: lizyml's Model.tune() assigns ``self._study``
+        # only at the very end of its body, so every bridge-callback save
+        # above pickled a model whose ``_study`` was still the pre-tune
+        # value (typically None for a fresh tune). Without this explicit
+        # post-tune save, load_checkpoint(...)._study is None and the
+        # Re-tune / Resume launcher hits lizyml's
+        # "Cannot resume tuning: no previous tune() call" guard.
+        # This is the source of truth for the on-disk checkpoint; the
+        # per-trial saves above remain a crash-insurance best-effort.
+        #
+        # IMPORTANT: do NOT remove the per-trial bridge save even though
+        # this final save is present. They serve different failure modes:
+        # - final save covers the "successful tune then Re-tune later" path
+        # - per-trial save covers "tune crashed mid-way" (power loss,
+        #   OOM kill, cancellation) so the Results Panel can still show
+        #   the last completed trial's score history. Note that a
+        #   mid-round crash leaves ``_study`` unset on the pickled model,
+        #   so Re-tune / Resume on such a crash is still best-effort.
+        #
+        # save_checkpoint itself swallows OSError/PicklingError internally
+        # as WARNING logs; the explicit INFO here distinguishes "final
+        # save ran" from "WARNING was logged" when triaging a Re-tune
+        # failure from logs alone. The outer except is intentionally
+        # narrowed (H-0062 Bugfix 2026-04-14 (8)) to filesystem / pickle
+        # / type errors so genuine programming bugs in the caller path
+        # (e.g. AttributeError on an unexpected model shape) still
+        # propagate and are not silently swallowed.
+        if checkpoint_dir is not None:
+            try:
+                self.save_checkpoint(model, checkpoint_dir)
+                logger.info(
+                    "H-0062: final post-tune checkpoint save attempted at %s",
+                    checkpoint_dir,
+                )
+            except (OSError, PicklingError, RecursionError):
+                logger.warning(
+                    "final checkpoint save after tune raised unexpectedly",
+                    exc_info=True,
+                )
 
         if on_progress is not None:
             total = len(tune_result.trials) or 1
@@ -851,3 +944,90 @@ def _serialize_search_dim(dim: Any) -> dict[str, Any]:
         choices = dim.choices
         result["choices"] = list(choices) if choices is not None else None
     return result
+
+
+# ---------------------------------------------------------------------------
+# H-0062 Bugfix 2026-04-14 (3): task <-> model.params compat checker
+# ---------------------------------------------------------------------------
+
+
+def _task_params_compat_errors(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return pydantic-style validation errors for task / objective /
+    metric mismatches.
+
+    Single source of truth for valid objective/metric names per task is
+    the lizyml UI schema ``option_sets``. The lists here are kept in
+    sync by ``tests/test_backends_lizyml.py``. Task is considered
+    unknown (no error) when it is missing or not one of the three
+    recognised values — that case is already covered by the normal
+    pydantic LizyMLConfig validation.
+
+    Defensive against malformed inputs: short-circuit when ``config``,
+    ``model``, or ``params`` are not dicts (H-0062 Bugfix 2026-04-14 (7)).
+    ``validate_config`` runs this helper after pydantic validation, so
+    a caller that passes a malformed config would otherwise see the
+    pydantic errors *plus* an AttributeError crashing the helper.
+    """
+    if not isinstance(config, dict):
+        return []
+    task = config.get("task")
+    if task not in ("binary", "multiclass", "regression"):
+        return []
+    model = config.get("model")
+    if not isinstance(model, dict):
+        return []
+    params = model.get("params")
+    if not isinstance(params, dict):
+        return []
+
+    from lizystudio.backends.lizyml_metrics import get_eval_metrics_by_task
+    from lizystudio.backends.lizyml_ui_schema import build_ui_schema
+
+    option_sets = build_ui_schema(get_eval_metrics_by_task()).get("option_sets", {})
+    allowed_objective = set(option_sets.get("objective", {}).get(task, []))
+    allowed_metric = set(option_sets.get("model_metric", {}).get(task, []))
+
+    errors: list[dict[str, Any]] = []
+
+    objective = params.get("objective")
+    if (
+        isinstance(objective, str)
+        and allowed_objective
+        and objective not in allowed_objective
+    ):
+        errors.append(
+            {
+                "type": "task_objective_mismatch",
+                "loc": ("model", "params", "objective"),
+                "msg": (
+                    f"objective={objective!r} is not valid for task={task!r}; "
+                    f"allowed: {sorted(allowed_objective)}"
+                ),
+                "input": objective,
+            }
+        )
+
+    metric = params.get("metric")
+    # Empty list is OK (backend supplies defaults downstream).
+    if isinstance(metric, list) and metric and allowed_metric:
+        # H-0062 Bugfix 2026-04-14 (7): flag when ANY metric is invalid
+        # for the current task. LightGBM rejects the whole list if any
+        # entry is incompatible (e.g. task=binary + metric=["auc",
+        # "multi_logloss"] → the old "all-invalid only" policy let
+        # this slip through and the user saw "All tuning trials failed"
+        # at run time with no hint at the real cause.
+        bad = [m for m in metric if isinstance(m, str) and m not in allowed_metric]
+        if bad:
+            errors.append(
+                {
+                    "type": "task_metric_mismatch",
+                    "loc": ("model", "params", "metric"),
+                    "msg": (
+                        f"metric={bad!r} is not valid for task={task!r}; "
+                        f"allowed: {sorted(allowed_metric)}"
+                    ),
+                    "input": metric,
+                }
+            )
+
+    return errors

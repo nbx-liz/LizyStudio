@@ -1610,3 +1610,286 @@ def test_start_retune_async_releases_lock_even_on_run_retune_error(
     assert refreshed is not None
     assert refreshed.status == "failed"
     assert job_store.get_locked_child(parent.job_id) is None
+
+
+# ---------------------------------------------------------------------------
+# H-0062 Bugfix 2026-04-14: start_retune_async must honour OpenMP
+# subprocess mode. Running lizyml tune in a daemon thread when OpenMP is
+# present causes ~8-50× slowdown because the OpenMP thread pool binds to
+# the first thread. start_fit_async / start_tune_async already dispatch
+# to subprocess; retune was missing the same branch.
+# ---------------------------------------------------------------------------
+
+
+def test_start_retune_async_subprocess_path_when_openmp_present(
+    job_store: JobStore,
+    sample_data_ref: DataRef,
+    sample_df: pd.DataFrame,
+    mock_backend: MagicMock,
+    mock_broadcaster: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When should_use_subprocess() returns True, start_retune_async
+    must invoke the subprocess runner instead of calling run_retune
+    directly in a daemon thread."""
+    import lizystudio.services.openmp_detect as openmp_detect_mod
+    import lizystudio.services.training as training_mod
+
+    parent = _make_tune_parent_with_checkpoint(job_store, sample_data_ref)
+    child = job_store.create(
+        backend_name="lizyml",
+        config=parent.config,
+        data_ref=sample_data_ref,
+        job_type="tune",
+        parent_job_id=parent.job_id,
+    )
+    ws = _make_workspace(mock_backend)
+    ws.dataframe = sample_df
+    # Retune subprocess mode requires a resolvable data_path. The fixture
+    # sets path on the DataRef which is enough for the API layer.
+    ws.data_ref = sample_data_ref
+
+    called: dict[str, Any] = {}
+
+    def fake_retune_subprocess(
+        *,
+        ws: Any,
+        job_store: Any,
+        broadcaster: Any,
+        parent_job: Any,
+        child_job: Any,
+        n_trials: int,
+        expand_boundary: Any,
+        boundary_threshold: Any,
+    ) -> Any:
+        called["invoked"] = True
+        called["parent_id"] = parent_job.job_id
+        called["child_id"] = child_job.job_id
+        called["n_trials"] = n_trials
+        # Simulate a subprocess that completed the child job.
+        child_job.status = "completed"
+        child_job.fit_result = None
+        child_job.tune_result = None
+        job_store.update(child_job)
+        with ws._lock:
+            ws.current_job_id = child_job.job_id
+        return child_job
+
+    monkeypatch.setattr(openmp_detect_mod, "should_use_subprocess", lambda: True)
+    monkeypatch.setattr(
+        training_mod, "_run_retune_subprocess", fake_retune_subprocess, raising=False
+    )
+
+    job_store.acquire_parent_lock(parent.job_id, "placeholder")
+
+    start_retune_async(
+        ws=ws,
+        job_store=job_store,
+        broadcaster=mock_broadcaster,
+        parent_job=parent,
+        child_job=child,
+        n_trials=7,
+        expand_boundary=None,
+        boundary_threshold=None,
+        mode="retune",
+    )
+
+    thread = ws._job_thread
+    assert thread is not None
+    thread.join(timeout=15)
+    assert not thread.is_alive()
+
+    assert called.get("invoked") is True, (
+        "start_retune_async did not dispatch to the subprocess path "
+        "despite should_use_subprocess() returning True"
+    )
+    assert called["parent_id"] == parent.job_id
+    assert called["child_id"] == child.job_id
+    assert called["n_trials"] == 7
+    assert mock_backend.load_checkpoint.call_count == 0, (
+        "subprocess path must not call backend.load_checkpoint in the parent "
+        "process — that work happens inside the child process"
+    )
+    # Lock released in the finally block.
+    assert job_store.get_locked_child(parent.job_id) is None
+
+
+def test_start_retune_async_rejects_in_memory_dataset_in_subprocess_mode(
+    job_store: JobStore,
+    sample_data_ref: DataRef,
+    sample_df: pd.DataFrame,
+    mock_backend: MagicMock,
+    mock_broadcaster: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """H-0062 Bugfix 2026-04-14: in subprocess mode the child reads the
+    dataframe from disk, so a dataset without a path (in-memory upload)
+    must fail inline with an explicit error instead of silently running
+    in the thread path (which would still be ~8× slower)."""
+    import lizystudio.services.openmp_detect as openmp_detect_mod
+
+    parent = _make_tune_parent_with_checkpoint(job_store, sample_data_ref)
+    child = job_store.create(
+        backend_name="lizyml",
+        config=parent.config,
+        data_ref=sample_data_ref,
+        job_type="tune",
+        parent_job_id=parent.job_id,
+    )
+    ws = _make_workspace(mock_backend)
+    ws.dataframe = sample_df
+    # data_ref.path missing / empty — simulates the in-memory-upload case
+    # that fails in the subprocess path because the child needs a file.
+    from lizystudio.backends.types import DataRef
+
+    ws.data_ref = DataRef(
+        source_type="upload",
+        path=None,
+        filename="mem.csv",
+        fingerprint="mem",
+        shape=(10, 3),
+    )
+
+    monkeypatch.setattr(openmp_detect_mod, "should_use_subprocess", lambda: True)
+
+    job_store.acquire_parent_lock(parent.job_id, "placeholder")
+
+    returned = start_retune_async(
+        ws=ws,
+        job_store=job_store,
+        broadcaster=mock_broadcaster,
+        parent_job=parent,
+        child_job=child,
+        n_trials=5,
+        expand_boundary=None,
+        boundary_threshold=None,
+        mode="retune",
+    )
+
+    assert returned == child.job_id
+    refreshed = job_store.get(child.job_id)
+    assert refreshed is not None
+    assert refreshed.status == "failed"
+    assert refreshed.error is not None
+    assert "file-backed" in refreshed.error.lower()
+    assert ws.current_job_id == child.job_id
+    assert job_store.get_locked_child(parent.job_id) is None
+    mock_broadcaster.send_error.assert_called_once()
+
+
+def test_run_retune_subprocess_helper_fails_child_on_missing_data_ref_path(
+    job_store: JobStore,
+    sample_data_ref: DataRef,
+    sample_df: pd.DataFrame,
+    mock_backend: MagicMock,
+    mock_broadcaster: MagicMock,
+) -> None:
+    """Direct unit test for _run_retune_subprocess: when the caller
+    violates the contract by passing a ws with a missing data_ref.path,
+    the helper must mark the child as ``failed`` via the shared
+    ``_mark_retune_child_failed`` helper instead of raising
+    AssertionError. H-0062 Bugfix 2026-04-14 (6): the old ``assert``
+    left the child in ``pending`` forever inside the worker thread."""
+    from lizystudio.backends.types import DataRef
+    from lizystudio.services.training import _run_retune_subprocess
+
+    parent = _make_tune_parent_with_checkpoint(job_store, sample_data_ref)
+    child = job_store.create(
+        backend_name="lizyml",
+        config=parent.config,
+        data_ref=sample_data_ref,
+        job_type="tune",
+        parent_job_id=parent.job_id,
+    )
+    ws = _make_workspace(mock_backend)
+    ws.dataframe = sample_df
+    ws.data_ref = DataRef(
+        source_type="upload",
+        path=None,
+        filename="mem.csv",
+        fingerprint="mem",
+        shape=(10, 3),
+    )
+
+    returned = _run_retune_subprocess(
+        ws=ws,
+        job_store=job_store,
+        broadcaster=mock_broadcaster,
+        parent_job=parent,
+        child_job=child,
+        n_trials=5,
+        expand_boundary=None,
+        boundary_threshold=None,
+    )
+
+    # Returned job reflects the failed state (same instance mutated).
+    assert returned.status == "failed"
+    assert returned.error is not None and "file-backed" in returned.error
+    # JobStore persisted the failure.
+    refreshed = job_store.get(child.job_id)
+    assert refreshed is not None
+    assert refreshed.status == "failed"
+    # Broadcaster saw the error.
+    mock_broadcaster.send_error.assert_called_once()
+    # Workspace selection was repointed to the child.
+    assert ws.current_job_id == child.job_id
+
+
+def test_start_retune_async_worker_crash_transitions_child_to_failed(
+    job_store: JobStore,
+    sample_data_ref: DataRef,
+    sample_df: pd.DataFrame,
+    mock_backend: MagicMock,
+    mock_broadcaster: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """H-0062 Bugfix 2026-04-14 (6): if an unexpected exception escapes
+    the subprocess helper (or the thread path) inside the worker, the
+    blanket exception handler must still transition the child job to
+    ``failed`` so the UI never shows a permanent ``pending`` state.
+    """
+    import lizystudio.services.openmp_detect as openmp_detect_mod
+    import lizystudio.services.training as training_mod
+
+    parent = _make_tune_parent_with_checkpoint(job_store, sample_data_ref)
+    child = job_store.create(
+        backend_name="lizyml",
+        config=parent.config,
+        data_ref=sample_data_ref,
+        job_type="tune",
+        parent_job_id=parent.job_id,
+    )
+    ws = _make_workspace(mock_backend)
+    ws.dataframe = sample_df
+    ws.data_ref = sample_data_ref
+
+    def boom(**_: Any) -> Any:
+        raise RuntimeError("synthetic worker crash")
+
+    monkeypatch.setattr(openmp_detect_mod, "should_use_subprocess", lambda: True)
+    monkeypatch.setattr(training_mod, "_run_retune_subprocess", boom, raising=False)
+
+    job_store.acquire_parent_lock(parent.job_id, "placeholder")
+
+    start_retune_async(
+        ws=ws,
+        job_store=job_store,
+        broadcaster=mock_broadcaster,
+        parent_job=parent,
+        child_job=child,
+        n_trials=5,
+        expand_boundary=None,
+        boundary_threshold=None,
+        mode="retune",
+    )
+    thread = ws._job_thread
+    assert thread is not None
+    thread.join(timeout=15)
+    assert not thread.is_alive()
+
+    refreshed = job_store.get(child.job_id)
+    assert refreshed is not None
+    assert refreshed.status == "failed"
+    assert refreshed.error is not None and "synthetic worker crash" in refreshed.error
+    mock_broadcaster.send_error.assert_called()
+    assert job_store.get_locked_child(parent.job_id) is None

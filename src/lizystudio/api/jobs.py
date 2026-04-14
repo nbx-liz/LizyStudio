@@ -265,25 +265,42 @@ def _validate_n_trials(n_trials: int) -> int:
     return n_trials
 
 
+def _validate_boundary_threshold(threshold: float | None) -> None:
+    """Mirror lizyml's ``Model.tune`` constraint at the API layer.
+
+    Without this, an out-of-range value would only fail asynchronously
+    inside the worker thread, leaving the user staring at a generic
+    "child failed" error instead of an immediate 400.
+    """
+    if threshold is None:
+        return
+    if not (0.0 < threshold < 0.5):
+        raise StudioError(
+            "INVALID_PARAM",
+            f"boundary_threshold must be in (0.0, 0.5), got {threshold}",
+        )
+
+
 def _require_tune_job_with_checkpoint(parent: Job, job_store: JobStore) -> None:
     """Validate that *parent* can host a Re-tune / Resume child (H-0062).
 
-    Beyond the structural checks (tune type, no nested retune, model.pkl
-    present), this also reads the checkpoint sidecar and runs the
-    pickle compatibility check synchronously. Doing it in the API layer
-    means a version mismatch surfaces as ``PICKLE_INCOMPATIBLE`` (400)
-    on the POST itself rather than as a failed background child job.
+    H-0062 Decision 2026-04-14: Grandchild retune (re-tuning a retune
+    child) is now allowed. Each child carries its own model.pkl that
+    continues the Optuna study, so chaining A -> B -> C is a natural
+    extension of the Re-tune UX and matches user expectations. The
+    original MVP restriction was removed after UX feedback showed users
+    naturally expected to continue tuning from the latest result
+    instead of jumping back to the original parent.
+
+    The remaining checks are structural (tune job, model.pkl present)
+    plus the synchronous pickle compatibility check so a version
+    mismatch surfaces as ``PICKLE_INCOMPATIBLE`` (400) on the POST
+    itself rather than as a failed background child job.
     """
     if parent.job_type != "tune":
         raise StudioError(
             "INVALID_PARAM",
             f"Job {parent.job_id} is not a tune job (type={parent.job_type})",
-        )
-    if parent.parent_job_id is not None:
-        raise StudioError(
-            "INVALID_PARAM",
-            f"Job {parent.job_id} is itself a retune/resume child; "
-            "nested retune is not supported",
         )
     parent_dir = job_store.jobs_dir / parent.job_id
     checkpoint = parent_dir / "model.pkl"
@@ -297,7 +314,10 @@ def _require_tune_job_with_checkpoint(parent: Job, job_store: JobStore) -> None:
         )
     # H-0062: check pickle metadata if present. Missing meta is
     # tolerated (legacy / pre-H-0062 checkpoints) — only the explicit
-    # mismatch case raises.
+    # mismatch case raises. A meta file that exists but is corrupted
+    # (truncated write, partial atomic rename failure, manual edit) is
+    # treated as an incompatible checkpoint rather than a 500 — the
+    # user can recover by deleting the parent and re-tuning.
     meta_path = parent_dir / "model_meta.json"
     if meta_path.exists():
         import json as _json
@@ -311,13 +331,18 @@ def _require_tune_job_with_checkpoint(parent: Job, job_store: JobStore) -> None:
 
         try:
             meta = _json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, _json.JSONDecodeError) as exc:
+            raise PickleIncompatibleApiError(
+                f"Corrupted model_meta.json for {parent.job_id}: {exc}"
+            ) from exc
+        try:
             verify_pickle_compatibility(meta)
         except _AdapterIncompatible as exc:
             raise PickleIncompatibleApiError(str(exc)) from exc
 
 
-def _claim_retune_slot(parent_job_id: str, job_store: JobStore) -> str | None:
-    """Return the child_job_id placeholder that must be swapped in later.
+def _claim_retune_slot(parent_job_id: str, job_store: JobStore) -> str:
+    """Return the placeholder that must be swapped in later via rebind.
 
     The lock is acquired with a provisional placeholder so we never
     leave the slot held if child creation fails.
@@ -351,8 +376,9 @@ def retune_job(
         raise JobNotCompletedError(job_id)
     _require_tune_job_with_checkpoint(parent, job_store)
     _validate_n_trials(body.n_trials)
+    _validate_boundary_threshold(body.boundary_threshold)
 
-    _claim_retune_slot(job_id, job_store)
+    placeholder = _claim_retune_slot(job_id, job_store)
     # Single try/except so a failure path never double-releases. On a
     # successful start_retune_async return the lock stays held and is
     # released by the launcher's own finally block when the worker
@@ -366,10 +392,21 @@ def retune_job(
             job_type="tune",
             parent_job_id=parent.job_id,
         )
-        # Rebind the lock from the placeholder to the real child ID so
-        # get_locked_child() reflects the actual holder.
-        job_store.release_parent_lock(parent.job_id)
-        job_store.acquire_parent_lock(parent.job_id, child.job_id)
+        # H-0062 Bugfix 2026-04-14 (4): atomic placeholder -> child
+        # rebind. The previous release+acquire pair opened a race
+        # window where another request could claim the slot between
+        # the two operations and the second acquire silently returned
+        # False. rebind_parent_lock does the swap under the single
+        # mutex so no window exists.
+        if not job_store.rebind_parent_lock(parent.job_id, placeholder, child.job_id):
+            # Another request stole the slot between claim and rebind.
+            # Surface it as a 409 so the caller can retry, and
+            # explicitly remove the newly-created child so it does not
+            # leak as an orphan pending row.
+            job_store.delete(child.job_id)
+            raise ParentLockedError(
+                parent.job_id, job_store.get_locked_child(parent.job_id)
+            )
 
         start_retune_async(
             ws=ws,
@@ -414,7 +451,7 @@ def resume_job(
         n_trials = _auto_remaining_trials(parent)
     _validate_n_trials(n_trials)
 
-    _claim_retune_slot(job_id, job_store)
+    placeholder = _claim_retune_slot(job_id, job_store)
     started = False
     try:
         child = job_store.create(
@@ -424,8 +461,12 @@ def resume_job(
             job_type="tune",
             parent_job_id=parent.job_id,
         )
-        job_store.release_parent_lock(parent.job_id)
-        job_store.acquire_parent_lock(parent.job_id, child.job_id)
+        # H-0062 Bugfix 2026-04-14 (4): atomic rebind, see retune_job.
+        if not job_store.rebind_parent_lock(parent.job_id, placeholder, child.job_id):
+            job_store.delete(child.job_id)
+            raise ParentLockedError(
+                parent.job_id, job_store.get_locked_child(parent.job_id)
+            )
 
         start_retune_async(
             ws=ws,

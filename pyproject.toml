@@ -103,4 +103,5 @@ testpaths = ["tests"]
 markers = [
     "unit: Unit tests (fast, no external dependencies)",
     "integration: Integration tests (require TestClient/server)",
+    "slow: Slow tests that actually train a real model (deselect with -m 'not slow')",
 ]
