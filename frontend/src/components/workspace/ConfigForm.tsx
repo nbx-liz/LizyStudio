@@ -192,17 +192,30 @@ export function ConfigForm({
     [uiSchema, modelConfig, modelParams, config],
   );
 
-  // Auto-select defaults for objective and model_metric when empty
+  // Auto-select defaults for objective and model_metric when empty OR
+  // when the current value belongs to a different task (H-0062 Bugfix
+  // 2026-04-14 (3)). The original guard only fired for empty values,
+  // so switching task=multiclass -> task=binary left
+  // objective=multiclass / metric=[auc_mu, multi_logloss] stale and
+  // the subsequent Tune failed with "All tuning trials failed" because
+  // LGBM rejects a multiclass objective on a binary target.
   useEffect(() => {
     if (!task || !uiSchema?.option_sets) return;
 
-    // Objective: single-select, pick first option
+    // Objective: single-select. Reset when empty OR when current value
+    // is not in the list of objectives valid for the current task.
     const objOpts = uiSchema.option_sets.objective?.[task] ?? [];
-    if (objOpts.length > 0 && !modelParams.objective) {
-      handleFieldChange(["model", "params", "objective"], objOpts[0]);
+    if (objOpts.length > 0) {
+      const currentObj = modelParams.objective;
+      const objInvalid =
+        typeof currentObj === "string" && !objOpts.includes(currentObj);
+      if (!currentObj || objInvalid) {
+        handleFieldChange(["model", "params", "objective"], objOpts[0]);
+      }
     }
 
-    // Metric: multi-select, use parameter_hints default for task
+    // Metric: multi-select, use parameter_hints default for task.
+    // Reset when empty OR when no current entry is valid for the task.
     const metricOpts = uiSchema.option_sets.model_metric?.[task] ?? [];
     if (metricOpts.length > 0) {
       const cur = modelParams.metric;
@@ -210,7 +223,13 @@ export function ConfigForm({
         cur === undefined ||
         cur === null ||
         (Array.isArray(cur) && cur.length === 0);
-      if (empty) {
+      const allInvalid =
+        Array.isArray(cur) &&
+        cur.length > 0 &&
+        cur.every(
+          (m: unknown) => typeof m !== "string" || !metricOpts.includes(m),
+        );
+      if (empty || allInvalid) {
         const metricHint = uiSchema.parameter_hints?.find(
           (h: { key: string }) => h.key === "metric",
         );

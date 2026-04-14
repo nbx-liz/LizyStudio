@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { ResultsCompletedView } from "./ResultsCompletedView";
 import { ResultsRunningView } from "./ResultsRunningView";
+import { ResumeActionButton } from "./retune/ResumeActionButton";
 
 interface ResultsPanelProps {
   jobId: string | null;
@@ -22,6 +23,12 @@ interface ResultsPanelProps {
   hasConfig?: boolean;
   onApplyToFit?: (params: Record<string, unknown>) => void;
   onJobDone?: () => void;
+  /**
+   * Called when a Re-tune / Resume child job has been created so the
+   * parent (WorkspacePage) can switch its selection over to the child
+   * and surface its progress (H-0062).
+   */
+  onJobStarted?: (childJobId: string) => void;
 }
 
 export function ResultsPanel({
@@ -30,6 +37,7 @@ export function ResultsPanel({
   hasConfig = false,
   onApplyToFit,
   onJobDone,
+  onJobStarted,
 }: ResultsPanelProps) {
   const queryClient = useQueryClient();
   const [progress, setProgress] = useState<ProgressMessage | null>(null);
@@ -66,7 +74,13 @@ export function ResultsPanel({
     | undefined;
 
   useEffect(() => {
-    if (!jobId || (job?.status !== "running" && job?.status !== "pending"))
+    if (!jobId) return;
+    // H-0062: allow WebSocket to start even when job is still undefined
+    // (child job just selected but its first fetch has not resolved).
+    // If the job is already terminal we still skip — no progress to
+    // subscribe to. When the job is undefined, optimistically connect
+    // so a fast-completing re-tune child does not lose its events.
+    if (job?.status && job.status !== "running" && job.status !== "pending")
       return;
 
     const disconnect = connectJobProgress(jobId, {
@@ -100,21 +114,37 @@ export function ResultsPanel({
     return () => disconnect();
   }, [jobId, job?.status, queryClient, onJobDone]);
 
-  // Polling fallback: detect completion if WebSocket misses it
+  // Polling fallback: detect completion if WebSocket misses it.
+  // H-0062: also handle the "jobId changed and the child is already
+  // completed / failed / cancelled" case, which happens when the
+  // backend finishes a short re-tune before the frontend could even
+  // subscribe. In that case prev was undefined (fresh selection) and
+  // we still need to flip running=false on the WorkspacePage.
   const prevStatusRef = useRef<string | undefined>(undefined);
+  const prevJobIdRef = useRef<string | null>(null);
   useEffect(() => {
+    // Reset the cached status whenever the selected job id changes so
+    // a transition from one job to another is not misread as a status
+    // transition on the same job.
+    if (prevJobIdRef.current !== jobId) {
+      prevJobIdRef.current = jobId;
+      prevStatusRef.current = undefined;
+    }
     const prev = prevStatusRef.current;
     prevStatusRef.current = job?.status;
-    if (
-      (prev === "running" || prev === "pending") &&
-      job?.status &&
-      job.status !== "running" &&
-      job.status !== "pending"
-    ) {
+    const reached_terminal =
+      job?.status === "completed" ||
+      job?.status === "failed" ||
+      job?.status === "cancelled";
+    if (!reached_terminal) return;
+    // Only notify when we transition TO a terminal state from a
+    // non-terminal one, OR when this is the first observation of a
+    // job that is already terminal (child selection edge case).
+    if (prev === undefined || prev === "running" || prev === "pending") {
       setProgress(null);
       onJobDone?.();
     }
-  }, [job?.status, onJobDone]);
+  }, [jobId, job?.status, onJobDone]);
 
   const handleCancel = useCallback(async () => {
     if (!jobId) return;
@@ -213,6 +243,7 @@ export function ResultsPanel({
   }
 
   if (job.status === "failed") {
+    const remaining = _computeRemainingTrials(job);
     return (
       <div className="flex h-full flex-col p-6">
         <div className="mb-4 flex items-center justify-between">
@@ -224,14 +255,23 @@ export function ResultsPanel({
         <div className="rounded-md border border-destructive/30 bg-destructive/10 p-4">
           <p className="text-sm font-mono">{job.error ?? "Unknown error"}</p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          className="mt-4 w-fit"
-          onClick={() => setLogOpen(true)}
-        >
-          View Full Log
-        </Button>
+        <div className="mt-4 flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => setLogOpen(true)}>
+            View Full Log
+          </Button>
+          {job.job_type === "tune" && (
+            <ResumeActionButton
+              jobId={job.job_id}
+              remainingTrials={remaining}
+              disabledReason={
+                job.parent_job_id
+                  ? "Resume of a re-tune child is not supported. Start from the original parent job."
+                  : null
+              }
+              onStarted={onJobStarted}
+            />
+          )}
+        </div>
         <LogDialog
           open={logOpen}
           onOpenChange={setLogOpen}
@@ -271,6 +311,7 @@ export function ResultsPanel({
       selectedPlot={selectedPlot}
       onSelectPlot={setSelectedPlot}
       onApplyToFit={onApplyToFit}
+      onJobStarted={onJobStarted}
     />
   );
 }
@@ -302,4 +343,23 @@ function LogDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+/** H-0062: compute remaining trials for a failed tune job's Resume dialog. */
+function _computeRemainingTrials(job: JobDetail): number {
+  const config = job.config as Record<string, unknown> | undefined;
+  const tuning = config?.tuning as Record<string, unknown> | undefined;
+  const optuna = tuning?.optuna as Record<string, unknown> | undefined;
+  const params = optuna?.params as Record<string, unknown> | undefined;
+  const originalRaw = params?.n_trials;
+  const original =
+    typeof originalRaw === "number" && originalRaw > 0 ? originalRaw : 50;
+  const tuneResult = job.tune_result as
+    | { trials?: unknown[] | null }
+    | null
+    | undefined;
+  const completed = Array.isArray(tuneResult?.trials)
+    ? (tuneResult?.trials?.length ?? 0)
+    : 0;
+  return Math.max(1, original - completed);
 }

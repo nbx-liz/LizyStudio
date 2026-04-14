@@ -111,6 +111,10 @@ class TuningSummary:
     trials: list[dict[str, Any]]       # trial history (行のリスト)
     metric_name: str                   # 最適化対象メトリクス名 (H-0013)
     direction: str                     # "minimize" | "maximize" (H-0013)
+    # Re-tune (Phase A) — いずれも後方互換のため optional。
+    # re_tune 未指定の単一ラウンド tune では None が入る (H-0061)。
+    rounds: list[dict[str, Any]] | None = None         # 各ラウンドの n_trials / best_score_before / best_score_after / expanded_dims / space_snapshot
+    boundary_report: dict[str, Any] | None = None      # 最終ラウンド後の BoundaryReport（per-dim: best_value / position_pct / edge / expanded / new bounds）
 
 @dataclass
 class PredictionSummary:
@@ -253,10 +257,12 @@ class DataRef:
 ```
 {jobs_dir}/
 ├── job_001/
-│   ├── meta.json              # job_id, status, config, data_ref, timestamps
+│   ├── meta.json              # job_id, status, config, data_ref, timestamps, parent_job_id (H-0062)
 │   ├── model/                 # BackendAdapter.export_model() の出力
-│   ├── fit_result.json         # FitSummary のシリアライズ（Fit/Tune 共通）
-│   └── tune_result.json        # TuningSummary のシリアライズ（Tune Job のみ）
+│   ├── fit_result.json        # FitSummary のシリアライズ（Fit/Tune 共通）
+│   ├── tune_result.json       # TuningSummary のシリアライズ（Tune Job のみ）
+│   ├── model.pkl              # cloudpickle checkpoint (Tune Job のみ, H-0062)
+│   └── model_meta.json        # pickle schema + lizyml/lightgbm/optuna version info (H-0062)
 ├── job_002/
 │   └── ...
 └── ...
@@ -265,6 +271,11 @@ class DataRef:
 - デフォルト: `.lizystudio/jobs/`（カレントディレクトリ相対）
 - CLI オプション `lizystudio --jobs-dir /path/to/jobs` で変更可能
 - 設定ファイルでも指定可能
+
+**H-0062 Phase B 追加ファイル:**
+- `model.pkl`: Tune 実行中に各 trial 完了毎に atomic rename で上書き保存される（クラッシュ耐性のための best-effort）。加えて `Model.tune()` が `self._study` をセットしてから `return` する前に、**確定版の最終 save を必ず 1 回実行する**。lizyml の `Model.tune()` は study を関数末尾でのみ内部フィールドに代入する契約のため、毎 trial save だけだと pickle に `_study=None` しか残らず、Re-tune / Resume で `load_checkpoint()` した Model が `lizyml: Cannot resume tuning: no previous tune() call` を発生させる（H-0062 Bugfix 2026-04-14）。再tune / resume 時はこの最終 save をソース・オブ・トゥルースとして `load_checkpoint()` でモデル状態（Optuna study 含む）を復元する。
+- `model_meta.json`: pickle schema version + saved_at + lizyml/lightgbm/optuna のバージョン記録。メジャーバージョン不一致時は `PICKLE_INCOMPATIBLE` で load を拒否する。
+- `meta.json.parent_job_id`: Re-tune / Resume の child job では parent の job_id を参照する。非 child job では `null`。
 
 #### 3.4.5 Inference 履歴（永続・ディスク）
 
@@ -780,6 +791,20 @@ Fit タブと Tune タブは**同一の Config オブジェクト**の異なる�
 SegmentedControl: プリセット値をボタン群で表示し、「カスタム」を選ぶと NumberInput が出現する。
 
 > 注: `direction` は廃止。Optimization Metric の選択に応じて `ui_schema.option_sets.metric_direction[task][metric]` から自動判定する（H-0031）。
+
+**Re-tune Settings セクション（config.tuning.re_tune, H-0061 Phase A）:**
+
+LizyML 0.9.0 (H-0068) の **Study Resume + Boundary Expansion** を GUI から利用するためのセクション。
+`re_tune` を有効化すると、単一の Tune ジョブ内で Optuna study を継続しつつ、最大 N ラウンドにわたって探索空間を動的に拡張する。`re_tune` 未指定時は従来の単一ラウンド tune として振る舞う。
+
+| 要素 | コンポーネント | Config パス | 選択肢 / 範囲 | デフォルト |
+|------|-------------|------------|--------------|----------|
+| enabled | Switch | `tuning.re_tune` (null/object) | OFF=null / ON=object | OFF |
+| n_rounds | NumberInput (int) | `tuning.re_tune.n_rounds` | 1–10 | 3 |
+| expand_boundary | Switch | `tuning.re_tune.expand_boundary` | ON/OFF | ON |
+| boundary_threshold | NumberInput (float) | `tuning.re_tune.boundary_threshold` | (0, 0.5) | 0.05 |
+
+> **DoS ガード**: バックエンドは `n_rounds <= 20` および `n_trials <= 10,000` を強制する (H-0061)。GUI 側は n_rounds 10 で上限、実際の API は 20 まで許容するが通常利用はしない。
 
 **Search Space セクション（config.tuning.optuna.space）:**
 
@@ -1447,6 +1472,27 @@ Fit 完了と同じ評価項目に加え、探索結果（Best Params・収束�
 
 **Plots（評価プロット）:** Fit 完了と同じ仕様・同じ選択肢。Best Params モデルの評価プロット。
 
+**Re-tune Dashboard（H-0061 Phase A）:**
+
+`TuningSummary.rounds` が非 null の場合（=`re_tune` 有効で実行された Tune ジョブ）、Optimization History の直下に Re-tune Dashboard を表示する。4 つのパネルで構成し、ユーザーがチューニングの収束状況を直感的に把握できるようにする。
+
+| パネル | コンポーネント | データソース | 表示条件 |
+|--------|-------------|-------------|---------|
+| Round History | `RoundHistoryTable` | `rounds[*].{n_rounds, best_score_before, best_score_after, expanded_dims}` | `rounds.length >= 1` |
+| Search Space Evolution | `SearchSpaceEvolutionPanel` | `rounds[*].space_snapshot` + `boundary_report` | 少なくとも 1 ラウンドが非 null の `space_snapshot` を持つ |
+| Boundary Expansion | `BoundaryExpansionPanel` | `boundary_report.dims[*].{best_value, position_pct, edge, expanded, new_low, new_high}` | `boundary_report != null` |
+| Convergence Signal | `ConvergenceSignalPanel` | 最終ラウンドの `expanded_dims` + `rounds[*].best_score_after` 推移 | `rounds.length >= 1` |
+
+**Convergence の判定ロジック（Studio 側の責務）:**
+
+| 条件 | 表示 |
+|------|------|
+| 最終ラウンドの `expanded_dims` が空 かつ `rounds.length >= 2` かつ 最終ラウンドの改善量 < `boundary_threshold` | "Converged — proceed to Fit" バナー（緑） |
+| 最終ラウンドの `expanded_dims` が非空 | "Active exploration — re-tune may help" バナー（青） |
+| それ以外（まだ安定化中） | "Stabilising — consider one more round" ソフトバナー |
+
+**Apply to Fit の動線**: Convergence Signal パネルから直接 `onApplyToFit` コールバックで Tune 時の全 Config を Fit タブに復元できる（既存 Apply to Fit と同じ挙動）。
+
 **Accordion セクション:**
 
 | セクション | 内容 | 表示条件 |
@@ -1647,6 +1693,34 @@ Optimization History → Best Params → Score → Learning Curve → Plots（�
 上記に加え、Jobs 固有の Accordion セクション（Config / Execution Log）を末尾に追加。Execution Log の表示方式は Fit 完了ジョブと同じ（H-0060）。
 
 **注:** Jobs 画面での Best Params セクションには `Apply to Fit` ボタンを表示しない。代わりにアクションバーの `Re-fit` を使用する。
+
+##### Re-tune / Resume アクション（H-0062 Phase B）
+
+完了した Tune Job と失敗した Tune Job には、既存の Action Bar ボタン群に加えて以下のアクションが表示される:
+
+| 状態 | ボタン | 説明 | 無効化条件 |
+|------|--------|------|-----------|
+| Completed (tune) | `Re-tune (+N trials)` | Optuna study を継続して追加 N trials を実行。child job として記録 | model.pkl が存在しないとき |
+| Failed (tune) | `Resume (X trials remaining)` | 最後の checkpoint から study を復元し残り trials を実行 | 同上 |
+
+いずれのボタンもクリックするとダイアログが開き、n_trials を入力する（デフォルトは元 tune の n_trials / 残り trials）。送信すると `POST /api/jobs/{id}/retune` または `POST /api/jobs/{id}/resume` が呼ばれ、新しい child job が作成される。child job は `parent_job_id` で parent を参照する。
+
+**多世代 resume（H-0062 Decision 2026-04-14 で許可）**: `parent_job_id` を既に持つ child に対する Re-tune / Resume は **許可される**。A → B → C → ... と自由に鎖を伸ばして良い。各 child は自分自身の `model.pkl` を持ち、Optuna study をその時点の状態から継続するため技術的制約はない。UX 上、ユーザーが「最新の結果からさらに tune を続ける」という自然な期待に合わせるための変更。Lineage tree の最大深度 20 は維持（cascade delete 再帰ガードのため）。
+
+##### Lineage Tree 表示（H-0062 Phase B）
+
+`GET /api/jobs/{id}/lineage` は parent ↔ children の関係を表すツリー構造を返す。Jobs 画面では shadcn Collapsible を使った簡易ツリービュー (`JobLineageTree`) で表示する。各ノードは job_id / status バッジ / type ラベルを持ち、クリックで対象 job を選択できる。ツリーの最大深度は 20（cascade delete の再帰ガードと一致）。
+
+##### Cascade Delete (H-0062 Phase B)
+
+`DELETE /api/jobs/{id}` は cascade クエリパラメータで動作を切り替える:
+
+| cascade | 動作 |
+|---------|------|
+| `false`（デフォルト） | 指定 job のみ削除。children は orphan として残る。ただし active な children（pending/running）がある場合は `PARENT_HAS_ACTIVE_CHILDREN` (409) で拒否 |
+| `true` | 指定 job と全 descendant を再帰的に削除。active children は先に cancel を要求してから削除 |
+
+レスポンスには削除された全 job_id のリストが含まれる。UI はこのリストを元にローカル状態を更新する。
 
 ##### Running ジョブ
 
@@ -2499,6 +2573,12 @@ Workspace の `workspace_result` は完了時に自動更新される。
 | `PATH_NOT_FOUND` | 指定されたローカルパスが存在しない | 400 |
 | `BACKEND_ERROR` | バックエンドライブラリの内部エラー | 500 |
 | `INTERNAL_ERROR` | 予期しないエラー | 500 |
+| `PICKLE_PREFLIGHT_FAILED` | Tune 開始前の pickle 事前検証失敗（書き込み権限/picklable 検査）(H-0062) | 400 |
+| `PICKLE_INCOMPATIBLE` | 保存された checkpoint のバージョンが現行 runtime と非互換 (H-0062) | 400 |
+| `PARENT_LOCKED` | 同一 parent への Re-tune/Resume が既に実行中 (H-0062) | 409 |
+| `PARENT_HAS_ACTIVE_CHILDREN` | DELETE 対象 parent に active children がある（cascade=true 必須）(H-0062) | 409 |
+| `CHECKPOINT_MISSING` | Re-tune/Resume 対象 job に model.pkl が存在しない (H-0062) | 400 |
+| `JOB_NOT_FAILED` | Resume は failed tune job のみ対象 (H-0062) | 400 |
 
 ### 6.2 バックエンドエラーの伝播
 
@@ -2758,3 +2838,12 @@ LizyStudio は localhost 専用のデスクトップツールであるが、以�
 - CSRF トークン
 - Rate limiting
 - HTTPS 強制
+
+### 11.6 Pickle 永続化と Re-tune (H-0062)
+
+Phase B では `{jobs_dir}/{job_id}/model.pkl` に cloudpickle で Tune Job のモデル状態を保存する。pickle はコード実行を伴うため以下の前提を**明示的な信頼境界**として扱う:
+
+- **書き込み権限**: `jobs_dir` 配下への書き込みは Studio プロセスのオーナーユーザーのみ。マルチユーザー環境で同一 `jobs_dir` を共有することは想定しない。同一マシンの別ユーザーが `model.pkl` を差し替えられる構成は権限昇格として扱う（OS レベルで `chmod 700 jobs_dir` を推奨）。
+- **API 経路**: pickle ファイルは HTTP リクエスト経由でアップロード/参照されない。`POST /api/jobs/{id}/retune` と `POST /api/jobs/{id}/resume` は `job_id` をパスから受け取り、`validate_path_within` で `jobs_dir` 内に解決されることを保証してから、その配下の `model.pkl` を `cloudpickle.load()` する。
+- **DoS 観点**: lineage tree / cascade delete の幅は無制限だが、子作成は per-parent 排他ロックで直列化されるため self-DoS のみが現実的なリスク。BLUEPRINT §11.5 と同じく、ローカル前提に基づき rate limiting は導入しない。
+- **エラー情報**: `PARENT_LOCKED` / `PARENT_HAS_ACTIVE_CHILDREN` のレスポンスには他 child の `job_id` を含めるが、シングルユーザー前提のもと意図的な情報露出として扱う。

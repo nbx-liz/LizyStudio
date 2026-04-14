@@ -11,7 +11,7 @@ import { NumberInput } from "./NumberInput";
 import { SegmentGroup } from "./SegmentGroup";
 
 /** Threshold for switching between SegmentGroup and Select dropdown. */
-export const MAX_SEGMENT_OPTIONS = 4;
+const MAX_SEGMENT_OPTIONS = 4;
 
 interface FixedValueEditorProps {
   paramType: string;

@@ -1453,3 +1453,146 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
 - **Alternatives:** なし
 - **Acceptance Criteria:** BLUEPRINT に Undo/Redo/Preset 仕様と Execution Log 表示方式が記載されている
 - **Decision:** 2026-04-07 accepted — 実装追認
+
+---
+
+### H-0061: Re-tune Dashboard — Round History / Boundary Expansion / Convergence Signal の可視化（Phase A）
+- **Status:** implemented
+- **Scope:** API | Frontend | Backend | Adapter
+- **Related:** BLUEPRINT.md §3.3.1 (TuningSummary), §4.2.2 (Tune Tab), §5.2 (Workspace API), Issue #59, LizyML H-0068 (re-tune + boundary expansion), LizyML-Widget P-027/P-028
+- **Context:** LizyML 0.9.0 で H-0068 が `Model.tune(resume, n_trials, expand_boundary, boundary_threshold)` を追加し、追加ラウンド実行時に Optuna study を継続し搜索空間を動的に拡張する機能をリリースした。LizyStudio 側ではこの機能がまだ GUI から利用できない。Issue #59 は Round History / Search Space Evolution / Convergence Signal / Boundary Detail の4ビューを要求している。
+
+  Studio の既存ジョブ実行モデルは「1 Tune Job = 1 Model インスタンス → 完了時に Model 破棄・TuningSummary のみ永続化」で、別ジョブから Optuna study を引き継ぐ真の "resume from previous job" は Model pickle 化 + Job lineage という大きな変更を要する。段階的アプローチとして、Phase A（本提案）では **単一ジョブ内の multi-round 実行** を導入し、Phase B（将来別 Proposal）で真の Job 間 resume を追加する。
+- **Proposal:**
+  1. **共通型拡張** ([backends/types.py](src/lizystudio/backends/types.py)): `TuningSummary` に以下を追記（いずれも optional, None デフォルトで後方互換）:
+     - `rounds: list[dict] | None` — 各ラウンドの n_trials / best_score_before / best_score_after / expanded_dims / space_snapshot
+     - `boundary_report: dict | None` — 最終ラウンド後の BoundaryReport（per-dim: best_value / position_pct / edge / expanded / new_low / new_high）
+  2. **Adapter 拡張** ([backends/lizyml.py](src/lizystudio/backends/lizyml.py)): `LizyMLAdapter.tune()` に `re_tune` パラメータを受け取るオプションを追加。`re_tune={"n_rounds": int, "expand_boundary": bool, "boundary_threshold": float}` が与えられた場合、`model.tune(n_trials=...)` → `model.tune(resume=True, n_trials=..., expand_boundary=..., boundary_threshold=...)` を n_rounds 回ループ実行し、lizyml の `TuningResult.rounds` / `boundary_report` を Studio `TuningSummary` にシリアライズする。
+  3. **API 拡張** ([api/workspace.py](src/lizystudio/api/workspace.py), [api/models.py](src/lizystudio/api/models.py)): `POST /api/workspace/tune` のリクエストボディ（Config JSON 経由）に `tuning.re_tune: {n_rounds, expand_boundary, boundary_threshold} | None` を許容する。既存呼び出しは影響を受けない。
+  4. **UI 新設** ([frontend/src/components/workspace/](frontend/src/components/workspace/)): 以下の新規コンポーネントを追加し、既存 Tune 結果画面 ([TuneTrialsSection.tsx](frontend/src/components/workspace/TuneTrialsSection.tsx)) に統合する:
+     - `RoundHistoryTable.tsx` — rounds 配列を表示する shadcn/ui Table
+     - `BoundaryExpansionPanel.tsx` — boundary_report を per-dim 表示（LizyML-Widget 実装を参考に shadcn/ui で再実装）
+     - `ConvergenceSignalPanel.tsx` — 最終ラウンドの expanded_dims が空かつ improvement < 閾値 のとき「Fit に進む」を推奨するバナー
+     - `TuneTab.tsx` の Accordion に Re-tune 設定セクション（n_rounds / expand_boundary / boundary_threshold 入力）
+  5. **依存バージョン**: `pyproject.toml` の lizyml pin を `>=0.7.0,<0.10.0` → `>=0.9.0,<0.10.0` に引き上げる。
+- **Impact:**
+  - Backend: [backends/types.py](src/lizystudio/backends/types.py), [backends/lizyml.py](src/lizystudio/backends/lizyml.py), [backends/base.py](src/lizystudio/backends/base.py) (Protocol doc 更新), [api/models.py](src/lizystudio/api/models.py), [api/workspace.py](src/lizystudio/api/workspace.py), [services/training.py](src/lizystudio/services/training.py) (re_tune 引数パススルー)
+  - Frontend: [TuneTab.tsx](frontend/src/components/workspace/TuneTab.tsx), [TuneTrialsSection.tsx](frontend/src/components/workspace/TuneTrialsSection.tsx), [ResultsCompletedView.tsx](frontend/src/components/workspace/ResultsCompletedView.tsx), 新規 retune/ ディレクトリ 4 コンポーネント, `frontend/src/api/types.ts` (自動生成)
+  - Docs: BLUEPRINT.md §3.3.1 TuningSummary フィールド追記, §4.2.2 Tune Tab UI 追記
+  - Version: pyproject.toml lizyml pin
+- **Compatibility:** 非破壊的。追加フィールドは all optional（None デフォルト）。既存の Tune Job / 古い TuningSummary JSON は `rounds=None, boundary_report=None` として読み込まれる。`re_tune` 未指定時は従来の単一ラウンド tune として振る舞う。
+- **Alternatives:**
+  - **C1: Model pickle + Job lineage** — 別ジョブから前ジョブの Model を復元して `tune(resume=True)` 実行。Issue #59 の "[Re-tune (+N trials)]" ボタンを事後操作として実現できる。ただし pickle バージョン整合性・subprocess 実行モード・Job 親子関係の lifecycle・並行制御など実装コストが大きく、MVP として重すぎる。Phase B で別 Proposal として提案予定。
+  - **C2: In-memory model registry** — Studio プロセス内に `dict[job_id, Model]` を保持。プロセス再起動で消失・subprocess 非互換。除外。
+  - **弱い resume (best_params を initial_params として引き継ぐ)** — Optuna study は継続しないので H-0068 の核心（boundary expansion）を活かせない。採用せず。
+- **Acceptance Criteria:**
+  1. `POST /api/workspace/tune` に `tuning.re_tune={n_rounds: 3, expand_boundary: true, boundary_threshold: 0.05}` を含む Config を送信すると、lizyml の multi-round 実行が走り、`TuningSummary.rounds` が長さ 3 のリストで返る
+  2. `TuningSummary.boundary_report` が最終ラウンドの BoundaryReport を含む
+  3. Tune 結果画面に Round History Table / Boundary Expansion Panel / Convergence Signal Panel が表示される
+  4. 最終ラウンドの `expanded_dims` が空 かつ rounds.length >= 2 のとき Convergence Signal に「Converged — proceed to Fit」が表示される
+  5. `re_tune` 未指定の従来 Tune は影響を受けず動作する（既存テスト緑）
+  6. pytest / mypy / ruff / vitest / Biome / pnpm build がすべて緑
+  7. Backend カバレッジ 80%+ を維持
+- **Decision:** 2026-04-13 accepted — ユーザ承認済、Phase A 実装開始
+- **Implemented:** 2026-04-13 in PR #72 (develop commits 5b14d6a..eac1936). BLUEPRINT §3.3.1 / §4.2.2 への仕様反映と Search Space Evolution パネル追加は後続 PR で対応。Phase B（Job lineage + Re-tune (+N trials) ボタン）は H-0062 として別 Proposal で起案する。
+
+---
+
+### H-0062: Re-tune Dashboard Phase B — Job lineage + Incremental checkpoint + [Re-tune (+N trials)] / [Resume] actions
+- **Status:** implemented
+- **Scope:** API | Frontend | Backend | Persistence
+- **Related:** H-0061 (Phase A, implemented), Issue #59 要求 4a ([Re-tune (+N trials)] ボタン), LizyML H-0068 (Study Resume), BLUEPRINT §3.4.4 (Job 永続化), H-0036 (subprocess tune 実行)
+- **Context:** H-0061 Phase A は **単一ジョブ内の multi-round 実行** を導入したが、Issue #59 の残る要求 4a「完了済みの Tune ジョブから追加 N trials を走らせる [Re-tune (+N trials)] ボタン」と、Tune 実行中のクラッシュ耐性は未対応のままだった。Studio の既存永続化モデルは「1 Tune Job = 1 Model インスタンス → 完了時に Model 破棄」だったため、別ジョブ間での Study Resume が不可能で、途中クラッシュ時はすべての trial が失われていた。
+
+  Phase B では以下 2 つの機能を同時に導入する:
+  1. **Incremental checkpoint**: Tune 実行中、各 trial 完了時に `model.pkl` を atomic rename で上書き保存する。これにより Tune の途中クラッシュ/ディスク障害からの復旧が可能になる。
+  2. **Job lineage + Re-tune / Resume UI**: Completed Tune Job から `[Re-tune (+N trials)]` を、Failed Tune Job から `[Resume (X trials remaining)]` を起動できる。両者は内部的に「既存 model.pkl を load して `tune(resume=True)`」の同じコードパスを共有し、child job として lineage に記録される。
+
+  なお Issue #59 要求 4b「[Fit with best params] ボタン」は Phase A の `ConvergenceSignalPanel.onApplyToFit` と `TuneTrialsSection` の Apply to Fit 動線で既にカバーされているため、Phase B のスコープからは除外する。
+- **Proposal:**
+  1. **Incremental checkpoint save:** LizyML Adapter の tune ループ内、各 trial 完了時に `_save_checkpoint(model, job_dir)` を呼び、`{job_dir}/model.pkl.tmp` に cloudpickle で書き出した後 POSIX の `rename()` で `model.pkl` にアトミックに置換する。書き出し失敗 (`OSError` / `PicklingError`) は warning log を出すのみで tune は継続する（次の trial で再試行される）。
+  2. **Pre-flight check (tune 開始前の最小限チェック):** `POST /api/workspace/tune` 受付直後、tune subprocess 起動前に以下を実行:
+     - `{job_dir}/.write_test` 作成 → 即削除（書き込み権限 / SELinux 検証）
+     - Minimal skeleton Model を cloudpickle dump/load の round-trip テスト（unpicklable object の早期検出）
+     - 失敗時は `PICKLE_PREFLIGHT_FAILED` エラーコードで 400 を返し tune を開始しない
+     - **Disk space check は実施しない** — incremental checkpoint の仕組みが tune 中のディスク枯渇を吸収できるため
+  3. **Model pickle メタデータ:** `{jobs_dir}/{job_id}/model_meta.json` に `{pickle_schema: 1, lizyml_version: X, lightgbm_version: Y, optuna_version: Z, saved_at: ISO}` を記録。Resume / Re-tune 時にメジャーバージョン不一致を検出したら `PICKLE_INCOMPATIBLE` エラーで明示的に拒否する（自動マイグレーションは行わない）。
+  4. **Job lineage:** `Job` dataclass に `parent_job_id: str | None` を追加。Re-tune / Resume で生成される child job が parent を参照する。child の `config` は parent を copy + `tuning.re_tune` をオーバーライド。API レスポンス (`JobDetail`) には `parent_job_id` と `child_job_ids: list[str]` を含める。
+  5. **排他ロック (Q6):** 同一 parent から同時に複数 Re-tune / Resume を起動できないようにする。`JobStore` に `{parent_job_id → child_job_id}` の in-memory lock を持ち、child job 完了/失敗/キャンセル時に解放する。ロック取得失敗時は `PARENT_LOCKED` (409) を返す。プロセス再起動時は全ロックが解放される（running 中の child は Studio 再起動で `failed` 扱いになるため整合性は維持）。
+  6. **新 API:**
+     - `POST /api/jobs/{job_id}/retune` — body `{n_trials: int, expand_boundary?: bool, boundary_threshold?: float}`。parent の model.pkl を child job ディレクトリにコピー → `adapter.tune(resume=True, re_tune=...)` を実行 → 完了後に best_params で auto-fit を実行（Phase A `run_tune` と同じパイプラインで `FitSummary` も生成） → 新 Job を作成して `TuningSummary` と `FitSummary` の両方を永続化。Completed Tune Job のみが対象。
+     - `POST /api/jobs/{job_id}/resume` — body `{n_trials?: int}` (省略時は残り trials を自動計算)。Failed Tune Job で model.pkl が残っているもののみが対象。child job として実行される。完了後の auto-fit は Re-tune と同じ。
+  7. **Cancellation semantics (Q3-detail (a)):** Parent Job の DELETE API は active な child が存在する場合、child を先にキャンセルしてから parent を削除する。DELETE リクエストに `?cascade=true` を必須とし、明示的でない場合は `PARENT_HAS_ACTIVE_CHILDREN` (409) を返す。UI 側は delete 確認ダイアログに "This will also cancel N active Re-tune/Resume jobs" を表示する。
+  8. **Cascade 削除 (Q4):** Parent Job の完全削除時は children も再帰的に cascade 削除する。API レスポンスには削除された job_id のリストを含める。
+  9. **Tree lineage UI (Q5):** Jobs 画面に lineage ツリー表示を追加する。shadcn/ui の Collapsible を入れ子にして親から子へ展開する簡易ビューを実装。大規模（深さ 5 以上 / 幅 10 以上）な場合のスクロール/折りたたみは含めない。
+  10. **UI アクションボタン:**
+      - `ResultsCompletedView` の Completed Tune 表示に `[Re-tune (+N trials)]` ボタン (n_trials は直前ラウンドと同じがデフォルト、上限 10,000)
+      - `ResultsPanel` の Failed Tune 表示に `[Resume (X trials remaining)]` ボタン (n_trials は残数自動計算)
+      - 両ボタンとも model.pkl が存在しない job では無効化
+      - parent_job_id が **既にある** child job では両ボタンとも **disabled + tooltip** で理由を表示する（孫世代を防ぐため MVP では禁止。ユーザ Q5 回答により tooltip 方式を採用、孫世代 Re-tune の必要性は将来別 Proposal で再評価）
+  11. **Restart 時の自動 resume は行わない (Q-new-1 (a)):** Studio 起動時に failed tune job を検出して自動的にキューに入れることはしない。ユーザーが明示的に Resume ボタンをクリックする必要がある。
+  12. **Resume と Re-tune は UI 上区別する (Q-new-2 (b)):** 内部コードパスは共有するが、ラベル・文脈・デフォルト値が異なるため UI ボタンは分離する。
+- **Impact:**
+  - Backend:
+    - `src/lizystudio/backends/base.py` — Protocol に `save_checkpoint(model, path)` / `load_checkpoint(path) -> Model` を追加
+    - `src/lizystudio/backends/lizyml.py` — checkpoint save/load 実装, tune loop に trial 完了 hook を追加
+    - `src/lizystudio/services/jobs.py` — `Job.parent_job_id` / `child_job_ids`, `create_child_job()`, `get_lineage_tree()`, retune lock management, cascade delete
+    - `src/lizystudio/services/training.py` — pre-flight check, tune subprocess への checkpoint callback 注入
+    - `src/lizystudio/api/jobs.py` — `POST /jobs/{id}/retune`, `POST /jobs/{id}/resume`, DELETE に cascade / active-children チェック
+    - `src/lizystudio/api/errors.py` — `PICKLE_PREFLIGHT_FAILED` / `PICKLE_INCOMPATIBLE` / `PARENT_LOCKED` / `PARENT_HAS_ACTIVE_CHILDREN` エラーコード追加
+  - Frontend:
+    - `frontend/src/components/workspace/ResultsCompletedView.tsx` — Re-tune ボタン
+    - `frontend/src/components/workspace/ResultsPanel.tsx` — Failed 状態に Resume ボタン
+    - `frontend/src/components/jobs/JobLineageTree.tsx` — 新規コンポーネント
+    - `frontend/src/api/jobs.ts` — `retuneJob()`, `resumeJob()` API client
+    - `frontend/src/api/types.ts` — OpenAPI 自動生成型に `parent_job_id` / `child_job_ids` 追加
+  - Docs:
+    - `BLUEPRINT.md` §3.4.4 に `model.pkl` / `model_meta.json` / lineage ファイル構造を追記
+    - `BLUEPRINT.md` §4.3 に lineage tree と Re-tune / Resume ボタンの仕様を追記
+    - `PLAN.md` に `v3-12` phase を追加
+- **Compatibility:** 非破壊的。既存の Tune Job (model.pkl を持たない) は Re-tune / Resume ボタンが自動的に無効化される。`parent_job_id` は optional（既存 job では `None`）。Pre-flight check / checkpoint save は Phase A の re_tune 実行時にも動作するため、Phase A 実装に影響はない。
+- **Alternatives considered:**
+  - **Snapshot copy モデル (Q3 rejected):** Re-tune 開始時に parent の pickle を child にコピーして以降 parent 非依存にする案。ユーザー判断により **却下**: lineage の意味が曖昧になり、ディスク使用量が倍加する。代わりに cascade delete + active children 検知で整合性を担保する。
+  - **In-memory model registry:** プロセス再起動で消失するため実用性なし。
+  - **Weak resume (best_params を initial_params として新 Tune):** Optuna study を継続しないので `expand_boundary` が機能しない。Phase A で既に却下済み。
+  - **Periodic checkpoint (N trials ごと):** incremental save のオーバーヘッドを減らす案。pickle サイズが数 MB-数十 MB で SSD 書き込み速度を考えると trial あたり数百 ms 未満のコストで済むため、毎 trial 保存でも実質問題にならない。シンプルさを優先して毎 trial を採用。
+  - **並行実行 (n_active_retune 制限) (Q6):** 同一 parent から複数 Re-tune を並行実行する案。lizyml の study resume が in-place 更新であることを前提にすると race condition のリスクがあり、MVP としては排他ロックが最もシンプルかつ堅牢。将来 B に進化させる場合はロック実装を差し替えるだけでよい。
+- **Acceptance Criteria:**
+  1. **Checkpoint:** Tune 実行中、各 trial 完了時に `{job_dir}/model.pkl` が atomic rename で更新される。途中で SIGKILL されても直前までの trial は無傷で残る
+  2. **Pre-flight:** 書き込み権限なし / unpicklable オブジェクトが検出されたら tune は開始されず、明確なエラーコードが返る
+  3. **Pickle metadata:** `model_meta.json` に lizyml / lightgbm / optuna のバージョンと pickle schema version が記録される
+  4. **Version mismatch:** Re-tune / Resume 時にメジャーバージョン不一致があれば `PICKLE_INCOMPATIBLE` で拒否され、具体的なバージョン情報がエラーメッセージに含まれる
+  5. **Re-tune API:** `POST /api/jobs/{id}/retune` が completed tune job から child job を作成し、`parent_job_id` が設定される
+  6. **Resume API:** `POST /api/jobs/{id}/resume` が failed tune job（model.pkl 保持）から child job を作成し、残り trials を実行する
+  7. **排他ロック:** 同一 parent から 2 つ目の Re-tune / Resume を起動すると `PARENT_LOCKED` (409) が返る
+  8. **Cascade delete:** Parent Job の削除時、children が再帰的に削除される
+  9. **Active children 保護:** Active children がある parent の DELETE は `?cascade=true` 無しで 409 を返す
+  10. **UI Re-tune ボタン:** Completed Tune Job に `[Re-tune (+N trials)]` が表示され、クリックで child job が起動する
+  11. **UI Resume ボタン:** Failed Tune Job (model.pkl あり) に `[Resume (X trials remaining)]` が表示され、クリックで残り trials が実行される
+  12. **UI 無効化:** model.pkl が存在しない job / 既に parent_job_id を持つ child job では両ボタンが disabled + tooltip で表示される
+  13. **Lineage tree:** Jobs 画面から parent ↔ children の関係がツリー表示でたどれる
+  14. **後方互換:** Phase A の `re_tune` 同一ジョブ multi-round 実行が影響を受けない
+  15. **品質ゲート:** pytest / mypy / ruff / vitest / biome / pnpm build がすべて緑
+  16. **Coverage:** Backend 80%+ / Frontend 80%+
+- **Decision:** 2026-04-13 accepted — ユーザレビュー済、ユーザ回答により Q1〜Q7 および追加質問 (Pre-flight minimization / Incremental checkpoint / Resume UI) を確定。本 Proposal accepted 後、PLAN.md に `v3-12` として実装フェーズを追加する。
+- **Implemented:** 2026-04-13 in branch `feat/h0062-phase-b-job-lineage-resume` (8 commits). 全 16 受入条件達成、869 backend tests + 1239 frontend tests 緑、mypy / ruff / biome clean。BLUEPRINT §3.4.4 / §4.3 / §6.1 と PLAN v3-12 に仕様反映済。
+- **Bugfix 2026-04-14 — Resume from checkpoint threw "no previous tune() call":** 初期実装ではチェックポイント保存は毎 trial の bridge コールバック内でのみ実行していたが、lizyml の `Model.tune()` は `self._study = study` を関数末尾でのみ代入する契約のため、毎 trial save でディスクに書かれる `model._study` は常に古い値（新規 Tune なら None）だった。結果として Re-tune / Resume で `load_checkpoint()` した Model は `_study is None` となり、lizyml の `resume=True` ガードで `TUNING_FAILED: Cannot resume tuning: no previous tune() call` が発生していた。修正として `LizyMLAdapter.tune` のループ完了後（`return` 前）に明示的な最終 `save_checkpoint` を追加し、`self._study` がセットされた後の Model をディスクに書き戻す。毎 trial の bridge save はクラッシュ耐性のため残す。併せて既存 mock ベーステストの盲点を埋める実 lizyml Model による回帰テストを `tests/test_lizyml_checkpoint_real_model.py` に追加し、API end-to-end 回帰テストを `tests/test_retune_api.py::test_retune_end_to_end_with_real_lizyml` に追加した。
+- **Bugfix 2026-04-14 (2) — Re-tune performance 8× slowdown + parent trial history invisible:** Re-tune 実行時に CPU 使用率が低く 1 trial あたり約 40 秒（通常 tune の約 5 秒に対し ~8×遅い）という報告を受けて調査。2 つの独立バグが同時に発生していた: **(A) OpenMP subprocess 分岐漏れ**: `start_fit_async` / `start_tune_async` は `openmp_detect.should_use_subprocess()` が True のとき subprocess モードに切り替えて daemon-thread OpenMP の thread-pool bind 問題（~8-50× 遅延）を回避していたが、`start_retune_async` はこの分岐を実装していなかった。OpenMP 検出環境では Re-tune がスレッドモードで強制実行され、lizyml の LightGBM 学習が 1 コアしか使えていなかった。**(B) Bridge accumulated_trials リセット**: `LizyMLAdapter.tune` の bridge コールバックは毎回 `accumulated_trials = []` から始まるため、`resume=True` でも UI の Running Trials テーブル / LiveTrialChart は新規 trials しか表示せず、Best 列も最初の新 trial から再カウントされ、ユーザーから見ると「前の結果を引き継いでいない」ように見えた（実際には Optuna study は継続していた）。修正として: (A) `subprocess_runner.run_job_in_subprocess` に `mode="retune"` 分岐を追加し、`_child_main` で `run_retune(...)` を実行できるようにした。`training.py` に `_run_retune_subprocess` ヘルパーを追加し、`start_retune_async` で `should_use_subprocess()` True 時に subprocess パスへディスパッチ。in-memory upload（`data_ref.path` が空）で subprocess モードが要求された場合は明示的なエラーで早期失敗させる（スレッドパスへの静かなフォールバックは行わない）。(B) `LizyMLAdapter.tune` で `resume=True` かつ `model._tuning_result` が非 None のとき、bridge の `accumulated_trials` を親の trials で seed し、各行の `best_score` に親の `best_score` をコピー。これにより Running view 側で親の履歴が先頭から表示され、Best 列は親の best から始まり新 trial が改善したときだけ更新される。テストは `tests/test_training_coverage.py` に 3 本（subprocess 分岐、in-memory 拒否、ヘルパー assert）と `tests/test_lizyml_checkpoint_real_model.py` に `test_resume_seeds_progress_trials_from_parent_history` を追加。905 backend tests green, mypy / ruff / biome clean。
+- **Hardening 2026-04-14 (deep-review follow-up) — concurrency + validation defensive fixes:** H-0062 Phase B 修正の深層レビューで 7 件の真正なバグを特定し、すべて対応。**(C1)** `api/jobs.py` の `release_parent_lock` → `acquire_parent_lock` 2 ステップが race window を作り、2 番目の `acquire` の bool 戻り値を無視して silent にロックを手放していた。`JobStore.rebind_parent_lock(parent, expected_holder, new_holder)` を追加して single mutex 下の atomic swap に置き換え、失敗時は新規 child を削除して 409 を返す。**(H1)** `subprocess_runner._poll_progress` に cancel 監視ループを追加し、`job_store.is_cancel_requested(job_id)` True で `proc.terminate()` を呼ぶ escape hatch を実装。`run_job_in_subprocess` 側で `proc.wait(timeout=_WAIT_TIMEOUT)` + `proc.kill()` フォールバックも追加。これまで子プロセスのハングが daemon worker thread を永久に生かし、次の retune が `PreviousJobStillRunningError` で永続的にロックアウトされていた。**(H2)** `_run_retune_subprocess` の `assert` を `_mark_retune_child_failed` 共有 helper 経由の runtime check に差し替え。`assert` 失敗時に child job が `pending` のまま orphan 化していた。併せて `start_retune_async._run` に blanket `except` を追加し、worker thread 内の予期せぬ例外でも child を `failed` に遷移させる。**(H1-data)** `_task_params_compat_errors` と `_strip_internal_keys` に `isinstance(model, dict)` / `isinstance(params, dict)` ガードを追加。pydantic が既に non-dict `model` を拒否している config に対して helper が `AttributeError` で 500 を返していた。**(H2-data)** metric 互換性チェックのポリシーを「全て不正で初めてフラグ」から「いずれか不正でフラグ」に変更。LightGBM は `task=binary` + `metric=["auc","multi_logloss"]` のような部分不整合でも全 trial を失敗させるため、旧ポリシーでは run-time まで検出できなかった。`test_adapter_validate_config_rejects_partial_metric_mismatch` + 空リスト許容 + 非 dict 2 ケース追加。**(M1-quality)** `LizyMLAdapter.tune` の final save 付近の `except Exception` を `(OSError, PicklingError, RecursionError)` に narrow 化し、programming bug が silent に swallowed されないように。**(M2-quality)** `assert` を runtime check に昇格 (Python -O で消えない)。テスト追加: `test_parent_lock.py` 3 本 (rebind succeeds / fails when stolen / fails when empty), `test_subprocess_runner.py::TestPollProgressCancelEscape` 2 本 (cancel terminate / no cancel no terminate), `test_training_coverage.py` 2 本 (helper fails child / worker crash transitions to failed), `test_backends_lizyml.py` 4 本 (partial metric mismatch / empty list accept / non-dict model / non-dict params)。920 backend tests green, 1250 frontend tests green, mypy / ruff / biome clean。
+- **Bugfix 2026-04-14 (3) — "All tuning trials failed" with stale task-specific params:** 通常 Tune 実行時に `LizyMLError: [TUNING_FAILED] All tuning trials failed. Check parameter ranges.` が発生。調査したところ job config は `task=binary` だが `model.params = {"objective": "multiclass", "metric": ["auc_mu", "multi_logloss"]}` という不整合状態。LGBM は binary target に multiclass objective を拒否するため全 trial が FAIL し、lizyml の tuner が「全 trial 失敗」として再送出していた。原因: ユーザーが一時的に `task=multiclass` を選択 → auto-default useEffect で `model.params.objective=multiclass` / `metric=[auc_mu, multi_logloss]` がセットされ、その後 `task=binary` に戻しても既存値が残ったまま使われた。旧 guard は `!modelParams.objective` で空のときしか発火せず、**task 変更に伴う不整合チェックが無かった**のが真因。修正 (二重ガード): **(Frontend)** `ConfigForm.tsx` の auto-default useEffect を「空 OR 現在値が新 task の option_sets に含まれない」で発火するように変更。`objective` は新 task の最初の選択肢にリセット、`metric` は `parameter_hints.metric.default[task]` にリセット。現在値が task と互換なら上書きしない。**(Backend)** `LizyMLAdapter.validate_config` に task ↔ objective / metric 互換性チェックを追加 (`_task_params_compat_errors`)。option_sets との突き合わせで不整合を pydantic-style validation error として返す。single source of truth は lizyml_ui_schema の `option_sets`。API 直叩きや古い config ファイルからの不整合もバックエンドで弾けるようになった。テスト: `tests/test_backends_lizyml.py` に 4 本 (binary/regression 不整合 + binary 正常), `frontend/src/components/workspace/ConfigForm.test.tsx` に 3 本 (objective reset / metric reset / compatible は維持)。910 backend tests green, 1250 frontend tests green, mypy / ruff / biome clean。
+- **Decision flip 2026-04-14 — Grandchild retune allowed:** 当初 H-0062 MVP スコープでは Q5 回答に基づき「`parent_job_id` を持つ child に対する Re-tune / Resume は disabled + tooltip」としていたが、UX 実地検証の結果ユーザーが「Re-tune の結果からさらに Re-tune を続けたい」という自然な期待を持つことが判明（2 回目 Re-tune で 400 Bad Request が発生）。技術的には各 child が自分の model.pkl を持ち Optuna study を継続できるため多世代チェーン（A → B → C → ...）に障害は無い。修正として `api/jobs.py::_require_tune_job_with_checkpoint` の `parent.parent_job_id is not None` ガードを削除、`frontend/src/components/workspace/ResultsCompletedView.tsx` で `RetuneActionButton` に渡していた `disabledReason` grandchild 分岐を削除。既存テスト `test_retune_rejects_grandchild` を `test_retune_accepts_grandchild` に差し替え、`tests/test_lizyml_checkpoint_real_model.py::test_grandchild_resume_chain_a_b_c` で A → B → C の実 lizyml チェーン検証を追加（各ステップで study trials 数が増えることを確認）。BLUEPRINT §11.6 の無効化ルール記述も削除し「多世代 resume を許可」に更新した。Lineage tree の最大深度 20 は cascade delete 再帰ガードのため維持。
+- **Outstanding follow-ups (as of 2026-04-14):** H-0062 Phase B の主要修正・hardening は全て完了したが、以下の残課題を別 PR で順次対応する予定。
+  - **HIGH:** _(2026-04-14 update: すべて対応完了)_
+    1. ~~**Lineage Tree UI 配線**~~ — PR #74 内で `ResultsCompletedView` に wire-in 完了。受入条件 #13 達成。
+  - **MEDIUM:**
+    2. ~~**ファイル分割**~~ — `feat/h0062-cleanup-and-e2e` ブランチで完了。`backends/lizyml.py` は `backends/lizyml/` パッケージ (pickle_compat / serialization / config_compat / adapter) に分割。`services/training.py` は `training_retune.py` を切り出し。`api/jobs.py` は `api/retune.py` を切り出し。すべて re-export で後方互換維持、テスト 945 全 green。
+    3. ~~**E2E シナリオ追加**~~ — `feat/h0062-cleanup-and-e2e` で B-1〜B-5 を `frontend/tests/e2e/retune-flow.spec.ts` に追加: Cancel during retune (API), PARENT_LOCKED 409 (API), 破損 model_meta.json で PICKLE_INCOMPATIBLE 400 (API), Lineage panel UI click-through (UI), Grandchild Re-tune button enabled (UI)。Resume end-to-end と In-memory upload rejection は scope-out（前者は意図的 failure 操作の flaky リスク、後者は既存 unit test でカバー済み）。
+    4. **`plotly.js-dist-min` peer dependency 検証:** `LiveTrialChart` 経由で peer dependency 警告のリスクがあるため確認が必要。_(残)_
+  - **LOW:**
+    5. biome `noNonNullAssertion` 15 warnings (テストファイル内、すべて pre-existing) の解消。
+    6. `_strip_internal_keys` の追加 defensive guard (tuning / result セクション)。
+    7. `JobStore` レベルでの cross-parent retune races 用 `_spawn_lock` 追加検討。
+    8. `LizyMLAdapter.tune` (~195 行) のリファクタ（ファイル分割完了後の追加リファクタ。`adapter.py` が 613 行と大きめなので分割の余地はある）。
+    9. `_run_retune_subprocess` と `start_fit_async` / `start_tune_async` の重複統合。
+    10. exact trial count 監視テストの brittleness（一部緩和済、残箇所は段階的に）。
+- **Bugfix 2026-04-14 (4) — AUC が low-is-better で最適化される CRITICAL バグ:** ユーザ報告「Tuning 時に AUC スコアが低いほど良い指標になっている」を受けて調査。根本原因は `api/workspace.py::workspace_tune` のデフォルト tuning inject 経路で `direction` が `"minimize"` にハードコードされていたこと。具体的な再現フロー: (1) ユーザが Workspace で task=binary を選ぶ（評価メトリックは default の auc）→ (2) `tuning` セクション未設定のまま Tune ボタンを押す → (3) `POST /api/workspace/tune` でバックエンドが `tuning.optuna.params = {"n_trials": 50, "direction": "minimize", "timeout": None}` を inject → (4) `_prepare_tune_config` の auto-resolve は `"direction" not in params` を見ていたため発火せず → (5) lizyml の `Model.tune()` が Optuna study direction = `"minimize"` で起動 → (6) AUC を最小化（=低いほど良い指標として扱う） → (7) `best_params` が完全に意味不明な値になる。**影響範囲**: すべての fresh tune 実行で auc / auc_pr / r2 / accuracy / f1 / auc_mu が低いほど良いと最適化されていた。ユーザがメトリックを 1 度切り替えた場合のみ TuneEvaluationSection の `handleOptimizationMetricChange` が direction を上書きするため回避されていた。修正 (5 層): **(Fix 1)** `api/workspace.py:437` のハードコード `"direction": "minimize"` を削除し、`_prepare_tune_config` の auto-resolve に一任。**(Fix 2)** `services/training.py::_prepare_tune_config` の direction 補正条件を `"direction" not in params` から「常に metric と整合させる（不整合なら上書き）」に変更。これにより stale な direction や API 直叩きの誤った値も自動修正される。**(Fix 3)** `frontend/src/components/workspace/TuneEvaluationSection.tsx` に defensive useEffect を追加し、メトリック変化時にコンポーネント側でも `optuna.params.direction` を `metricDirection` と整合させる（ユーザがメトリックボタンを押さなくても同期）。**(Fix 4)** リグレッションテスト追加: `tests/test_workspace_coverage.py::test_tune_default_tuning_uses_auc_maximize_for_binary` (workspace_tune → _prepare_tune_config の統合テスト), `tests/test_training_service.py::test_overrides_stale_minimize_direction_for_auc` / `test_overrides_stale_maximize_direction_for_rmse` / `test_keeps_consistent_direction_unchanged`, 既存 `test_preserves_explicit_direction` を `test_overwrites_inconsistent_direction` に差し替え (新しい契約: 「metric が direction の単一の真実」)。E2E `frontend/tests/e2e/workspace-tune.spec.ts` の fixture から `direction: "minimize"` ハードコードを削除し、`tune_result.direction === "maximize"` の assertion を追加。**Fix 5** (このエントリー)。**壊れた job 履歴**: 既存の `direction: minimize` で完了済みの binary + auc tune jobs は best_params が論理的に逆なので破棄推奨。マイグレーション script は不要、ユーザが手動 delete でよい。949 backend tests green, mypy / ruff clean。

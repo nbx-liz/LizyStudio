@@ -14,6 +14,7 @@ The parent polls the progress file and forwards messages to the
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -32,6 +33,11 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL = 0.2  # seconds between progress file polls
+# Hard cap on how long we wait for the subprocess to exit after polling
+# has ended or after a cancel-triggered terminate. Chosen large enough
+# for normal tail flushing but small enough that a hung child does not
+# keep the daemon worker thread alive forever (H-0062 Bugfix 2026-04-14).
+_WAIT_TIMEOUT = 10.0
 
 
 def run_job_in_subprocess(
@@ -41,11 +47,23 @@ def run_job_in_subprocess(
     broadcaster: ProgressBroadcaster | None,
     backend_name: str,
     data_path: str,
+    mode: str = "job",
+    parent_job_id: str | None = None,
+    retune_n_trials: int = 0,
+    retune_expand_boundary: bool | None = None,
+    retune_boundary_threshold: float | None = None,
 ) -> Job:
     """Execute a job in a subprocess and return the updated Job.
 
     Progress is forwarded to *broadcaster* by polling a JSONL file
     written by the child process.
+
+    When *mode* is ``"retune"`` (H-0062 Bugfix 2026-04-14), the child
+    process runs :func:`lizystudio.services.training.run_retune` instead
+    of ``run_fit`` / ``run_tune``. The additional ``parent_job_id`` and
+    ``retune_*`` arguments are forwarded so the child can reconstruct
+    the Re-tune inputs without needing the in-memory WorkspaceState
+    from the parent process.
     """
     # Prepare arguments for the child process
     args_dict: dict[str, Any] = {
@@ -55,7 +73,19 @@ def run_job_in_subprocess(
         "config": job.config,
         "data_path": data_path,
         "job_type": job.job_type,
+        "mode": mode,
     }
+    if mode == "retune":
+        if parent_job_id is None:
+            msg = "retune mode requires parent_job_id"
+            raise ValueError(msg)
+        if retune_n_trials <= 0:
+            msg = f"retune mode requires retune_n_trials >= 1, got {retune_n_trials}"
+            raise ValueError(msg)
+        args_dict["parent_job_id"] = parent_job_id
+        args_dict["retune_n_trials"] = retune_n_trials
+        args_dict["retune_expand_boundary"] = retune_expand_boundary
+        args_dict["retune_boundary_threshold"] = retune_boundary_threshold
 
     with tempfile.NamedTemporaryFile(
         mode="w",
@@ -82,10 +112,28 @@ def run_job_in_subprocess(
             stderr=subprocess.PIPE,
         )
 
-        _poll_progress(proc, progress_path, job.job_id, broadcaster)
-        proc.wait()
+        # H-0062 Bugfix 2026-04-14 (5): pass job_store so _poll_progress
+        # can honour cancel requests and terminate a hung subprocess.
+        _poll_progress(
+            proc, progress_path, job.job_id, broadcaster, job_store=job_store
+        )
+        # proc.wait() with a generous timeout: after cancel we want to
+        # give the child a chance to flush the final "error" message
+        # before killing it. If it doesn't exit within _WAIT_TIMEOUT the
+        # escalation path below takes over.
+        try:
+            proc.wait(timeout=_WAIT_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            _logger.warning(
+                "Subprocess %s did not exit within %ss; killing",
+                job.job_id,
+                _WAIT_TIMEOUT,
+            )
+            proc.kill()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=_WAIT_TIMEOUT)
 
-        if proc.returncode != 0:
+        if proc.returncode not in (0, None):
             raw = proc.stderr.read() if proc.stderr else b""
             stderr = (raw or b"").decode(errors="replace")
             _logger.error(
@@ -112,10 +160,21 @@ def _poll_progress(
     progress_path: str,
     job_id: str,
     broadcaster: ProgressBroadcaster | None,
+    *,
+    job_store: JobStore | None = None,
 ) -> None:
-    """Poll the progress JSONL file and forward to broadcaster."""
+    """Poll the progress JSONL file and forward to broadcaster.
+
+    When *job_store* is provided (H-0062 Bugfix 2026-04-14 (5)), the
+    loop also polls ``job_store.is_cancel_requested(job_id)`` on each
+    iteration and terminates the subprocess when cancel is requested.
+    Without this escape hatch, a hung child process kept the daemon
+    worker thread alive forever and the next retune attempt permanently
+    failed with ``PreviousJobStillRunningError``.
+    """
     lines_read = 0
     path = Path(progress_path)
+    terminated = False
 
     while proc.poll() is None:
         if path.exists():
@@ -123,6 +182,20 @@ def _poll_progress(
             for line in lines[lines_read:]:
                 lines_read += 1
                 _forward_progress(line, job_id, broadcaster)
+        if (
+            not terminated
+            and job_store is not None
+            and job_store.is_cancel_requested(job_id)
+        ):
+            _logger.info("cancel requested for job %s; terminating subprocess", job_id)
+            terminated = True
+            with contextlib.suppress(Exception):
+                proc.terminate()
+            # Give the child a brief moment to flush then escalate if
+            # still alive. The outer run_job_in_subprocess does the
+            # real proc.wait() with _WAIT_TIMEOUT, so here we just
+            # break out of the polling loop.
+            break
         time.sleep(_POLL_INTERVAL)
 
     # Final flush — read any remaining lines after subprocess exits.
@@ -185,6 +258,7 @@ def _child_main(args_path: str, progress_path: str) -> None:
     config: dict[str, Any] = args["config"]
     data_path: str = args["data_path"]
     job_type: str = args["job_type"]
+    mode: str = args.get("mode", "job")
 
     # Reconstruct dependencies in subprocess
     from lizystudio.backends.registry import get_adapter
@@ -205,12 +279,32 @@ def _child_main(args_path: str, progress_path: str) -> None:
     # Build a broadcaster-like wrapper that writes to progress file
     file_broadcaster = _FileBroadcaster(progress_path)
 
-    from lizystudio.services.training import run_fit, run_tune
+    from lizystudio.services.training import run_fit, run_retune, run_tune
 
     # _FileBroadcaster is duck-type compatible with ProgressBroadcaster
     broadcaster_any: Any = file_broadcaster
 
-    if job_type == "fit":
+    if mode == "retune":
+        parent_job_id = args["parent_job_id"]
+        parent = job_store.get(parent_job_id)
+        if parent is None:
+            _write_progress(
+                progress_path,
+                {"type": "error", "message": f"Parent job {parent_job_id} not found"},
+            )
+            sys.exit(1)
+        run_retune(
+            parent_job=parent,
+            child_job=job,
+            job_store=job_store,
+            backend=adapter,
+            dataframe=dataframe,
+            n_trials=int(args["retune_n_trials"]),
+            expand_boundary=args.get("retune_expand_boundary"),
+            boundary_threshold=args.get("retune_boundary_threshold"),
+            broadcaster=broadcaster_any,
+        )
+    elif job_type == "fit":
         run_fit(
             job=job,
             job_store=job_store,

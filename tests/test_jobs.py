@@ -107,9 +107,9 @@ def test_delete(job_store: JobStore, sample_data_ref: DataRef) -> None:
         data_ref=sample_data_ref,
         job_type="fit",
     )
-    assert job_store.delete(job.job_id) is True
+    assert job_store.delete(job.job_id) == [job.job_id]
     assert job_store.get(job.job_id) is None
-    assert job_store.delete(job.job_id) is False
+    assert job_store.delete(job.job_id) == []
 
 
 # ---------------------------------------------------------------------------

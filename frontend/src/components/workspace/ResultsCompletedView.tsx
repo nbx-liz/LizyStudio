@@ -1,12 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
 import { Download } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   fetchJobImportance,
   fetchJobImportanceKinds,
+  fetchJobLearningCurveMetrics,
+  fetchJobLineage,
   fetchJobPlot,
   fetchJobPlots,
   fetchJobSplitSummary,
+  type LineageNode,
 } from "@/api/jobs";
 import type { JobDetail, MetricEntry } from "@/api/types";
 import { MetricCards } from "@/components/shared/MetricCards";
@@ -16,6 +19,8 @@ import { Button } from "@/components/ui/button";
 import { pivotMetrics } from "@/lib/metrics";
 import { FoldDetailsSection } from "./FoldDetailsSection";
 import { PlotSection } from "./PlotSection";
+import { JobLineageTree } from "./retune/JobLineageTree";
+import { RetuneActionButton } from "./retune/RetuneActionButton";
 import {
   TrialResultsAccordionItem,
   TuneTrialsSection,
@@ -28,6 +33,8 @@ interface ResultsCompletedViewProps {
   selectedPlot: string;
   onSelectPlot: (p: string) => void;
   onApplyToFit?: (params: Record<string, unknown>) => void;
+  /** Called when a Re-tune child job is successfully started (H-0062). */
+  onJobStarted?: (childJobId: string) => void;
 }
 
 export function ResultsCompletedView({
@@ -36,6 +43,7 @@ export function ResultsCompletedView({
   modelName,
   selectedPlot,
   onSelectPlot,
+  onJobStarted,
   onApplyToFit,
 }: ResultsCompletedViewProps) {
   const { data: plots } = useQuery({
@@ -57,29 +65,58 @@ export function ResultsCompletedView({
     retry: false,
   });
 
-  // Learning curve metrics filter (H-0034)
-  // Default to first metric only to avoid cramped subplots when multiple exist
+  // Learning curve metrics filter (H-0034).
+  // The available list comes from the backend — it reflects the actual
+  // eval_history keys, not the user-requested metric config, which can
+  // diverge when lizyml routes some metrics through feval callables.
   const [lcMetric, setLcMetric] = useState<string | null>(null);
   const lcInitialized = useRef(false);
+  const lcEnabled =
+    selectedPlot === "learning-curve" &&
+    (plots?.includes("learning-curve") ?? false);
 
-  const { data: learningCurve, isError: isLcError } = useQuery({
+  const { data: lcAvailableMetrics, isError: isLcMetricsError } = useQuery({
+    queryKey: ["job-learning-curve-metrics", job.job_id],
+    queryFn: () => fetchJobLearningCurveMetrics(job.job_id),
+    enabled: lcEnabled,
+  });
+
+  const { data: learningCurve, isError: isLcPlotError } = useQuery({
     queryKey: ["job-plot", job.job_id, "learning-curve", lcMetric],
     queryFn: () =>
       fetchJobPlot(job.job_id, "learning-curve", {
         metrics: lcMetric ?? undefined,
       }),
-    enabled:
-      selectedPlot === "learning-curve" &&
-      (plots?.includes("learning-curve") ?? false),
+    enabled: lcEnabled,
     retry: false,
   });
 
-  // If LC filter fails (e.g. feval-only metric), fall back to unfiltered view
+  const isLcError = isLcMetricsError || isLcPlotError;
+
+  // When the user switches to a different job within the same mounted
+  // component instance, any previously selected lcMetric must be
+  // cleared before the new job's metrics list arrives — otherwise the
+  // plot query fires with a name that isn't valid for the new job.
+  const lastJobIdRef = useRef(job.job_id);
   useEffect(() => {
-    if (isLcError && lcMetric !== null) {
+    if (lastJobIdRef.current !== job.job_id) {
+      lastJobIdRef.current = job.job_id;
       setLcMetric(null);
+      lcInitialized.current = false;
     }
-  }, [isLcError, lcMetric]);
+  }, [job.job_id]);
+
+  // If the persisted lcMetric is no longer a valid option (e.g. legacy
+  // state from a previous job), drop it so PlotSection falls back to the
+  // first available metric. LC fetch errors are left to PlotSection to
+  // surface — silently resetting state masked real bugs (H-0061).
+  useEffect(() => {
+    if (!lcAvailableMetrics) return;
+    if (lcMetric !== null && !lcAvailableMetrics.includes(lcMetric)) {
+      setLcMetric(null);
+      lcInitialized.current = false;
+    }
+  }, [lcAvailableMetrics, lcMetric]);
 
   const [importanceKind, setImportanceKind] = useState("split");
   const importanceEnabled = plots?.includes("importance") ?? false;
@@ -127,6 +164,19 @@ export function ResultsCompletedView({
     enabled: job.job_type === "tune",
   });
 
+  // H-0062 acceptance #13: lineage tree wire-in. Only fetch for tune jobs;
+  // silently swallow errors because lineage is auxiliary information.
+  const { data: lineageData } = useQuery({
+    queryKey: ["job-lineage", job.job_id],
+    queryFn: () => fetchJobLineage(job.job_id),
+    enabled: job.job_type === "tune",
+    retry: false,
+  });
+  const lineageRoot: LineageNode | null = lineageData?.tree ?? null;
+  const showLineage =
+    lineageRoot != null &&
+    (lineageRoot.children.length > 0 || job.parent_job_id != null);
+
   useEffect(() => {
     if (plots && plots.length > 0 && !selectedPlot) {
       const first = plots.find((p) => p !== "tuning");
@@ -143,22 +193,11 @@ export function ResultsCompletedView({
   // evalConfig is used by annotateMetric() for precision_at_k k-value display.
   const evalConfig = (job.config?.evaluation as Record<string, unknown>) ?? {};
 
-  // LC filter uses model.params.metric (LightGBM internal metric names)
-  // which match the subplot titles in the learning curve plot.
-  // If metric is unset in job config (e.g. legacy jobs), lcAvailableMetrics
-  // is empty and the filter is hidden — all subplots are shown unfiltered.
-  const modelConfig = (job.config?.model as Record<string, unknown>) ?? {};
-  const lcAvailableMetrics = useMemo(() => {
-    const m = (modelConfig.params as Record<string, unknown>)?.metric;
-    if (Array.isArray(m)) return m as string[];
-    if (typeof m === "string") return [m];
-    return [];
-  }, [modelConfig.params]);
-
   // Initialize LC filter to first metric (avoid cramped subplots).
   // When only 1 metric exists, lcMetric stays null (no filter needed).
   useEffect(() => {
     if (lcInitialized.current) return;
+    if (!lcAvailableMetrics) return;
     if (lcAvailableMetrics.length > 1) {
       lcInitialized.current = true;
       setLcMetric(lcAvailableMetrics[0]);
@@ -213,7 +252,14 @@ export function ResultsCompletedView({
           Completed
         </Badge>
         {primaryMetric && <Badge variant="secondary">{primaryMetric}</Badge>}
-        <div className="ml-auto">
+        <div className="ml-auto flex gap-2">
+          {job.job_type === "tune" && tuneResult && (
+            <RetuneActionButton
+              jobId={job.job_id}
+              defaultNTrials={_defaultRetuneTrials(job)}
+              onStarted={onJobStarted}
+            />
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -226,6 +272,16 @@ export function ResultsCompletedView({
           </Button>
         </div>
       </div>
+
+      {/* H-0062 #13: Job lineage tree (only when relations exist).
+          onJobStarted is reused as the node-select handler — the parent
+          WorkspacePage treats it as "switch workspace selection to job_id",
+          which is exactly the behavior we want when clicking a tree node. */}
+      {showLineage && lineageRoot && (
+        <div className="mb-3">
+          <JobLineageTree root={lineageRoot} onSelect={onJobStarted} />
+        </div>
+      )}
 
       {/* Tune results first: Optimization History -> Best Params -> Apply to Fit */}
       {tuneResult && (
@@ -259,10 +315,10 @@ export function ResultsCompletedView({
               ? isImportancePlotLoading
               : isPlotLoading
           }
-          isError={isPlotError}
+          isError={selectedPlot === "learning-curve" ? isLcError : isPlotError}
           lcMetric={lcMetric}
           onLcMetricChange={setLcMetric}
-          availableEvalMetrics={lcAvailableMetrics}
+          availableEvalMetrics={lcAvailableMetrics ?? []}
           importanceKinds={importanceKinds}
           selectedImportanceKind={importanceKind}
           onImportanceKindChange={setImportanceKind}
@@ -285,4 +341,17 @@ export function ResultsCompletedView({
       </Accordion>
     </div>
   );
+}
+
+/** H-0062: pick a sensible default n_trials for the Re-tune dialog. */
+function _defaultRetuneTrials(job: JobDetail): number {
+  const config = job.config as Record<string, unknown> | undefined;
+  const tuning = config?.tuning as Record<string, unknown> | undefined;
+  const optuna = tuning?.optuna as Record<string, unknown> | undefined;
+  const params = optuna?.params as Record<string, unknown> | undefined;
+  const raw = params?.n_trials;
+  if (typeof raw === "number" && raw > 0) {
+    return raw;
+  }
+  return 50;
 }

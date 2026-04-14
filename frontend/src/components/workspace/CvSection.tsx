@@ -14,6 +14,7 @@ import {
   type BlockedGroupKFoldState,
   INITIAL_BLOCKED_STATE,
 } from "./BlockedGroupKFoldEditor";
+
 export { type BlockedGroupKFoldState, INITIAL_BLOCKED_STATE };
 
 import { CV_STRATEGY_FIELDS, CV_STRATEGY_LABELS } from "./constants";
@@ -21,11 +22,12 @@ import { NullableNumberField } from "./NullableNumberField";
 import { NumberInput } from "./NumberInput";
 import { SegmentGroup } from "./SegmentGroup";
 
-// Re-export all public symbols from cv-state for backward compatibility
+// Re-export all public symbols from cv-state for backward compatibility.
+// CV_FIELD_DEFAULTS is intentionally NOT re-exported here — it has no
+// external consumers; importers use it directly from "./cv-state".
 export {
   applyCvDataFields,
   buildSplitConfig,
-  CV_FIELD_DEFAULTS,
   type CvState,
   INITIAL_CV_STATE,
   recommendedInnerValid,

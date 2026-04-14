@@ -44,6 +44,160 @@ def test_adapter_validate_config_empty() -> None:
     assert len(errors) > 0
 
 
+# H-0062 Bugfix 2026-04-14 (3): backend-side guard against the class of
+# inconsistent configs that surfaced when a user briefly selected a
+# different task and the frontend did not reset model.params.objective /
+# metric when switching back. A Tune job with task=binary and
+# objective=multiclass made LGBM fail every trial with
+# "All tuning trials failed. Check parameter ranges." — the error was
+# correct in substance but pointed at parameter ranges instead of the
+# real culprit. The validator now rejects the mismatch up-front.
+
+
+def _valid_binary_config(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "config_version": 1,
+        "task": "binary",
+        "data": {"target": "y"},
+        "model": {"name": "lgbm", "params": {}},
+        "split": {"method": "stratified_kfold"},
+    }
+    for key, value in overrides.items():
+        base[key] = value
+    return base
+
+
+def test_adapter_validate_config_rejects_binary_with_multiclass_objective() -> None:
+    adapter = LizyMLAdapter()
+    cfg = _valid_binary_config()
+    cfg["model"]["params"] = {"objective": "multiclass"}
+    errors = adapter.validate_config(cfg)
+    assert any(
+        "objective" in str(e.get("loc", ())) or "objective" in str(e.get("msg", ""))
+        for e in errors
+    ), errors
+
+
+def test_adapter_validate_config_rejects_binary_with_multiclass_metric() -> None:
+    adapter = LizyMLAdapter()
+    cfg = _valid_binary_config()
+    cfg["model"]["params"] = {"metric": ["auc_mu", "multi_logloss"]}
+    errors = adapter.validate_config(cfg)
+    assert any(
+        "metric" in str(e.get("loc", ())) or "metric" in str(e.get("msg", ""))
+        for e in errors
+    ), errors
+
+
+def test_adapter_validate_config_accepts_binary_with_binary_params() -> None:
+    adapter = LizyMLAdapter()
+    cfg = _valid_binary_config()
+    cfg["model"]["params"] = {
+        "objective": "binary",
+        "metric": ["auc", "binary_logloss"],
+    }
+    errors = adapter.validate_config(cfg)
+    # No task/objective compat error (there may still be unrelated schema
+    # errors depending on lizyml's Pydantic schema — just ensure our
+    # specific checks do not flag this valid config).
+    compat_errors = [
+        e
+        for e in errors
+        if (
+            "task_objective_mismatch" in str(e.get("type", ""))
+            or "task_metric_mismatch" in str(e.get("type", ""))
+        )
+    ]
+    assert compat_errors == []
+
+
+def test_adapter_validate_config_rejects_regression_with_binary_objective() -> None:
+    adapter = LizyMLAdapter()
+    cfg: dict[str, Any] = {
+        "config_version": 1,
+        "task": "regression",
+        "data": {"target": "y"},
+        "model": {"name": "lgbm", "params": {"objective": "binary"}},
+        "split": {"method": "kfold"},
+    }
+    errors = adapter.validate_config(cfg)
+    assert any(
+        "objective" in str(e.get("loc", ())) or "objective" in str(e.get("msg", ""))
+        for e in errors
+    ), errors
+
+
+def test_adapter_validate_config_rejects_partial_metric_mismatch() -> None:
+    """H-0062 Bugfix 2026-04-14 (7): flag any invalid metric, not just
+    the all-invalid case. LightGBM rejects ``metric=["auc","multi_logloss"]``
+    because multi_logloss is incompatible with task=binary, and the old
+    "only flag when every metric is invalid" policy let it through."""
+    adapter = LizyMLAdapter()
+    cfg = _valid_binary_config()
+    cfg["model"]["params"] = {"metric": ["auc", "multi_logloss"]}
+    errors = adapter.validate_config(cfg)
+    assert any(
+        "metric" in str(e.get("loc", ())) or "metric" in str(e.get("msg", ""))
+        for e in errors
+    ), errors
+
+
+def test_adapter_validate_config_accepts_empty_metric_list() -> None:
+    """An empty metric list must NOT be flagged — the adapter already
+    supplies defaults downstream. Flagging an empty list would break
+    the common case of 'leave the field unset and let the backend
+    decide'."""
+    adapter = LizyMLAdapter()
+    cfg = _valid_binary_config()
+    cfg["model"]["params"] = {"metric": []}
+    errors = adapter.validate_config(cfg)
+    compat = [
+        e
+        for e in errors
+        if str(e.get("type", "")).startswith(
+            ("task_objective_mismatch", "task_metric_mismatch")
+        )
+    ]
+    assert compat == []
+
+
+def test_adapter_validate_config_does_not_crash_on_non_dict_model() -> None:
+    """H-0062 Bugfix 2026-04-14 (7): pydantic may reject a non-dict
+    ``model`` field with its own error, but the compat helper used to
+    blindly call ``.get("params")`` on whatever was there. If pydantic
+    had already captured the type error and the helper ran next on a
+    list / string, it crashed with AttributeError and the caller saw a
+    500 instead of a structured error list. The helper must short
+    circuit when ``model`` is not a dict."""
+    adapter = LizyMLAdapter()
+    cfg: dict[str, Any] = {
+        "config_version": 1,
+        "task": "binary",
+        "data": {"target": "y"},
+        # model is a list instead of a dict — pydantic will reject it.
+        "model": ["invalid"],
+        "split": {"method": "stratified_kfold"},
+    }
+    # Must not raise.
+    errors = adapter.validate_config(cfg)
+    assert isinstance(errors, list)
+
+
+def test_adapter_validate_config_does_not_crash_on_non_dict_params() -> None:
+    """Defensive: params field is a list (malformed) — helper must not
+    crash."""
+    adapter = LizyMLAdapter()
+    cfg: dict[str, Any] = {
+        "config_version": 1,
+        "task": "binary",
+        "data": {"target": "y"},
+        "model": {"name": "lgbm", "params": ["invalid"]},
+        "split": {"method": "stratified_kfold"},
+    }
+    errors = adapter.validate_config(cfg)
+    assert isinstance(errors, list)
+
+
 def test_adapter_load_config_yaml() -> None:
     adapter = LizyMLAdapter()
     content = b"task: binary\nmodel:\n  name: lightgbm"
@@ -287,6 +441,530 @@ def test_tune_no_progress_callback_skips_bridge() -> None:
 
     adapter.tune(mock_model)
     mock_model.tune.assert_called_once_with(progress_callback=None)
+
+
+# --- re-tune (H-0061) ---
+
+
+def _fake_lizyml_tuning_result(
+    best_score: float = 0.9,
+    rounds: Any = None,
+    boundary_report: Any = None,
+    trials: list[Any] | None = None,
+) -> MagicMock:
+    """Build a MagicMock that mimics a lizyml TuningResult."""
+    result = MagicMock()
+    result.best_params = {"lr": 0.1}
+    result.best_score = best_score
+    result.trials = trials if trials is not None else []
+    result.metric_name = "auc"
+    result.direction = "maximize"
+    result.rounds = rounds
+    result.boundary_report = boundary_report
+    return result
+
+
+def _make_round(
+    round_no: int,
+    *,
+    n_trials: int = 10,
+    best_before: float | None = None,
+    best_after: float = 0.85,
+    expanded: tuple[str, ...] = (),
+    space: tuple[Any, ...] = (),
+) -> MagicMock:
+    r = MagicMock()
+    r.round = round_no
+    r.n_trials = n_trials
+    r.best_score_before = best_before
+    r.best_score_after = best_after
+    r.expanded_dims = expanded
+    r.space_snapshot = space
+    return r
+
+
+def test_tune_re_tune_runs_multi_round_loop() -> None:
+    """re_tune.n_rounds=3 triggers three calls to model.tune()."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    adapter.tune(mock_model, re_tune={"n_rounds": 3})
+
+    assert mock_model.tune.call_count == 3
+    # Round 1 — no resume
+    first_kwargs = mock_model.tune.call_args_list[0].kwargs
+    assert "resume" not in first_kwargs
+    # Rounds 2 and 3 — resume=True
+    for call in mock_model.tune.call_args_list[1:]:
+        assert call.kwargs["resume"] is True
+
+
+def test_tune_re_tune_forwards_expand_and_threshold_kwargs() -> None:
+    """expand_boundary / boundary_threshold are passed to rounds 2..N only."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    adapter.tune(
+        mock_model,
+        re_tune={
+            "n_rounds": 2,
+            "expand_boundary": True,
+            "boundary_threshold": 0.1,
+            "n_trials": 20,
+        },
+    )
+
+    first = mock_model.tune.call_args_list[0].kwargs
+    second = mock_model.tune.call_args_list[1].kwargs
+    # First round does not receive resume kwargs
+    assert "resume" not in first
+    assert "expand_boundary" not in first
+    # Second round receives resume + expand kwargs
+    assert second["resume"] is True
+    assert second["expand_boundary"] is True
+    assert second["boundary_threshold"] == 0.1
+    assert second["n_trials"] == 20
+
+
+def test_tune_re_tune_n_rounds_1_matches_legacy_call() -> None:
+    """re_tune.n_rounds=1 is equivalent to legacy tune (single call)."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    adapter.tune(mock_model, re_tune={"n_rounds": 1})
+    mock_model.tune.assert_called_once()
+    assert "resume" not in mock_model.tune.call_args.kwargs
+
+
+@pytest.mark.parametrize("bad", [0, -1, "abc", 1.5, True, False])
+def test_tune_re_tune_invalid_n_rounds_raises(bad: Any) -> None:
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+    with pytest.raises(ValueError, match="n_rounds"):
+        adapter.tune(mock_model, re_tune={"n_rounds": bad})
+
+
+@pytest.mark.parametrize("bad", [0, -1, "abc", 1.5, True, False])
+def test_tune_re_tune_invalid_n_trials_raises(bad: Any) -> None:
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+    with pytest.raises(ValueError, match="n_trials"):
+        adapter.tune(mock_model, re_tune={"n_rounds": 2, "n_trials": bad})
+
+
+def test_tune_re_tune_invalid_threshold_raises() -> None:
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+    with pytest.raises(ValueError, match="boundary_threshold"):
+        adapter.tune(
+            mock_model,
+            re_tune={"n_rounds": 2, "boundary_threshold": 0.9},
+        )
+
+
+def test_tune_serializes_rounds_and_boundary_report() -> None:
+    """When lizyml returns rounds/boundary_report, they appear in the summary."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+
+    r1 = _make_round(1, n_trials=30, best_before=None, best_after=0.85, expanded=())
+    r2 = _make_round(
+        2, n_trials=20, best_before=0.85, best_after=0.87, expanded=("lr",)
+    )
+    dim = MagicMock(
+        name="lr",
+        best_value=0.03,
+        low=0.001,
+        high=0.1,
+        position_pct=0.25,
+        edge="none",
+        expanded=False,
+        new_low=None,
+        new_high=None,
+    )
+    # Override the automatic .name attribute from MagicMock(name=...)
+    dim.name = "lr"
+    report = MagicMock()
+    report.dims = (dim,)
+    report.expanded_names = ("lr",)
+
+    trial = MagicMock()
+    trial.number = 0
+    trial.params = {"lr": 0.03}
+    trial.score = 0.87
+    trial.state = "complete"
+    trial.round = 2
+
+    mock_model.tune.return_value = _fake_lizyml_tuning_result(
+        best_score=0.87,
+        rounds=(r1, r2),
+        boundary_report=report,
+        trials=[trial],
+    )
+
+    summary = adapter.tune(mock_model, re_tune={"n_rounds": 2})
+
+    assert summary.rounds is not None
+    assert len(summary.rounds) == 2
+    assert summary.rounds[0]["round"] == 1
+    assert summary.rounds[0]["best_score_before"] is None
+    assert summary.rounds[1]["expanded_dims"] == ["lr"]
+
+    assert summary.boundary_report is not None
+    assert summary.boundary_report["expanded_names"] == ["lr"]
+    assert len(summary.boundary_report["dims"]) == 1
+    assert summary.boundary_report["dims"][0]["name"] == "lr"
+
+    assert summary.trials[0]["round"] == 2
+
+
+def test_tune_legacy_single_round_leaves_rounds_none() -> None:
+    """Legacy single-round tune leaves rounds/boundary_report as None."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result(
+        rounds=None,
+        boundary_report=None,
+    )
+
+    summary = adapter.tune(mock_model)
+    assert summary.rounds is None
+    assert summary.boundary_report is None
+
+
+def test_tune_pruned_trial_with_none_score_does_not_crash() -> None:
+    """Optuna PRUNED/FAIL trials carry score=None; serialization must preserve it."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+
+    pruned = MagicMock()
+    pruned.number = 0
+    pruned.params = {"lr": 0.01}
+    pruned.score = None
+    pruned.state = "pruned"
+    pruned.round = 1
+
+    mock_model.tune.return_value = _fake_lizyml_tuning_result(trials=[pruned])
+
+    summary = adapter.tune(mock_model)
+    assert summary.trials[0]["score"] is None
+    assert summary.trials[0]["state"] == "pruned"
+
+
+def test_tune_re_tune_empty_dict_is_valid() -> None:
+    """An empty re_tune={} should behave like re_tune=None (single round)."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    adapter.tune(mock_model, re_tune={})
+    mock_model.tune.assert_called_once()
+    assert "resume" not in mock_model.tune.call_args.kwargs
+
+
+def test_tune_re_tune_expand_boundary_false_forwarded() -> None:
+    """expand_boundary=False must be forwarded, not coerced or dropped."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    adapter.tune(
+        mock_model,
+        re_tune={"n_rounds": 2, "expand_boundary": False},
+    )
+    second = mock_model.tune.call_args_list[1].kwargs
+    assert second["resume"] is True
+    assert second["expand_boundary"] is False
+
+
+def test_tune_re_tune_threshold_zero_rejected() -> None:
+    """boundary_threshold=0.0 hits lizyml's strict lower bound and must raise.
+
+    lizyml 0.9.0 Model.tune enforces ``0.0 < threshold < 0.5`` — surfacing
+    the error here (before calling the model) gives a clean ValueError
+    instead of a LizyMLError burying the root cause.
+    """
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    with pytest.raises(ValueError, match="boundary_threshold"):
+        adapter.tune(
+            mock_model,
+            re_tune={"n_rounds": 2, "boundary_threshold": 0.0},
+        )
+
+
+def test_tune_re_tune_threshold_upper_bound_exclusive() -> None:
+    """boundary_threshold=0.499 is just under the exclusive upper bound."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    adapter.tune(
+        mock_model,
+        re_tune={"n_rounds": 2, "boundary_threshold": 0.499},
+    )
+    second = mock_model.tune.call_args_list[1].kwargs
+    assert second["boundary_threshold"] == 0.499
+
+
+def test_tune_re_tune_threshold_smallest_positive_accepted() -> None:
+    """A tiny positive threshold (e.g. 0.001) is within the open range."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    adapter.tune(
+        mock_model,
+        re_tune={"n_rounds": 2, "boundary_threshold": 0.001},
+    )
+    second = mock_model.tune.call_args_list[1].kwargs
+    assert second["boundary_threshold"] == 0.001
+
+
+def test_tune_re_tune_threshold_negative_rejected() -> None:
+    """Negative thresholds hit the lower bound and must raise."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    with pytest.raises(ValueError, match="boundary_threshold"):
+        adapter.tune(
+            mock_model,
+            re_tune={"n_rounds": 2, "boundary_threshold": -0.01},
+        )
+
+
+def test_tune_re_tune_threshold_string_rejected() -> None:
+    """Strings must not be silently coerced to float via _parse_re_tune."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    with pytest.raises(ValueError, match="boundary_threshold"):
+        adapter.tune(
+            mock_model,
+            re_tune={"n_rounds": 2, "boundary_threshold": "0.1"},
+        )
+
+
+def test_tune_re_tune_threshold_exact_0_5_rejected() -> None:
+    """boundary_threshold=0.5 hits the exclusive upper bound and must raise."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    with pytest.raises(ValueError, match="boundary_threshold"):
+        adapter.tune(
+            mock_model,
+            re_tune={"n_rounds": 2, "boundary_threshold": 0.5},
+        )
+
+
+def test_tune_re_tune_n_rounds_upper_bound_rejected() -> None:
+    """n_rounds > _MAX_RE_TUNE_ROUNDS must raise (DoS guard)."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    with pytest.raises(ValueError, match="n_rounds"):
+        adapter.tune(mock_model, re_tune={"n_rounds": 1000000})
+
+
+def test_tune_re_tune_n_trials_upper_bound_rejected() -> None:
+    """n_trials > _MAX_RE_TUNE_TRIALS_PER_ROUND must raise (DoS guard)."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    with pytest.raises(ValueError, match="n_trials"):
+        adapter.tune(mock_model, re_tune={"n_rounds": 2, "n_trials": 1_000_000})
+
+
+def test_tune_re_tune_nones_use_defaults() -> None:
+    """Explicit None values in re_tune fall back to lizyml defaults."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    adapter.tune(
+        mock_model,
+        re_tune={
+            "n_rounds": 2,
+            "n_trials": None,
+            "expand_boundary": None,
+            "boundary_threshold": None,
+        },
+    )
+    second = mock_model.tune.call_args_list[1].kwargs
+    assert second["resume"] is True
+    # None-valued keys should not be forwarded
+    assert "n_trials" not in second
+    assert "expand_boundary" not in second
+    assert "boundary_threshold" not in second
+
+
+def test_tune_serializes_search_dim_from_round_snapshot() -> None:
+    """Round.space_snapshot entries are serialized via _serialize_search_dim.
+
+    Uses the real lizyml SearchDim dataclasses so that class-name-based
+    type detection is exercised end-to-end.
+    """
+    from lizyml.core.types.search_dim import (
+        CategoricalDim,
+        FloatDim,
+        IntDim,
+    )
+
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+
+    dim_float = FloatDim(name="lr", low=1e-4, high=1e-1, log=True, category="model")
+    dim_int = IntDim(name="num_leaves", low=16, high=256, log=False, category="model")
+    dim_cat = CategoricalDim(name="optim", choices=("adam", "sgd"), category="training")
+
+    r1 = _make_round(
+        1,
+        n_trials=10,
+        best_after=0.9,
+        expanded=(),
+        space=(dim_float, dim_int, dim_cat),
+    )
+
+    mock_model.tune.return_value = _fake_lizyml_tuning_result(rounds=(r1,))
+
+    summary = adapter.tune(mock_model, re_tune={"n_rounds": 1})
+
+    assert summary.rounds is not None
+    snapshot = summary.rounds[0]["space_snapshot"]
+    assert len(snapshot) == 3
+
+    float_dim = snapshot[0]
+    assert float_dim["name"] == "lr"
+    assert float_dim["type"] == "float"
+    assert float_dim["category"] == "model"
+    assert float_dim["low"] == 1e-4
+    assert float_dim["high"] == 1e-1
+    assert float_dim["log"] is True
+    assert "choices" not in float_dim  # FloatDim has no choices field
+
+    int_dim = snapshot[1]
+    assert int_dim["name"] == "num_leaves"
+    assert int_dim["type"] == "int"
+    assert int_dim["category"] == "model"
+    assert int_dim["low"] == 16
+    assert int_dim["high"] == 256
+    assert int_dim["log"] is False
+
+    cat = snapshot[2]
+    assert cat["name"] == "optim"
+    assert cat["type"] == "categorical"
+    assert cat["category"] == "training"
+    assert cat["choices"] == ["adam", "sgd"]  # tuple -> list
+    assert "low" not in cat
+    assert "high" not in cat
+
+
+def test_tune_serialize_empty_trials_yields_empty_list() -> None:
+    """Empty trial list is preserved as an empty list, not None."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result(trials=[])
+
+    summary = adapter.tune(mock_model)
+    assert summary.trials == []
+
+
+def test_tune_best_score_zero_float_preserved() -> None:
+    """best_score=0.0 must be preserved and not treated as missing."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result(best_score=0.0)
+
+    summary = adapter.tune(mock_model)
+    assert summary.best_score == 0.0
+
+
+def test_tune_re_tune_invalid_n_rounds_error_message_includes_value() -> None:
+    """ValueError carries the offending value for debugging."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = _fake_lizyml_tuning_result()
+
+    with pytest.raises(ValueError, match="1.5"):
+        adapter.tune(mock_model, re_tune={"n_rounds": 1.5})
+
+
+def test_tune_boundary_report_edge_none_preserved_as_none() -> None:
+    """Edge value None is preserved, not coerced to the literal string 'None'."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+
+    dim = MagicMock()
+    dim.name = "param_a"
+    dim.best_value = 0.5
+    dim.low = 0.0
+    dim.high = 1.0
+    dim.position_pct = 0.5
+    dim.edge = None
+    dim.expanded = False
+    dim.new_low = None
+    dim.new_high = None
+
+    report = MagicMock()
+    report.dims = (dim,)
+    report.expanded_names = ()
+
+    mock_model.tune.return_value = _fake_lizyml_tuning_result(
+        boundary_report=report,
+    )
+
+    summary = adapter.tune(mock_model)
+    assert summary.boundary_report is not None
+    assert summary.boundary_report["dims"][0]["edge"] is None
+
+
+def test_tune_re_tune_progress_emits_round_field() -> None:
+    """Progress callbacks from multi-round tune carry round metadata."""
+    adapter = LizyMLAdapter()
+
+    trial_calls: list[dict[str, Any]] = []
+
+    def _progress(*, current: int, total: int, message: str, **extra: Any) -> None:
+        trial_calls.append({"current": current, "total": total, **extra})
+
+    # Fake model.tune emits progress_callback invocations
+    def fake_tune(*, progress_callback: Any = None, **_: Any) -> Any:
+        if progress_callback is not None:
+            info = MagicMock()
+            info.current_trial = 1
+            info.total_trials = 5
+            info.best_score = 0.8
+            info.latest_score = 0.8
+            info.latest_state = "complete"
+            progress_callback(info)
+        return _fake_lizyml_tuning_result()
+
+    mock_model = MagicMock()
+    mock_model.tune = fake_tune
+
+    adapter.tune(
+        mock_model,
+        on_progress=_progress,
+        re_tune={"n_rounds": 2},
+    )
+
+    # At least one trial callback from each round should carry round=1/2
+    round_values = {c.get("round") for c in trial_calls if "round" in c}
+    assert 1 in round_values
+    assert 2 in round_values
 
 
 def test_model_info_returns_target() -> None:
@@ -593,6 +1271,80 @@ def test_importance_kinds_returns_list() -> None:
     assert "shap" in result
 
 
+# --- learning_curve_metrics ---
+
+
+def _model_with_history(history: list[Any]) -> MagicMock:
+    mock_model = MagicMock()
+    mock_model.fit_result.history = history
+    return mock_model
+
+
+def test_learning_curve_metrics_collects_from_eval_history() -> None:
+    """learning_curve_metrics() returns metric names from fit_result.history."""
+    adapter = LizyMLAdapter()
+    history = [
+        {
+            "eval_history": {
+                "valid_0": {"f1": [0.1, 0.2, 0.3]},
+            }
+        },
+        {
+            "eval_history": {
+                "valid_0": {"f1": [0.2, 0.3], "auc": [0.7, 0.8]},
+            }
+        },
+    ]
+    model = _model_with_history(history)
+
+    result = adapter.learning_curve_metrics(model)
+
+    assert result == ["f1", "auc"]
+
+
+def test_learning_curve_metrics_deduplicates_across_datasets() -> None:
+    """Names appearing under multiple datasets are deduplicated."""
+    adapter = LizyMLAdapter()
+    history = [
+        {
+            "eval_history": {
+                "valid_0": {"binary_logloss": [0.5]},
+                "valid_1": {"binary_logloss": [0.6], "auc": [0.9]},
+            }
+        },
+    ]
+    model = _model_with_history(history)
+
+    result = adapter.learning_curve_metrics(model)
+
+    assert sorted(result) == ["auc", "binary_logloss"]
+
+
+def test_learning_curve_metrics_empty_when_no_history() -> None:
+    """Returns empty list when history is missing or empty."""
+    adapter = LizyMLAdapter()
+    assert adapter.learning_curve_metrics(_model_with_history([])) == []
+
+    mock_model = MagicMock()
+    mock_model.fit_result = None
+    assert adapter.learning_curve_metrics(mock_model) == []
+
+
+def test_learning_curve_metrics_skips_folds_without_eval_history() -> None:
+    """Folds with missing/empty eval_history are skipped gracefully."""
+    adapter = LizyMLAdapter()
+    history = [
+        {},
+        {"eval_history": {}},
+        {"eval_history": {"valid_0": {"f1": [0.1]}}},
+    ]
+    model = _model_with_history(history)
+
+    result = adapter.learning_curve_metrics(model)
+
+    assert result == ["f1"]
+
+
 # --- confusion_matrix ---
 
 
@@ -794,3 +1546,155 @@ class TestLoadConfigEdgeCases:
         adapter = LizyMLAdapter()
         result = adapter.load_config_from_file(b'{"task": "binary"}', "config.txt")
         assert result["task"] == "binary"
+
+
+# ---------------------------------------------------------------------------
+# Integration-style tests using real lizyml types (guards against mock drift)
+# ---------------------------------------------------------------------------
+
+
+def test_tune_serializes_real_lizyml_tuning_result() -> None:
+    """End-to-end: adapter consumes a real lizyml.TuningResult dataclass.
+
+    Guards against the "mock-circular" failure mode where MagicMock-based
+    tests pass even when the serializer's attribute expectations diverge
+    from the actual lizyml 0.9.0 shape.
+    """
+    from lizyml.core.types.search_dim import FloatDim
+    from lizyml.core.types.tuning_result import (
+        BoundaryDimStatus,
+        BoundaryReport,
+        RoundSummary,
+        TrialResult,
+        TuningResult,
+    )
+
+    space = (FloatDim(name="lr", low=1e-4, high=1e-1, log=True),)
+
+    round1 = RoundSummary(
+        round=1,
+        n_trials=10,
+        best_score_before=None,
+        best_score_after=0.85,
+        expanded_dims=(),
+        space_snapshot=space,
+    )
+    round2 = RoundSummary(
+        round=2,
+        n_trials=10,
+        best_score_before=0.85,
+        best_score_after=0.87,
+        expanded_dims=("lr",),
+        space_snapshot=space,
+    )
+
+    dim_status = BoundaryDimStatus(
+        name="lr",
+        best_value=0.003,
+        low=1e-4,
+        high=1e-1,
+        position_pct=0.25,
+        edge="none",
+        expanded=False,
+        new_low=None,
+        new_high=None,
+    )
+    report = BoundaryReport(dims=(dim_status,), expanded_names=())
+
+    trial = TrialResult(
+        number=0, params={"lr": 0.003}, score=0.87, state="complete", round=2
+    )
+
+    real_result = TuningResult(
+        best_model_params={"lr": 0.003},
+        best_smart_params={},
+        best_training_params={},
+        best_score=0.87,
+        trials=[trial],
+        metric_name="auc",
+        direction="maximize",
+        rounds=(round1, round2),
+        boundary_report=report,
+    )
+
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = real_result
+
+    summary = adapter.tune(mock_model, re_tune={"n_rounds": 2})
+
+    # rounds are serialized from a real tuple[RoundSummary, ...]
+    assert summary.rounds is not None
+    assert len(summary.rounds) == 2
+    assert summary.rounds[0]["round"] == 1
+    assert summary.rounds[0]["best_score_before"] is None
+    assert summary.rounds[1]["expanded_dims"] == ["lr"]
+    # space_snapshot captures SearchDim type label via class name
+    assert summary.rounds[0]["space_snapshot"][0]["type"] == "float"
+    assert summary.rounds[0]["space_snapshot"][0]["category"] == "model"
+
+    # boundary_report round-trips
+    assert summary.boundary_report is not None
+    assert len(summary.boundary_report["dims"]) == 1
+    assert summary.boundary_report["dims"][0]["edge"] == "none"
+    assert summary.boundary_report["dims"][0]["expanded"] is False
+
+    # TrialResult.round is preserved and .best_params flattens dicts
+    assert summary.trials[0]["round"] == 2
+    assert summary.best_params == {"lr": 0.003}
+
+
+def test_tuning_summary_backward_compat_old_json_shape() -> None:
+    """TuningSummary(**old_dict) accepts legacy JSON without rounds/boundary_report.
+
+    Guards against JobStore._load_job failing to rehydrate jobs that were
+    persisted before H-0061 landed.
+    """
+    from lizystudio.backends.types import TuningSummary
+
+    old = {
+        "best_params": {"lr": 0.01},
+        "best_score": 0.9,
+        "trials": [
+            {"number": 0, "params": {"lr": 0.01}, "score": 0.9, "state": "complete"}
+        ],
+        "metric_name": "auc",
+        "direction": "maximize",
+    }
+    rehydrated = TuningSummary(**old)
+    assert rehydrated.rounds is None
+    assert rehydrated.boundary_report is None
+    assert rehydrated.best_score == 0.9
+
+
+def test_tune_real_tuning_result_empty_rounds_yields_none() -> None:
+    """An empty rounds tuple maps to TuningSummary.rounds=None (not []).
+
+    The UI uses ``rounds != null`` as the render gate; ``rounds=()`` from
+    a single-round tune must land as None so the RetuneDashboard shell
+    collapses correctly.
+    """
+    from lizyml.core.types.tuning_result import TrialResult, TuningResult
+
+    real_result = TuningResult(
+        best_model_params={"lr": 0.01},
+        best_smart_params={},
+        best_training_params={},
+        best_score=0.9,
+        trials=[
+            TrialResult(number=0, params={"lr": 0.01}, score=0.9, state="complete")
+        ],
+        metric_name="auc",
+        direction="maximize",
+        # rounds defaults to () — the legacy single-round path
+        boundary_report=None,
+    )
+
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_model.tune.return_value = real_result
+
+    summary = adapter.tune(mock_model)
+    assert summary.rounds is None
+    assert summary.boundary_report is None
+    assert summary.best_params == {"lr": 0.01}

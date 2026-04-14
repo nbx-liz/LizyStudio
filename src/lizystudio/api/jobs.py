@@ -20,6 +20,7 @@ from lizystudio.api.errors import (
     JobNotCompletedError,
     JobNotFoundError,
     JobRunningError,
+    ParentHasActiveChildrenError,
     StudioError,
 )
 from lizystudio.api.models import (
@@ -36,6 +37,7 @@ from lizystudio.services.jobs import (
     get_importance_kinds,
     get_job_plot,
     get_job_store,
+    get_learning_curve_metrics,
     get_metrics_table,
     get_split_summary,
 )
@@ -156,15 +158,48 @@ def get_job_config(
 @router.delete("/{job_id}")
 def delete_job(
     job_id: str,
+    cascade: bool = False,
     job_store: JobStore = Depends(get_job_store),
-) -> dict[str, str]:
-    """Delete a job. Running jobs cannot be deleted (v2-13 task 2)."""
+) -> dict[str, Any]:
+    """Delete a job. Running jobs cannot be deleted (v2-13 task 2).
+
+    Pass ``?cascade=true`` to remove the entire descendant subtree
+    created by Re-tune / Resume children (H-0062). When children are
+    currently pending or running, cascade is required; otherwise the
+    request is rejected with ``PARENT_HAS_ACTIVE_CHILDREN``.
+    """
     job = _get_job_or_404(job_id, job_store)
     if job.status == "running":
         raise JobRunningError(job_id)
-    if not job_store.delete(job_id):
+
+    # H-0062: guard against orphaning in-flight children on a non-cascade
+    # delete. Collect the direct active descendants first so the error
+    # details list exactly what would be lost.
+    if not cascade and job_store.has_active_children(job_id):
+        active: list[str] = []
+        for cid in job_store.get_child_job_ids(job_id):
+            child = job_store.get(cid)
+            if child is not None and child.status in ("pending", "running"):
+                active.append(cid)
+        raise ParentHasActiveChildrenError(job_id, active)
+
+    if cascade:
+        # Active running/pending children must be asked to stop before we
+        # rmtree their directories. Cancel flags are best-effort; the
+        # actual subprocess may still be running when rmtree fires, but
+        # the run_tune wrapper tolerates a missing job dir via its finally
+        # block.
+        for cid in job_store.get_child_job_ids(job_id):
+            child = job_store.get(cid)
+            if child is not None and child.status in ("pending", "running"):
+                job_store.request_cancel(cid)
+        removed = job_store.delete(job_id, cascade=True)
+    else:
+        removed = job_store.delete(job_id)
+
+    if not removed:
         raise JobNotFoundError(job_id)
-    return {"status": "deleted"}
+    return {"status": "deleted", "removed_job_ids": removed}
 
 
 @router.post("/{job_id}/cancel")
@@ -244,6 +279,26 @@ def get_job_importance_kinds_endpoint(
     _require_completed(job)
     try:
         return get_importance_kinds(job, ws.backend)
+    except Exception as exc:
+        raise BackendError(exc) from exc
+
+
+@router.get("/{job_id}/learning-curve/metrics")
+def get_job_learning_curve_metrics_endpoint(
+    job_id: str,
+    job_store: JobStore = Depends(get_job_store),
+    ws: WorkspaceState = Depends(get_workspace),
+) -> list[str]:
+    """Get the metric names recorded in the learning curve history.
+
+    These are the values accepted by the learning-curve plot's ``metrics``
+    filter. Sourced from the actual training eval history — they may
+    differ from the user's configured evaluation metrics.
+    """
+    job = _get_job_or_404(job_id, job_store)
+    _require_completed(job)
+    try:
+        return get_learning_curve_metrics(job, ws.backend)
     except Exception as exc:
         raise BackendError(exc) from exc
 
@@ -401,3 +456,12 @@ def export_code(
         media_type="application/zip",
         filename=filename,
     )
+
+
+# H-0062 cleanup: retune / resume / lineage endpoints live in
+# ``api/retune.py`` which imports this module's ``router`` and registers
+# its handlers via the same ``@router.post(...)`` decorators. Importing
+# the module here ensures the registration side effect runs whenever
+# ``api.jobs`` is loaded, so ``server.py`` only needs to include
+# ``jobs.router`` once (URL paths are unchanged).
+from lizystudio.api import retune as _retune  # noqa: E402, F401

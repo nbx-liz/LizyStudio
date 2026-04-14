@@ -81,7 +81,7 @@ test.describe("Workspace tune flow", () => {
       ...defaults,
       tuning: {
         optuna: {
-          params: { n_trials: 3, direction: "minimize", timeout: null },
+          params: { n_trials: 3, timeout: null },
           space: {
             learning_rate: {
               type: "float",
@@ -120,6 +120,13 @@ test.describe("Workspace tune flow", () => {
     expect(tuneResult).toHaveProperty("metric_name");
     expect(tuneResult).toHaveProperty("direction");
 
+    // Bug 2026-04-14 regression guard: a binary task with the default
+    // AUC metric MUST run as ``maximize``. The previous workspace inject
+    // path hardcoded ``minimize`` and AUC was being optimized as
+    // low-is-better, producing meaningless ``best_params``.
+    expect(tuneResult.metric_name).toBe("auc");
+    expect(tuneResult.direction).toBe("maximize");
+
     // best_params should be a non-empty object
     expect(typeof tuneResult.best_params).toBe("object");
     expect(Object.keys(tuneResult.best_params as object).length).toBeGreaterThan(0);
@@ -154,7 +161,7 @@ test.describe("Workspace tune flow", () => {
       ...defaults,
       tuning: {
         optuna: {
-          params: { n_trials: 2, direction: "minimize", timeout: null },
+          params: { n_trials: 2, timeout: null },
           space: {},
         },
       },
@@ -202,7 +209,7 @@ test.describe("Workspace tune flow", () => {
       ...defaults,
       tuning: {
         optuna: {
-          params: { n_trials: 2, direction: "minimize", timeout: null },
+          params: { n_trials: 2, timeout: null },
           space: {
             learning_rate: {
               type: "float",

@@ -12,6 +12,7 @@ vi.mock("@/api/jobs", () => ({
   fetchJobPlot: vi.fn(),
   fetchJobImportance: vi.fn(),
   fetchJobImportanceKinds: vi.fn().mockResolvedValue([]),
+  fetchJobLearningCurveMetrics: vi.fn().mockResolvedValue([]),
   fetchJobSplitSummary: vi.fn(),
   fetchJobLog: vi.fn().mockResolvedValue({ log: "test log content" }),
   fetchJobs: (...args: unknown[]) => mockFetchJobs(...args),

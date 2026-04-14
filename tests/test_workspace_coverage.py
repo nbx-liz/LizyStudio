@@ -267,6 +267,51 @@ def test_tune_injects_default_tuning_config_when_missing(
     assert tuning["optuna"]["params"]["n_trials"] == 50
 
 
+def test_tune_default_tuning_uses_auc_maximize_for_binary(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """Bug 2026-04-14: hardcoded ``direction: minimize`` in the inject path
+    caused AUC to be optimized as if low-is-better. The injected default
+    tuning config must end up with ``direction: maximize`` for the
+    ``binary`` + default-AUC combination after ``_prepare_tune_config``
+    runs, otherwise Optuna walks the wrong way and ``best_params`` is
+    meaningless.
+
+    This is an integration test: it goes through the whole
+    ``POST /workspace/tune`` path so a future regression in either the
+    inject step OR the auto-resolve step in ``_prepare_tune_config``
+    is caught up front.
+    """
+    _load_data_and_config(client, tmp_path)
+    app = client.app  # type: ignore[attr-defined]
+    ws = app.state.workspace
+    ws.config.pop("tuning", None)
+
+    captured: dict[str, dict] = {}
+
+    def fake_start(**kwargs: object) -> str:
+        # Snapshot the config that would be passed to the runner so the
+        # test can assert on the post-prepare direction without touching
+        # internals.
+        from lizystudio.services.training import _prepare_tune_config
+
+        captured["prepared"] = _prepare_tune_config(kwargs["config"])  # type: ignore[arg-type]
+        return "job_tune_dir"
+
+    with patch("lizystudio.api.workspace.start_tune_async", side_effect=fake_start):
+        res = client.post("/api/workspace/tune")
+    assert res.status_code == 200, res.text
+
+    prepared = captured["prepared"]
+    direction = prepared["tuning"]["optuna"]["params"].get("direction")
+    assert direction == "maximize", (
+        f"Default binary + AUC tune must run as maximize, got {direction!r}. "
+        "Likely cause: workspace_tune injected a hardcoded direction "
+        "('minimize') and _prepare_tune_config refused to override it."
+    )
+
+
 def test_tune_preserves_existing_tuning_config(
     client: TestClient,
     tmp_path: Path,

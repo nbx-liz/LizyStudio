@@ -80,7 +80,38 @@ class BackendAdapter(Protocol):
         model: Any,
         *,
         on_progress: ProgressCallback | None = None,
-    ) -> TuningSummary: ...
+        re_tune: dict[str, Any] | None = None,
+        checkpoint_dir: Any = None,
+        resume: bool = False,
+    ) -> TuningSummary:
+        """Run hyperparameter tuning.
+
+        When *re_tune* is provided, the adapter performs a multi-round
+        tuning session on the same model instance, continuing the Optuna
+        study across rounds and optionally expanding the search space at
+        round boundaries.  The ``re_tune`` dict may contain:
+
+        - ``n_rounds``: total number of tuning rounds (>= 1)
+        - ``expand_boundary``: whether to expand the search space at
+          round boundaries (bool, default True)
+        - ``boundary_threshold``: relative distance from search-space
+          boundary that triggers expansion (float in [0, 0.5))
+
+        When *checkpoint_dir* is a writable :class:`~pathlib.Path`, the
+        adapter writes an incremental checkpoint after each completed
+        trial (H-0062).  Checkpoint save failures are swallowed so tune
+        execution is not aborted by transient filesystem errors.
+
+        When *resume* is True (H-0062 Phase B), the first round is
+        started against the model's existing Optuna study instead of
+        a fresh one, so trials accumulated in a previous tune / checkpoint
+        are preserved. The ``re_tune`` kwargs are applied to that first
+        round as well.
+
+        Legacy single-round tuning leaves ``TuningSummary.rounds`` and
+        ``TuningSummary.boundary_report`` as ``None``.
+        """
+        ...
 
     def predict(
         self,
@@ -101,6 +132,39 @@ class BackendAdapter(Protocol):
     def importance_kinds(self, model: Any) -> list[str]:
         """Return the list of valid importance kind identifiers."""
         return ["split"]
+
+    def learning_curve_metrics(self, model: Any) -> list[str]:
+        """Return the metric names present in the learning curve history.
+
+        The returned names are the exact values accepted by
+        ``plot(model, "learning-curve", metrics=[...])``. They come from the
+        actual training eval history, not from the user config — the two
+        can diverge when the backend routes some metrics to feval callables
+        or drops duplicates during training.
+        """
+        return []
+
+    # --- Checkpoint persistence (H-0062) ---
+
+    def save_checkpoint(self, model: Any, path: Any) -> None:
+        """Atomically persist an in-flight *model* into *path* as a pickle.
+
+        Adapters should use ``path/model.pkl.tmp`` -> ``path/model.pkl``
+        via ``os.replace`` to avoid partial writes, and write a sidecar
+        ``path/model_meta.json`` capturing version info for compatibility
+        checks on load.  Failures must be swallowed (logged only) so a
+        flaky filesystem cannot abort an otherwise healthy tune.
+        """
+        raise NotImplementedError
+
+    def load_checkpoint(self, path: Any) -> Any:
+        """Load a previously saved checkpoint from *path*.
+
+        Raises :class:`FileNotFoundError` when ``path/model.pkl`` does not
+        exist.  Adapters should call their own pickle-version verification
+        before returning and raise a descriptive error on mismatch.
+        """
+        raise NotImplementedError
 
     def confusion_matrix(
         self, model: Any, threshold: float = 0.5

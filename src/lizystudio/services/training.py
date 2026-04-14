@@ -204,6 +204,22 @@ def _prepare_autofit_config(
     return result
 
 
+def _extract_re_tune(config: dict[str, Any]) -> dict[str, Any] | None:
+    """Extract the H-0061 ``re_tune`` block from a tune request config.
+
+    Returns ``None`` when the client did not request multi-round tuning,
+    so legacy single-round behaviour is unaffected.  The returned dict
+    is a shallow copy to avoid leaking mutations back into the caller.
+    """
+    tuning = config.get("tuning")
+    if not isinstance(tuning, dict):
+        return None
+    re_tune = tuning.get("re_tune")
+    if not isinstance(re_tune, dict):
+        return None
+    return dict(re_tune)
+
+
 def _prepare_tune_config(config: dict[str, Any]) -> dict[str, Any]:
     """Merge tuning-specific overrides into the top-level config for LizyML.
 
@@ -260,30 +276,37 @@ def _prepare_tune_config(config: dict[str, Any]) -> dict[str, Any]:
         if default_metric:
             result["evaluation"] = {"metrics": [default_metric]}
 
-    # Resolve direction from evaluation metrics if not explicitly set
+    # Resolve direction from evaluation metrics. Bug 2026-04-14: the
+    # previous ``"direction" not in params`` guard let stale / wrong
+    # values pass through unchanged. The workspace inject path used to
+    # hardcode ``direction: minimize`` and old persisted configs from a
+    # broken state could carry a direction that no longer matches the
+    # evaluation metric. We now ALWAYS recompute the natural direction
+    # from the optimization metric and overwrite when it disagrees,
+    # using ``maximize_metrics`` as the single source of truth.
     if "tuning" in result:
         optuna = result["tuning"].get("optuna", {})
         params = optuna.get("params", {})
-        if "direction" not in params:
-            final_metrics = (result.get("evaluation") or {}).get("metrics", [])
-            if final_metrics:
-                first_metric = (
-                    final_metrics[0]
-                    if isinstance(final_metrics[0], str)
-                    else next(iter(final_metrics[0]), "")
-                )
-                maximize_metrics = {
-                    "auc",
-                    "auc_pr",
-                    "r2",
-                    "accuracy",
-                    "f1",
-                    "auc_mu",
-                }
-                direction = (
-                    "maximize" if first_metric in maximize_metrics else "minimize"
-                )
-                optuna["params"] = {**params, "direction": direction}
+        final_metrics = (result.get("evaluation") or {}).get("metrics", [])
+        if final_metrics:
+            first_metric = (
+                final_metrics[0]
+                if isinstance(final_metrics[0], str)
+                else next(iter(final_metrics[0]), "")
+            )
+            maximize_metrics = {
+                "auc",
+                "auc_pr",
+                "r2",
+                "accuracy",
+                "f1",
+                "auc_mu",
+            }
+            correct_direction = (
+                "maximize" if first_metric in maximize_metrics else "minimize"
+            )
+            if params.get("direction") != correct_direction:
+                optuna["params"] = {**params, "direction": correct_direction}
                 result["tuning"]["optuna"] = optuna
 
     # Clean tuning section: keep only optuna (params + space)
@@ -291,6 +314,25 @@ def _prepare_tune_config(config: dict[str, Any]) -> dict[str, Any]:
         result["tuning"] = {"optuna": result["tuning"].get("optuna", {})}
 
     return result
+
+
+def _run_pickle_preflight(job_dir: Path) -> None:
+    """Run the H-0062 pre-flight check before tune launches.
+
+    Translates the adapter-level :class:`PicklePreflightError` into a
+    Studio-domain :class:`PicklePreflightFailedError` so the API layer
+    can return the standard JSON envelope with ``PICKLE_PREFLIGHT_FAILED``.
+    """
+    from lizystudio.api.errors import PicklePreflightFailedError
+    from lizystudio.backends.lizyml import (
+        PicklePreflightError,
+        preflight_pickle_check,
+    )
+
+    try:
+        preflight_pickle_check(job_dir)
+    except PicklePreflightError as exc:
+        raise PicklePreflightFailedError(str(exc)) from exc
 
 
 def run_tune(
@@ -304,10 +346,19 @@ def run_tune(
 ) -> Job:
     """Execute a tune job: tune -> auto-fit with best params (H-0002 B)."""
     tune_config = _prepare_tune_config(config)
+    re_tune = _extract_re_tune(config)
+    # H-0062: checkpoint directory for incremental trial persistence.
+    checkpoint_dir = job_store.jobs_dir / job.job_id
+    _run_pickle_preflight(checkpoint_dir)
 
     def execute(cb: ProgressCallback) -> tuple[FitSummary, TuningSummary | None, str]:
         model = backend.create_model(tune_config, dataframe)
-        tune_result: TuningSummary = backend.tune(model, on_progress=cb)
+        tune_result: TuningSummary = backend.tune(
+            model,
+            on_progress=cb,
+            re_tune=re_tune,
+            checkpoint_dir=checkpoint_dir,
+        )
 
         # Capture tuning plot from the tune model before creating model2.
         # The exported model2 (fit with best params) loses tuning history.
@@ -471,3 +522,34 @@ def start_tune_async(
     with ws._lock:
         ws._job_thread = t
     return job.job_id
+
+
+# ---------------------------------------------------------------------------
+# Re-tune / Resume launcher (H-0062)
+# ---------------------------------------------------------------------------
+# Implementation moved to ``training_retune.py`` as part of the H-0062
+# cleanup file split. Re-exported here so existing
+# ``from lizystudio.services.training import start_retune_async, run_retune``
+# call sites continue to work without churn.
+
+from lizystudio.services.training_retune import (  # noqa: E402
+    _copy_checkpoint_to_child,
+    _mark_retune_child_failed,
+    _run_retune_subprocess,
+    run_retune,
+    start_retune_async,
+)
+
+__all__ = [  # noqa: F405 -- module re-exports
+    "CancelledError",
+    "PreviousJobStillRunningError",
+    "_copy_checkpoint_to_child",
+    "_mark_retune_child_failed",
+    "_run_retune_subprocess",
+    "run_fit",
+    "run_retune",
+    "run_tune",
+    "start_fit_async",
+    "start_retune_async",
+    "start_tune_async",
+]

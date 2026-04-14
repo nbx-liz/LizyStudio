@@ -16,12 +16,35 @@ import {
 } from "@/components/ui/table";
 import { formatNum } from "@/lib/utils";
 import { PlotlyChart } from "./PlotlyChart";
+import type { BoundaryReport, TuneRound } from "./retune";
+import { RetuneDashboard } from "./retune";
 
 interface TuneTrialsSectionProps {
   tuneResult: TuneResult;
   tuningPlot: PlotResponse | undefined;
   job: JobDetail;
   onApplyToFit?: (params: Record<string, unknown>) => void;
+}
+
+/** Build a fit-ready config snapshot by merging best_params into model.params
+ *  and stripping the tuning section (not needed for plain fit). */
+function buildFitConfig(
+  job: JobDetail,
+  bestParams: Record<string, unknown>,
+): Record<string, unknown> {
+  const { tuning: _stripped, ...baseWithoutTuning } =
+    (job.config as Record<string, unknown>) ?? {};
+  const baseModel = (baseWithoutTuning.model as Record<string, unknown>) ?? {};
+  return {
+    ...baseWithoutTuning,
+    model: {
+      ...baseModel,
+      params: {
+        ...((baseModel.params as Record<string, unknown>) ?? {}),
+        ...bestParams,
+      },
+    },
+  };
 }
 
 /** Renders optimization history plot, best params table, and Apply to Fit button. */
@@ -31,6 +54,20 @@ export function TuneTrialsSection({
   job,
   onApplyToFit,
 }: TuneTrialsSectionProps) {
+  // Retune data is optional in the OpenAPI-typed TuneResult. Cast to a local
+  // structural type to surface rounds/boundary_report without hand-editing
+  // the auto-generated API types module.
+  const raw = tuneResult as unknown as {
+    rounds?: TuneRound[] | null;
+    boundary_report?: BoundaryReport | null;
+  };
+  const retuneRounds = raw.rounds ?? null;
+  const retuneBoundaryReport = raw.boundary_report ?? null;
+
+  const handleApplyToFit = onApplyToFit
+    ? () => onApplyToFit(buildFitConfig(job, tuneResult.best_params))
+    : undefined;
+
   return (
     <>
       {/* Optimization History */}
@@ -62,35 +99,20 @@ export function TuneTrialsSection({
             ))}
           </TableBody>
         </Table>
-        {onApplyToFit && (
-          <Button
-            size="sm"
-            className="mt-3"
-            onClick={() => {
-              // Restore full config snapshot with best_params applied,
-              // stripping the tuning section (not needed for fit).
-              const { tuning: _stripped, ...baseWithoutTuning } =
-                (job.config as Record<string, unknown>) ?? {};
-              const baseModel =
-                (baseWithoutTuning.model as Record<string, unknown>) ?? {};
-              const fitConfig: Record<string, unknown> = {
-                ...baseWithoutTuning,
-                model: {
-                  ...baseModel,
-                  params: {
-                    ...((baseModel.params as Record<string, unknown>) ?? {}),
-                    ...tuneResult.best_params,
-                  },
-                },
-              };
-              onApplyToFit(fitConfig);
-            }}
-          >
+        {handleApplyToFit && (
+          <Button size="sm" className="mt-3" onClick={handleApplyToFit}>
             Apply to Fit
             <ArrowRight className="ml-1 h-3.5 w-3.5" />
           </Button>
         )}
       </section>
+
+      {/* Re-tune dashboard: convergence signal, round history, boundary report */}
+      <RetuneDashboard
+        rounds={retuneRounds}
+        boundaryReport={retuneBoundaryReport}
+        onApplyToFit={handleApplyToFit}
+      />
     </>
   );
 }
