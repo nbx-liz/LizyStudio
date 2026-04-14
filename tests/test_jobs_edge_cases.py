@@ -169,7 +169,7 @@ def test_plot_valid_metric_names_pass_validation(
 def test_delete_job_store_returns_false(
     client: TestClient, sample_data_ref: DataRef
 ) -> None:
-    """DELETE when job_store.delete() returns False → 404."""
+    """DELETE when job_store.delete() reports nothing removed → 404."""
     from unittest.mock import patch
 
     app = client.app  # type: ignore[union-attr]
@@ -183,8 +183,9 @@ def test_delete_job_store_returns_false(
     job.status = "completed"
     job_store.update(job)
 
-    # Simulate race: get() finds the job, but delete() fails
-    with patch.object(job_store, "delete", return_value=False):
+    # Simulate race: get() finds the job, but delete() reports an empty
+    # removal list (H-0062 lineage delete shape).
+    with patch.object(job_store, "delete", return_value=[]):
         res = client.delete(f"/api/jobs/{job.job_id}")
     assert res.status_code == 404
 

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import builtins
 import json
+import logging
 import shutil
 import threading
 from dataclasses import asdict, dataclass
@@ -16,6 +18,8 @@ from fastapi import Request
 from lizystudio.backends.base import BackendAdapter
 from lizystudio.backends.types import DataRef, FitSummary, TuningSummary
 from lizystudio.security import validate_path_within  # noqa: E402
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -34,6 +38,9 @@ class Job:
     tune_result: TuningSummary | None = None
     model_path: str | None = None
     error: str | None = None
+    # H-0062: job lineage for Re-tune / Resume child jobs. Optional so
+    # existing jobs on disk (written before Phase B) continue to load.
+    parent_job_id: str | None = None
 
 
 class JobStore:
@@ -54,6 +61,13 @@ class JobStore:
         self._cancel_lock = threading.Lock()
         self._active_job_id: str | None = None
         self._active_lock = threading.Lock()
+        # H-0062: per-parent exclusive lock for Re-tune / Resume children.
+        # Maps parent_job_id -> child_job_id currently holding the slot.
+        # In-memory only; cleared naturally on process restart because
+        # any child that was "running" when the old process died is
+        # already marked failed at restart time.
+        self._parent_locks: dict[str, str] = {}
+        self._parent_lock_mutex = threading.Lock()
 
     def _job_dir(self, job_id: str) -> Path:
         """Resolve job directory with traversal guard."""
@@ -70,8 +84,13 @@ class JobStore:
         config: dict[str, Any],
         data_ref: DataRef,
         job_type: Literal["fit", "tune"],
+        parent_job_id: str | None = None,
     ) -> Job:
-        """Create a new pending job and persist its metadata."""
+        """Create a new pending job and persist its metadata.
+
+        When *parent_job_id* is provided the new job is recorded as a
+        child in the lineage graph (H-0062).
+        """
         job_id = f"job_{uuid4().hex[:8]}"
         job = Job(
             job_id=job_id,
@@ -81,6 +100,7 @@ class JobStore:
             data_ref=data_ref,
             job_type=job_type,
             created_at=datetime.now(timezone.utc).isoformat(),
+            parent_job_id=parent_job_id,
         )
         self._save_meta(job)
         return job
@@ -133,13 +153,176 @@ class JobStore:
                 asdict(job.tune_result),
             )
 
-    def delete(self, job_id: str) -> bool:
-        """Delete a job directory. Returns True if it existed."""
-        job_dir = self._job_dir(job_id)
-        if job_dir.exists():
-            shutil.rmtree(job_dir)
-            return True
+    def delete(self, job_id: str, *, cascade: bool = False) -> builtins.list[str]:
+        """Delete a job directory. Returns the list of removed job IDs.
+
+        When *cascade* is True (H-0062), the entire descendant subtree is
+        removed recursively.  When False only the requested job is
+        removed (existing children become orphaned).  An empty list is
+        returned when the job does not exist.
+        """
+        if not self._job_dir(job_id).exists():
+            return []
+
+        removed: builtins.list[str] = []
+        if cascade:
+            # Iterative BFS to collect all descendants first so we never
+            # rmtree a directory while we still need to enumerate its
+            # siblings.
+            queue: builtins.list[str] = [job_id]
+            while queue:
+                current = queue.pop()
+                removed.append(current)
+                queue.extend(self.get_child_job_ids(current))
+        else:
+            removed.append(job_id)
+
+        for jid in removed:
+            target = self._job_dir(jid)
+            if target.exists():
+                shutil.rmtree(target)
+        return removed
+
+    # --- H-0062 lineage helpers ---
+
+    def get_child_job_ids(self, parent_job_id: str) -> builtins.list[str]:
+        """Return direct children of *parent_job_id* (H-0062)."""
+        children: builtins.list[str] = []
+        if not self.jobs_dir.exists():
+            return children
+        for d in self.jobs_dir.iterdir():
+            if not d.is_dir() or not (d / "meta.json").exists():
+                continue
+            try:
+                meta = self._read_json(d / "meta.json")
+            except (OSError, json.JSONDecodeError):
+                continue
+            if meta.get("parent_job_id") == parent_job_id:
+                children.append(d.name)
+        return children
+
+    def get_lineage_tree(self, root_job_id: str) -> dict[str, Any] | None:
+        """Return ``{job_id, status, children: [...]}`` rooted at *root_job_id*.
+
+        Returns ``None`` when the root does not exist.  Walks the tree
+        recursively with a depth guard (20) to avoid runaway lineages.
+        Nodes that hit the depth cap are returned with ``children: []``
+        AND ``truncated: True`` so the UI can surface the cut-off
+        explicitly instead of silently dropping descendants.
+        """
+        root = self.get(root_job_id)
+        if root is None:
+            return None
+        max_depth = 20
+
+        def _build(job: Job, depth: int) -> dict[str, Any]:
+            node: dict[str, Any] = {
+                "job_id": job.job_id,
+                "status": job.status,
+                "job_type": job.job_type,
+                "children": [],
+                "truncated": False,
+            }
+            if depth >= max_depth:
+                # Mark truncated only if the node actually has children
+                # we are about to drop; otherwise it is a real leaf.
+                if self.get_child_job_ids(job.job_id):
+                    node["truncated"] = True
+                return node
+            for cid in self.get_child_job_ids(job.job_id):
+                child = self.get(cid)
+                if child is None:
+                    # Meta.json missing / corrupt. Log rather than
+                    # silently dropping so a broken child is visible
+                    # in the server log instead of the UI claiming a
+                    # clean lineage.
+                    _logger.warning(
+                        "lineage: child %s listed under %s but cannot be loaded",
+                        cid,
+                        job.job_id,
+                    )
+                    continue
+                node["children"].append(_build(child, depth + 1))
+            return node
+
+        return _build(root, 0)
+
+    def has_active_children(self, parent_job_id: str) -> bool:
+        """Return True when any direct child is pending or running (H-0062).
+
+        Only walks direct children, not the whole descendant tree. This
+        matches the Phase B MVP invariant that nested Re-tune is
+        rejected server-side (``_require_tune_job_with_checkpoint``
+        blocks grandchild creation), so no grandchildren can exist and
+        a direct-child scan is complete. If the nested-retune
+        restriction is ever relaxed, this helper must be rewritten as a
+        full subtree walk, otherwise cascade-delete guards will miss
+        running grandchildren and silently destroy their work.
+        """
+        for cid in self.get_child_job_ids(parent_job_id):
+            child = self.get(cid)
+            if child is None:
+                continue
+            if child.status in ("pending", "running"):
+                return True
         return False
+
+    # --- H-0062 per-parent exclusive retune / resume lock ---
+
+    def acquire_parent_lock(self, parent_job_id: str, child_job_id: str) -> bool:
+        """Try to claim the retune slot for *parent_job_id*.
+
+        Returns ``True`` when the caller now holds the slot, ``False``
+        when another child already has it.  The lock is stored in
+        memory only; a process restart clears all locks (matching the
+        fact that any "running" child from the previous process is
+        already considered failed on the next boot).
+        """
+        with self._parent_lock_mutex:
+            if parent_job_id in self._parent_locks:
+                return False
+            self._parent_locks[parent_job_id] = child_job_id
+            return True
+
+    def release_parent_lock(self, parent_job_id: str) -> None:
+        """Release the retune slot for *parent_job_id* if held.
+
+        Unlocking an already-unlocked parent is a no-op; this lets
+        caller ``finally`` blocks call release unconditionally.
+        """
+        with self._parent_lock_mutex:
+            self._parent_locks.pop(parent_job_id, None)
+
+    def rebind_parent_lock(
+        self, parent_job_id: str, expected_holder: str, new_holder: str
+    ) -> bool:
+        """Atomically swap the lock holder from *expected_holder* to *new_holder*.
+
+        H-0062 Bugfix 2026-04-14 (4): the API layer acquires the parent
+        lock with a placeholder id first, then needs to swap that
+        placeholder for the real child job id after the child is
+        created. Doing it as ``release_parent_lock`` + ``acquire_parent_lock``
+        in two separate calls opens a race window where another
+        request can claim the slot between the two operations, and
+        the second ``acquire_parent_lock`` silently returns ``False``
+        without the caller noticing.
+
+        Returns ``True`` when the slot was successfully rebound.
+        Returns ``False`` when the slot is empty or held by a different
+        holder — in which case the caller must treat their lock grant
+        as lost and abort the retune attempt.
+        """
+        with self._parent_lock_mutex:
+            current = self._parent_locks.get(parent_job_id)
+            if current != expected_holder:
+                return False
+            self._parent_locks[parent_job_id] = new_holder
+            return True
+
+    def get_locked_child(self, parent_job_id: str) -> str | None:
+        """Return the child job currently holding *parent_job_id*'s lock."""
+        with self._parent_lock_mutex:
+            return self._parent_locks.get(parent_job_id)
 
     def request_cancel(self, job_id: str) -> None:
         """Mark a job for cancellation (H-0011)."""
@@ -206,6 +389,7 @@ class JobStore:
             "completed_at": job.completed_at,
             "model_path": job.model_path,
             "error": job.error,
+            "parent_job_id": job.parent_job_id,
         }
         self._write_json(job_dir / "meta.json", meta)
 
@@ -240,6 +424,7 @@ class JobStore:
             tune_result=tune_result,
             model_path=meta.get("model_path"),
             error=meta.get("error"),
+            parent_job_id=meta.get("parent_job_id"),
         )
 
     @staticmethod

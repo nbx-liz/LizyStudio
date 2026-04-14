@@ -31,6 +31,9 @@ dependencies = [
     "uvicorn[standard]>=0.34",
     "python-multipart>=0.0.18",
     "websockets>=14.0",
+    # H-0062: explicit pin so pickle usage survives a future lizyml
+    # dependency refactor. Already in the tree via lizyml.
+    "cloudpickle>=3.0",
 ]
 
 [project.scripts]
@@ -91,9 +94,14 @@ ignore_missing_imports = true
 module = "plotly.*"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = "cloudpickle"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
     "unit: Unit tests (fast, no external dependencies)",
     "integration: Integration tests (require TestClient/server)",
+    "slow: Slow tests that actually train a real model (deselect with -m 'not slow')",
 ]

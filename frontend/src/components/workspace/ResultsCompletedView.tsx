@@ -5,9 +5,11 @@ import {
   fetchJobImportance,
   fetchJobImportanceKinds,
   fetchJobLearningCurveMetrics,
+  fetchJobLineage,
   fetchJobPlot,
   fetchJobPlots,
   fetchJobSplitSummary,
+  type LineageNode,
 } from "@/api/jobs";
 import type { JobDetail, MetricEntry } from "@/api/types";
 import { MetricCards } from "@/components/shared/MetricCards";
@@ -17,6 +19,8 @@ import { Button } from "@/components/ui/button";
 import { pivotMetrics } from "@/lib/metrics";
 import { FoldDetailsSection } from "./FoldDetailsSection";
 import { PlotSection } from "./PlotSection";
+import { JobLineageTree } from "./retune/JobLineageTree";
+import { RetuneActionButton } from "./retune/RetuneActionButton";
 import {
   TrialResultsAccordionItem,
   TuneTrialsSection,
@@ -29,6 +33,8 @@ interface ResultsCompletedViewProps {
   selectedPlot: string;
   onSelectPlot: (p: string) => void;
   onApplyToFit?: (params: Record<string, unknown>) => void;
+  /** Called when a Re-tune child job is successfully started (H-0062). */
+  onJobStarted?: (childJobId: string) => void;
 }
 
 export function ResultsCompletedView({
@@ -37,6 +43,7 @@ export function ResultsCompletedView({
   modelName,
   selectedPlot,
   onSelectPlot,
+  onJobStarted,
   onApplyToFit,
 }: ResultsCompletedViewProps) {
   const { data: plots } = useQuery({
@@ -157,6 +164,19 @@ export function ResultsCompletedView({
     enabled: job.job_type === "tune",
   });
 
+  // H-0062 acceptance #13: lineage tree wire-in. Only fetch for tune jobs;
+  // silently swallow errors because lineage is auxiliary information.
+  const { data: lineageData } = useQuery({
+    queryKey: ["job-lineage", job.job_id],
+    queryFn: () => fetchJobLineage(job.job_id),
+    enabled: job.job_type === "tune",
+    retry: false,
+  });
+  const lineageRoot: LineageNode | null = lineageData?.tree ?? null;
+  const showLineage =
+    lineageRoot != null &&
+    (lineageRoot.children.length > 0 || job.parent_job_id != null);
+
   useEffect(() => {
     if (plots && plots.length > 0 && !selectedPlot) {
       const first = plots.find((p) => p !== "tuning");
@@ -232,7 +252,14 @@ export function ResultsCompletedView({
           Completed
         </Badge>
         {primaryMetric && <Badge variant="secondary">{primaryMetric}</Badge>}
-        <div className="ml-auto">
+        <div className="ml-auto flex gap-2">
+          {job.job_type === "tune" && tuneResult && (
+            <RetuneActionButton
+              jobId={job.job_id}
+              defaultNTrials={_defaultRetuneTrials(job)}
+              onStarted={onJobStarted}
+            />
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -245,6 +272,16 @@ export function ResultsCompletedView({
           </Button>
         </div>
       </div>
+
+      {/* H-0062 #13: Job lineage tree (only when relations exist).
+          onJobStarted is reused as the node-select handler — the parent
+          WorkspacePage treats it as "switch workspace selection to job_id",
+          which is exactly the behavior we want when clicking a tree node. */}
+      {showLineage && lineageRoot && (
+        <div className="mb-3">
+          <JobLineageTree root={lineageRoot} onSelect={onJobStarted} />
+        </div>
+      )}
 
       {/* Tune results first: Optimization History -> Best Params -> Apply to Fit */}
       {tuneResult && (
@@ -304,4 +341,17 @@ export function ResultsCompletedView({
       </Accordion>
     </div>
   );
+}
+
+/** H-0062: pick a sensible default n_trials for the Re-tune dialog. */
+function _defaultRetuneTrials(job: JobDetail): number {
+  const config = job.config as Record<string, unknown> | undefined;
+  const tuning = config?.tuning as Record<string, unknown> | undefined;
+  const optuna = tuning?.optuna as Record<string, unknown> | undefined;
+  const params = optuna?.params as Record<string, unknown> | undefined;
+  const raw = params?.n_trials;
+  if (typeof raw === "number" && raw > 0) {
+    return raw;
+  }
+  return 50;
 }

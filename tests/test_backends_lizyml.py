@@ -44,6 +44,160 @@ def test_adapter_validate_config_empty() -> None:
     assert len(errors) > 0
 
 
+# H-0062 Bugfix 2026-04-14 (3): backend-side guard against the class of
+# inconsistent configs that surfaced when a user briefly selected a
+# different task and the frontend did not reset model.params.objective /
+# metric when switching back. A Tune job with task=binary and
+# objective=multiclass made LGBM fail every trial with
+# "All tuning trials failed. Check parameter ranges." — the error was
+# correct in substance but pointed at parameter ranges instead of the
+# real culprit. The validator now rejects the mismatch up-front.
+
+
+def _valid_binary_config(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "config_version": 1,
+        "task": "binary",
+        "data": {"target": "y"},
+        "model": {"name": "lgbm", "params": {}},
+        "split": {"method": "stratified_kfold"},
+    }
+    for key, value in overrides.items():
+        base[key] = value
+    return base
+
+
+def test_adapter_validate_config_rejects_binary_with_multiclass_objective() -> None:
+    adapter = LizyMLAdapter()
+    cfg = _valid_binary_config()
+    cfg["model"]["params"] = {"objective": "multiclass"}
+    errors = adapter.validate_config(cfg)
+    assert any(
+        "objective" in str(e.get("loc", ())) or "objective" in str(e.get("msg", ""))
+        for e in errors
+    ), errors
+
+
+def test_adapter_validate_config_rejects_binary_with_multiclass_metric() -> None:
+    adapter = LizyMLAdapter()
+    cfg = _valid_binary_config()
+    cfg["model"]["params"] = {"metric": ["auc_mu", "multi_logloss"]}
+    errors = adapter.validate_config(cfg)
+    assert any(
+        "metric" in str(e.get("loc", ())) or "metric" in str(e.get("msg", ""))
+        for e in errors
+    ), errors
+
+
+def test_adapter_validate_config_accepts_binary_with_binary_params() -> None:
+    adapter = LizyMLAdapter()
+    cfg = _valid_binary_config()
+    cfg["model"]["params"] = {
+        "objective": "binary",
+        "metric": ["auc", "binary_logloss"],
+    }
+    errors = adapter.validate_config(cfg)
+    # No task/objective compat error (there may still be unrelated schema
+    # errors depending on lizyml's Pydantic schema — just ensure our
+    # specific checks do not flag this valid config).
+    compat_errors = [
+        e
+        for e in errors
+        if (
+            "task_objective_mismatch" in str(e.get("type", ""))
+            or "task_metric_mismatch" in str(e.get("type", ""))
+        )
+    ]
+    assert compat_errors == []
+
+
+def test_adapter_validate_config_rejects_regression_with_binary_objective() -> None:
+    adapter = LizyMLAdapter()
+    cfg: dict[str, Any] = {
+        "config_version": 1,
+        "task": "regression",
+        "data": {"target": "y"},
+        "model": {"name": "lgbm", "params": {"objective": "binary"}},
+        "split": {"method": "kfold"},
+    }
+    errors = adapter.validate_config(cfg)
+    assert any(
+        "objective" in str(e.get("loc", ())) or "objective" in str(e.get("msg", ""))
+        for e in errors
+    ), errors
+
+
+def test_adapter_validate_config_rejects_partial_metric_mismatch() -> None:
+    """H-0062 Bugfix 2026-04-14 (7): flag any invalid metric, not just
+    the all-invalid case. LightGBM rejects ``metric=["auc","multi_logloss"]``
+    because multi_logloss is incompatible with task=binary, and the old
+    "only flag when every metric is invalid" policy let it through."""
+    adapter = LizyMLAdapter()
+    cfg = _valid_binary_config()
+    cfg["model"]["params"] = {"metric": ["auc", "multi_logloss"]}
+    errors = adapter.validate_config(cfg)
+    assert any(
+        "metric" in str(e.get("loc", ())) or "metric" in str(e.get("msg", ""))
+        for e in errors
+    ), errors
+
+
+def test_adapter_validate_config_accepts_empty_metric_list() -> None:
+    """An empty metric list must NOT be flagged — the adapter already
+    supplies defaults downstream. Flagging an empty list would break
+    the common case of 'leave the field unset and let the backend
+    decide'."""
+    adapter = LizyMLAdapter()
+    cfg = _valid_binary_config()
+    cfg["model"]["params"] = {"metric": []}
+    errors = adapter.validate_config(cfg)
+    compat = [
+        e
+        for e in errors
+        if str(e.get("type", "")).startswith(
+            ("task_objective_mismatch", "task_metric_mismatch")
+        )
+    ]
+    assert compat == []
+
+
+def test_adapter_validate_config_does_not_crash_on_non_dict_model() -> None:
+    """H-0062 Bugfix 2026-04-14 (7): pydantic may reject a non-dict
+    ``model`` field with its own error, but the compat helper used to
+    blindly call ``.get("params")`` on whatever was there. If pydantic
+    had already captured the type error and the helper ran next on a
+    list / string, it crashed with AttributeError and the caller saw a
+    500 instead of a structured error list. The helper must short
+    circuit when ``model`` is not a dict."""
+    adapter = LizyMLAdapter()
+    cfg: dict[str, Any] = {
+        "config_version": 1,
+        "task": "binary",
+        "data": {"target": "y"},
+        # model is a list instead of a dict — pydantic will reject it.
+        "model": ["invalid"],
+        "split": {"method": "stratified_kfold"},
+    }
+    # Must not raise.
+    errors = adapter.validate_config(cfg)
+    assert isinstance(errors, list)
+
+
+def test_adapter_validate_config_does_not_crash_on_non_dict_params() -> None:
+    """Defensive: params field is a list (malformed) — helper must not
+    crash."""
+    adapter = LizyMLAdapter()
+    cfg: dict[str, Any] = {
+        "config_version": 1,
+        "task": "binary",
+        "data": {"target": "y"},
+        "model": {"name": "lgbm", "params": ["invalid"]},
+        "split": {"method": "stratified_kfold"},
+    }
+    errors = adapter.validate_config(cfg)
+    assert isinstance(errors, list)
+
+
 def test_adapter_load_config_yaml() -> None:
     adapter = LizyMLAdapter()
     content = b"task: binary\nmodel:\n  name: lightgbm"

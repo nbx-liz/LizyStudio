@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import os
+from datetime import datetime, timezone
 from pathlib import Path
+from pickle import PicklingError
 from typing import Any
 
+import cloudpickle
 import pandas as pd
 import yaml
 
@@ -21,6 +26,144 @@ from lizystudio.backends.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# --- H-0062: Phase B checkpoint persistence -------------------------------
+
+
+class PicklePreflightError(RuntimeError):
+    """Raised before tune starts when the job dir is not usable for
+    pickle persistence (no write perms, SELinux denial, or unpicklable
+    skeleton)."""
+
+
+class PickleIncompatibleError(RuntimeError):
+    """Raised by ``load_checkpoint`` / ``verify_pickle_compatibility`` when
+    the on-disk ``model_meta.json`` points at a schema or major backend
+    version the current Studio cannot safely deserialize."""
+
+
+_PICKLE_SCHEMA_VERSION = 1
+_MODEL_PKL = "model.pkl"
+_MODEL_PKL_TMP = "model.pkl.tmp"
+_MODEL_META = "model_meta.json"
+_MODEL_META_TMP = "model_meta.json.tmp"
+
+
+def _collect_pickle_versions() -> dict[str, str]:
+    """Snapshot the lizyml / lightgbm / optuna versions for the sidecar."""
+    import lizyml
+
+    versions: dict[str, str] = {
+        "lizyml_version": getattr(lizyml, "__version__", "unknown"),
+    }
+    try:
+        import lightgbm
+
+        versions["lightgbm_version"] = getattr(lightgbm, "__version__", "unknown")
+    except ImportError:  # pragma: no cover - lightgbm is a hard dep
+        versions["lightgbm_version"] = "unknown"
+    try:
+        import optuna
+
+        versions["optuna_version"] = getattr(optuna, "__version__", "unknown")
+    except ImportError:  # pragma: no cover - optuna is a hard dep
+        versions["optuna_version"] = "unknown"
+    return versions
+
+
+def _major_minor(version: str) -> tuple[int, int] | None:
+    """Parse ``'0.9.1'`` into ``(0, 9)`` for version-compat comparison.
+
+    Strips PEP 440 local / dev / pre-release suffixes so that the
+    base ``major.minor`` is compared even for builds like
+    ``'0.9.1.dev3+local'`` or ``'0.9.0a1'``. The strictness comes from
+    the major/minor equality check in ``verify_pickle_compatibility``;
+    if a dev build's pickle format diverges from the matching stable
+    release, the fix is to bump ``_PICKLE_SCHEMA_VERSION``.
+    """
+    # Drop everything after the first non-numeric character in any
+    # component (handles 0.9.0a1 / 0.9.0rc1 / 0.9.0.dev3 / 0.9.0+local).
+    cleaned = version.split("+", 1)[0]
+    parts = cleaned.split(".")
+    if len(parts) < 2:
+        return None
+    numeric_parts: list[str] = []
+    for raw in parts[:2]:
+        digits = ""
+        for ch in raw:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        numeric_parts.append(digits)
+    if not numeric_parts[0] or not numeric_parts[1]:
+        return None
+    try:
+        return int(numeric_parts[0]), int(numeric_parts[1])
+    except ValueError:
+        return None
+
+
+def verify_pickle_compatibility(meta: dict[str, Any]) -> None:
+    """Reject a checkpoint whose sidecar points at an incompatible runtime.
+
+    The check is intentionally strict: we only accept the exact pickle
+    schema version and an exact lizyml major.minor match.  Anything else
+    raises so the caller can show a clear error to the user rather than
+    silently loading a bad model state.
+    """
+    schema = meta.get("pickle_schema")
+    if schema != _PICKLE_SCHEMA_VERSION:
+        raise PickleIncompatibleError(
+            f"Unsupported pickle_schema: expected {_PICKLE_SCHEMA_VERSION}, "
+            f"got {schema!r}"
+        )
+
+    current = _collect_pickle_versions()
+    saved_lizyml = str(meta.get("lizyml_version", ""))
+    current_mm = _major_minor(current["lizyml_version"])
+    saved_mm = _major_minor(saved_lizyml)
+    if current_mm is None or saved_mm is None or current_mm != saved_mm:
+        raise PickleIncompatibleError(
+            "Incompatible lizyml version: checkpoint was saved with "
+            f"{saved_lizyml!r}, current runtime is "
+            f"{current['lizyml_version']!r}"
+        )
+
+
+def preflight_pickle_check(job_dir: Path) -> None:
+    """Fail fast before tune if ``job_dir`` cannot host a pickle file.
+
+    Catches the common 'tune ran for an hour and then pickle save
+    failed' class of bugs by verifying:
+
+    1. The job dir is writable (creates and removes ``.write_test``)
+    2. cloudpickle can round-trip a minimal sentinel object
+
+    Real Model-specific picklability cannot be tested here because it
+    requires the fitted instance, which is exactly what we are trying
+    to produce.  The first real save attempt will surface any remaining
+    pickling issue (logged as WARNING, tune continues).
+    """
+    job_dir.mkdir(parents=True, exist_ok=True)
+    probe = job_dir / ".write_test"
+    try:
+        probe.write_bytes(b"ok")
+    except OSError as exc:
+        raise PicklePreflightError(
+            f"Job directory {job_dir} is not writable: {exc}"
+        ) from exc
+    finally:
+        if probe.exists():
+            with contextlib.suppress(OSError):
+                probe.unlink()
+
+    sentinel: dict[str, Any] = {"_pickle_schema": _PICKLE_SCHEMA_VERSION}
+    try:
+        cloudpickle.loads(cloudpickle.dumps(sentinel))
+    except Exception as exc:  # noqa: BLE001 — cloudpickle can raise many
+        raise PicklePreflightError(f"cloudpickle round-trip failed: {exc}") from exc
 
 
 class LizyMLAdapter:
@@ -69,25 +212,45 @@ class LizyMLAdapter:
         from pydantic import ValidationError
 
         clean = self._strip_internal_keys(config)
+        errors: list[dict[str, Any]] = []
         try:
             LizyMLConfig.model_validate(clean)
-            return []
         except ValidationError as exc:
-            return exc.errors()  # type: ignore[return-value]
+            errors.extend(exc.errors())  # type: ignore[arg-type]
+
+        # H-0062 Bugfix 2026-04-14 (3): catch task <-> model.params
+        # inconsistency up-front. The original user-facing symptom was
+        # "LizyMLError: [TUNING_FAILED] All tuning trials failed. Check
+        # parameter ranges." — technically correct but misleading when
+        # the real cause was an obsolete `objective=multiclass` left on
+        # a `task=binary` config after the user briefly switched tasks.
+        errors.extend(_task_params_compat_errors(clean))
+        return errors
 
     @staticmethod
     def _strip_internal_keys(config: dict[str, Any]) -> dict[str, Any]:
         """Remove UI-internal keys (prefixed with _) and tune-only sections
-        that LizyML's Pydantic schema doesn't accept."""
+        that LizyML's Pydantic schema doesn't accept.
+
+        Defensive against malformed inputs: if ``config`` is not a dict
+        (or ``model`` / ``params`` / ``tuning`` are not dicts), the
+        helper returns a best-effort copy unchanged rather than
+        crashing. The real type errors surface via pydantic validation
+        downstream.
+        """
         import copy
 
+        if not isinstance(config, dict):
+            return config  # pydantic will reject the type at validate time
         result = copy.deepcopy(config)
-        # Strip _ keys from model.params
-        model_params = (result.get("model") or {}).get("params")
-        if isinstance(model_params, dict):
-            result["model"]["params"] = {
-                k: v for k, v in model_params.items() if not k.startswith("_")
-            }
+        # Strip _ keys from model.params (only when model AND params are dicts)
+        model = result.get("model")
+        if isinstance(model, dict):
+            model_params = model.get("params")
+            if isinstance(model_params, dict):
+                model["params"] = {
+                    k: v for k, v in model_params.items() if not k.startswith("_")
+                }
         # Strip tune-only keys from tuning (evaluation, model_params, training)
         tuning = result.get("tuning")
         if isinstance(tuning, dict):
@@ -141,17 +304,80 @@ class LizyMLAdapter:
         *,
         on_progress: ProgressCallback | None = None,
         re_tune: dict[str, Any] | None = None,
+        checkpoint_dir: Path | None = None,
+        resume: bool = False,
     ) -> TuningSummary:
+        """Run hyperparameter tuning via lizyml's Model.tune().
+
+        When *resume* is True (H-0062 Phase B), the first round is
+        started with ``resume=True`` so the provided *model* continues
+        its existing Optuna study instead of throwing it away. The
+        ``re_tune`` kwargs (n_trials, expand_boundary, boundary_threshold)
+        are applied to the first round as well in that case.
+        """
         n_rounds, extra_kwargs = _parse_re_tune(re_tune)
 
         lizyml_callback: Any = None
         accumulated_trials: list[dict[str, Any]] = []
         current_round = 1
 
-        if on_progress is not None:
+        # H-0062 Bugfix 2026-04-14: when resume=True and the loaded Model
+        # already carries a prior ``_tuning_result``, seed the bridge's
+        # accumulated_trials with the parent's trial history. Without
+        # this, the Running view table and LiveTrialChart start empty on
+        # every Re-tune so the user sees only the *new* trials and the
+        # Best column begins from the first new trial — giving the
+        # false impression that the parent results were thrown away.
+        # The seeded entries carry the parent's best_score as the
+        # per-row best so the chart's "Best" trace is flat across the
+        # parent portion until a new trial beats it.
+        if resume:
+            prior_result = getattr(model, "_tuning_result", None)
+            if prior_result is not None and getattr(prior_result, "trials", None):
+                prior_best = (
+                    float(prior_result.best_score)
+                    if getattr(prior_result, "best_score", None) is not None
+                    else None
+                )
+                for t in prior_result.trials:
+                    accumulated_trials.append(
+                        {
+                            "number": getattr(t, "number", len(accumulated_trials)),
+                            "round": getattr(t, "round", 1),
+                            "score": (
+                                float(t.score)
+                                if getattr(t, "score", None) is not None
+                                else None
+                            ),
+                            "state": str(getattr(t, "state", "complete")),
+                            "best_score": prior_best,
+                        }
+                    )
+
+        need_bridge = on_progress is not None or checkpoint_dir is not None
+
+        if need_bridge:
             from lizyml import TuneProgressInfo
 
             def _bridge(info: TuneProgressInfo) -> None:
+                # H-0062: persist an incremental checkpoint BEFORE calling
+                # the user-supplied progress callback so a crash during
+                # the UI push still leaves the trial we just finished on
+                # disk.  save_checkpoint is resilient on its own; we wrap
+                # in try/except anyway so that any latent bug in the
+                # persistence layer cannot abort the in-flight tune.
+                if checkpoint_dir is not None:
+                    try:
+                        self.save_checkpoint(model, checkpoint_dir)
+                    except Exception:  # noqa: BLE001 - intentionally broad
+                        logger.warning(
+                            "checkpoint save raised unexpectedly; tune continues",
+                            exc_info=True,
+                        )
+
+                if on_progress is None:
+                    return
+
                 msg = f"Round {current_round}/{n_rounds} · "
                 msg += f"Trial {info.current_trial}/{info.total_trials}"
                 if info.best_score is not None:
@@ -187,11 +413,24 @@ class LizyMLAdapter:
                     raise KeyboardInterrupt from None
 
             lizyml_callback = _bridge
+
+        if on_progress is not None:
             # total=0 signals indeterminate until first trial callback
             # provides the real total.
             on_progress(current=0, total=0, message="Starting tuning...")
 
-        tune_result = model.tune(progress_callback=lizyml_callback)
+        # First round. When resume=True we continue the existing Optuna
+        # study from the checkpoint (H-0062) and pass the re_tune kwargs
+        # (n_trials / expand_boundary / boundary_threshold) that would
+        # otherwise only apply from round 2 onwards.
+        first_round_kwargs: dict[str, Any] = {}
+        if resume:
+            first_round_kwargs["resume"] = True
+            first_round_kwargs.update(extra_kwargs)
+        tune_result = model.tune(
+            progress_callback=lizyml_callback,
+            **first_round_kwargs,
+        )
         for round_idx in range(2, n_rounds + 1):
             current_round = round_idx
             if on_progress is not None:
@@ -208,10 +447,133 @@ class LizyMLAdapter:
                 **extra_kwargs,
             )
 
+        # H-0062 final save: lizyml's Model.tune() assigns ``self._study``
+        # only at the very end of its body, so every bridge-callback save
+        # above pickled a model whose ``_study`` was still the pre-tune
+        # value (typically None for a fresh tune). Without this explicit
+        # post-tune save, load_checkpoint(...)._study is None and the
+        # Re-tune / Resume launcher hits lizyml's
+        # "Cannot resume tuning: no previous tune() call" guard.
+        # This is the source of truth for the on-disk checkpoint; the
+        # per-trial saves above remain a crash-insurance best-effort.
+        #
+        # IMPORTANT: do NOT remove the per-trial bridge save even though
+        # this final save is present. They serve different failure modes:
+        # - final save covers the "successful tune then Re-tune later" path
+        # - per-trial save covers "tune crashed mid-way" (power loss,
+        #   OOM kill, cancellation) so the Results Panel can still show
+        #   the last completed trial's score history. Note that a
+        #   mid-round crash leaves ``_study`` unset on the pickled model,
+        #   so Re-tune / Resume on such a crash is still best-effort.
+        #
+        # save_checkpoint itself swallows OSError/PicklingError internally
+        # as WARNING logs; the explicit INFO here distinguishes "final
+        # save ran" from "WARNING was logged" when triaging a Re-tune
+        # failure from logs alone. The outer except is intentionally
+        # narrowed (H-0062 Bugfix 2026-04-14 (8)) to filesystem / pickle
+        # / type errors so genuine programming bugs in the caller path
+        # (e.g. AttributeError on an unexpected model shape) still
+        # propagate and are not silently swallowed.
+        if checkpoint_dir is not None:
+            try:
+                self.save_checkpoint(model, checkpoint_dir)
+                logger.info(
+                    "H-0062: final post-tune checkpoint save attempted at %s",
+                    checkpoint_dir,
+                )
+            except (OSError, PicklingError, RecursionError):
+                logger.warning(
+                    "final checkpoint save after tune raised unexpectedly",
+                    exc_info=True,
+                )
+
         if on_progress is not None:
             total = len(tune_result.trials) or 1
             on_progress(current=total, total=total, message="Tuning complete.")
         return _serialize_tuning_result(tune_result)
+
+    # -- Checkpoint persistence (H-0062) --
+
+    def save_checkpoint(self, model: Any, path: Path) -> None:
+        """Atomically persist *model* as ``path/model.pkl`` via temp+rename.
+
+        Writes a ``model_meta.json`` sidecar capturing lizyml / lightgbm /
+        optuna versions so later loads can reject incompatible runtimes.
+        All failures (filesystem, pickling) are swallowed with a WARNING
+        log so that a flaky checkpoint cannot crash an in-flight tune.
+
+        Atomicity note: ``model.pkl`` and ``model_meta.json`` are
+        rewritten as two separate atomic renames, not a combined
+        transaction. A reader interleaving between the two replaces
+        would briefly see a fresh ``model.pkl`` paired with a stale
+        ``model_meta.json``. Inside a single Studio process this cannot
+        cause a real problem because the only consumer (``load_checkpoint``
+        from the Re-tune / Resume launcher) runs in the same interpreter
+        as the writer and shares the same lizyml / lightgbm / optuna
+        versions, so the sidecar comparison is trivially compatible.
+        """
+        target_dir = Path(path)
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logger.warning("checkpoint: cannot create %s: %s", target_dir, exc)
+            return
+
+        tmp_path = target_dir / _MODEL_PKL_TMP
+        final_path = target_dir / _MODEL_PKL
+        try:
+            with tmp_path.open("wb") as fh:
+                cloudpickle.dump(model, fh)
+            os.replace(tmp_path, final_path)
+        except (OSError, PicklingError, RecursionError) as exc:
+            logger.warning(
+                "checkpoint save failed at %s: %s",
+                final_path,
+                exc,
+            )
+            # Best-effort cleanup of the partial temp file
+            with contextlib.suppress(OSError):
+                tmp_path.unlink(missing_ok=True)
+            return
+
+        # Meta sidecar — if this fails we still keep the pickle, but log.
+        meta_tmp = target_dir / _MODEL_META_TMP
+        meta_final = target_dir / _MODEL_META
+        try:
+            meta_payload: dict[str, Any] = {
+                "pickle_schema": _PICKLE_SCHEMA_VERSION,
+                "saved_at": datetime.now(timezone.utc).isoformat(),
+                **_collect_pickle_versions(),
+            }
+            meta_tmp.write_text(
+                json.dumps(meta_payload, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            os.replace(meta_tmp, meta_final)
+        except OSError as exc:
+            logger.warning("checkpoint meta write failed at %s: %s", meta_final, exc)
+            with contextlib.suppress(OSError):
+                meta_tmp.unlink(missing_ok=True)
+
+    def load_checkpoint(self, path: Path) -> Any:
+        """Load ``path/model.pkl`` after verifying ``model_meta.json``.
+
+        Raises :class:`FileNotFoundError` when no pickle exists, and
+        :class:`PickleIncompatibleError` when the sidecar reports a
+        schema or lizyml-major mismatch.
+        """
+        target_dir = Path(path)
+        pkl_path = target_dir / _MODEL_PKL
+        if not pkl_path.exists():
+            raise FileNotFoundError(f"No checkpoint at {pkl_path}")
+
+        meta_path = target_dir / _MODEL_META
+        if meta_path.exists():
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            verify_pickle_compatibility(meta)
+
+        with pkl_path.open("rb") as fh:
+            return cloudpickle.load(fh)
 
     def predict(
         self,
@@ -582,3 +944,90 @@ def _serialize_search_dim(dim: Any) -> dict[str, Any]:
         choices = dim.choices
         result["choices"] = list(choices) if choices is not None else None
     return result
+
+
+# ---------------------------------------------------------------------------
+# H-0062 Bugfix 2026-04-14 (3): task <-> model.params compat checker
+# ---------------------------------------------------------------------------
+
+
+def _task_params_compat_errors(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return pydantic-style validation errors for task / objective /
+    metric mismatches.
+
+    Single source of truth for valid objective/metric names per task is
+    the lizyml UI schema ``option_sets``. The lists here are kept in
+    sync by ``tests/test_backends_lizyml.py``. Task is considered
+    unknown (no error) when it is missing or not one of the three
+    recognised values — that case is already covered by the normal
+    pydantic LizyMLConfig validation.
+
+    Defensive against malformed inputs: short-circuit when ``config``,
+    ``model``, or ``params`` are not dicts (H-0062 Bugfix 2026-04-14 (7)).
+    ``validate_config`` runs this helper after pydantic validation, so
+    a caller that passes a malformed config would otherwise see the
+    pydantic errors *plus* an AttributeError crashing the helper.
+    """
+    if not isinstance(config, dict):
+        return []
+    task = config.get("task")
+    if task not in ("binary", "multiclass", "regression"):
+        return []
+    model = config.get("model")
+    if not isinstance(model, dict):
+        return []
+    params = model.get("params")
+    if not isinstance(params, dict):
+        return []
+
+    from lizystudio.backends.lizyml_metrics import get_eval_metrics_by_task
+    from lizystudio.backends.lizyml_ui_schema import build_ui_schema
+
+    option_sets = build_ui_schema(get_eval_metrics_by_task()).get("option_sets", {})
+    allowed_objective = set(option_sets.get("objective", {}).get(task, []))
+    allowed_metric = set(option_sets.get("model_metric", {}).get(task, []))
+
+    errors: list[dict[str, Any]] = []
+
+    objective = params.get("objective")
+    if (
+        isinstance(objective, str)
+        and allowed_objective
+        and objective not in allowed_objective
+    ):
+        errors.append(
+            {
+                "type": "task_objective_mismatch",
+                "loc": ("model", "params", "objective"),
+                "msg": (
+                    f"objective={objective!r} is not valid for task={task!r}; "
+                    f"allowed: {sorted(allowed_objective)}"
+                ),
+                "input": objective,
+            }
+        )
+
+    metric = params.get("metric")
+    # Empty list is OK (backend supplies defaults downstream).
+    if isinstance(metric, list) and metric and allowed_metric:
+        # H-0062 Bugfix 2026-04-14 (7): flag when ANY metric is invalid
+        # for the current task. LightGBM rejects the whole list if any
+        # entry is incompatible (e.g. task=binary + metric=["auc",
+        # "multi_logloss"] → the old "all-invalid only" policy let
+        # this slip through and the user saw "All tuning trials failed"
+        # at run time with no hint at the real cause.
+        bad = [m for m in metric if isinstance(m, str) and m not in allowed_metric]
+        if bad:
+            errors.append(
+                {
+                    "type": "task_metric_mismatch",
+                    "loc": ("model", "params", "metric"),
+                    "msg": (
+                        f"metric={bad!r} is not valid for task={task!r}; "
+                        f"allowed: {sorted(allowed_metric)}"
+                    ),
+                    "input": metric,
+                }
+            )
+
+    return errors

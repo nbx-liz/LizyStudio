@@ -21,8 +21,9 @@ export function RetuneDashboard({
   // showEvolution implies showHistory (a non-empty space_snapshot requires
   // at least one round), so it does not need its own early-return clause.
   const showEvolution =
-    rounds != null &&
-    rounds.some((r) => r.space_snapshot != null && r.space_snapshot.length > 0);
+    rounds?.some(
+      (r) => r.space_snapshot != null && r.space_snapshot.length > 0,
+    ) ?? false;
 
   if (!showConvergence && !showHistory && !showBoundary) {
     return null;

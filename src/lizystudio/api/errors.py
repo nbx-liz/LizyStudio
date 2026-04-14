@@ -133,6 +133,59 @@ class InvalidPatchError(StudioError):
         super().__init__("INVALID_PATCH", f"Invalid patch: {reason}", 422)
 
 
+# --- H-0062 Phase B (Re-tune / Resume) ------------------------------------
+
+
+class PicklePreflightFailedError(StudioError):
+    """Pre-flight pickle check failed before tune could start (H-0062)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(
+            "PICKLE_PREFLIGHT_FAILED",
+            f"Pickle preflight failed: {reason}",
+            400,
+        )
+
+
+class PickleIncompatibleError(StudioError):
+    """Stored checkpoint cannot be deserialized by the current runtime (H-0062)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(
+            "PICKLE_INCOMPATIBLE",
+            f"Checkpoint incompatible: {reason}",
+            400,
+        )
+
+
+class ParentLockedError(StudioError):
+    """Another Re-tune / Resume is already attached to this parent (H-0062)."""
+
+    def __init__(self, parent_job_id: str, holder_child_id: str | None) -> None:
+        detail = f" (held by {holder_child_id})" if holder_child_id else ""
+        super().__init__(
+            "PARENT_LOCKED",
+            f"Parent job {parent_job_id} already has an active retune/resume{detail}",
+            409,
+            details={"parent_job_id": parent_job_id, "holder": holder_child_id},
+        )
+
+
+class ParentHasActiveChildrenError(StudioError):
+    """DELETE on a parent with active children without ?cascade=true (H-0062)."""
+
+    def __init__(self, parent_job_id: str, active: list[str]) -> None:
+        super().__init__(
+            "PARENT_HAS_ACTIVE_CHILDREN",
+            (
+                f"Parent job {parent_job_id} has {len(active)} active child job(s). "
+                "Retry with ?cascade=true to cancel and delete them together."
+            ),
+            409,
+            details={"parent_job_id": parent_job_id, "active_children": active},
+        )
+
+
 # --- FastAPI exception handlers ---
 
 
