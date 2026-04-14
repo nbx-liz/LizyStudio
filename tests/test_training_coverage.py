@@ -1633,7 +1633,7 @@ def test_start_retune_async_subprocess_path_when_openmp_present(
     must invoke the subprocess runner instead of calling run_retune
     directly in a daemon thread."""
     import lizystudio.services.openmp_detect as openmp_detect_mod
-    import lizystudio.services.training as training_mod
+    import lizystudio.services.training_retune as training_mod
 
     parent = _make_tune_parent_with_checkpoint(job_store, sample_data_ref)
     child = job_store.create(
@@ -1849,7 +1849,7 @@ def test_start_retune_async_worker_crash_transitions_child_to_failed(
     ``failed`` so the UI never shows a permanent ``pending`` state.
     """
     import lizystudio.services.openmp_detect as openmp_detect_mod
-    import lizystudio.services.training as training_mod
+    import lizystudio.services.training_retune as training_mod
 
     parent = _make_tune_parent_with_checkpoint(job_store, sample_data_ref)
     child = job_store.create(

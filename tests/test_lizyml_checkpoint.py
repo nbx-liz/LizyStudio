@@ -77,13 +77,15 @@ def test_save_checkpoint_swallows_oserror(
     adapter = LizyMLAdapter()
 
     # Force cloudpickle.dump inside save_checkpoint to raise OSError by
-    # substituting the underlying bytes write.
-    from lizystudio.backends import lizyml as lm
+    # substituting the underlying bytes write. After the H-0062 cleanup
+    # split, cloudpickle is imported into the adapter submodule rather
+    # than the package root.
+    from lizystudio.backends.lizyml import adapter as lm_adapter
 
     def boom(*args: Any, **kwargs: Any) -> None:
         raise OSError("disk full")
 
-    monkeypatch.setattr(lm.cloudpickle, "dump", boom)
+    monkeypatch.setattr(lm_adapter.cloudpickle, "dump", boom)
 
     with caplog.at_level("WARNING"):
         adapter.save_checkpoint(_make_picklable_object(), tmp_path)
