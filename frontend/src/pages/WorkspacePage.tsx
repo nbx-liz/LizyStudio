@@ -33,8 +33,12 @@ export function WorkspacePage() {
   // established by InferencePage so links stay consistent across
   // the two destinations.
   const [searchParams] = useSearchParams();
-  const [currentJobId, setCurrentJobId] = useState<string | null>(() =>
-    searchParams.get("job_id"),
+  // `searchParams.get("job_id")` returns `""` (not `null`) for an
+  // explicitly empty `?job_id=` value; normalize with `|| null` so the
+  // Results panel sees a clean null and does not try to render an
+  // empty-string job id.
+  const [currentJobId, setCurrentJobId] = useState<string | null>(
+    () => searchParams.get("job_id") || null,
   );
   const [running, setRunning] = useState(false);
   const [modelTab, setModelTab] = useState<"fit" | "tune">("fit");
