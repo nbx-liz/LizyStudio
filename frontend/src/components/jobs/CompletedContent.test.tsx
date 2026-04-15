@@ -87,6 +87,7 @@ function makeFitJob(overrides?: Partial<JobDetail>): JobDetail {
     },
     tune_result: null,
     model_path: "/models/j1",
+    parent_job_id: null,
     ...overrides,
   };
 }

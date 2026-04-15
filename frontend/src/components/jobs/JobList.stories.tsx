@@ -26,6 +26,7 @@ function makeJob(overrides: Partial<JobSummary>): JobSummary {
     completed_at: new Date().toISOString(),
     error: null,
     primary_score: 0.95,
+    parent_job_id: null,
     ...overrides,
   };
 }

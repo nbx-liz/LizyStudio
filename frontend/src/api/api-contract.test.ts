@@ -203,6 +203,7 @@ describe("JobSummary", () => {
       completed_at: "2026-01-01T00:05:00Z",
       error: null,
       primary_score: 0.95,
+      parent_job_id: null,
     };
     assertDefined(job.job_id, "job_id");
     assertDefined(job.job_type, "job_type");
@@ -239,6 +240,7 @@ describe("JobSummary", () => {
       completed_at: null,
       error: "Out of memory",
       primary_score: null,
+      parent_job_id: null,
     };
     expect(job.completed_at).toBeNull();
     expect(job.primary_score).toBeNull();
@@ -276,6 +278,7 @@ describe("JobDetail", () => {
       },
       tune_result: null,
       model_path: "/models/job-detail-1.pkl",
+      parent_job_id: null,
     };
     assertDefined(detail.fit_result, "fit_result");
     expect(detail.tune_result).toBeNull();

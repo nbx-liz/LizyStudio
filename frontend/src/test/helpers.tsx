@@ -54,6 +54,7 @@ export function makeJobSummary(
     completed_at: "2026-01-01T00:01:00Z",
     error: null,
     primary_score: 0.95,
+    parent_job_id: null,
     ...overrides,
   };
 }
@@ -81,6 +82,7 @@ export function makeJob(overrides: Partial<JobDetail> = {}): JobDetail {
     fit_result: null,
     tune_result: null,
     model_path: null,
+    parent_job_id: null,
     ...overrides,
   };
 }
