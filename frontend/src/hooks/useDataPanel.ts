@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { getErrorMessage } from "@/api/errors";
@@ -45,6 +46,7 @@ export function useDataPanel({
   onTaskChanged,
   uiSchema: _uiSchema,
 }: UseDataPanelParams) {
+  const queryClient = useQueryClient();
   const [sourceType, setSourceType] = useState<SourceType>("upload");
   const [dataPath, setDataPath] = useState("");
   const [shape, setShape] = useState<[number, number] | null>(null);
@@ -277,6 +279,27 @@ export function useDataPanel({
             },
           };
           await updateConfig(merged);
+          // Issue #107: broadcast the merged config into the shared query
+          // cache so ModelPanel's useQuery(['config']) consumer observes the
+          // fully-defaulted config immediately. Without this, any ConfigForm
+          // effect that fires on task change during the transition would
+          // PUT a partial config derived from a stale cached value, and the
+          // ModelPanel error list would transiently show
+          // 'config_version / task / split / model: Field required'.
+          queryClient.setQueryData(["config"], merged);
+          // Issue #107: pre-seed prevSyncKey with the post-handleTargetChange
+          // state key so the target/task/overrides/cv effect that fires when
+          // skipNextSyncRef is released does not re-PUT the same config via
+          // syncConfig. Without this, the effect sees a new key (because
+          // task/overrides/cv all just changed) and fires a second PUT with
+          // an equivalent body.
+          prevSyncKey.current = JSON.stringify({
+            target: value,
+            task: detectedTask,
+            overrides: newOverrides,
+            cv: resetCvState(detectedStrategy),
+            blocked,
+          });
           onDataChanged();
         }
       } catch (err) {
@@ -287,7 +310,7 @@ export function useDataPanel({
         skipNextSyncRef.current = false;
       }
     },
-    [task, cv, dataPath, onDataChanged, onTaskChanged],
+    [task, cv, dataPath, blocked, onDataChanged, onTaskChanged, queryClient],
   );
 
   const handleTaskChange = (newTask: TaskType) => {

@@ -1066,4 +1066,87 @@ describe("ModelPanel", () => {
     );
     expect(screen.getByText("A job is currently running")).toBeInTheDocument();
   });
+
+  // --- Issue #107: deep-equal guard in handleConfigChange ---
+
+  it("skips handleConfigChange PUT when newConfig equals the cached config", async () => {
+    // Regression guard for Issue #107. When useDataPanel.handleTargetChange
+    // broadcasts the merged config into the query cache, ConfigForm's
+    // task/metric auto-select effect may re-fire with an identical config
+    // body. Without a deep-equal guard, this would produce a duplicate
+    // updateConfig PUT and a debounced validate roundtrip, briefly
+    // re-surfacing the transient 'Field required' validation error.
+    const { fetchConfig, updateConfig: mockUpdate } = await import(
+      "@/api/workspace"
+    );
+    const cachedConfig = { model: { name: "lgbm", params: {} } };
+    (fetchConfig as ReturnType<typeof vi.fn>).mockResolvedValue(cachedConfig);
+    (mockUpdate as ReturnType<typeof vi.fn>).mockClear();
+    captured.onChange = null;
+
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(captured.onChange).not.toBeNull();
+    });
+    const onChange = captured.onChange;
+    if (!onChange) throw new Error("ConfigForm onChange not captured");
+
+    // Emit an onChange with a body that is deep-equal to the cached config.
+    onChange({ model: { name: "lgbm", params: {} } });
+
+    // Give the promise chain a tick to settle.
+    await new Promise((r) => setTimeout(r, 50));
+
+    // updateConfig must NOT have been called: the deep-equal guard should
+    // short-circuit the PUT and the debounced validate.
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("still PUTs when newConfig differs from the cached config", async () => {
+    // Dual guard: make sure the deep-equal short-circuit does not block
+    // legitimate config edits. A changed model name must still trigger
+    // updateConfig.
+    const { fetchConfig, updateConfig: mockUpdate } = await import(
+      "@/api/workspace"
+    );
+    (fetchConfig as ReturnType<typeof vi.fn>).mockResolvedValue({
+      model: { name: "lgbm", params: {} },
+    });
+    (mockUpdate as ReturnType<typeof vi.fn>).mockClear();
+    (mockUpdate as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    captured.onChange = null;
+
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(captured.onChange).not.toBeNull();
+    });
+    const onChange = captured.onChange;
+    if (!onChange) throw new Error("ConfigForm onChange not captured");
+
+    onChange({ model: { name: "xgb", params: {} } });
+
+    await waitFor(() => {
+      expect(mockUpdate).toHaveBeenCalledWith({
+        model: { name: "xgb", params: {} },
+      });
+    });
+  });
 });
