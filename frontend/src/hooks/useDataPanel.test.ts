@@ -1,4 +1,6 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ColumnInfo, ColumnsResponse } from "@/api/types";
 
@@ -64,6 +66,18 @@ const COLS_OK: ColumnsResponse = {
   ],
 };
 
+function createWrapper(): {
+  wrapper: ({ children }: { children: ReactNode }) => ReactNode;
+  queryClient: QueryClient;
+} {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    createElement(QueryClientProvider, { client: queryClient }, children);
+  return { wrapper, queryClient };
+}
+
 describe("useDataPanel", () => {
   beforeEach(() => {
     for (const m of Object.values(mocks)) m.mockReset?.();
@@ -80,8 +94,10 @@ describe("useDataPanel", () => {
 
     const onDataChanged = vi.fn();
     const onTaskChanged = vi.fn();
-    const { result } = renderHook(() =>
-      useDataPanel({ onDataChanged, onTaskChanged }),
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(
+      () => useDataPanel({ onDataChanged, onTaskChanged }),
+      { wrapper },
     );
 
     await act(async () => {
@@ -100,8 +116,10 @@ describe("useDataPanel", () => {
   it("loadDataFromPath reverts loading to false and shows toast on failure", async () => {
     mocks.loadDataFromPath.mockRejectedValue(new Error("path not found"));
 
-    const { result } = renderHook(() =>
-      useDataPanel({ onDataChanged: vi.fn() }),
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(
+      () => useDataPanel({ onDataChanged: vi.fn() }),
+      { wrapper },
     );
 
     await act(async () => {
@@ -116,8 +134,10 @@ describe("useDataPanel", () => {
   });
 
   it("loadDataFromPath skips empty input silently", async () => {
-    const { result } = renderHook(() =>
-      useDataPanel({ onDataChanged: vi.fn() }),
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(
+      () => useDataPanel({ onDataChanged: vi.fn() }),
+      { wrapper },
     );
 
     await act(async () => {
@@ -133,8 +153,10 @@ describe("useDataPanel", () => {
   it("uploadData error keeps loading=false", async () => {
     mocks.uploadData.mockRejectedValue(new Error("too large"));
 
-    const { result } = renderHook(() =>
-      useDataPanel({ onDataChanged: vi.fn() }),
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(
+      () => useDataPanel({ onDataChanged: vi.fn() }),
+      { wrapper },
     );
 
     const file = new File(["a,b\n1,2"], "x.csv", { type: "text/csv" });
@@ -164,8 +186,10 @@ describe("useDataPanel", () => {
       value_counts: [{ value: "1", count: 50 }],
     }));
 
-    const { result } = renderHook(() =>
-      useDataPanel({ onDataChanged: vi.fn() }),
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(
+      () => useDataPanel({ onDataChanged: vi.fn() }),
+      { wrapper },
     );
 
     await act(async () => {
@@ -194,8 +218,10 @@ describe("useDataPanel", () => {
     // marker for HIGH-1.
     mocks.fetchColumnStats.mockRejectedValue(new Error("stats unavailable"));
 
-    const { result } = renderHook(() =>
-      useDataPanel({ onDataChanged: vi.fn() }),
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(
+      () => useDataPanel({ onDataChanged: vi.fn() }),
+      { wrapper },
     );
 
     await act(async () => {
@@ -208,5 +234,57 @@ describe("useDataPanel", () => {
     );
     // colStats[a] must remain undefined so later code can branch correctly.
     expect(result.current.colStats.a).toBeUndefined();
+  });
+
+  // --- Issue #107: handleTargetChange broadcasts merged config ---
+
+  it("handleTargetChange seeds the 'config' query cache with the merged config", async () => {
+    // Regression guard for Issue #107. When target selection completes,
+    // the merged defaults-backed config must be written into the React
+    // Query cache so ModelPanel's useQuery(['config']) sees the full
+    // config immediately. Without this, any ConfigForm effect that fires
+    // on task change can PUT a partial config derived from an empty
+    // cached value, producing transient "Field required" validation
+    // errors from the Pydantic validator on the server.
+    mocks.fetchColumns.mockResolvedValue(COLS_OK);
+    mocks.fetchConfigDefaults.mockResolvedValue({
+      config_version: 1,
+      task: "binary",
+      data: { path: null, target: null },
+      features: { categorical: [], exclude: [] },
+      split: { method: "kfold", n_splits: 5 },
+      model: { name: "lgbm", params: {} },
+    });
+
+    const { wrapper, queryClient } = createWrapper();
+    const { result } = renderHook(
+      () =>
+        useDataPanel({
+          onDataChanged: vi.fn(),
+          onTaskChanged: vi.fn(),
+        }),
+      { wrapper },
+    );
+
+    await act(async () => {
+      await result.current.handleTargetChange("a");
+    });
+
+    // updateConfig must have been called exactly once with a fully
+    // validatable config.
+    expect(mocks.updateConfig).toHaveBeenCalledTimes(1);
+    const merged = mocks.updateConfig.mock.calls[0]?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(merged.config_version).toBe(1);
+    expect(merged.task).toBe("binary");
+    expect(merged.data).toMatchObject({ target: "a" });
+
+    // The merged config must be present in the query cache so the
+    // ModelPanel-side useQuery(['config']) consumer sees it without
+    // waiting for a refetch.
+    const cached = queryClient.getQueryData(["config"]);
+    expect(cached).toEqual(merged);
   });
 });
