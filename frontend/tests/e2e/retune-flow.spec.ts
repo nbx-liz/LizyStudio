@@ -196,7 +196,13 @@ test.describe("Re-tune / Resume / Lineage flow (H-0062)", () => {
     // equal — it must never be strictly worse than the parent's best.
     // The assertion is direction-aware; if setupTuneJob ever flips to
     // maximize, change to `>=`.
-    expect(childBest).toBeLessThanOrEqual(parentBest);
+    //
+    // Add a tiny epsilon for IEEE-754 rounding drift: parent and child
+    // best_score values pass through JSON serialization and metric
+    // re-aggregation, so an "equal" continuation can come back as
+    // 0.9800000000000001 vs 0.98 (Issue #100). 1e-9 is far below any
+    // metric precision we care about.
+    expect(childBest).toBeLessThanOrEqual(parentBest + 1e-9);
   });
 
   test("API: retune on a fit job returns 400 INVALID_PARAM", async ({
