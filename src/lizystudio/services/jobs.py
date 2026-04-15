@@ -448,6 +448,27 @@ class JobStore:
             if self._active_job_id == job_id:
                 self._active_job_id = None
 
+    def force_release_active_if(self, expected_job_id: str) -> bool:
+        """Atomically release the slot iff it is still held by *expected_job_id*.
+
+        H-0063: ``workspace_reset`` uses this to force-release a stuck
+        orphan slot after its cancel wait times out. The two-step
+        ``active_job_id`` read + ``release_active(active_id)`` dance is
+        racy — between the read and the release another thread could
+        claim the slot with a new job id, and the caller would end up
+        releasing someone else's slot. This helper keeps the compare
+        and the release under a single ``_active_lock`` critical
+        section so the operation either releases the exact id the
+        caller observed or is a no-op.
+
+        Returns True if the slot was released, False otherwise.
+        """
+        with self._active_lock:
+            if self._active_job_id == expected_job_id:
+                self._active_job_id = None
+                return True
+            return False
+
     def has_active_job(self) -> bool:
         """Check if a job is currently active (running or pending)."""
         with self._active_lock:
