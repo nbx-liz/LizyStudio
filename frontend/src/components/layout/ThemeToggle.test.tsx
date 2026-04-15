@@ -4,7 +4,7 @@ import { ThemeToggle } from "./ThemeToggle";
 
 describe("ThemeToggle", () => {
   beforeEach(() => {
-    // Mock matchMedia for jsdom
+    // Mock matchMedia for headless DOM environment
     Object.defineProperty(window, "matchMedia", {
       writable: true,
       value: vi.fn().mockImplementation((query: string) => ({

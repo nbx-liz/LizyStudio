@@ -431,11 +431,11 @@ describe("DataPanel", () => {
     });
   });
 
-  // Note: Radix Select interactions don't work reliably in jsdom,
-  // so we skip tests that require Select option clicking.
+  // Note: Radix Select interactions don't work reliably in headless DOM
+  // environments, so we skip tests that require Select option clicking.
 
   // Column grid rendering requires a complex async chain (load → fetchColumns
-  // → fetchConfigDefaults → updateConfig) that is unreliable in jsdom.
+  // → fetchConfigDefaults → updateConfig) that is unreliable in headless DOM.
   // These paths are covered by E2E visual regression tests instead.
   it.skip("renders column settings grid when data is loaded with target", async () => {
     mockLoadDataFromPath.mockResolvedValue({
@@ -585,7 +585,7 @@ describe("DataPanel", () => {
 // syncConfig abort, Feature Summary, column type/exclude toggles
 // ---------------------------------------------------------------------------
 
-// Polyfill Radix UI pointer events that jsdom does not implement
+// Polyfill Radix UI pointer events that headless DOM does not implement
 beforeAll(() => {
   window.HTMLElement.prototype.hasPointerCapture = vi
     .fn()

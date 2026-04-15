@@ -78,8 +78,9 @@ describe("RawConfigDialog", () => {
 
   it("copies config text to clipboard on copy button click", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, {
-      clipboard: { writeText },
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
     });
     const { toast } = await import("sonner");
 
@@ -112,8 +113,9 @@ describe("RawConfigDialog", () => {
 
   it("shows error toast when clipboard write fails", async () => {
     const writeText = vi.fn().mockRejectedValue(new Error("not allowed"));
-    Object.assign(navigator, {
-      clipboard: { writeText },
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
     });
     const { toast } = await import("sonner");
 
