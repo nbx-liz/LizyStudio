@@ -87,3 +87,18 @@
       Roboto, "Helvetica Neue", Arial, sans-serif;
   }
 }
+
+/* Issue #126: bridge Tailwind v3 outline-none semantics to match v4. In
+   Tailwind v3, `.outline-none` compiles to `outline: 2px solid transparent;
+   outline-offset: 2px` (a high-contrast-mode hack). With `outline-offset: 2px`
+   the transparent outline sits 2px outside the border and renders as a
+   faint double-border around shadcn/ui controls (SelectTrigger, Input,
+   Button, etc.). Tailwind v4 and the shadcn/ui base classes assume
+   `outline-none` is truly `outline-style: none`. This override bridges the
+   two until the project migrates to Tailwind v4 (Issue #125). */
+@layer utilities {
+  .outline-none {
+    outline-style: none;
+    outline-offset: 0;
+  }
+}
