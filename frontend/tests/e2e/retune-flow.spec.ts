@@ -79,63 +79,13 @@ async function setupTuneJob(
 test.describe("Re-tune / Resume / Lineage flow (H-0062)", () => {
   test.setTimeout(180_000);
 
-  // Per-test baseline of non-terminal jobs captured in beforeEach so the
-  // afterEach regression guard only flags jobs introduced BY the current
-  // test. The job store directory (/tmp/e2e_jobs) is shared across runs
-  // and may already hold stale `running` rows from earlier sessions —
-  // those are tracked separately in Issue #99 and must not make this
-  // guard flaky.
-  let baselineAlive = new Set<string>();
-
-  async function fetchAliveJobIds(
-    request: import("@playwright/test").APIRequestContext,
-  ): Promise<Set<string>> {
-    const res = await request.get(`${API}/jobs/`);
-    // Fail loud on any non-200 so the baseline snapshot and the
-    // afterEach comparison stay symmetric. A silently empty baseline
-    // after a transient 5xx would flag every pre-existing running row
-    // as a fresh leak in the next afterEach.
-    expect(res.status(), "GET /jobs/ must succeed").toBe(200);
-    const jobs = (await res.json()) as Array<{
-      job_id: string;
-      status: string;
-    }>;
-    return new Set(
-      jobs
-        .filter((j) => j.status === "running" || j.status === "pending")
-        .map((j) => j.job_id),
-    );
-  }
-
+  // H-0063 (PR #110) made POST /workspace/reset synchronously cancel the
+  // active job and release its slot, so a plain reset between tests is
+  // now sufficient to leave JobStore in a clean state. The earlier
+  // afterEach baseline-diff regression guard (Issue #120) is no longer
+  // load-bearing and has been removed.
   test.beforeEach(async ({ request }) => {
     await request.post(`${API}/workspace/reset`);
-    baselineAlive = await fetchAliveJobIds(request);
-  });
-
-  // Regression guard for the fire-and-forget orphan pattern that once
-  // leaked a retune child's active slot into subsequent tests, causing
-  // a cascade of 409 JOB_CONFLICT failures. workspace/reset intentionally
-  // does NOT clear JobStore._active_job_id (see Issue #99), so any test
-  // that starts a background job must drive it to a terminal state before
-  // returning. Computing the diff against the per-test baseline ensures
-  // this guard fires on NEW leaks only, not on stale pre-existing rows.
-  //
-  // Known blind spot: a job whose on-disk status is already terminal
-  // but whose _active_job_id slot has not yet been released will NOT be
-  // flagged here (it is filtered out of `fetchAliveJobIds`). That tiny
-  // window is real — _run_job_core writes status then releases the slot
-  // in finally — but it closes as soon as the runner thread returns, so
-  // every existing test that calls `pollJobUntilDone` or cancel+poll
-  // ends up in a fully-clean state by the time afterEach runs. If a
-  // future test ever hits a 409 without an observed leak here, check
-  // for a new fire-and-forget that skips `pollJobUntilDone`.
-  test.afterEach(async ({ request }) => {
-    const currentAlive = await fetchAliveJobIds(request);
-    const leaked = [...currentAlive].filter((id) => !baselineAlive.has(id));
-    expect(
-      leaked,
-      `Test leaked non-terminal jobs introduced during this test: ${leaked.join(", ")}`,
-    ).toHaveLength(0);
   });
 
   test("API: completed parent can be retuned into a child with parent_job_id", async ({
@@ -322,10 +272,11 @@ test.describe("Re-tune / Resume / Lineage flow (H-0062)", () => {
     });
     expect(second.status()).toBe(200);
     const { job_id: secondChildId } = await second.json();
-    // Drain the second retune before returning so it does not hold the
-    // JobStore active slot into the next test (workspace/reset does not
-    // clear _active_job_id — see Issue #99). Cancel first to keep this
-    // test fast; pollJobUntilDone accepts any terminal state.
+    // Drain the second retune before returning so it terminates cleanly
+    // before the next test's workspace/reset. Even though H-0063 makes
+    // reset cancel the active slot, draining explicitly keeps this test
+    // fast and makes the lifecycle obvious. Cancel first and then poll;
+    // pollJobUntilDone accepts any terminal state.
     const cancelSecond = await request.post(`${API}/jobs/${secondChildId}/cancel`);
     // 200 (running) or 400 (already finished) are both acceptable; a
     // 5xx would mean the backend crashed and we should fail loud rather
@@ -544,8 +495,8 @@ test.describe("Re-tune / Resume / Lineage flow (H-0062)", () => {
     expect(bcBody.job_id).not.toBe(childB);
     expect(bcBody.parent_job_id).toBe(childB);
     // Drain C before returning — the test only asserts API acceptance,
-    // but leaving it running would orphan the active slot for the next
-    // test (see Issue #99 and this spec's afterEach guard).
+    // so polling it to terminal state keeps the lifecycle clean for the
+    // next test's workspace/reset.
     await pollJobUntilDone(request, bcBody.job_id as string);
   });
 });
