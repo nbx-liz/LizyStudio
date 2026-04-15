@@ -190,23 +190,31 @@ def _run_retune_subprocess(
         )
         return child_job
 
-    finished = run_job_in_subprocess(
-        job=child_job,
-        job_store=job_store,
-        broadcaster=broadcaster,
-        backend_name=get_backend_name(ws),
-        data_path=ws.data_ref.path,
-        mode="retune",
-        parent_job_id=parent_job.job_id,
-        retune_n_trials=n_trials,
-        retune_expand_boundary=expand_boundary,
-        retune_boundary_threshold=boundary_threshold,
-    )
-    with ws._lock:
-        ws.workspace_fit_result = finished.fit_result
-        ws.workspace_tune_result = finished.tune_result
-        ws.current_job_id = finished.job_id
-    return finished
+    try:
+        finished = run_job_in_subprocess(
+            job=child_job,
+            job_store=job_store,
+            broadcaster=broadcaster,
+            backend_name=get_backend_name(ws),
+            data_path=ws.data_ref.path,
+            mode="retune",
+            parent_job_id=parent_job.job_id,
+            retune_n_trials=n_trials,
+            retune_expand_boundary=expand_boundary,
+            retune_boundary_threshold=boundary_threshold,
+        )
+        with ws._lock:
+            ws.workspace_fit_result = finished.fit_result
+            ws.workspace_tune_result = finished.tune_result
+            ws.current_job_id = finished.job_id
+        return finished
+    finally:
+        # CRITICAL-2 follow-up: release the parent-process active slot
+        # that ``create_and_claim_active`` took when this retune was
+        # started. The subprocess path has its own child JobStore so
+        # the in-process _run_job_core finally does not touch the
+        # parent's _active_job_id.
+        job_store.release_active(child_job.job_id)
 
 
 def start_retune_async(

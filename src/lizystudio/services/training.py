@@ -424,32 +424,45 @@ def _run_subprocess_job(
     job_store: JobStore,
     broadcaster: ProgressBroadcaster,
 ) -> None:
-    """Run a job via subprocess and update workspace state (H-0036)."""
+    """Run a job via subprocess and update workspace state (H-0036).
+
+    CRITICAL-2 follow-up: the active-slot claim performed by
+    ``create_and_claim_active`` in the API layer must be released here
+    too. The in-process ``_run_job_core`` path does that via its
+    ``finally`` block, but subprocess execution bypasses that code
+    entirely — the child process has its own ``JobStore`` instance, so
+    the parent's slot stays held until server restart. This broke the
+    second tune request in a row whenever OpenMP routed jobs through
+    the subprocess path.
+    """
     from lizystudio.services.subprocess_runner import run_job_in_subprocess
     from lizystudio.services.workspace import get_backend_name
 
-    if ws.data_ref is None or not ws.data_ref.path:
-        job.status = "failed"
-        job.error = "No data loaded — cannot run subprocess job"
-        job.completed_at = datetime.now(timezone.utc).isoformat()
-        job_store.update(job)
-        if broadcaster is not None:
-            broadcaster.send_error(job.job_id, job.error)
+    try:
+        if ws.data_ref is None or not ws.data_ref.path:
+            job.status = "failed"
+            job.error = "No data loaded — cannot run subprocess job"
+            job.completed_at = datetime.now(timezone.utc).isoformat()
+            job_store.update(job)
+            if broadcaster is not None:
+                broadcaster.send_error(job.job_id, job.error)
+            with ws._lock:
+                ws.current_job_id = job.job_id
+            return
+        data_path = ws.data_ref.path
+        finished = run_job_in_subprocess(
+            job=job,
+            job_store=job_store,
+            broadcaster=broadcaster,
+            backend_name=get_backend_name(ws),
+            data_path=data_path,
+        )
         with ws._lock:
-            ws.current_job_id = job.job_id
-        return
-    data_path = ws.data_ref.path
-    finished = run_job_in_subprocess(
-        job=job,
-        job_store=job_store,
-        broadcaster=broadcaster,
-        backend_name=get_backend_name(ws),
-        data_path=data_path,
-    )
-    with ws._lock:
-        ws.workspace_fit_result = finished.fit_result
-        ws.workspace_tune_result = finished.tune_result
-        ws.current_job_id = finished.job_id
+            ws.workspace_fit_result = finished.fit_result
+            ws.workspace_tune_result = finished.tune_result
+            ws.current_job_id = finished.job_id
+    finally:
+        job_store.release_active(job.job_id)
 
 
 def start_fit_async(

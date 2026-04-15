@@ -374,10 +374,34 @@ class JobStore:
         The subsequent ``_run_job_core`` will re-invoke ``claim_active``
         with the same job_id; that call is a no-op because the slot is
         already owned by this job.
+
+        Before refusing a request, this method checks whether the
+        currently-held slot is actually still running. Terminal jobs
+        (``completed`` / ``failed`` / ``cancelled``) have no business
+        occupying the slot and can happen if:
+
+        - a subprocess path returned without going through
+          ``_run_job_core.finally`` (e.g. the subprocess was killed and
+          the release call was skipped),
+        - the server restarted mid-job and the in-memory slot was
+          re-initialised from disk state, or
+        - a cancel request left the runner thread unable to reach the
+          release call.
+
+        Rather than locking the workspace out permanently, the slot is
+        reclaimed from the stale owner so the user's next fit/tune can
+        proceed. The stale job's on-disk state is left untouched.
         """
         with self._active_lock:
             if self._active_job_id is not None:
-                return None
+                stale = self._is_slot_holder_stale_locked()
+                if not stale:
+                    return None
+                _logger.warning(
+                    "Active slot held by stale job %s; reclaiming",
+                    self._active_job_id,
+                )
+                self._active_job_id = None
             job = self.create(
                 backend_name=backend_name,
                 config=config,
@@ -387,6 +411,21 @@ class JobStore:
             )
             self._active_job_id = job.job_id
             return job
+
+    def _is_slot_holder_stale_locked(self) -> bool:
+        """Return True when the current slot holder is in a terminal state.
+
+        Caller must hold ``self._active_lock``.
+        """
+        holder = self._active_job_id
+        if holder is None:
+            return False
+        try:
+            job = self._load_job(holder)
+        except (FileNotFoundError, OSError, json.JSONDecodeError, KeyError):
+            # Meta gone or unreadable -> definitely stale.
+            return True
+        return job.status in ("completed", "failed", "cancelled")
 
     def claim_active(self, job_id: str) -> bool:
         """Attempt to claim the active slot.

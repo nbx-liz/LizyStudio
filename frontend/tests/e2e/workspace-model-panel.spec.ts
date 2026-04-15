@@ -107,14 +107,20 @@ test.describe("ModelPanel interactions", () => {
     const savePresetButton = page.getByRole("button", { name: "Save Preset" });
     await expect(savePresetButton).toBeVisible();
 
-    // Set up dialog handler before clicking
-    page.on("dialog", async (dialog) => {
-      expect(dialog.type()).toBe("prompt");
-      expect(dialog.message()).toBe("Preset name:");
-      await dialog.accept("my-test-preset");
-    });
-
+    // CRITICAL-4 (code review): window.prompt() was replaced with a
+    // shadcn Dialog-based SavePresetDialog. The test now drives the
+    // real modal instead of listening for a native dialog event.
     await savePresetButton.click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible({ timeout: 3000 });
+    await expect(dialog.getByText("Save preset")).toBeVisible();
+
+    const nameInput = dialog.getByLabel("Name");
+    await expect(nameInput).toBeFocused();
+    await nameInput.fill("my-test-preset");
+
+    await dialog.getByRole("button", { name: /^save$/i }).click();
 
     // After saving, a toast notification should appear
     await expect(

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -183,6 +184,35 @@ def test_fit_starts_job_when_data_and_config_present(
     _mock_start.assert_called_once()
 
 
+def _seed_running_holder(job_store: Any) -> str:
+    """Create a real running job on disk and claim the active slot.
+
+    ``create_and_claim_active`` refuses new callers when the current
+    slot holder is still running. Simulating that needs real on-disk
+    meta — a bare ``claim_active("dummy-id")`` no longer works because
+    the stale-slot auto-reclaim path sees the missing meta file and
+    treats the slot as reclaimable.
+    """
+    from lizystudio.backends.types import DataRef
+
+    holder = job_store.create(
+        backend_name="lizyml",
+        config={"task": "binary"},
+        data_ref=DataRef(
+            source_type="path",
+            path="/data/holder.csv",
+            filename="holder.csv",
+            fingerprint="h",
+            shape=(10, 2),
+        ),
+        job_type="fit",
+    )
+    holder.status = "running"
+    job_store.update(holder)
+    assert job_store.claim_active(holder.job_id)
+    return holder.job_id
+
+
 def test_fit_returns_409_when_job_active(
     client: TestClient,
     tmp_path: Path,
@@ -191,13 +221,13 @@ def test_fit_returns_409_when_job_active(
     _load_data_and_config(client, tmp_path)
 
     job_store = client.app.state.job_store  # type: ignore[union-attr]
-    job_store.claim_active("existing-job-123")
+    holder_id = _seed_running_holder(job_store)
     try:
         res = client.post("/api/workspace/fit")
         assert res.status_code == 409
         assert res.json()["error"]["code"] == "JOB_CONFLICT"
     finally:
-        job_store.release_active("existing-job-123")
+        job_store.release_active(holder_id)
 
 
 def test_tune_returns_409_when_job_active(
@@ -208,13 +238,13 @@ def test_tune_returns_409_when_job_active(
     _load_data_and_config(client, tmp_path)
 
     job_store = client.app.state.job_store  # type: ignore[union-attr]
-    job_store.claim_active("existing-job-456")
+    holder_id = _seed_running_holder(job_store)
     try:
         res = client.post("/api/workspace/tune")
         assert res.status_code == 409
         assert res.json()["error"]["code"] == "JOB_CONFLICT"
     finally:
-        job_store.release_active("existing-job-456")
+        job_store.release_active(holder_id)
 
 
 # ---------------------------------------------------------------------------
