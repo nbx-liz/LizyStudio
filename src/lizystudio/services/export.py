@@ -13,6 +13,14 @@ from lizystudio.services.jobs import Job
 
 _log = logging.getLogger(__name__)
 
+# Plotly bundle pinned for the HTML report. The SRI hash is verified by
+# the browser before the script is allowed to execute, so a tampered
+# CDN cannot inject arbitrary JavaScript into the report. Bumping the
+# version requires recomputing the hash AND updating the matching
+# constants in tests/regression/test_reg_0074_export_report_plotly_sri.py.
+_PLOTLY_VERSION = "plotly-2.27.0.min.js"
+_PLOTLY_SRI = "sha384-Hl48Kq2HifOWdXEjMsKo6qxqvRLTYqIGbvlENBmkHAxZKIGCXv43H6W1jA671RzC"
+
 
 def export_model(
     *,
@@ -155,11 +163,34 @@ def _build_report_html(
         </script>
         """
 
-    # HIGH-5: Plotly is pulled from a CDN because bundling ~4 MB of JS
-    # into every HTML report is wasteful. We constrain what that CDN is
-    # allowed to execute via a CSP that only permits the CDN origin for
-    # scripts, and disallow every other active content source. A future
-    # Issue tracks migrating to a locally-bundled plotly with SRI.
+    # HIGH-5 / Issue #92: Plotly is pulled from a CDN because bundling
+    # ~4 MB of JS into every HTML report is wasteful. We layer two
+    # mitigations against a tampered or substituted bundle:
+    #
+    # 1. ``Content-Security-Policy`` whitelists ``cdn.plot.ly`` as the
+    #    only allowed script origin so the browser refuses to fetch
+    #    Plotly from anywhere else.
+    # 2. ``integrity="sha384-..."`` (Subresource Integrity) makes the
+    #    browser hash the fetched bundle and refuse to execute it if the
+    #    hash differs from the pinned value, so a compromised CDN cannot
+    #    silently swap in malicious JavaScript.
+    #
+    # ``crossorigin="anonymous"`` is required for SRI to actually take
+    # effect on cross-origin scripts (without it the browser silently
+    # drops the integrity check).
+    #
+    # Note on ``'unsafe-inline'`` below: it would normally weaken SRI on
+    # an HTTP-header-delivered CSP, but here the CSP is embedded in a
+    # ``<meta http-equiv>`` tag and the inline allowance only enables
+    # the ``Plotly.newPlot('plot-N', ...)`` bootstraps emitted above.
+    # SRI on the external Plotly bundle remains enforced regardless.
+    #
+    # When bumping the Plotly version, recompute the SRI hash and
+    # update both ``_PLOTLY_VERSION`` / ``_PLOTLY_SRI`` AND the matching
+    # constants in
+    # ``tests/regression/test_reg_0074_export_report_plotly_sri.py``.
+    # See that test's module docstring for the one-liner that computes
+    # the hash from the CDN bundle.
     csp = (
         "default-src 'none'; "
         "script-src https://cdn.plot.ly 'unsafe-inline'; "
@@ -173,7 +204,8 @@ def _build_report_html(
     <meta charset="utf-8">
     <meta http-equiv="Content-Security-Policy" content="{csp}">
     <title>{title}</title>
-    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"
+    <script src="https://cdn.plot.ly/{_PLOTLY_VERSION}"
+            integrity="{_PLOTLY_SRI}"
             crossorigin="anonymous"></script>
     <style>
         body {{ font-family: system-ui, sans-serif;
