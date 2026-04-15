@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -152,6 +153,31 @@ def run_job_in_subprocess(
         job.status = "failed"
         job.error = "Subprocess did not persist job result"
         return job
+
+    # If the child was killed mid-run (Cancel -> SIGTERM, or hard kill
+    # after _WAIT_TIMEOUT), it never reached ``_run_job_core.finally``
+    # and so never wrote a terminal state back to disk. Reconcile here
+    # based on the cancel flag so waiters downstream (E2E, UI) see the
+    # final status instead of spinning on ``running`` forever.
+    if updated.status in ("pending", "running"):
+        now = datetime.now(timezone.utc).isoformat()
+        if job_store.is_cancel_requested(job.job_id):
+            updated.status = "cancelled"
+            if broadcaster is not None:
+                broadcaster.send_error(
+                    job.job_id, "Job cancelled", code="JOB_CANCELLED"
+                )
+        else:
+            updated.status = "failed"
+            updated.error = (
+                f"Subprocess exited with code {proc.returncode} "
+                f"without persisting a terminal status"
+            )
+            if broadcaster is not None:
+                broadcaster.send_error(job.job_id, updated.error)
+        updated.completed_at = now
+        job_store.update(updated)
+        job_store.clear_cancel(job.job_id)
     return updated
 
 
