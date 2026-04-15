@@ -1596,3 +1596,32 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
     9. `_run_retune_subprocess` と `start_fit_async` / `start_tune_async` の重複統合。
     10. exact trial count 監視テストの brittleness（一部緩和済、残箇所は段階的に）。
 - **Bugfix 2026-04-14 (4) — AUC が low-is-better で最適化される CRITICAL バグ:** ユーザ報告「Tuning 時に AUC スコアが低いほど良い指標になっている」を受けて調査。根本原因は `api/workspace.py::workspace_tune` のデフォルト tuning inject 経路で `direction` が `"minimize"` にハードコードされていたこと。具体的な再現フロー: (1) ユーザが Workspace で task=binary を選ぶ（評価メトリックは default の auc）→ (2) `tuning` セクション未設定のまま Tune ボタンを押す → (3) `POST /api/workspace/tune` でバックエンドが `tuning.optuna.params = {"n_trials": 50, "direction": "minimize", "timeout": None}` を inject → (4) `_prepare_tune_config` の auto-resolve は `"direction" not in params` を見ていたため発火せず → (5) lizyml の `Model.tune()` が Optuna study direction = `"minimize"` で起動 → (6) AUC を最小化（=低いほど良い指標として扱う） → (7) `best_params` が完全に意味不明な値になる。**影響範囲**: すべての fresh tune 実行で auc / auc_pr / r2 / accuracy / f1 / auc_mu が低いほど良いと最適化されていた。ユーザがメトリックを 1 度切り替えた場合のみ TuneEvaluationSection の `handleOptimizationMetricChange` が direction を上書きするため回避されていた。修正 (5 層): **(Fix 1)** `api/workspace.py:437` のハードコード `"direction": "minimize"` を削除し、`_prepare_tune_config` の auto-resolve に一任。**(Fix 2)** `services/training.py::_prepare_tune_config` の direction 補正条件を `"direction" not in params` から「常に metric と整合させる（不整合なら上書き）」に変更。これにより stale な direction や API 直叩きの誤った値も自動修正される。**(Fix 3)** `frontend/src/components/workspace/TuneEvaluationSection.tsx` に defensive useEffect を追加し、メトリック変化時にコンポーネント側でも `optuna.params.direction` を `metricDirection` と整合させる（ユーザがメトリックボタンを押さなくても同期）。**(Fix 4)** リグレッションテスト追加: `tests/test_workspace_coverage.py::test_tune_default_tuning_uses_auc_maximize_for_binary` (workspace_tune → _prepare_tune_config の統合テスト), `tests/test_training_service.py::test_overrides_stale_minimize_direction_for_auc` / `test_overrides_stale_maximize_direction_for_rmse` / `test_keeps_consistent_direction_unchanged`, 既存 `test_preserves_explicit_direction` を `test_overwrites_inconsistent_direction` に差し替え (新しい契約: 「metric が direction の単一の真実」)。E2E `frontend/tests/e2e/workspace-tune.spec.ts` の fixture から `direction: "minimize"` ハードコードを削除し、`tune_result.direction === "maximize"` の assertion を追加。**Fix 5** (このエントリー)。**壊れた job 履歴**: 既存の `direction: minimize` で完了済みの binary + auc tune jobs は best_params が論理的に逆なので破棄推奨。マイグレーション script は不要、ユーザが手動 delete でよい。949 backend tests green, mypy / ruff clean。
+
+### H-0063: `POST /workspace/reset` がアクティブジョブを確実にキャンセルして slot を解放する
+- **Status:** accepted
+- **Scope:** API, Backend
+- **Related:** BLUEPRINT §5 Workspace API / §8 Jobs ライフサイクル, Issue #99
+- **Context:** 現状の `POST /workspace/reset` は `WorkspaceState` のみをクリアし、`JobStore._active_job_id` にはノータッチ。したがって前の fit / tune job がバックグラウンドで走っている状態で reset を押しても、次の fit / tune は `JOB_CONFLICT (409)` で弾かれる可能性がある。ユーザー期待値は「reset ボタンを押したら真っさらな状態から次の操作が始められる」であり、現在の挙動はそれを裏切っている。また E2E テスト側では PR #102 の `afterEach` baseline-diff ガードで workaround しており、そのガード自体が「reset は slot を touch しない」という暗黙の前提に依存している。
+- **Proposal:** `workspace_reset` エンドポイントの挙動を次のように拡張する。
+  1. `job_store.active_job_id` を取得し、非 None でかつ on-disk status が `running` / `pending` の場合に `job_store.request_cancel(active_id)` を呼ぶ。既存の cancel エンドポイント `POST /jobs/{id}/cancel` と同一経路なので、subprocess 経路は `subprocess_runner._poll_progress` が `is_cancel_requested` を検知して `proc.terminate()` → `run_job_in_subprocess.reconcile` で terminal 状態に遷移させる。in-process thread 経路は `_run_job_core` の cancel-aware callback が `CancelledError` を投げて finally で `release_active` を呼ぶ。
+  2. 上記の完了を同期的に短時間待機する: `_RESET_WAIT_TIMEOUT = 12.0s`（subprocess runner の `_WAIT_TIMEOUT = 10s` + buffer 2s）で `has_active_job()` が False になるまで polling（`_RESET_WAIT_INTERVAL = 0.05s`）。待機中に on-disk status が terminal に遷移した場合は runner finally を待たず直接 `force_release_active_if` を呼ぶ（crashed runner 対応）。
+  3. **Force-release on timeout:** タイムアウト内に解放されなかった場合、warn ログを残した上で `force_release_active_if(stuck_id)` で slot を強制解放する。Proposal 初稿では「warn だけ残して 409 は許容」としていたが、RED テストで runner が存在しない orphan slot ケースが露出したため、reset の約束（次の操作はクリーン状態から始められる）を守る方向に方針を強めた。`_RESET_WAIT_TIMEOUT` を subprocess の `_WAIT_TIMEOUT` より長く設定しているので、合法的な subprocess runner には `proc.terminate` + `proc.wait` + 自前の `release_active` まで完了する時間的余裕がある。それでもタイムアウトする場合は orphan slot と判断して差し支えない。
+  4. **Atomic compare-and-release:** force-release の root cause review で TOCTOU ホール（`active_job_id` 読み取り → 別スレッドが新 claim → `release_active` で新 claim を誤削除）を指摘されたため、`JobStore.force_release_active_if(expected_job_id)` を追加。`_active_lock` を保持した単一 critical section 内で compare-and-release を行うので、観測した id と実際の slot holder が一致した場合のみ release する。一致しない場合は no-op。
+  5. workspace state のクリアは 1. / 2. / 3. の **後**に実行する。データフレームやモデル参照が先にクリアされると、終了中の subprocess / thread が解放のタイミングで参照先を失ってクラッシュする余地がある。
+- **Impact:**
+  - `src/lizystudio/api/workspace.py::workspace_reset` — `job_store: JobStore = Depends(get_job_store)` を追加し、上記フローを実装。
+  - `src/lizystudio/services/jobs.py` — 変更なし（既存の `request_cancel` / `has_active_job` / `active_job_id` で十分）。
+  - `tests/regression/test_reg_NNNN_workspace_reset_releases_slot.py`（新規）— (a) active slot を持つ状態で reset を呼ぶと slot が解放される, (b) `request_cancel` が呼ばれる, (c) タイムアウト時も 200 を返して warn ログを残す, の 3 テストを追加。
+  - `frontend/tests/e2e/retune-flow.spec.ts` の `afterEach` baseline-diff ガードは **このPRでは残す**。ガードの撤去は別 PR（動作確認後）にする。
+- **Compatibility:** 非破壊的。既存クライアントから見ると「reset が少しだけ遅くなり、以前より多くの状態をクリアする」という拡張。reset のレスポンスボディは `{"status": "ok"}` で不変。
+- **Alternatives:**
+  1. **選択肢 A（却下）**: `workspace_reset` は現状維持で、新しい `POST /jobs/active/cancel` エンドポイントを追加する案。メリット: reset の影響範囲を変えず、セマンティクス分離が明確。デメリット: ユーザーが「reset」と「cancel active job」を区別して使いこなす必要があり、実際には「reset ボタンを押したのに次の Run が 409 になる」というユーザー期待値ギャップが残る。
+  2. **選択肢 B（却下）**: `JobStore` に heartbeat-based stale detection を追加し、`running` のまま一定時間経過したジョブを stale 扱いして slot を自動再取得する案。メリット: reset 以外の経路でも効く。デメリット: 正当な長時間 tune を誤検知する誤陽性リスクがあり、timeout 値のチューニングが難しい。本質的には root cause（reset が slot を触らない）を修正しないで症状を緩和するだけ。
+  3. **選択肢 C（採用、本提案）**: reset が active slot を同期的にキャンセルする。ユーザー期待値に最も近く、既存の cancel 経路を再利用するだけで実装リスクが低い。
+- **Acceptance Criteria:**
+  - (a) `POST /workspace/reset` 呼び出し前に active job が存在した場合、呼び出し後 `job_store.has_active_job()` は False を返す（タイムアウト内）。
+  - (b) active job に対して `request_cancel` が呼ばれたことが確認できる。
+  - (c) `_RESET_WAIT_TIMEOUT` 内に解放されなくても HTTP 200 を返し、サーバーログに warn を残す。
+  - (d) active job が無い通常ケースでは既存の挙動が変わらない。
+  - (e) 既存の `test_reg_0071` / `test_reg_0072` / retune-flow E2E が regression なく通る。
+- **Decision:** 2026-04-15 採択 (Phase B3)。Option 1 変種 C を採用。E2E workaround 撤去は本 PR 範囲外。
