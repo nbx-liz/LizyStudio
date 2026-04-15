@@ -35,7 +35,7 @@ vi.mock("sonner", () => ({
   toast: mockToast,
 }));
 
-// Mock react-resizable-panels (doesn't work in jsdom)
+// Mock react-resizable-panels (doesn't work in headless DOM)
 vi.mock("@/components/ui/resizable", () => ({
   ResizablePanelGroup: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="panel-group">{children}</div>
