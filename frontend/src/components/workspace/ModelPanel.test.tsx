@@ -6,6 +6,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { renderWithQuery } from "@/test/helpers";
@@ -800,10 +801,10 @@ describe("ModelPanel", () => {
 
   // --- handleSavePreset ---
 
-  it("saves preset when Save Preset is clicked and name is provided", async () => {
+  it("saves preset via dialog when Save Preset is clicked and name is provided", async () => {
     const { toast } = await import("sonner");
     (toast.success as ReturnType<typeof vi.fn>).mockClear();
-    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("My Preset");
+    const user = userEvent.setup();
 
     renderWithQuery(
       <ModelPanel
@@ -820,19 +821,21 @@ describe("ModelPanel", () => {
       expect(screen.getByTestId("mock-config-form")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /Save Preset/i }));
+    await user.click(screen.getByRole("button", { name: /Save Preset/i }));
 
-    expect(promptSpy).toHaveBeenCalled();
+    // Dialog mounts and auto-focuses the name input.
+    const nameInput = await screen.findByLabelText(/name/i);
+    await user.type(nameInput, "My Preset");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
     expect(toast.success).toHaveBeenCalledWith(
       expect.stringContaining("My Preset"),
     );
-
-    promptSpy.mockRestore();
   });
 
-  it("does nothing when Save Preset prompt is cancelled", async () => {
+  it("does nothing when Save Preset dialog is cancelled", async () => {
     const { toast } = await import("sonner");
-    vi.spyOn(window, "prompt").mockReturnValue(null);
+    const user = userEvent.setup();
 
     renderWithQuery(
       <ModelPanel
@@ -844,12 +847,18 @@ describe("ModelPanel", () => {
       />,
     );
 
+    await waitFor(() => {
+      expect(screen.getByTestId("mock-config-form")).toBeInTheDocument();
+    });
+
     (toast.success as ReturnType<typeof vi.fn>).mockClear();
-    const saveBtn = screen.getByRole("button", { name: /Save Preset/i });
-    fireEvent.click(saveBtn);
+    await user.click(screen.getByRole("button", { name: /Save Preset/i }));
+
+    // Cancel via the dialog's Cancel button.
+    const cancel = await screen.findByRole("button", { name: /cancel/i });
+    await user.click(cancel);
 
     expect(toast.success).not.toHaveBeenCalled();
-    vi.restoreAllMocks();
   });
 
   // --- handleRedo ---
