@@ -140,6 +140,8 @@ class JobSummaryResponse(BaseModel):
     error: str | None = None
     model_name: str | None = None
     primary_score: float | None = None
+    # H-0062 lineage: null for root jobs, set for Re-tune / Resume children.
+    parent_job_id: str | None = None
 
 
 class JobDetailResponse(JobSummaryResponse):

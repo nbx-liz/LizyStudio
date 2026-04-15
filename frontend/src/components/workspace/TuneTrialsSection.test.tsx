@@ -40,6 +40,7 @@ function makeJob(overrides: Partial<JobDetail> = {}): JobDetail {
     fit_result: null,
     tune_result: null,
     model_path: null,
+    parent_job_id: null,
     ...overrides,
   };
 }

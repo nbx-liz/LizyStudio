@@ -81,6 +81,10 @@ def _job_summary(job: Job) -> dict[str, Any]:
         "created_at": job.created_at,
         "completed_at": job.completed_at,
         "error": _sanitize_error(job.error),
+        # H-0062: lineage field for Re-tune / Resume children. Always
+        # present in the summary so consumers can distinguish "root
+        # job" (null) from "missing key" (undefined).
+        "parent_job_id": job.parent_job_id,
     }
 
     # Model name from config
