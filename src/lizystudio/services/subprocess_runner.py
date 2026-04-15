@@ -40,6 +40,14 @@ _POLL_INTERVAL = 0.2  # seconds between progress file polls
 # keep the daemon worker thread alive forever (H-0062 Bugfix 2026-04-14).
 _WAIT_TIMEOUT = 10.0
 
+# Issue #87: after the subprocess exits, retry the progress reader a
+# handful of times so writes that the child flushed moments before
+# ``SIGTERM`` still land on the parent's WebSocket broadcaster. The
+# legacy single 50 ms sleep was unreliable on NFS / docker overlay2
+# where the flush->visibility delay is occasionally above that budget.
+_FINAL_FLUSH_RETRIES = 5
+_FINAL_FLUSH_INTERVAL = 0.05
+
 
 def run_job_in_subprocess(
     *,
@@ -181,6 +189,101 @@ def run_job_in_subprocess(
     return updated
 
 
+class _ProgressReader:
+    """Tail-read the progress JSONL file one new chunk at a time.
+
+    Issue #87: the legacy poll loop read the whole progress file via
+    ``Path.read_text().splitlines()`` on every 200 ms tick and tracked a
+    consumed-line counter. That is O(N) per poll in the number of lines
+    already seen, so a long tune with hundreds of trials quadratically
+    degrades the parent thread as the file grows. It also silently
+    dropped partial writes (a ``write()`` that landed but whose
+    terminating newline had not flushed yet was parsed as invalid JSON
+    and thrown away, never to be retried).
+
+    This reader keeps an open file handle and reads only the new bytes
+    since the last call (``file.read()`` on a regular file with a live
+    offset). A small ``_buffer`` holds any unterminated trailing text
+    across calls so it is never lost — the next call stitches the
+    continuation on and returns the completed line.
+
+    The reader also handles the common "file does not exist yet"
+    startup case: ``_ensure_open`` retries on every call until the
+    child creates the file, at which point the handle opens and
+    subsequent calls stream from offset 0.
+    """
+
+    def __init__(self, path: str) -> None:
+        self._path = path
+        self._file: Any = None  # typing.IO[str] once opened
+        self._buffer = ""
+
+    def _ensure_open(self) -> bool:
+        """Open the file lazily if it has appeared on disk.
+
+        Returns True if a live handle is available after the call, and
+        False if the file still does not exist.
+        """
+        if self._file is not None:
+            return True
+        if not Path(self._path).exists():
+            return False
+        # Text mode with UTF-8 to match _write_progress; errors="replace"
+        # so a corrupt byte sequence in the middle of a long tune does
+        # not raise UnicodeDecodeError and kill the poll loop. A broken
+        # line will fail JSON parsing in _forward_progress and be
+        # dropped there with logging, which is the right failure mode.
+        self._file = open(  # noqa: SIM115 — handle lives with the reader
+            self._path, encoding="utf-8", errors="replace"
+        )
+        return True
+
+    def read_new_lines(self) -> list[str]:
+        """Return complete lines written since the last call.
+
+        Any partial trailing content (no terminating newline) is stashed
+        on ``self._buffer`` and only released once its continuation has
+        been written.
+        """
+        if not self._ensure_open():
+            return []
+        chunk = self._file.read()
+        if not chunk:
+            return []
+        data = self._buffer + chunk
+        # If the chunk ends with a newline, every line is complete and
+        # the buffer is empty; otherwise the last fragment is partial
+        # and we hold it until a later call completes it.
+        if data.endswith("\n"):
+            self._buffer = ""
+            return [ln for ln in data.splitlines() if ln]
+        parts = data.split("\n")
+        self._buffer = parts[-1]
+        return [ln for ln in parts[:-1] if ln]
+
+    def final_flush(self) -> list[str]:
+        """Return any buffered partial line and clear the buffer.
+
+        Called by ``_poll_progress`` after the subprocess has exited and
+        the poll retries have finished. If the child was killed
+        mid-write, its last bytes live here as a best-effort tail; the
+        caller decides whether to forward them (they probably fail JSON
+        parsing, but at least they land in logs).
+        """
+        if not self._buffer:
+            return []
+        tail = self._buffer
+        self._buffer = ""
+        return [tail]
+
+    def close(self) -> None:
+        """Release the file handle. Safe to call multiple times."""
+        if self._file is not None:
+            with contextlib.suppress(Exception):
+                self._file.close()
+            self._file = None
+
+
 def _poll_progress(
     proc: subprocess.Popen[bytes],
     progress_path: str,
@@ -197,40 +300,58 @@ def _poll_progress(
     Without this escape hatch, a hung child process kept the daemon
     worker thread alive forever and the next retune attempt permanently
     failed with ``PreviousJobStillRunningError``.
+
+    Issue #87: uses an incremental ``_ProgressReader`` instead of
+    re-reading the entire file each tick. See that class's docstring
+    for the rationale; the behavioural contract here is unchanged —
+    only the cost model is.
     """
-    lines_read = 0
-    path = Path(progress_path)
+    reader = _ProgressReader(progress_path)
     terminated = False
 
-    while proc.poll() is None:
-        if path.exists():
-            lines = path.read_text(encoding="utf-8").splitlines()
-            for line in lines[lines_read:]:
-                lines_read += 1
+    try:
+        while proc.poll() is None:
+            for line in reader.read_new_lines():
                 _forward_progress(line, job_id, broadcaster)
-        if (
-            not terminated
-            and job_store is not None
-            and job_store.is_cancel_requested(job_id)
-        ):
-            _logger.info("cancel requested for job %s; terminating subprocess", job_id)
-            terminated = True
-            with contextlib.suppress(Exception):
-                proc.terminate()
-            # Give the child a brief moment to flush then escalate if
-            # still alive. The outer run_job_in_subprocess does the
-            # real proc.wait() with _WAIT_TIMEOUT, so here we just
-            # break out of the polling loop.
-            break
-        time.sleep(_POLL_INTERVAL)
+            if (
+                not terminated
+                and job_store is not None
+                and job_store.is_cancel_requested(job_id)
+            ):
+                _logger.info(
+                    "cancel requested for job %s; terminating subprocess", job_id
+                )
+                terminated = True
+                with contextlib.suppress(Exception):
+                    proc.terminate()
+                # Give the child a brief moment to flush then escalate
+                # if still alive. The outer run_job_in_subprocess does
+                # the real proc.wait() with _WAIT_TIMEOUT, so here we
+                # just break out of the polling loop.
+                break
+            time.sleep(_POLL_INTERVAL)
 
-    # Final flush — read any remaining lines after subprocess exits.
-    # Retry once to handle partial writes at EOF.
-    time.sleep(0.05)
-    if path.exists():
-        lines = path.read_text(encoding="utf-8").splitlines()
-        for line in lines[lines_read:]:
+        # Final flush — the child has exited (or we terminated it).
+        # Retry a handful of times to cover the NFS / overlay2 visibility
+        # gap where the kernel flushed the bytes but the parent's view
+        # has not caught up yet. Each iteration reads whatever new lines
+        # are now visible; if nothing arrives in a full retry cycle we
+        # give up and forward the buffered partial as best-effort.
+        for _ in range(_FINAL_FLUSH_RETRIES):
+            time.sleep(_FINAL_FLUSH_INTERVAL)
+            new_lines = reader.read_new_lines()
+            if not new_lines:
+                continue
+            for line in new_lines:
+                _forward_progress(line, job_id, broadcaster)
+
+        # Anything still buffered is an incomplete last write — forward
+        # it so the information at least reaches _forward_progress's
+        # logging path, even if it fails JSON parsing.
+        for line in reader.final_flush():
             _forward_progress(line, job_id, broadcaster)
+    finally:
+        reader.close()
 
 
 def _forward_progress(
