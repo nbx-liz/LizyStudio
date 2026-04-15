@@ -403,26 +403,27 @@ test.describe("Re-tune / Resume / Lineage flow (H-0062)", () => {
     //      to the Workspace selection (onJobStarted handler).
     test.setTimeout(180_000);
 
-    // Pre-create the parent via API so the UI test does not also have to
-    // walk through the upload + tune flow. The Workspace will pick it up
-    // when we navigate.
+    // Pre-create the parent via API so the UI test does not also have
+    // to walk through the upload + tune flow.
     const parentId = await setupTuneJob(request, 3);
 
-    await page.goto("/");
-    // The home page is the Workspace; once data is loaded the parent
-    // tune result should be the active job.
+    // Issue #101: land directly on the Workspace with the parent job
+    // pre-selected via the ?job_id= query param. WorkspacePage reads
+    // that param on mount and hydrates its local currentJobId state,
+    // so the Results panel renders immediately without the test having
+    // to drive a Jobs-page-click-through (JobList only lives on /jobs,
+    // not on the Workspace left rail, and WorkspacePage does not
+    // auto-hydrate currentJobId from /workspace/status).
+    await page.goto(`/?job_id=${parentId}`);
     await page.waitForLoadState("networkidle");
 
-    // Select the parent job from the Jobs list so the Workspace shows
-    // its results panel. The list lives in the left rail; clicking the
-    // job id text is the most stable selector across UI tweaks.
-    const parentRow = page.getByText(parentId, { exact: false }).first();
-    await parentRow.waitFor({ state: "visible", timeout: 30_000 });
-    await parentRow.click();
-
-    // Re-tune button should be enabled because the parent has a checkpoint.
+    // Re-tune button should be enabled because the parent has a
+    // checkpoint. The accessible name comes from the button's
+    // `aria-label="Re-tune with additional trials"` (set in
+    // RetuneActionButton.tsx), not from its visible text label
+    // "Re-tune (+N trials)" — getByRole matches the aria-label first.
     const retuneButton = page.getByRole("button", {
-      name: /Re-tune \(\+N trials\)/i,
+      name: /Re-tune with additional trials/i,
     });
     await retuneButton.waitFor({ state: "visible", timeout: 30_000 });
     await retuneButton.click();
@@ -454,20 +455,27 @@ test.describe("Re-tune / Resume / Lineage flow (H-0062)", () => {
     // Wait for the child to finish so the Lineage panel has a stable badge.
     await pollJobUntilDone(request, childId);
 
-    // The Workspace should switch selection to the child via onJobStarted.
-    // The Lineage panel renders the child id as a clickable button.
+    // The Workspace should switch selection to the child via
+    // onJobStarted. The Lineage panel renders each job id as a
+    // clickable button; we narrow to the button role because a bare
+    // getByText(jobId) also matches the "Re-tune started (jobid)"
+    // toast that lingers right after we click Start Re-tune.
+    //
+    // Note: the lineage tree here is rooted at the *currently viewed*
+    // job (the child we just switched to), not at the parent — the
+    // backend returns a subtree rooted at job_id from
+    // GET /jobs/{id}/lineage. So we can assert the child appears in
+    // its own lineage subtree, but we cannot click "parent" to go
+    // back within this panel; promoting a different job back into
+    // the Workspace is the Jobs page's "Open in Workspace" button
+    // (Issue #101) rather than an in-lineage navigation.
     const lineageHeader = page.getByText("Lineage", { exact: true });
     await lineageHeader.waitFor({ state: "visible", timeout: 30_000 });
-    const childNode = page.getByText(childId, { exact: false });
+    const childNode = page.getByRole("button", { name: childId });
     await childNode.waitFor({ state: "visible" });
 
-    // Clicking the parent node in the lineage tree should switch the
-    // Workspace selection back to the parent.
-    const parentNode = page.getByText(parentId, { exact: false }).first();
-    await parentNode.click();
-    // The page should now show the parent job header again. We assert
-    // by checking the Re-tune button is still enabled (it is on the
-    // parent's results view).
+    // Assert the Re-tune button is still present (and therefore the
+    // child is still rendered as a Workspace completed view).
     await expect(retuneButton).toBeVisible({ timeout: 10_000 });
   });
 
@@ -490,18 +498,18 @@ test.describe("Re-tune / Resume / Lineage flow (H-0062)", () => {
     const { job_id: childId } = await ab.json();
     await pollJobUntilDone(request, childId);
 
-    await page.goto("/");
+    // Issue #101: land directly on the Workspace with the CHILD job
+    // pre-selected via the ?job_id= query param. This is the stable
+    // entry point for "show me this specific completed job in the
+    // Workspace" — see the Lineage UI test above for the same pattern.
+    await page.goto(`/?job_id=${childId}`);
     await page.waitForLoadState("networkidle");
 
-    // Select the child job so the Workspace shows its completed view.
-    const childRow = page.getByText(childId, { exact: false }).first();
-    await childRow.waitFor({ state: "visible", timeout: 30_000 });
-    await childRow.click();
-
     // The Re-tune button must be enabled (not disabled with a tooltip)
-    // because the grandchild rule was lifted.
+    // because the grandchild rule was lifted. The accessible name
+    // comes from the aria-label, not the visible text label.
     const retuneButton = page.getByRole("button", {
-      name: /Re-tune \(\+N trials\)/i,
+      name: /Re-tune with additional trials/i,
     });
     await retuneButton.waitFor({ state: "visible", timeout: 30_000 });
     await expect(retuneButton).toBeEnabled();

@@ -1,5 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Download, RotateCcw, Trash2, X } from "lucide-react";
+import {
+  ArrowRight,
+  Download,
+  ExternalLink,
+  RotateCcw,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -119,8 +126,20 @@ export function JobDetailPanel({
     navigate("/", { state: { refitJobId: jobId } });
   }, [navigate, jobId]);
 
+  const handleOpenInWorkspace = useCallback(() => {
+    // Issue #101: hydrate the Workspace with this job selected so the
+    // user can see its Results panel, Re-tune button, lineage panel,
+    // etc. WorkspacePage reads the ?job_id= query param (see
+    // WorkspacePage.tsx). This is the first-party way to "promote" a
+    // historical job back into the live editing surface — before this,
+    // the Workspace only ever hosted the latest fit / tune started via
+    // its own UI. encodeURIComponent keeps this robust if job ids ever
+    // start carrying reserved URL characters.
+    navigate(`/?job_id=${encodeURIComponent(jobId)}`);
+  }, [navigate, jobId]);
+
   const handleInference = useCallback(() => {
-    navigate(`/inference?job_id=${jobId}`);
+    navigate(`/inference?job_id=${encodeURIComponent(jobId)}`);
   }, [navigate, jobId]);
 
   if (!job) {
@@ -198,6 +217,15 @@ export function JobDetailPanel({
       <div className="flex items-center gap-2 border-t px-6 py-3">
         {isCompleted && (
           <>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleOpenInWorkspace}
+              data-testid="open-in-workspace"
+            >
+              <ExternalLink className="mr-1 h-3 w-3" />
+              Open in Workspace
+            </Button>
             <Button variant="outline" size="sm" onClick={handleInference}>
               <ArrowRight className="mr-1 h-3 w-3" />
               Inference

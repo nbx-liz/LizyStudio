@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { getErrorMessage } from "@/api/errors";
 import {
@@ -25,9 +26,45 @@ export function WorkspacePage() {
   const queryClient = useQueryClient();
   const [hasData, setHasData] = useState(false);
   const [task, setTask] = useState<string | null>(null);
-  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
+  // Issue #101: hydrate currentJobId from the `?job_id=<id>` query
+  // param so the Jobs page (or any external link) can navigate the
+  // user directly into the Workspace with a specific completed job
+  // selected. The query-param name matches the convention already
+  // established by InferencePage so links stay consistent across
+  // the two destinations.
+  const [searchParams] = useSearchParams();
+  const [currentJobId, setCurrentJobId] = useState<string | null>(() =>
+    searchParams.get("job_id"),
+  );
   const [running, setRunning] = useState(false);
   const [modelTab, setModelTab] = useState<"fit" | "tune">("fit");
+
+  // Re-hydrate when the URL param changes (e.g. the user clicks
+  // "Open in Workspace" on a SECOND job from the Jobs page, which
+  // only updates the search params without remounting this page).
+  // The `useState` initializer fires once on mount; without this
+  // effect the second navigation would silently keep the first job
+  // selected. Mirrors InferencePage's HIGH-4 fix. Suppressed while
+  // a fit / tune is actively running so a URL change does not clobber
+  // a freshly-started job id set from inside handleFit / handleTune.
+  //
+  // Note on stale URL: after the user starts a fresh fit / tune via
+  // the Workspace UI, we intentionally do NOT rewrite `?job_id=` in
+  // the URL bar. If the user reloads the page in the middle of a new
+  // run, the URL still points at the previously-hydrated job and
+  // they will land back on that historical view. This matches the
+  // pre-Issue #101 behavior (reload = back to an empty Workspace)
+  // closely enough that we decided not to couple browser history to
+  // every in-run job_id change. A future improvement could call
+  // `setSearchParams({ job_id: newId })` inside handleFit / handleTune
+  // if user feedback asks for it.
+  useEffect(() => {
+    if (running) return;
+    const jobIdParam = searchParams.get("job_id");
+    if (jobIdParam) {
+      setCurrentJobId(jobIdParam);
+    }
+  }, [searchParams, running]);
 
   useDocumentTitle(running ? "Running..." : null);
   const notify = useBackgroundNotification();

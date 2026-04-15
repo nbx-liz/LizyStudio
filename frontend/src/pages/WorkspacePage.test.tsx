@@ -326,4 +326,51 @@ describe("WorkspacePage", () => {
       "Tune failed: plain string error",
     );
   });
+
+  // -----------------------------------------------------------------
+  // Issue #101: hydrate currentJobId from the URL `?job_id=<id>` param
+  // so a "Open in Workspace" link from the Jobs page lands directly
+  // on the selected job's Results panel instead of an empty Workspace.
+  // -----------------------------------------------------------------
+  describe("job hydration from URL", () => {
+    it("hydrates currentJobId from ?job_id=<id> on mount", () => {
+      renderWithProviders(<WorkspacePage />, {
+        initialEntries: ["/?job_id=job_abc123"],
+      });
+      expect(capturedResultsPanelProps.jobId).toBe("job_abc123");
+    });
+
+    it("leaves currentJobId null when no ?job param is present", () => {
+      renderWithProviders(<WorkspacePage />, { initialEntries: ["/"] });
+      expect(capturedResultsPanelProps.jobId).toBeNull();
+    });
+
+    it("does not start the running spinner when hydrating from URL", () => {
+      // The job being hydrated is a completed historical job, not a
+      // freshly-started run — ModelPanel must not show Running.
+      renderWithProviders(<WorkspacePage />, {
+        initialEntries: ["/?job_id=job_already_done"],
+      });
+      expect(capturedModelPanelProps.running).toBe(false);
+    });
+
+    it("ignores an empty ?job_id= value", () => {
+      renderWithProviders(<WorkspacePage />, { initialEntries: ["/?job_id="] });
+      expect(capturedResultsPanelProps.jobId).toBeNull();
+    });
+
+    it("still allows starting a fresh fit after a URL hydration", async () => {
+      mockRunFit.mockResolvedValue({ job_id: "job_new" });
+      renderWithProviders(<WorkspacePage />, {
+        initialEntries: ["/?job_id=job_hydrated"],
+      });
+      expect(capturedResultsPanelProps.jobId).toBe("job_hydrated");
+
+      const onFit = capturedModelPanelProps.onFit as () => Promise<void>;
+      await act(async () => onFit());
+
+      expect(capturedResultsPanelProps.jobId).toBe("job_new");
+      expect(capturedModelPanelProps.running).toBe(true);
+    });
+  });
 });
