@@ -35,6 +35,23 @@ export interface ColumnOverride {
   type: "numeric" | "categorical";
 }
 
+// Issue #107: key used by the target/task/overrides/cv effect to de-dup
+// syncConfig runs AND by handleTargetChange to pre-seed that de-dup after
+// a target-selection flow completes. Both sites MUST produce byte-identical
+// strings for the same logical state — otherwise the effect fires a
+// redundant syncConfig immediately after skipNextSyncRef is released,
+// which race-PUTs the same config and re-surfaces Issue #107. Keeping the
+// key construction in one place prevents that drift.
+function buildSyncKey(
+  target: string | null,
+  task: TaskType | null,
+  overrides: Record<string, ColumnOverride>,
+  cv: CvState,
+  blocked: BlockedGroupKFoldState,
+): string {
+  return JSON.stringify({ target, task, overrides, cv, blocked });
+}
+
 interface UseDataPanelParams {
   onDataChanged: () => void;
   onTaskChanged?: (task: string | null) => void;
@@ -154,7 +171,7 @@ export function useDataPanel({
   const prevSyncKey = useRef("");
   useEffect(() => {
     if (!target) return;
-    const key = JSON.stringify({ target, task, overrides, cv, blocked });
+    const key = buildSyncKey(target, task, overrides, cv, blocked);
     if (key === prevSyncKey.current) return;
     prevSyncKey.current = key;
     // H-0063: suppress syncConfig while handleTargetChange is assembling the
@@ -234,13 +251,20 @@ export function useDataPanel({
 
         let detectedTask: TaskType | null = task;
         let detectedStrategy = cv.strategy;
+        // Issue #107: mirror the cv state update here so buildSyncKey at
+        // the end of this function can use the same post-change cv value
+        // the effect will observe on its next run. If cols.suggested_task
+        // is absent, cv is not updated and nextCv stays as the current
+        // closure value — the effect will also see that same value.
+        let nextCv = cv;
         if (cols.suggested_task) {
           const t = cols.suggested_task as TaskType;
           detectedTask = t;
           setTask(t);
           onTaskChanged?.(t);
           detectedStrategy = getDefaultCvStrategy(t);
-          setCv(resetCvState(detectedStrategy));
+          nextCv = resetCvState(detectedStrategy);
+          setCv(nextCv);
         }
 
         const newOverrides: Record<string, ColumnOverride> = {};
@@ -290,16 +314,15 @@ export function useDataPanel({
           // Issue #107: pre-seed prevSyncKey with the post-handleTargetChange
           // state key so the target/task/overrides/cv effect that fires when
           // skipNextSyncRef is released does not re-PUT the same config via
-          // syncConfig. Without this, the effect sees a new key (because
-          // task/overrides/cv all just changed) and fires a second PUT with
-          // an equivalent body.
-          prevSyncKey.current = JSON.stringify({
-            target: value,
-            task: detectedTask,
-            overrides: newOverrides,
-            cv: resetCvState(detectedStrategy),
+          // syncConfig. Both sites share buildSyncKey so the two key
+          // constructions cannot drift.
+          prevSyncKey.current = buildSyncKey(
+            value,
+            detectedTask,
+            newOverrides,
+            nextCv,
             blocked,
-          });
+          );
           onDataChanged();
         }
       } catch (err) {
