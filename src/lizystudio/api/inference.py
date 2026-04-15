@@ -96,6 +96,13 @@ def inference_run(
         return {"inf_id": record.inf_id, "job_id": record.job_id}
     except Exception as exc:
         raise BackendError(exc) from exc
+    finally:
+        # HIGH-8: one-shot upload cleanup. Uploaded files previously
+        # lingered in /tmp until ws.reset() ran, exhausting disk on
+        # repeated 100 MB uploads. Path-mode runs leave the user's own
+        # files alone.
+        if body.data.source_type == "upload":
+            ws.consume_temp_file(body.data.path)
 
 
 @router.post("/upload")
@@ -240,13 +247,16 @@ def inference_comparison(
     """Compare two inference runs."""
     store = _get_inf_store(job_store)
 
-    # Resolve task type from the job's config
+    # Resolve task type from the job's config.
+    # ``task`` lives at the top level of the LizyML config — the previous
+    # lookup path ``config["model"]["task"]`` always fell through to the
+    # ``"regression"`` default, silently masking binary jobs.
     task = "regression"
     record = store.get(job_id, inf_id)
     if record is not None:
         job = job_store.get(record.job_id)
         if job is not None:
-            task = job.config.get("model", {}).get("task", "regression")
+            task = job.config.get("task", "regression")
 
     try:
         return get_comparison_stats(store, job_id, inf_id, other_inf_id, task=task)

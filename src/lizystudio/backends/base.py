@@ -157,8 +157,13 @@ class BackendAdapter(Protocol):
         """
         raise NotImplementedError
 
-    def load_checkpoint(self, path: Any) -> Any:
+    def load_checkpoint(self, path: Any, *, allowed_root: Any | None = None) -> Any:
         """Load a previously saved checkpoint from *path*.
+
+        When *allowed_root* is supplied the resolved target must live
+        within it — adapters should raise :class:`ValueError` otherwise.
+        This lets callers constrain deserialization to a trusted root
+        (e.g. the job store) and avoid arbitrary-path unpickling.
 
         Raises :class:`FileNotFoundError` when ``path/model.pkl`` does not
         exist.  Adapters should call their own pickle-version verification

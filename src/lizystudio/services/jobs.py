@@ -118,15 +118,28 @@ class JobStore:
         status: str | None = None,
         sort: str = "created_at",
     ) -> list[Job]:
-        """List all jobs, optionally filtered/sorted."""
+        """List all jobs, optionally filtered/sorted.
+
+        Entries that disappear or become unreadable between ``iterdir``
+        and ``_load_job`` (concurrent delete, partial write, corrupted
+        meta.json) are skipped with a warning rather than crashing the
+        whole listing.
+        """
         jobs: list[Job] = []
         if not self.jobs_dir.exists():
             return jobs
         for d in self.jobs_dir.iterdir():
-            if d.is_dir() and (d / "meta.json").exists():
+            if not d.is_dir() or not (d / "meta.json").exists():
+                continue
+            try:
                 job = self._load_job(d.name)
-                if status is None or job.status == status:
-                    jobs.append(job)
+            except (FileNotFoundError, OSError, json.JSONDecodeError, KeyError):
+                _logger.warning(
+                    "Skipping unreadable job directory %s", d.name, exc_info=True
+                )
+                continue
+            if status is None or job.status == status:
+                jobs.append(job)
         _SORTABLE_FIELDS = {
             "created_at",
             "completed_at",
@@ -341,13 +354,54 @@ class JobStore:
 
     # --- Active job tracking (concurrency control) ---
 
-    def claim_active(self, job_id: str) -> bool:
-        """Attempt to claim the active slot. Returns False if another job is active."""
+    def create_and_claim_active(
+        self,
+        *,
+        backend_name: str,
+        config: dict[str, Any],
+        data_ref: DataRef,
+        job_type: Literal["fit", "tune"],
+        parent_job_id: str | None = None,
+    ) -> Job | None:
+        """Atomically create a pending job and claim the active slot.
+
+        Returns the newly created ``Job`` when the slot was empty, or
+        ``None`` when another job already owns it. Unlike the two-step
+        ``create(...) + claim_active(...)`` sequence this method never
+        produces an orphan ``failed`` job directory for the losing
+        caller — nothing is persisted until the slot is actually held.
+
+        The subsequent ``_run_job_core`` will re-invoke ``claim_active``
+        with the same job_id; that call is a no-op because the slot is
+        already owned by this job.
+        """
         with self._active_lock:
             if self._active_job_id is not None:
-                return False
-            self._active_job_id = job_id
-            return True
+                return None
+            job = self.create(
+                backend_name=backend_name,
+                config=config,
+                data_ref=data_ref,
+                job_type=job_type,
+                parent_job_id=parent_job_id,
+            )
+            self._active_job_id = job.job_id
+            return job
+
+    def claim_active(self, job_id: str) -> bool:
+        """Attempt to claim the active slot.
+
+        Returns ``True`` when the slot is empty *or* when it is already
+        held by ``job_id`` (idempotent re-claim after
+        ``create_and_claim_active`` — the runner thread re-enters this
+        with the same id to keep the ownership explicit). Returns
+        ``False`` when a different job currently owns the slot.
+        """
+        with self._active_lock:
+            if self._active_job_id is None:
+                self._active_job_id = job_id
+                return True
+            return self._active_job_id == job_id
 
     def release_active(self, job_id: str) -> None:
         """Release the active slot."""

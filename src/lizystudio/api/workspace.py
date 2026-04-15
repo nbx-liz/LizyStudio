@@ -119,21 +119,30 @@ def data_load_path(
     body: DataPathRequest,
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, Any]:
-    """Load data from a local file path."""
-    path = body.path
+    """Load data from a local file path.
+
+    Uses the resolved path from ``validate_path_within`` for the
+    subsequent exists / read operations so a symlink swap between the
+    allow-list check and the actual load cannot redirect to a file
+    outside ``ALLOWED_FILES_ROOT``.
+    """
     try:
-        validate_path_within(Path(path), security.ALLOWED_FILES_ROOT)
+        resolved = validate_path_within(Path(body.path), security.ALLOWED_FILES_ROOT)
     except ValueError as exc:
         raise PathNotFoundError(str(exc)) from exc
-    if not Path(path).exists():
-        raise PathNotFoundError(path)
+    if not resolved.exists():
+        raise PathNotFoundError(str(resolved))
     try:
-        df = load_dataframe(path)
-    except Exception as exc:
+        df = load_dataframe(str(resolved))
+    except (FileNotFoundError, OSError) as exc:
+        # File vanished between the exists() check and the read, or the
+        # filesystem rejected the access outright.
+        raise PathNotFoundError(str(resolved)) from exc
+    except Exception as exc:  # noqa: BLE001 - pandas raises a wide variety
         raise FileInvalidError(str(exc)) from exc
     memory_usage_bytes = check_dataframe_memory(df)
     data_ref = make_data_ref(
-        df, source_type="path", path=path, filename=Path(path).name
+        df, source_type="path", path=str(resolved), filename=resolved.name
     )
     ws.set_data(df, data_ref)
     return {"data_ref": asdict(data_ref), "memory_usage_bytes": memory_usage_bytes}
@@ -384,8 +393,6 @@ def workspace_fit(
     job_store: JobStore = Depends(get_job_store),
 ) -> dict[str, Any]:
     """Create a fit job (thread managed by Service layer)."""
-    if job_store.has_active_job():
-        raise JobConflictError(job_store.active_job_id or "unknown")
     if not ws.config:
         raise WorkspaceNoConfigError()
     if ws.dataframe is None or ws.data_ref is None:
@@ -393,12 +400,18 @@ def workspace_fit(
     errors = validate_config(ws, ws.config)
     if errors:
         raise ValidationError(errors)
-    job = job_store.create(
+    # CRITICAL-2: atomically claim the active slot and create the job
+    # metadata in a single critical section so two concurrent
+    # /fit requests cannot race past the has_active_job check and
+    # leave an orphan "failed" job on disk.
+    job = job_store.create_and_claim_active(
         backend_name=get_backend_name(ws),
         config=ws.config,
         data_ref=ws.data_ref,
         job_type="fit",
     )
+    if job is None:
+        raise JobConflictError(job_store.active_job_id or "unknown")
     try:
         job_id = start_fit_async(
             ws=ws,
@@ -412,7 +425,13 @@ def workspace_fit(
         job.status = "failed"
         job.error = "Previous job still running"
         job_store.update(job)
+        job_store.release_active(job.job_id)
         raise JobConflictError(job.job_id) from None
+    except Exception:
+        # Any other failure after we claimed the slot must release it,
+        # otherwise the slot stays held until server restart.
+        job_store.release_active(job.job_id)
+        raise
     return {"job_id": job_id}
 
 
@@ -423,8 +442,6 @@ def workspace_tune(
     job_store: JobStore = Depends(get_job_store),
 ) -> dict[str, Any]:
     """Create a tune job (thread managed by Service layer)."""
-    if job_store.has_active_job():
-        raise JobConflictError(job_store.active_job_id or "unknown")
     if not ws.config:
         raise WorkspaceNoConfigError()
     if ws.dataframe is None or ws.data_ref is None:
@@ -452,12 +469,15 @@ def workspace_tune(
     errors = validate_config(ws, ws.config)
     if errors:
         raise ValidationError(errors)
-    job = job_store.create(
+    # CRITICAL-2: atomic create + slot claim, see workspace_fit above.
+    job = job_store.create_and_claim_active(
         backend_name=get_backend_name(ws),
         config=ws.config,
         data_ref=ws.data_ref,
         job_type="tune",
     )
+    if job is None:
+        raise JobConflictError(job_store.active_job_id or "unknown")
     try:
         job_id = start_tune_async(
             ws=ws,
@@ -471,5 +491,9 @@ def workspace_tune(
         job.status = "failed"
         job.error = "Previous job still running"
         job_store.update(job)
+        job_store.release_active(job.job_id)
         raise JobConflictError(job.job_id) from None
+    except Exception:
+        job_store.release_active(job.job_id)
+        raise
     return {"job_id": job_id}

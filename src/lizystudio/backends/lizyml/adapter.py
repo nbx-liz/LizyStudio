@@ -221,6 +221,10 @@ class LizyMLAdapter:
         if need_bridge:
             from lizyml import TuneProgressInfo
 
+            # Imported inline to avoid a circular import with services.training
+            # at module load (adapter is pulled in via backends/__init__).
+            from lizystudio.services.training import CancelledError
+
             def _bridge(info: TuneProgressInfo) -> None:
                 # H-0062: persist an incremental checkpoint BEFORE calling
                 # the user-supplied progress callback so a crash during
@@ -268,10 +272,13 @@ class LizyMLAdapter:
                         total_rounds=n_rounds,
                         trial_results=list(accumulated_trials),
                     )
-                except Exception:
-                    # CancelledError from _make_cancel_aware_cb is caught by
-                    # Optuna internally.  Re-raise as KeyboardInterrupt which
-                    # Optuna honours to abort the study gracefully.
+                except CancelledError:
+                    # CancelledError from _make_cancel_aware_cb must be
+                    # converted to KeyboardInterrupt so Optuna honours the
+                    # cancel request and aborts the study gracefully. Any
+                    # other exception (RuntimeError, TypeError, ...) is a
+                    # genuine bug in the progress path and must propagate
+                    # with its original traceback intact.
                     raise KeyboardInterrupt from None
 
             lizyml_callback = _bridge
@@ -417,14 +424,26 @@ class LizyMLAdapter:
             with contextlib.suppress(OSError):
                 meta_tmp.unlink(missing_ok=True)
 
-    def load_checkpoint(self, path: Path) -> Any:
+    def load_checkpoint(self, path: Path, *, allowed_root: Path | None = None) -> Any:
         """Load ``path/model.pkl`` after verifying ``model_meta.json``.
 
-        Raises :class:`FileNotFoundError` when no pickle exists, and
-        :class:`PickleIncompatibleError` when the sidecar reports a
-        schema or lizyml-major mismatch.
+        When *allowed_root* is supplied the resolved target directory
+        must live inside it. This protects ``cloudpickle.load`` from
+        being invoked on arbitrary filesystem paths — the production
+        caller passes ``job_store.jobs_dir`` so only checkpoints under
+        the studio's own jobs directory can be deserialized.
+
+        Raises :class:`FileNotFoundError` when no pickle exists,
+        :class:`ValueError` when the resolved path escapes
+        *allowed_root*, and :class:`PickleIncompatibleError` when the
+        sidecar reports a schema or lizyml-major mismatch.
         """
         target_dir = Path(path)
+        if allowed_root is not None:
+            from lizystudio.security import validate_path_within
+
+            target_dir = validate_path_within(target_dir, Path(allowed_root))
+
         pkl_path = target_dir / MODEL_PKL
         if not pkl_path.exists():
             raise FileNotFoundError(f"No checkpoint at {pkl_path}")
@@ -433,6 +452,15 @@ class LizyMLAdapter:
         if meta_path.exists():
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
             verify_pickle_compatibility(meta)
+        else:
+            # H-0067: accept legacy checkpoints that predate the sidecar,
+            # but log a warning so operators know the compatibility check
+            # was bypassed.
+            logger.warning(
+                "Loading checkpoint %s without model_meta.json — "
+                "pickle compatibility cannot be verified",
+                pkl_path,
+            )
 
         with pkl_path.open("rb") as fh:
             return cloudpickle.load(fh)
