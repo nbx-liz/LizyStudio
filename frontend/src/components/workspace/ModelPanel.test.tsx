@@ -1097,11 +1097,8 @@ describe("ModelPanel", () => {
     await waitFor(() => {
       expect(captured.onChange).not.toBeNull();
     });
-    const onChange = captured.onChange;
-    if (!onChange) throw new Error("ConfigForm onChange not captured");
-
-    // Emit an onChange with a body that is deep-equal to the cached config.
-    onChange({ model: { name: "lgbm", params: {} } });
+    // biome-ignore lint/style/noNonNullAssertion: guaranteed non-null by the waitFor above; matches sibling handleConfigChange tests in this file.
+    captured.onChange!({ model: { name: "lgbm", params: {} } });
 
     // Give the promise chain a tick to settle.
     await new Promise((r) => setTimeout(r, 50));
@@ -1138,10 +1135,8 @@ describe("ModelPanel", () => {
     await waitFor(() => {
       expect(captured.onChange).not.toBeNull();
     });
-    const onChange = captured.onChange;
-    if (!onChange) throw new Error("ConfigForm onChange not captured");
-
-    onChange({ model: { name: "xgb", params: {} } });
+    // biome-ignore lint/style/noNonNullAssertion: guaranteed non-null by the waitFor above; matches sibling handleConfigChange tests in this file.
+    captured.onChange!({ model: { name: "xgb", params: {} } });
 
     await waitFor(() => {
       expect(mockUpdate).toHaveBeenCalledWith({
