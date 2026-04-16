@@ -124,7 +124,9 @@ def _build_report_html(
     """Build a minimal self-contained HTML report."""
     import html
     import json
+    import secrets
 
+    nonce = secrets.token_urlsafe(16)
     title = html.escape(f"Job {job.job_id} — {job.job_type.title()} Report")
     task = html.escape(str(info.get("task", "")))
     model_name = html.escape(str(info.get("model_name", "")))
@@ -158,42 +160,36 @@ def _build_report_html(
         layout_js = _js_safe(parsed.get("layout", {}))
         plot_divs += f"""
         <div id="plot-{i}" style="width:100%;height:500px;margin-bottom:20px;"></div>
-        <script>
+        <script nonce="{nonce}">
             Plotly.newPlot('plot-{i}', {data_js}, {layout_js});
         </script>
         """
 
-    # HIGH-5 / Issue #92: Plotly is pulled from a CDN because bundling
-    # ~4 MB of JS into every HTML report is wasteful. We layer two
-    # mitigations against a tampered or substituted bundle:
+    # HIGH-5 / Issue #92 / Issue #104: Plotly is pulled from a CDN
+    # because bundling ~4 MB of JS into every HTML report is wasteful.
+    # We layer three mitigations against script injection:
     #
     # 1. ``Content-Security-Policy`` whitelists ``cdn.plot.ly`` as the
-    #    only allowed script origin so the browser refuses to fetch
-    #    Plotly from anywhere else.
+    #    only allowed external script origin.
     # 2. ``integrity="sha384-..."`` (Subresource Integrity) makes the
     #    browser hash the fetched bundle and refuse to execute it if the
-    #    hash differs from the pinned value, so a compromised CDN cannot
-    #    silently swap in malicious JavaScript.
+    #    hash differs from the pinned value.
+    # 3. A per-report CSP **nonce** authorises the inline
+    #    ``Plotly.newPlot(...)`` bootstraps without ``'unsafe-inline'``.
+    #    Each report gets a fresh nonce via ``secrets.token_urlsafe``,
+    #    so an attacker who can inject markup still cannot execute
+    #    scripts unless they also guess the nonce.
     #
-    # ``crossorigin="anonymous"`` is required for SRI to actually take
-    # effect on cross-origin scripts (without it the browser silently
-    # drops the integrity check).
-    #
-    # Note on ``'unsafe-inline'`` below: it would normally weaken SRI on
-    # an HTTP-header-delivered CSP, but here the CSP is embedded in a
-    # ``<meta http-equiv>`` tag and the inline allowance only enables
-    # the ``Plotly.newPlot('plot-N', ...)`` bootstraps emitted above.
-    # SRI on the external Plotly bundle remains enforced regardless.
+    # ``crossorigin="anonymous"`` is required for SRI to take effect on
+    # cross-origin scripts.
     #
     # When bumping the Plotly version, recompute the SRI hash and
     # update both ``_PLOTLY_VERSION`` / ``_PLOTLY_SRI`` AND the matching
     # constants in
     # ``tests/regression/test_reg_0074_export_report_plotly_sri.py``.
-    # See that test's module docstring for the one-liner that computes
-    # the hash from the CDN bundle.
     csp = (
         "default-src 'none'; "
-        "script-src https://cdn.plot.ly 'unsafe-inline'; "
+        f"script-src https://cdn.plot.ly 'nonce-{nonce}'; "
         "style-src 'unsafe-inline'; "
         "img-src data:;"
     )
@@ -206,7 +202,8 @@ def _build_report_html(
     <title>{title}</title>
     <script src="https://cdn.plot.ly/{_PLOTLY_VERSION}"
             integrity="{_PLOTLY_SRI}"
-            crossorigin="anonymous"></script>
+            crossorigin="anonymous"
+            nonce="{nonce}"></script>
     <style>
         body {{ font-family: system-ui, sans-serif;
                max-width: 1000px; margin: 0 auto;
