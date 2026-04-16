@@ -1,10 +1,10 @@
-"""Additional tests for api/workspace.py to push coverage to 85%+.
+"""Primary test suite for api/workspace.py.
 
-Targets:
-- GET /workspace/status: correct shape, job restore path (lines 64-68)
-- POST /workspace/fit: 400 when no config, 400 when no data (lines 285-306)
-- POST /workspace/tune: default tuning config injected (lines 309-347)
-- POST /workspace/config/upload: valid YAML config saved (lines 232-250)
+Covers:
+- GET /workspace/status: correct shape, job restore path
+- POST /workspace/fit: 400 when no config, 400 when no data
+- POST /workspace/tune: default tuning config injected
+- POST /workspace/config/upload: valid YAML config saved
 """
 
 from __future__ import annotations
