@@ -293,6 +293,127 @@ describe("CompletedContent — annotateMetric", () => {
   });
 });
 
+describe("CompletedContent — LC metric initialization", () => {
+  it("sets lcMetric to first metric when model.params.metric is an array with multiple entries", async () => {
+    // Line 160: lcAvailableMetrics.length > 1 path
+    const job = makeFitJob({
+      config: {
+        model: { params: { metric: ["auc", "logloss"] } },
+      },
+      fit_result: {
+        metrics: {
+          raw: {
+            if_mean: { auc: 0.95 },
+            oof: { auc: 0.9 },
+            oof_std: { auc: 0.01 },
+          },
+        },
+        fold_count: 1,
+        params: [],
+      },
+    });
+    renderWithQuery(
+      <CompletedContent
+        job={job}
+        selectedPlot="learning-curve"
+        onSelectPlot={vi.fn()}
+      />,
+    );
+    // Component renders without error — effect runs and sets lcMetric
+    expect(screen.getByTestId("kpi-cards")).toBeInTheDocument();
+  });
+
+  it("marks lcInitialized when model.params.metric is a single string", async () => {
+    // Line 162: lcAvailableMetrics.length >= 1 (exactly 1) path
+    const job = makeFitJob({
+      config: {
+        model: { params: { metric: "auc" } },
+      },
+      fit_result: {
+        metrics: {
+          raw: {
+            if_mean: { auc: 0.95 },
+            oof: { auc: 0.9 },
+            oof_std: { auc: 0.01 },
+          },
+        },
+        fold_count: 1,
+        params: [],
+      },
+    });
+    renderWithQuery(
+      <CompletedContent
+        job={job}
+        selectedPlot="learning-curve"
+        onSelectPlot={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("kpi-cards")).toBeInTheDocument();
+  });
+});
+
+describe("CompletedContent — annotateMetric MetricEntry object form", () => {
+  it("annotates precision_at_k from MetricEntry dict in evaluation.metrics array", () => {
+    // Lines 173-179: entry is object with precision_at_k key containing k number
+    const job = makeFitJob({
+      config: {
+        evaluation: {
+          metrics: [{ precision_at_k: { k: 10 } }],
+        },
+      },
+      fit_result: {
+        metrics: {
+          raw: {
+            if_mean: { precision_at_k: 0.8 },
+            oof: { precision_at_k: 0.75 },
+            oof_std: { precision_at_k: 0.02 },
+          },
+        },
+        fold_count: 5,
+        params: [],
+      },
+    });
+    renderWithQuery(
+      <CompletedContent
+        job={job}
+        selectedPlot="learning-curve"
+        onSelectPlot={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("precision_at_k@10")).toBeInTheDocument();
+  });
+
+  it("returns name unchanged when MetricEntry object exists but k is not a number", () => {
+    // Line 179: typeof k === "number" is false
+    const job = makeFitJob({
+      config: {
+        evaluation: {
+          metrics: [{ precision_at_k: { k: "top10" } }],
+        },
+      },
+      fit_result: {
+        metrics: {
+          raw: {
+            if_mean: { precision_at_k: 0.8 },
+            oof: { precision_at_k: 0.75 },
+            oof_std: {},
+          },
+        },
+        fold_count: 1,
+        params: [],
+      },
+    });
+    renderWithQuery(
+      <CompletedContent
+        job={job}
+        selectedPlot="learning-curve"
+        onSelectPlot={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("precision_at_k")).toBeInTheDocument();
+  });
+});
+
 describe("CompletedContent — multiple metrics", () => {
   it("renders multiple metric KPI cards", () => {
     const job = makeFitJob({

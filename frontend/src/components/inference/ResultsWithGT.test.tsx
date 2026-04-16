@@ -1,4 +1,5 @@
-import { cleanup, screen } from "@testing-library/react";
+import { cleanup, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithQuery } from "@/test/helpers";
 
@@ -31,6 +32,12 @@ vi.mock("@/components/workspace/PlotlyChart", () => ({
 }));
 
 import type { InferenceRecord } from "@/api/inference";
+import {
+  fetchInferenceMetrics,
+  fetchInferencePlot,
+  fetchInferenceShapPlot,
+} from "@/api/inference";
+import { fetchJobPlots } from "@/api/jobs";
 import { ResultsWithGT } from "./ResultsWithGT";
 
 function makeRecord(overrides: Partial<InferenceRecord> = {}): InferenceRecord {
@@ -205,5 +212,282 @@ describe("ResultsWithGT", () => {
     );
 
     expect(screen.getByText("Warnings")).toBeInTheDocument();
+  });
+
+  // Lines 89-102: Score section renders when metrics has three-column structure
+  it("renders Score section when metrics has inf/is/oos structure", async () => {
+    vi.mocked(fetchInferenceMetrics).mockResolvedValueOnce({
+      inf: { accuracy: 0.9 },
+      is: { accuracy: 0.88 },
+      oos: { accuracy: 0.85 },
+    } as never);
+
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsWithGT
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        targetCol="target"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Score")).toBeInTheDocument();
+      expect(screen.getByTestId("score-table")).toBeInTheDocument();
+    });
+  });
+
+  // Lines 105-131: Plots section renders when plots array is non-empty
+  it("renders Plots section with select when plots are available", async () => {
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce([
+      "confusion-matrix",
+      "roc-curve",
+      "learning-curve",
+    ]);
+
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsWithGT
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        targetCol="target"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Plots")).toBeInTheDocument();
+    });
+  });
+
+  // Lines 117-122: Plots section filters out learning-curve, tuning, importance
+  it("filters out learning-curve, tuning, importance from plot select", async () => {
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce([
+      "learning-curve",
+      "tuning",
+      "importance",
+      "confusion-matrix",
+    ]);
+
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsWithGT
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        targetCol="target"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Plots")).toBeInTheDocument();
+    });
+
+    // learning-curve, tuning, importance should not appear as select items
+    expect(screen.queryByText("learning curve")).not.toBeInTheDocument();
+    expect(screen.queryByText("tuning")).not.toBeInTheDocument();
+    expect(screen.queryByText("importance")).not.toBeInTheDocument();
+  });
+
+  // Lines 129: plotData renders PlotlyChart when available
+  it("renders PlotlyChart when plot data is loaded", async () => {
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce(["confusion-matrix"]);
+    vi.mocked(fetchInferencePlot).mockResolvedValue({
+      plotly_json: '{"data":[]}',
+    } as never);
+
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsWithGT
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        targetCol="target"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Plots")).toBeInTheDocument();
+      expect(screen.getByTestId("plotly-chart")).toBeInTheDocument();
+    });
+  });
+
+  // Lines 169-187: PredDistributionPlot shows loading then chart
+  it("renders prediction distribution loading state initially", async () => {
+    // Keep fetchInferencePlot pending so isLoading stays true briefly
+    let resolve: (v: unknown) => void;
+    const pending = new Promise((res) => {
+      resolve = res;
+    });
+    vi.mocked(fetchInferencePlot).mockImplementation((_, __, plotName) => {
+      if (plotName === "prediction-distribution") return pending as never;
+      return Promise.resolve(null) as never;
+    });
+
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsWithGT
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        targetCol="target"
+      />,
+    );
+
+    // The accordion is collapsed by default; PredDistributionPlot still mounts
+    // and issues the query. Since the promise is pending, isLoading is true.
+    // We verify the component renders without crashing here.
+    expect(screen.getByText("Prediction Distribution")).toBeInTheDocument();
+
+    // Resolve to avoid hanging
+    resolve!(null);
+  });
+
+  // Lines 129 + auto-select useEffect: PlotlyChart renders in Plots section
+  // when fetchJobPlots returns plots and fetchInferencePlot returns data
+  it("renders PlotlyChart in Plots section when plot data resolves", async () => {
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce(["confusion-matrix"]);
+    vi.mocked(fetchInferencePlot).mockResolvedValue({
+      plotly_json: '{"data":[]}',
+    } as never);
+
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsWithGT
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        targetCol="target"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("plotly-chart")).toBeInTheDocument();
+    });
+  });
+
+  // Lines 191-214: ShapAccordionItem renders when shap data is available
+  it("renders SHAP Summary accordion when shap data resolves", async () => {
+    vi.mocked(fetchInferenceShapPlot).mockResolvedValueOnce({
+      plotly_json: '{"data":[]}',
+    } as never);
+
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsWithGT
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        targetCol="target"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("SHAP Summary")).toBeInTheDocument();
+    });
+  });
+
+  // Lines 198: ShapAccordionItem returns null when no data and not loading
+  it("does not render SHAP Summary accordion when shap data is null", async () => {
+    vi.mocked(fetchInferenceShapPlot).mockResolvedValueOnce(null as never);
+
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsWithGT
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        targetCol="target"
+      />,
+    );
+
+    await waitFor(() => {
+      // Wait for query to settle
+      expect(screen.queryByText("SHAP Summary")).not.toBeInTheDocument();
+    });
+  });
+
+  // Lines 204-206: ShapAccordionItem shows loading text while fetching
+  it("renders SHAP Summary loading state while shap is pending", async () => {
+    let resolveShap: (v: unknown) => void;
+    const pendingShap = new Promise((res) => {
+      resolveShap = res;
+    });
+    vi.mocked(fetchInferenceShapPlot).mockReturnValueOnce(pendingShap as never);
+
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsWithGT
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        targetCol="target"
+      />,
+    );
+
+    // While loading, the accordion item should be present (isLoading = true)
+    await waitFor(() => {
+      expect(screen.getByText("SHAP Summary")).toBeInTheDocument();
+    });
+
+    // Resolve to avoid hanging
+    resolveShap!(null);
+  });
+
+  // Lines 176-187: PredDistributionPlot — open accordion to trigger content render
+  it("renders loading text in prediction distribution while query is pending", async () => {
+    const user = userEvent.setup();
+    let resolveDist: (v: unknown) => void;
+    const pendingDist = new Promise((res) => {
+      resolveDist = res;
+    });
+    vi.mocked(fetchInferencePlot).mockImplementation((_, __, plotName) => {
+      if (plotName === "prediction-distribution") return pendingDist as never;
+      return Promise.resolve(null) as never;
+    });
+
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsWithGT
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        targetCol="target"
+      />,
+    );
+
+    // Open the Prediction Distribution accordion
+    await user.click(screen.getByText("Prediction Distribution"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Loading distribution...")).toBeInTheDocument();
+    });
+
+    resolveDist!(null);
+  });
+
+  it("renders PlotlyChart in prediction distribution after data resolves", async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchInferencePlot).mockResolvedValue({
+      plotly_json: '{"data":[]}',
+    } as never);
+
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsWithGT
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        targetCol="target"
+      />,
+    );
+
+    // Open the Prediction Distribution accordion to mount PredDistributionPlot content
+    await user.click(screen.getByText("Prediction Distribution"));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("plotly-chart")).toBeInTheDocument();
+    });
   });
 });

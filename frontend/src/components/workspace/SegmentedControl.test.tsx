@@ -76,6 +76,68 @@ describe("SegmentedControl", () => {
     expect(screen.getByRole("button", { name: /custom/i })).toBeInTheDocument();
   });
 
+  it("clicking Custom when value is a preset calls onChange with first numeric preset", () => {
+    const onChange = vi.fn();
+    render(
+      <SegmentedControl
+        presets={PRESETS}
+        value={10}
+        onChange={onChange}
+        allowCustom
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /custom/i }));
+    expect(onChange).toHaveBeenCalledWith(10);
+  });
+
+  it("clicking Custom when value is null calls onChange with first numeric preset", () => {
+    const onChange = vi.fn();
+    render(
+      <SegmentedControl
+        presets={PRESETS}
+        value={null}
+        onChange={onChange}
+        allowCustom
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /custom/i }));
+    expect(onChange).toHaveBeenCalledWith(10);
+  });
+
+  it("clicking Custom when no numeric preset falls back to 50", () => {
+    const onChange = vi.fn();
+    const presetsAllNull = [{ label: "None", value: null }];
+    render(
+      <SegmentedControl
+        presets={presetsAllNull}
+        value={null}
+        onChange={onChange}
+        allowCustom
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /custom/i }));
+    expect(onChange).toHaveBeenCalledWith(50);
+  });
+
+  it("NumberInput onChange with empty string calls onChange with null", () => {
+    // Render with a non-preset value to activate custom mode
+    const onChange = vi.fn();
+    render(
+      <SegmentedControl
+        presets={PRESETS}
+        value={999}
+        onChange={onChange}
+        allowCustom
+      />,
+    );
+    // Custom mode should be active since 999 is not a preset
+    // NumberInput renders a text input
+    const input = screen.getByRole("textbox");
+    expect(input).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "" } });
+    expect(onChange).toHaveBeenCalledWith(null);
+  });
+
   it("supports preset with null value (e.g. None)", () => {
     const presetsWithNull = [
       { label: "None", value: null },
