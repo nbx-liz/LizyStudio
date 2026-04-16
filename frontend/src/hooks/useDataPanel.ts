@@ -52,6 +52,62 @@ function buildSyncKey(
   return JSON.stringify({ target, task, overrides, cv, blocked });
 }
 
+export function buildOverridesFromColumns(
+  columns: ColumnInfo[],
+): Record<string, ColumnOverride> {
+  const overrides: Record<string, ColumnOverride> = {};
+  for (const col of columns) {
+    overrides[col.name] = {
+      excluded: col.suggested_excluded,
+      type: col.suggested_type,
+    };
+  }
+  return overrides;
+}
+
+export function buildMergedConfig({
+  defaults,
+  task,
+  strategy,
+  folds,
+  dataPath,
+  target,
+  overrides,
+}: {
+  defaults: Record<string, unknown>;
+  task: string;
+  strategy: string;
+  folds: number;
+  dataPath: string;
+  target: string;
+  overrides: Record<string, ColumnOverride>;
+}): Record<string, unknown> {
+  const categorical = Object.entries(overrides)
+    .filter(([, v]) => !v.excluded && v.type === "categorical")
+    .map(([k]) => k);
+  const excluded = Object.entries(overrides)
+    .filter(([, v]) => v.excluded)
+    .map(([k]) => k);
+  return {
+    ...defaults,
+    task,
+    data: {
+      ...(defaults.data as object),
+      path: dataPath || undefined,
+      target,
+    },
+    features: {
+      ...(defaults.features as object),
+      categorical,
+      exclude: excluded,
+    },
+    split: {
+      method: strategy,
+      n_splits: folds,
+    },
+  };
+}
+
 interface UseDataPanelParams {
   onDataChanged: () => void;
   onTaskChanged?: (task: string | null) => void;
@@ -267,55 +323,22 @@ export function useDataPanel({
           setCv(nextCv);
         }
 
-        const newOverrides: Record<string, ColumnOverride> = {};
-        for (const col of cols.columns) {
-          newOverrides[col.name] = {
-            excluded: col.suggested_excluded,
-            type: col.suggested_type,
-          };
-        }
+        const newOverrides = buildOverridesFromColumns(cols.columns);
         setOverrides(newOverrides);
 
         if (detectedTask) {
           const defaults = await fetchConfigDefaults(detectedTask, value);
-          const categorical = Object.entries(newOverrides)
-            .filter(([, v]) => !v.excluded && v.type === "categorical")
-            .map(([k]) => k);
-          const excluded = Object.entries(newOverrides)
-            .filter(([, v]) => v.excluded)
-            .map(([k]) => k);
-          const merged: Record<string, unknown> = {
-            ...defaults,
+          const merged = buildMergedConfig({
+            defaults,
             task: detectedTask,
-            data: {
-              ...(defaults.data as object),
-              path: dataPath || undefined,
-              target: value,
-            },
-            features: {
-              ...(defaults.features as object),
-              categorical,
-              exclude: excluded,
-            },
-            split: {
-              method: detectedStrategy,
-              n_splits: cv.folds,
-            },
-          };
+            strategy: detectedStrategy,
+            folds: cv.folds,
+            dataPath,
+            target: value,
+            overrides: newOverrides,
+          });
           await updateConfig(merged);
-          // Issue #107: broadcast the merged config into the shared query
-          // cache so ModelPanel's useQuery(['config']) consumer observes the
-          // fully-defaulted config immediately. Without this, any ConfigForm
-          // effect that fires on task change during the transition would
-          // PUT a partial config derived from a stale cached value, and the
-          // ModelPanel error list would transiently show
-          // 'config_version / task / split / model: Field required'.
           queryClient.setQueryData(["config"], merged);
-          // Issue #107: pre-seed prevSyncKey with the post-handleTargetChange
-          // state key so the target/task/overrides/cv effect that fires when
-          // skipNextSyncRef is released does not re-PUT the same config via
-          // syncConfig. Both sites share buildSyncKey so the two key
-          // constructions cannot drift.
           prevSyncKey.current = buildSyncKey(
             value,
             detectedTask,
