@@ -184,6 +184,7 @@ export function WorkspacePage() {
           jobId={currentJobId}
           hasData={hasData}
           hasConfig={hasData && config != null}
+          currentConfig={config ?? undefined}
           onApplyToFit={handleApplyToFit}
           onJobDone={handleJobDone}
           onJobStarted={handleJobStarted}

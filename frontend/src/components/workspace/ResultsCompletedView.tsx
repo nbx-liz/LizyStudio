@@ -17,6 +17,7 @@ import { Accordion } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { pivotMetrics } from "@/lib/metrics";
+import { ConfigDiffBadge } from "./ConfigDiffBadge";
 import { FoldDetailsSection } from "./FoldDetailsSection";
 import { PlotSection } from "./PlotSection";
 import { JobLineageTree } from "./retune/JobLineageTree";
@@ -30,6 +31,7 @@ interface ResultsCompletedViewProps {
   job: JobDetail;
   headerLabel: string;
   modelName?: string;
+  currentConfig?: Record<string, unknown>;
   selectedPlot: string;
   onSelectPlot: (p: string) => void;
   onApplyToFit?: (params: Record<string, unknown>) => void;
@@ -41,6 +43,7 @@ export function ResultsCompletedView({
   job,
   headerLabel,
   modelName,
+  currentConfig,
   selectedPlot,
   onSelectPlot,
   onJobStarted,
@@ -252,6 +255,10 @@ export function ResultsCompletedView({
           Completed
         </Badge>
         {primaryMetric && <Badge variant="secondary">{primaryMetric}</Badge>}
+        <ConfigDiffBadge
+          jobConfig={(job.config ?? {}) as Record<string, unknown>}
+          currentConfig={currentConfig}
+        />
         <div className="ml-auto flex gap-2">
           {job.job_type === "tune" && tuneResult && (
             <RetuneActionButton

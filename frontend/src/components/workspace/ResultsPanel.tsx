@@ -21,6 +21,7 @@ interface ResultsPanelProps {
   jobId: string | null;
   hasData?: boolean;
   hasConfig?: boolean;
+  currentConfig?: Record<string, unknown>;
   onApplyToFit?: (params: Record<string, unknown>) => void;
   onJobDone?: () => void;
   /**
@@ -35,6 +36,7 @@ export function ResultsPanel({
   jobId,
   hasData = false,
   hasConfig = false,
+  currentConfig,
   onApplyToFit,
   onJobDone,
   onJobStarted,
@@ -308,6 +310,7 @@ export function ResultsPanel({
       job={job}
       headerLabel={headerLabel}
       modelName={modelName}
+      currentConfig={currentConfig}
       selectedPlot={selectedPlot}
       onSelectPlot={setSelectedPlot}
       onApplyToFit={onApplyToFit}
