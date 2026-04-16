@@ -1097,7 +1097,6 @@ describe("ModelPanel", () => {
     await waitFor(() => {
       expect(captured.onChange).not.toBeNull();
     });
-    // biome-ignore lint/style/noNonNullAssertion: guaranteed non-null by the waitFor above; matches sibling handleConfigChange tests in this file.
     captured.onChange!({ model: { name: "lgbm", params: {} } });
 
     // Give the promise chain a tick to settle.
@@ -1135,7 +1134,6 @@ describe("ModelPanel", () => {
     await waitFor(() => {
       expect(captured.onChange).not.toBeNull();
     });
-    // biome-ignore lint/style/noNonNullAssertion: guaranteed non-null by the waitFor above; matches sibling handleConfigChange tests in this file.
     captured.onChange!({ model: { name: "xgb", params: {} } });
 
     await waitFor(() => {
