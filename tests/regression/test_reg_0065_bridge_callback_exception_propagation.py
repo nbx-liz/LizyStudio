@@ -70,7 +70,7 @@ def test_adapter_bridge_source_narrows_exception() -> None:
     from pathlib import Path
 
     source = Path(
-        "src/lizystudio/backends/lizyml/adapter.py",
+        "src/lizystudio/backends/lizyml/lifecycle_mixin.py",
     ).read_text(encoding="utf-8")
     # Locate the inline _bridge function and verify its exception handler
     # does not use a broad ``except Exception``.

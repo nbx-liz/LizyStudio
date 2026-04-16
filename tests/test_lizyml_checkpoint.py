@@ -80,12 +80,12 @@ def test_save_checkpoint_swallows_oserror(
     # substituting the underlying bytes write. After the H-0062 cleanup
     # split, cloudpickle is imported into the adapter submodule rather
     # than the package root.
-    from lizystudio.backends.lizyml import adapter as lm_adapter
+    from lizystudio.backends.lizyml import checkpoint_mixin as ckpt_mod
 
     def boom(*args: Any, **kwargs: Any) -> None:
         raise OSError("disk full")
 
-    monkeypatch.setattr(lm_adapter.cloudpickle, "dump", boom)
+    monkeypatch.setattr(ckpt_mod.cloudpickle, "dump", boom)
 
     with caplog.at_level("WARNING"):
         adapter.save_checkpoint(_make_picklable_object(), tmp_path)
