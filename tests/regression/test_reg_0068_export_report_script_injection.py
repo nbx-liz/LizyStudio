@@ -101,3 +101,7 @@ def test_report_has_csp_meta_restricting_scripts(tmp_path: Path) -> None:
     assert 'http-equiv="Content-Security-Policy"' in html
     assert "script-src https://cdn.plot.ly" in html
     assert "default-src 'none'" in html
+    # Issue #104: unsafe-inline must not appear in script-src.
+    # Inline scripts are authorised via a per-report CSP nonce instead.
+    assert "'unsafe-inline'" not in html.split("script-src")[1].split(";")[0]
+    assert "'nonce-" in html
