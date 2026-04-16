@@ -261,7 +261,7 @@ export function ResultsCompletedView({
             />
           )}
           <Button
-            variant="outline"
+            variant="default"
             size="sm"
             onClick={() => {
               window.open(`/api/jobs/${job.job_id}/export-code`, "_blank");
