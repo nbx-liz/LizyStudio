@@ -288,3 +288,106 @@ describe("useDataPanel", () => {
     expect(cached).toEqual(merged);
   });
 });
+
+// --- Issue #128: pure helper unit tests ---
+
+import { buildMergedConfig, buildOverridesFromColumns } from "./useDataPanel";
+
+describe("buildOverridesFromColumns", () => {
+  it("maps columns to ColumnOverride records", () => {
+    const columns: ColumnInfo[] = [
+      {
+        name: "age",
+        dtype: "float64",
+        unique_count: 50,
+        suggested_type: "numeric",
+        suggested_excluded: false,
+        exclude_reason: null,
+      } as ColumnInfo,
+      {
+        name: "id",
+        dtype: "int64",
+        unique_count: 100,
+        suggested_type: "numeric",
+        suggested_excluded: true,
+        exclude_reason: "id",
+      } as ColumnInfo,
+      {
+        name: "color",
+        dtype: "object",
+        unique_count: 3,
+        suggested_type: "categorical",
+        suggested_excluded: false,
+        exclude_reason: null,
+      } as ColumnInfo,
+    ];
+    const result = buildOverridesFromColumns(columns);
+    expect(result).toEqual({
+      age: { excluded: false, type: "numeric" },
+      id: { excluded: true, type: "numeric" },
+      color: { excluded: false, type: "categorical" },
+    });
+  });
+
+  it("returns empty object for empty columns", () => {
+    expect(buildOverridesFromColumns([])).toEqual({});
+  });
+});
+
+describe("buildMergedConfig", () => {
+  it("merges defaults with overrides, task, target, and split", () => {
+    const defaults = {
+      config_version: 1,
+      task: "binary",
+      data: { path: null, target: null },
+      features: { categorical: [], exclude: [] },
+      split: { method: "kfold", n_splits: 5 },
+      model: { name: "lgbm", params: {} },
+    };
+    const overrides = {
+      age: { excluded: false, type: "numeric" as const },
+      color: { excluded: false, type: "categorical" as const },
+      id: { excluded: true, type: "numeric" as const },
+    };
+    const result = buildMergedConfig({
+      defaults,
+      task: "binary",
+      strategy: "kfold",
+      folds: 5,
+      dataPath: "/data/train.csv",
+      target: "survived",
+      overrides,
+    });
+
+    expect(result.config_version).toBe(1);
+    expect(result.task).toBe("binary");
+    expect(result.data).toMatchObject({
+      path: "/data/train.csv",
+      target: "survived",
+    });
+    expect(result.features).toEqual({
+      categorical: ["color"],
+      exclude: ["id"],
+    });
+    expect(result.split).toEqual({ method: "kfold", n_splits: 5 });
+    expect(result.model).toEqual({ name: "lgbm", params: {} });
+  });
+
+  it("sets path to undefined when dataPath is empty", () => {
+    const defaults = {
+      data: {},
+      features: {},
+      split: {},
+    };
+    const result = buildMergedConfig({
+      defaults,
+      task: "binary",
+      strategy: "kfold",
+      folds: 5,
+      dataPath: "",
+      target: "y",
+      overrides: {},
+    });
+    expect(result.data).toMatchObject({ path: undefined, target: "y" });
+  });
+});
