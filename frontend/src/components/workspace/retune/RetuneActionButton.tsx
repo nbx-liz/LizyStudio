@@ -90,7 +90,7 @@ export function RetuneActionButton({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button
-          variant="outline"
+          variant="default"
           size="sm"
           disabled={disabled}
           title={tooltip}
