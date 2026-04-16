@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import equal from "fast-deep-equal";
 import {
   Download,
   FileText,
@@ -121,19 +122,10 @@ export function ModelPanel({
   const handleConfigChange = useCallback(
     async (newConfig: Record<string, unknown>) => {
       if (running) return;
-      // Issue #107: deep-equal guard against duplicate PUTs. When
-      // useDataPanel.handleTargetChange broadcasts the merged config into
-      // the query cache, ConfigForm's task/metric auto-select effect can
-      // re-fire with an identical body on the next render. Without this
-      // guard the duplicate PUT races the upstream flow and briefly
-      // resurfaces the transient 'Field required' validation error the
-      // broadcast was meant to prevent. JSON.stringify is sufficient here
-      // because the config shape is a plain JSON object produced by
-      // setNestedValue, so key order is stable.
       const cached = queryClient.getQueryData<Record<string, unknown>>([
         "config",
       ]);
-      if (cached && JSON.stringify(cached) === JSON.stringify(newConfig)) {
+      if (cached && equal(cached, newConfig)) {
         return;
       }
       try {

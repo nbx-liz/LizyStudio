@@ -1107,6 +1107,36 @@ describe("ModelPanel", () => {
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 
+  it("skips PUT when newConfig is deep-equal but has different key order", async () => {
+    const { fetchConfig, updateConfig: mockUpdate } = await import(
+      "@/api/workspace"
+    );
+    (fetchConfig as ReturnType<typeof vi.fn>).mockResolvedValue({
+      model: { name: "lgbm", params: { depth: 6 } },
+    });
+    (mockUpdate as ReturnType<typeof vi.fn>).mockClear();
+    captured.onChange = null;
+
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(captured.onChange).not.toBeNull();
+    });
+    // Same values, different key insertion order
+    captured.onChange!({ model: { params: { depth: 6 }, name: "lgbm" } });
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
   it("still PUTs when newConfig differs from the cached config", async () => {
     // Dual guard: make sure the deep-equal short-circuit does not block
     // legitimate config edits. A changed model name must still trigger
