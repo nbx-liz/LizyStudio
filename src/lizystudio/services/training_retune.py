@@ -159,25 +159,16 @@ def _run_retune_subprocess(
     expand_boundary: bool | None,
     boundary_threshold: float | None,
 ) -> Job:
-    """Execute a Re-tune child job in a subprocess (H-0062 Bugfix 2026-04-14).
+    """Execute a Re-tune child job in a subprocess (H-0062).
 
-    The parent thread cannot run lizyml / LightGBM because OpenMP would
-    bind its thread pool to the daemon thread and cause ~8-50× slowdown
-    (see ``openmp_detect.should_use_subprocess``). Mirrors the path used
-    by ``start_fit_async`` / ``start_tune_async`` but forwards the
-    Re-tune specific inputs so the child process can reconstruct the
-    run without accessing the parent's in-memory WorkspaceState.
-
-    The caller (``start_retune_async``) is responsible for guaranteeing
-    ``ws.data_ref.path`` is set before invoking this helper. Bugfix
-    2026-04-14 (6): previously this used ``assert`` which left the
-    child job in ``pending`` forever when the invariant was violated.
-    Now a runtime check marks the child failed via the shared helper.
+    Delegates to the shared ``_run_subprocess_job`` orchestrator
+    (Issue #118) so subprocess lifecycle management (data-ref check,
+    ``run_job_in_subprocess`` call, workspace state update, and
+    active-slot release) is not duplicated.
     """
-    from lizystudio.services.subprocess_runner import run_job_in_subprocess
-    from lizystudio.services.workspace import get_backend_name
+    from lizystudio.services.training import _run_subprocess_job
 
-    if ws.data_ref is None or not ws.data_ref.path:
+    def _on_data_missing(_job: Job) -> None:
         _mark_retune_child_failed(
             ws=ws,
             job_store=job_store,
@@ -188,33 +179,19 @@ def _run_retune_subprocess(
                 "(ws.data_ref.path is empty)"
             ),
         )
-        return child_job
 
-    try:
-        finished = run_job_in_subprocess(
-            job=child_job,
-            job_store=job_store,
-            broadcaster=broadcaster,
-            backend_name=get_backend_name(ws),
-            data_path=ws.data_ref.path,
-            mode="retune",
-            parent_job_id=parent_job.job_id,
-            retune_n_trials=n_trials,
-            retune_expand_boundary=expand_boundary,
-            retune_boundary_threshold=boundary_threshold,
-        )
-        with ws._lock:
-            ws.workspace_fit_result = finished.fit_result
-            ws.workspace_tune_result = finished.tune_result
-            ws.current_job_id = finished.job_id
-        return finished
-    finally:
-        # CRITICAL-2 follow-up: release the parent-process active slot
-        # that ``create_and_claim_active`` took when this retune was
-        # started. The subprocess path has its own child JobStore so
-        # the in-process _run_job_core finally does not touch the
-        # parent's _active_job_id.
-        job_store.release_active(child_job.job_id)
+    return _run_subprocess_job(
+        ws,
+        child_job,
+        job_store,
+        broadcaster,
+        mode="retune",
+        parent_job_id=parent_job.job_id,
+        retune_n_trials=n_trials,
+        retune_expand_boundary=expand_boundary,
+        retune_boundary_threshold=boundary_threshold,
+        on_data_missing=_on_data_missing,
+    )
 
 
 def start_retune_async(
