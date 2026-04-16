@@ -1,4 +1,4 @@
-import { cleanup, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JobSummary } from "@/api/types";
 import { makeJobSummary, renderWithProviders } from "@/test/helpers";
@@ -134,5 +134,96 @@ describe("JobList", () => {
     );
 
     expect(screen.getByText("...")).toBeInTheDocument();
+  });
+
+  it("shows dash for cancelled job score", () => {
+    const jobs: JobSummary[] = [
+      makeJobSummary({
+        job_id: "j1",
+        status: "cancelled",
+        primary_score: null,
+      }),
+    ];
+
+    renderWithProviders(
+      <JobList jobs={jobs} selectedJobId={null} onSelectJob={vi.fn()} />,
+    );
+
+    expect(screen.getByText("\u2014")).toBeInTheDocument();
+  });
+
+  it("shows dash when primary_score is null and not running/failed/cancelled", () => {
+    const jobs: JobSummary[] = [
+      makeJobSummary({
+        job_id: "j1",
+        status: "completed",
+        primary_score: null,
+      }),
+    ];
+
+    renderWithProviders(
+      <JobList jobs={jobs} selectedJobId={null} onSelectJob={vi.fn()} />,
+    );
+
+    expect(screen.getByText("\u2014")).toBeInTheDocument();
+  });
+
+  it("filters jobs when status filter button is clicked", () => {
+    const jobs: JobSummary[] = [
+      makeJobSummary({ job_id: "j1", status: "completed" }),
+      makeJobSummary({ job_id: "j2", status: "failed" }),
+    ];
+
+    renderWithProviders(
+      <JobList jobs={jobs} selectedJobId={null} onSelectJob={vi.fn()} />,
+    );
+
+    // Click "Fail" filter
+    fireEvent.click(screen.getByText("Fail"));
+
+    expect(screen.queryByText("No jobs match the current filters.")).toBeNull();
+  });
+
+  it("shows 'No jobs match' when filter removes all jobs", () => {
+    const jobs: JobSummary[] = [
+      makeJobSummary({ job_id: "j1", status: "completed" }),
+    ];
+
+    renderWithProviders(
+      <JobList jobs={jobs} selectedJobId={null} onSelectJob={vi.fn()} />,
+    );
+
+    // Click "Fail" filter — no failed jobs exist
+    fireEvent.click(screen.getByText("Fail"));
+
+    expect(
+      screen.getByText("No jobs match the current filters."),
+    ).toBeInTheDocument();
+  });
+
+  it("calls onSelectJob when a job button is clicked", () => {
+    const onSelectJob = vi.fn();
+    const jobs: JobSummary[] = [
+      makeJobSummary({ job_id: "j1", model_name: "LightGBM" }),
+    ];
+
+    renderWithProviders(
+      <JobList jobs={jobs} selectedJobId={null} onSelectJob={onSelectJob} />,
+    );
+
+    fireEvent.click(screen.getByText("LGB"));
+    expect(onSelectJob).toHaveBeenCalledWith("j1");
+  });
+
+  it("shows undefined model name as '???' abbreviation", () => {
+    const jobs: JobSummary[] = [
+      makeJobSummary({ job_id: "j1", model_name: "" }),
+    ];
+
+    renderWithProviders(
+      <JobList jobs={jobs} selectedJobId={null} onSelectJob={vi.fn()} />,
+    );
+
+    expect(screen.getByText("???")).toBeInTheDocument();
   });
 });
