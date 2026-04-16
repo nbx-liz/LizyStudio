@@ -4,11 +4,11 @@ React + TypeScript + Vite UI for [LizyStudio](https://github.com/nbx-liz/LizyStu
 
 ## Prerequisites
 
-- **Node.js 18.19 or newer** — declared via `engines.node` in `package.json`. CI runs on Node 20, so 20 is the recommended version for parity. Versions below 18.19 are not supported.
+- **Node.js 20 or newer** — declared via `engines.node` in `package.json`. CI runs on Node 20. Older versions (including Node 18.x) have been observed to crash the production build (`pnpm build`) with a V8 fatal error under the current dependency graph, so 20 is the enforced floor rather than a recommendation.
 - **pnpm 10 or newer** — the project pins `pnpm@10.31.0` via the `packageManager` field. Enable corepack once with `corepack enable` and pnpm will match automatically.
 - A running backend on `http://localhost:8501` for `pnpm dev` (the Vite dev server proxies API calls there).
 
-Run `node -v` to confirm. If you see anything below `v18.19`, install a supported Node via your version manager (`nvm install 20`, `fnm install 20`, `volta install node@20`, etc.) before continuing.
+Run `node -v` to confirm. If you see anything below `v20`, install Node 20 via your version manager (`nvm install 20`, `fnm install 20`, `volta install node@20`, etc.) before continuing.
 
 ## Install
 
