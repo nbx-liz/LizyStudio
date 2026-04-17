@@ -110,13 +110,8 @@ export function useConfigSync({
     syncConfig();
   }, [target, task, overrides, cv, blocked, syncConfig]);
 
-  const suppressSync = useCallback(async (fn: () => Promise<void>) => {
-    skipNextSyncRef.current = true;
-    try {
-      await fn();
-    } finally {
-      skipNextSyncRef.current = false;
-    }
+  const setSyncSuppressed = useCallback((flag: boolean) => {
+    skipNextSyncRef.current = flag;
   }, []);
 
   const preseedSyncKey = useCallback((key: string) => {
@@ -125,7 +120,7 @@ export function useConfigSync({
 
   return {
     syncConfig,
-    suppressSync,
+    setSyncSuppressed,
     preseedSyncKey,
   };
 }
