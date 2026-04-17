@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from lizystudio.backends.base import BackendAdapter, ProgressCallback
 from lizystudio.backends.types import FitSummary, TuningSummary
+from lizystudio.metrics import record_job_terminal
 from lizystudio.services.jobs import Job, JobStore
 from lizystudio.services.training import (
     _join_previous_thread,
@@ -146,6 +147,7 @@ def _mark_retune_child_failed(
         ws.current_job_id = child_job.job_id
     if broadcaster is not None:
         broadcaster.send_error(child_job.job_id, message)
+    record_job_terminal(child_job.job_type, "failed")
 
 
 def _run_retune_subprocess(

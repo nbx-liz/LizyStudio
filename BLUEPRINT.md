@@ -2601,6 +2601,66 @@ Readiness probe。Backend adapter と JobStore の初期化が完了し、トラ
 - **liveness は必ず `/api/health` を使う**。`/api/health/ready` は未初期化時に 503 を返すため、liveness probe に設定すると k8s が pod を restart loop に入れる恐れがある。
 - **認証不要**。これは probe 用であり、エンドポイントからは backend 名と pkg version しか露出しない（新規に秘匿情報を追加しないこと）。
 
+### 5.9 Metrics API
+
+Prometheus 互換の観測エンドポイント。Issue #30 Phase 2 / H-0065。
+
+#### GET `/api/metrics`
+
+Prometheus text format (version 0.0.4) で 4 系統のメトリクスを返す。認証不要（probe と同じポジショニング）。
+
+**Response 200:**
+```
+Content-Type: text/plain; version=0.0.4; charset=utf-8
+
+# HELP lizystudio_requests_total HTTP requests handled by LizyStudio
+# TYPE lizystudio_requests_total counter
+lizystudio_requests_total{method="GET",path="/api/workspace/status",status="200"} 42.0
+lizystudio_requests_total{method="POST",path="/api/workspace/fit",status="200"} 3.0
+
+# HELP lizystudio_request_duration_seconds HTTP request latency
+# TYPE lizystudio_request_duration_seconds histogram
+lizystudio_request_duration_seconds_bucket{method="GET",path="/api/workspace/status",le="0.005"} 40.0
+...
+
+# HELP lizystudio_jobs_total ML jobs by terminal status
+# TYPE lizystudio_jobs_total counter
+lizystudio_jobs_total{job_type="fit",status="completed"} 3.0
+
+# HELP lizystudio_active_jobs Currently running ML jobs (0 or 1)
+# TYPE lizystudio_active_jobs gauge
+lizystudio_active_jobs 0.0
+```
+
+#### メトリクス定義
+
+| Name | Type | Labels | 意味 |
+|------|------|--------|------|
+| `lizystudio_requests_total` | Counter | `method`, `path`, `status` | HTTP リクエスト総数 |
+| `lizystudio_request_duration_seconds` | Histogram | `method`, `path` | HTTP レイテンシ（bucket は prometheus_client default） |
+| `lizystudio_jobs_total` | Counter | `job_type`, `status` | ML ジョブ終了カウンタ。`job_type` ∈ `{fit, tune}`、`status` ∈ `{completed, failed, cancelled}` |
+| `lizystudio_active_jobs` | Gauge | なし | JobStore active slot の使用状態 (0 または 1) |
+
+#### カーディナリティ方針
+
+- **`path` label は FastAPI の route template を使う**（例: `/api/jobs/{job_id}`）。生の job_id や inf_id を label 化すると長期的に Prometheus の series が爆発するため禁止。
+- route に未マッチの path（404 経路）は `path="unmatched"` に集約する。
+- 静的ファイル (`/assets/...` / SPA fallback) は label 化せず集約カテゴリで数える（metrics router がアタッチされる前の middleware で扱う）。
+
+#### 計測対象からの除外
+
+- `/api/metrics` 自身の呼び出しは `lizystudio_requests_total` / `lizystudio_request_duration_seconds` に含めない。監視ツール由来のトラフィックが本体メトリクスのベースロードを汚染するのを防ぐため。
+- `/api/health` と `/api/health/ready` は計測に含める（probe 頻度も重要な観測情報）。
+
+#### 運用上の注意
+
+- **認証不要** — health / readiness と同じく公開エンドポイント。露出する情報は以下のみ:
+  - LizyStudio 定義のカウンタ / ヒストグラム / ゲージ（本節の冒頭表）
+  - `prometheus_client` デフォルトレジストリが自動追加する `python_info`（実装 / マイナー / パッチレベル）と `process_*`（RSS、CPU時間、FD数、スタート時刻）
+
+  運用時に Python バージョンやプロセスメモリを外部に出したくない場合は、リバースプロキシで `/api/metrics` を内部ネットワーク限定に制限すること。アプリケーション側では無効化しない（Prometheus のデフォルト挙動を保ち、ツール互換性を優先）。
+- **レート制限なし** — Prometheus の scrape 間隔（通常 15s）を前提に設計。外部公開する場合はリバースプロキシ側で rate limit を設定する想定。
+
 ---
 
 ## 6. エラーハンドリング

@@ -17,6 +17,7 @@ from fastapi import Request
 
 from lizystudio.backends.base import BackendAdapter
 from lizystudio.backends.types import DataRef, FitSummary, TuningSummary
+from lizystudio.metrics import ACTIVE_JOBS
 from lizystudio.security import validate_path_within  # noqa: E402
 
 _logger = logging.getLogger(__name__)
@@ -410,6 +411,7 @@ class JobStore:
                 parent_job_id=parent_job_id,
             )
             self._active_job_id = job.job_id
+            ACTIVE_JOBS.set(1)
             return job
 
     def _is_slot_holder_stale_locked(self) -> bool:
@@ -439,7 +441,14 @@ class JobStore:
         with self._active_lock:
             if self._active_job_id is None:
                 self._active_job_id = job_id
+                ACTIVE_JOBS.set(1)
                 return True
+            # H-0065: the `self._active_job_id == job_id` re-claim
+            # branch intentionally skips `ACTIVE_JOBS.set(1)` — the
+            # gauge was already set to 1 by the original
+            # `create_and_claim_active` or `claim_active` call that
+            # acquired the slot, and bumping it again would be a
+            # no-op.
             return self._active_job_id == job_id
 
     def release_active(self, job_id: str) -> None:
@@ -447,6 +456,7 @@ class JobStore:
         with self._active_lock:
             if self._active_job_id == job_id:
                 self._active_job_id = None
+                ACTIVE_JOBS.set(0)
 
     def force_release_active_if(self, expected_job_id: str) -> bool:
         """Atomically release the slot iff it is still held by *expected_job_id*.
@@ -466,6 +476,7 @@ class JobStore:
         with self._active_lock:
             if self._active_job_id == expected_job_id:
                 self._active_job_id = None
+                ACTIVE_JOBS.set(0)
                 return True
             return False
 
