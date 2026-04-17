@@ -35,6 +35,26 @@ export function createTestCsvNoTarget(
 }
 
 /**
+ * Upload a local file via multipart POST /workspace/data/upload.
+ * Returns the raw APIResponse so callers can assert status / body
+ * themselves (mirrors the negative-path tests that craft the multipart
+ * payload inline).
+ */
+export async function uploadDataFile(
+  request: import("@playwright/test").APIRequestContext,
+  filePath: string,
+  mimeType = "text/csv",
+): Promise<import("@playwright/test").APIResponse> {
+  const buffer = fs.readFileSync(filePath);
+  const name = filePath.split("/").pop() ?? "upload.csv";
+  return await request.post(`${API}/workspace/data/upload`, {
+    multipart: {
+      file: { name, mimeType, buffer },
+    },
+  });
+}
+
+/**
  * Load data, get defaults, save config, start fit. Returns job_id.
  */
 export async function setupAndFit(
