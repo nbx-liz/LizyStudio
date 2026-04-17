@@ -1625,3 +1625,31 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (d) active job が無い通常ケースでは既存の挙動が変わらない。
   - (e) 既存の `test_reg_0071` / `test_reg_0072` / retune-flow E2E が regression なく通る。
 - **Decision:** 2026-04-15 採択 (Phase B3)。Option 1 変種 C を採用。E2E workaround 撤去は本 PR 範囲外。
+
+---
+
+### H-0064: Health / readiness エンドポイントの追加（Issue #30 Phase 1）
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §5.8（新設）
+- **Context:** Issue #30 は Prometheus メトリクス + liveness / readiness probe の追加を要望している。現状、`/api/*` 配下には軽量な liveness エンドポイントが存在せず、k8s / 一般的なリバースプロキシ配下に LizyStudio をデプロイする際に probe を配線する手段がない。Prometheus 対応（Phase 2）は外部依存（`prometheus-client`）と middleware 追加が必要で規模が大きいため、まずは追加依存ゼロで実装できる health / ready 2 エンドポイントを切り出して先に着地させたい。
+- **Proposal:** 以下 2 エンドポイントを `/api/health` 名前空間に追加する:
+  - `GET /api/health` — liveness probe。プロセスが応答可能であれば常に 200 を返す。Body: `{"status": "ok", "version": "<pkg __version__>"}`。
+  - `GET /api/health/ready` — readiness probe。Backend adapter と JobStore の初期化が完了しているか確認する。準備完了なら 200、未完了なら 503。Body: `{"status": "ready" | "not_ready", "backend": "<name>", "jobs_dir": true/false, "version": "..."}`。
+- **Impact:**
+  - 新規: `src/lizystudio/api/health.py`（エンドポイント実装）
+  - 追加: `src/lizystudio/server.py` に `app.include_router(health.router, prefix="/api/health")` 1 行
+  - 新規: `tests/test_health_api.py`
+  - 追記: BLUEPRINT.md §5.8
+- **Compatibility:** 非破壊的（新規エンドポイント追加のみ）。既存のフロントエンドは health を呼ばない。
+- **Alternatives:**
+  1. **選択肢 A（却下）**: `/api/workspace/status` を liveness として流用する案。デメリット: workspace state の依存があり、未初期化時に 500 を返す可能性がある。liveness として誤検知リスクが高い。
+  2. **選択肢 B（却下）**: Issue #30 の 3 フェーズ（health + Prometheus + system metrics）を一括実装する案。デメリット: PR が肥大化し、`prometheus-client` の追加やメトリクス middleware の設計議論でブロックされる。Phase 1 だけでも独立した運用価値がある。
+  3. **選択肢 C（採用、本提案）**: health / ready 2 本のみ、追加依存ゼロで着地。Prometheus は別 Issue / 別 PR で段階的に追加する。
+- **Acceptance Criteria:**
+  - (a) `GET /api/health` が 200 と `{"status": "ok", "version": ...}` を返す。
+  - (b) `GET /api/health/ready` が完全初期化済みアプリに対して 200 と `{"status": "ready", ...}` を返す。
+  - (c) backend adapter / jobs_dir の初期化失敗を ready=false として 503 で返す（未初期化シナリオ）。
+  - (d) liveness エンドポイントが **workspace state に依存せず** 単独で応答する（未データロード状態でも 200）。
+  - (e) SPA fallback ルートが `/api/health` を奪わない（`/api/` プレフィックスで既に除外されているが、テストで固定）。
+- **Decision:** 2026-04-17 採択 (Issue #30 Phase 1)。Prometheus メトリクス + system metrics は別 Proposal で追加する。

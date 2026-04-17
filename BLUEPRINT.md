@@ -2556,6 +2556,51 @@ Workspace の `workspace_result` は完了時に自動更新される。
 }
 ```
 
+### 5.8 Health API
+
+運用基盤（k8s / リバースプロキシ）からプロセスの生死と準備状況を確認するための軽量エンドポイント。Issue #30 Phase 1 / H-0064。
+
+#### GET `/api/health`
+
+Liveness probe。プロセスが応答可能であれば常に `200 OK` を返す。Workspace state や Backend adapter には依存しない。
+
+**Response 200:**
+```json
+{"status": "ok", "version": "0.2.0"}
+```
+
+#### GET `/api/health/ready`
+
+Readiness probe。Backend adapter と JobStore の初期化が完了し、トラフィックを受け付けられる状態かを確認する。
+
+**Response 200 (ready):**
+```json
+{
+  "status": "ready",
+  "version": "0.2.0",
+  "backend": "lizyml",
+  "jobs_dir": true
+}
+```
+
+**Response 503 (not_ready):**
+```json
+{
+  "status": "not_ready",
+  "version": "0.2.0",
+  "backend": null,
+  "jobs_dir": false
+}
+```
+
+- `backend`: `request.app.state.workspace.backend.info.name`（取得失敗時は `null`）
+- `jobs_dir`: `request.app.state.job_store.base_dir.is_dir()` の結果
+
+#### 運用上の注意
+
+- **liveness は必ず `/api/health` を使う**。`/api/health/ready` は未初期化時に 503 を返すため、liveness probe に設定すると k8s が pod を restart loop に入れる恐れがある。
+- **認証不要**。これは probe 用であり、エンドポイントからは backend 名と pkg version しか露出しない（新規に秘匿情報を追加しないこと）。
+
 ---
 
 ## 6. エラーハンドリング
