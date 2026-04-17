@@ -764,7 +764,7 @@ describe("ConfigForm — auto-select useEffect", () => {
     const onChange = vi.fn();
     renderConfigForm({
       schema: minimalSchema,
-      config: { model: { name: "lgbm", params: {} } },
+      config: { config_version: 1, model: { name: "lgbm", params: {} } },
       onChange,
       task: "binary",
       uiSchema: {
@@ -789,7 +789,7 @@ describe("ConfigForm — auto-select useEffect", () => {
     const onChange = vi.fn();
     renderConfigForm({
       schema: minimalSchema,
-      config: { model: { name: "lgbm", params: {} } },
+      config: { config_version: 1, model: { name: "lgbm", params: {} } },
       onChange,
       task: "binary",
       uiSchema: {
@@ -837,7 +837,7 @@ describe("ConfigForm — auto-select useEffect", () => {
     const onChange = vi.fn();
     renderConfigForm({
       schema: minimalSchema,
-      config: { model: { name: "lgbm", params: {} } },
+      config: { config_version: 1, model: { name: "lgbm", params: {} } },
       onChange,
       task: null,
       uiSchema: {
@@ -856,7 +856,7 @@ describe("ConfigForm — auto-select useEffect", () => {
     const onChange = vi.fn();
     renderConfigForm({
       schema: minimalSchema,
-      config: { model: { name: "lgbm", params: {} } },
+      config: { config_version: 1, model: { name: "lgbm", params: {} } },
       onChange,
       task: "binary",
       uiSchema: {
@@ -888,6 +888,7 @@ describe("ConfigForm — auto-select useEffect", () => {
       schema: minimalSchema,
       // Incompatible state: task is binary but objective is multiclass.
       config: {
+        config_version: 1,
         model: {
           name: "lgbm",
           params: { objective: "multiclass" },
@@ -919,6 +920,7 @@ describe("ConfigForm — auto-select useEffect", () => {
     renderConfigForm({
       schema: minimalSchema,
       config: {
+        config_version: 1,
         model: {
           name: "lgbm",
           // Incompatible state: task is binary but metric is multiclass-only.

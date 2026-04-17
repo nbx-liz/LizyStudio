@@ -119,13 +119,21 @@ export function ConfigForm({
   // Auto-reset inner_valid when current selection is not in filtered options
   const currentInnerValid = (innerValid.method as string) ?? "holdout";
   useEffect(() => {
+    // Same guard as the objective/metric effect below: avoid partial-PUT
+    // races while the config is still being seeded by useDataPanel.
+    if (!config.config_version) return;
     if (
       filteredInnerValidOptions.length > 0 &&
       !filteredInnerValidOptions.includes(currentInnerValid)
     ) {
       handleFieldChange(["training", "inner_valid", "method"], "holdout");
     }
-  }, [filteredInnerValidOptions, currentInnerValid, handleFieldChange]);
+  }, [
+    filteredInnerValidOptions,
+    currentInnerValid,
+    handleFieldChange,
+    config.config_version,
+  ]);
 
   // Calibration
   const calibration =
@@ -211,6 +219,14 @@ export function ConfigForm({
   // LGBM rejects a multiclass objective on a binary target.
   useEffect(() => {
     if (!task || !uiSchema?.option_sets) return;
+    // Issue #107 regression guard: skip auto-select while the config is
+    // still empty or only partially seeded. Writing to an empty config
+    // here produces a partial-only PUT like {model:{params:{objective}}}
+    // that overwrites the server-side config via the router's assignment
+    // semantics, re-surfacing 'config_version / task / split: Field
+    // required' validation errors. Wait until useDataPanel has seeded a
+    // full config (recognised by config_version being set).
+    if (!config.config_version) return;
 
     // Objective: single-select. Reset when empty OR when current value
     // is not in the list of objectives valid for the current task.
@@ -258,7 +274,7 @@ export function ConfigForm({
         );
       }
     }
-  }, [task, uiSchema, modelParams, handleFieldChange]);
+  }, [task, uiSchema, modelParams, handleFieldChange, config.config_version]);
 
   if (!rawProperties) return null;
 

@@ -89,50 +89,64 @@ export function useDataPanel({
 
   const handleTargetChange = useCallback(
     async (value: string) => {
-      await configSync.suppressSync(async () => {
-        setTarget(value);
-        try {
-          const cols = await fetchColumns(value);
-          setColumns(cols.columns);
+      configSync.setSyncSuppressed(true);
+      setTarget(value);
+      try {
+        const cols = await fetchColumns(value);
+        setColumns(cols.columns);
 
-          let detectedTask: TaskType | null = task;
-          let detectedStrategy = cv.strategy;
-          let nextCv = cv;
-          if (cols.suggested_task) {
-            const t = cols.suggested_task as TaskType;
-            detectedTask = t;
-            setTask(t);
-            onTaskChanged?.(t);
-            detectedStrategy = getDefaultCvStrategy(t);
-            nextCv = resetCvState(detectedStrategy);
-            setCv(nextCv);
-          }
-
-          const newOverrides = buildOverridesFromColumns(cols.columns);
-          columnOverrides.setOverrides(newOverrides);
-
-          if (detectedTask) {
-            const defaults = await fetchConfigDefaults(detectedTask, value);
-            const merged = buildMergedConfig({
-              defaults,
-              task: detectedTask,
-              strategy: detectedStrategy,
-              folds: cv.folds,
-              dataPath: dataLoad.dataPath,
-              target: value,
-              overrides: newOverrides,
-            });
-            await updateConfig(merged);
-            queryClient.setQueryData(["config"], merged);
-            configSync.preseedSyncKey(
-              buildSyncKey(value, detectedTask, newOverrides, nextCv, blocked),
-            );
-            onDataChanged();
-          }
-        } catch (err) {
-          toast.error(`Column detection failed: ${getErrorMessage(err)}`);
+        let detectedTask: TaskType | null = task;
+        let detectedStrategy = cv.strategy;
+        let nextCv = cv;
+        if (cols.suggested_task) {
+          const t = cols.suggested_task as TaskType;
+          detectedTask = t;
+          setTask(t);
+          onTaskChanged?.(t);
+          detectedStrategy = getDefaultCvStrategy(t);
+          nextCv = resetCvState(detectedStrategy);
+          setCv(nextCv);
         }
-      });
+
+        const newOverrides = buildOverridesFromColumns(cols.columns);
+        columnOverrides.setOverrides(newOverrides);
+
+        if (detectedTask) {
+          const defaults = await fetchConfigDefaults(detectedTask, value);
+          const merged = buildMergedConfig({
+            defaults,
+            task: detectedTask,
+            strategy: detectedStrategy,
+            // Use nextCv.folds (post-reset) so the merged split config
+            // matches the cv state the sync effect will observe next;
+            // otherwise the pre-reset cv.folds could leak into the PUT
+            // while preseedSyncKey uses nextCv.
+            folds: nextCv.folds,
+            dataPath: dataLoad.dataPath,
+            target: value,
+            overrides: newOverrides,
+          });
+          await updateConfig(merged);
+          queryClient.setQueryData(["config"], merged);
+          configSync.preseedSyncKey(
+            buildSyncKey(value, detectedTask, newOverrides, nextCv, blocked),
+          );
+          onDataChanged();
+        }
+      } catch (err) {
+        toast.error(`Column detection failed: ${getErrorMessage(err)}`);
+      } finally {
+        configSync.setSyncSuppressed(false);
+        // Radix Select returns focus to the trigger on close via
+        // `onCloseAutoFocus`, which runs AFTER our finally block. Defer
+        // the blur to the next animation frame so it fires after Radix
+        // has restored focus, otherwise `:focus-visible` matches and the
+        // 3px focus ring combined with the 1px border reads as a doubled
+        // outline. Keyboard users regain the ring on subsequent Tab.
+        requestAnimationFrame(() => {
+          (document.activeElement as HTMLElement | null)?.blur();
+        });
+      }
     },
     [
       task,
@@ -143,7 +157,7 @@ export function useDataPanel({
       onTaskChanged,
       queryClient,
       columnOverrides.setOverrides,
-      configSync.suppressSync,
+      configSync.setSyncSuppressed,
       configSync.preseedSyncKey,
     ],
   );
