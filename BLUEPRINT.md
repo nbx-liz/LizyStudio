@@ -2611,7 +2611,7 @@ Prometheus text format (version 0.0.4) で 4 系統のメトリクスを返す�
 
 **Response 200:**
 ```
-Content-Type: text/plain; version=0.0.4; charset=utf-8
+Content-Type: text/plain; version=1.0.0; charset=utf-8
 
 # HELP lizystudio_requests_total HTTP requests handled by LizyStudio
 # TYPE lizystudio_requests_total counter
@@ -2639,6 +2639,7 @@ lizystudio_active_jobs 0.0
 | `lizystudio_requests_total` | Counter | `method`, `path`, `status` | HTTP リクエスト総数 |
 | `lizystudio_request_duration_seconds` | Histogram | `method`, `path` | HTTP レイテンシ（bucket は prometheus_client default） |
 | `lizystudio_jobs_total` | Counter | `job_type`, `status` | ML ジョブ終了カウンタ。`job_type` ∈ `{fit, tune}`、`status` ∈ `{completed, failed, cancelled}` |
+| `lizystudio_jobs_duration_seconds` | Histogram | `job_type`, `status` | ML ジョブ所要時間（H-0066）。bucket は ML ワークロード用: `(1, 5, 10, 30, 60, 120, 300, 600, 1800, 3600, +Inf)` 秒 |
 | `lizystudio_active_jobs` | Gauge | なし | JobStore active slot の使用状態 (0 または 1) |
 
 #### カーディナリティ方針

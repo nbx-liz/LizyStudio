@@ -11,6 +11,7 @@ import copy
 import io
 import logging
 import threading
+import time
 import traceback
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -62,22 +63,47 @@ def _make_cancel_aware_cb(
     return callback
 
 
-def _emit_terminal_metric(job: Job) -> None:
-    """Bump `lizystudio_jobs_total` for *job*'s terminal status.
+def _subprocess_duration_seconds(job: Job) -> float:
+    """Compute wall-clock duration from a subprocess-owned job.
+
+    H-0066: the subprocess child stamps both ``created_at`` and
+    ``completed_at`` in ISO-8601. The parent cannot share the thread-
+    mode ``time.monotonic()`` baseline, so this helper reconstructs
+    the elapsed seconds from the persisted timestamps.
+
+    Returns 0.0 when either timestamp is missing / unparseable — safer
+    than propagating an exception through the finally-block.
+    """
+    if job.completed_at is None:
+        return 0.0
+    try:
+        created = datetime.fromisoformat(job.created_at)
+        completed = datetime.fromisoformat(job.completed_at)
+    except ValueError:
+        return 0.0
+    return max(0.0, (completed - created).total_seconds())
+
+
+def _emit_terminal_metric(job: Job, duration: float = 0.0) -> None:
+    """Bump `lizystudio_jobs_total` and observe duration (H-0065, H-0066).
 
     Centralises the per-literal dispatch that mypy requires for
-    Literal narrowing (H-0065). Two call sites share this helper:
+    Literal narrowing. Two call sites share this helper:
     ``_run_job_core``'s finally block (thread mode) and
     ``_run_subprocess_job``'s finally block (subprocess mode).
     The ``claim_active`` early-fail path passes a hardcoded literal
     and calls ``record_job_terminal`` directly.
+
+    *duration* is the wall-clock seconds between ``claim_active``
+    success and terminal state; 0.0 for paths that failed before
+    training started.
     """
     if job.status == "completed":
-        record_job_terminal(job.job_type, "completed")
+        record_job_terminal(job.job_type, "completed", duration=duration)
     elif job.status == "failed":
-        record_job_terminal(job.job_type, "failed")
+        record_job_terminal(job.job_type, "failed", duration=duration)
     elif job.status == "cancelled":
-        record_job_terminal(job.job_type, "cancelled")
+        record_job_terminal(job.job_type, "cancelled", duration=duration)
 
 
 def _run_job_core(
@@ -108,6 +134,12 @@ def _run_job_core(
 
     job.status = "running"
     job_store.update(job)
+
+    # H-0066: capture wall-clock start for the jobs_duration_seconds
+    # histogram. `time.monotonic()` is guaranteed monotonic by the API
+    # contract, so a system clock adjustment during a long tune
+    # cannot corrupt the sample.
+    start_time = time.monotonic()
 
     cb = _make_cancel_aware_cb(job.job_id, job_store, broadcaster)
 
@@ -147,7 +179,8 @@ def _run_job_core(
     finally:
         job_store.release_active(job.job_id)
         job_store.clear_cancel(job.job_id)
-        _emit_terminal_metric(job)  # H-0065
+        elapsed = time.monotonic() - start_time
+        _emit_terminal_metric(job, duration=elapsed)  # H-0065 / H-0066
         job_logger.removeHandler(handler)
         handler.close()
         # Persist captured logs. An OSError here must not propagate out of
@@ -521,7 +554,12 @@ def _run_subprocess_job(
         if not terminal_already_recorded:
             latest = job_store.get(job.job_id)
             if latest is not None:
-                _emit_terminal_metric(latest)  # H-0065
+                # H-0066: duration = completed_at - created_at. Fall
+                # back to 0.0 when either timestamp is missing (e.g.
+                # crash before completion was stamped); the counter
+                # still increments so totals stay correct.
+                duration = _subprocess_duration_seconds(latest)
+                _emit_terminal_metric(latest, duration=duration)
 
 
 def start_fit_async(

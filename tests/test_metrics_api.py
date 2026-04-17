@@ -134,6 +134,52 @@ def test_asset_paths_do_not_explode_cardinality(client: TestClient) -> None:
     assert "chunk-def456.js" not in body
 
 
+def test_jobs_duration_histogram_is_declared(client: TestClient) -> None:
+    """H-0066: the duration histogram must appear in the text output.
+
+    Declared at module-import time so the HELP/TYPE headers are
+    present even before the first job finishes.
+    """
+    body = client.get("/api/metrics").text
+    assert "# TYPE lizystudio_jobs_duration_seconds histogram" in body
+
+
+def test_jobs_duration_uses_ml_workload_buckets(client: TestClient) -> None:
+    """H-0066 (c): buckets must cover seconds through one hour.
+
+    The prometheus_client default (5ms -> 10s) would collapse every
+    real fit / tune into the `+Inf` bucket, making the histogram
+    useless for ML latency analysis. Lock the custom ladder in so a
+    future refactor cannot regress it.
+
+    Note: prometheus_client only emits `_bucket` lines after the first
+    observation — prime the histogram with one sample before reading.
+    """
+    from lizystudio.metrics import record_job_terminal
+
+    record_job_terminal("fit", "completed", duration=0.5)
+
+    body = client.get("/api/metrics").text
+    # A handful of bucket edges we promised in BLUEPRINT §5.9.
+    for edge in ("1.0", "10.0", "60.0", "600.0", "3600.0"):
+        assert f'le="{edge}"' in body, (
+            f"expected bucket le={edge} missing from /api/metrics"
+        )
+
+
+def test_record_job_terminal_accepts_duration(client: TestClient) -> None:
+    """`record_job_terminal` should accept a `duration` keyword.
+
+    The helper is the single entry point used across the training
+    service; adding a duration arg keeps the call sites uniform.
+    """
+    from lizystudio.metrics import record_job_terminal
+
+    # Should not raise; duration is optional.
+    record_job_terminal("fit", "completed", duration=1.23)
+    record_job_terminal("tune", "failed")  # backward-compat: no duration
+
+
 def test_active_jobs_gauge_starts_at_zero(client: TestClient) -> None:
     """A freshly-started app has no active job; gauge must read 0."""
     body = client.get("/api/metrics").text
