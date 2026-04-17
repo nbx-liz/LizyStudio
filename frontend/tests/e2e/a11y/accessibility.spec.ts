@@ -5,15 +5,17 @@ import { dismissOnboarding } from "../helpers/onboarding";
 /**
  * Known a11y violations still excluded.
  *
- * Resolved in Issue #90:
+ * All four original Issue #90 rules are now resolved:
  * - color-contrast: --sidebar-primary darkened from 60% -> 50% lightness
  * - label: FormField now wires <Label htmlFor> to its child via useId()
+ * - button-name: every shadcn Select trigger has an explicit aria-label
+ * - aria-valid-attr-value: TabsContent nodes added so Radix's auto
+ *   aria-controls references have real DOM targets
  *
- * Still open (require deeper Radix/shadcn-primitive work):
- * - button-name: some shadcn Select triggers lack visible text (radix combobox)
- * - aria-valid-attr-value: Radix UI tabs generate aria-controls with truncated IDs
+ * Keep this list empty. Any new axe violation should be fixed at the
+ * source, not suppressed here.
  */
-const KNOWN_ISSUES = ["button-name", "aria-valid-attr-value"];
+const KNOWN_ISSUES: string[] = [];
 
 function createScanner(page: import("@playwright/test").Page) {
   return new AxeBuilder({ page })

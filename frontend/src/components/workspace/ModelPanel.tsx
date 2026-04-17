@@ -32,7 +32,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Tooltip,
   TooltipContent,
@@ -266,6 +266,27 @@ export function ModelPanel({
                 Tune
               </TabsTrigger>
             </TabsList>
+            {/* Issue #90: Radix Tabs auto-generates `aria-controls` on
+                each TabsTrigger. Without corresponding <TabsContent>
+                elements the attribute points at IDs that do not exist
+                in the DOM, which axe's `aria-valid-attr-value` flags.
+                The visible Fit/Tune content is rendered outside this
+                Tabs tree (see the scrollable panel below), so the two
+                TabsContent nodes below exist only to host the matching
+                aria-controls targets. They are visually hidden and
+                carry no user-facing text. */}
+            <TabsContent
+              value="fit"
+              tabIndex={-1}
+              aria-hidden
+              className="sr-only"
+            />
+            <TabsContent
+              value="tune"
+              tabIndex={-1}
+              aria-hidden
+              className="sr-only"
+            />
           </Tabs>
           <div className="flex items-center gap-2 min-w-0">
             {disabledReason && (
@@ -418,7 +439,10 @@ export function ModelPanel({
           </Button>
           {presets.length > 0 && (
             <Select onValueChange={handleLoadPreset}>
-              <SelectTrigger className="h-8 w-36 text-xs">
+              <SelectTrigger
+                aria-label="Load preset"
+                className="h-8 w-36 text-xs"
+              >
                 <SelectValue placeholder="Load Preset" />
               </SelectTrigger>
               <SelectContent>

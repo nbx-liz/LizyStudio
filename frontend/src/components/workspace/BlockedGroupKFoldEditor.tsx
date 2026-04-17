@@ -186,7 +186,10 @@ export function BlockedGroupKFoldEditor({
             value={cv.timeCol ?? ""}
             onValueChange={(v) => updateCv({ timeCol: v })}
           >
-            <SelectTrigger data-testid="block-col-select">
+            <SelectTrigger
+              aria-label="Block column"
+              data-testid="block-col-select"
+            >
               <SelectValue placeholder="Select column" />
             </SelectTrigger>
             <SelectContent>
@@ -332,7 +335,10 @@ export function BlockedGroupKFoldEditor({
             value={cv.groupCol ?? ""}
             onValueChange={(v) => updateCv({ groupCol: v })}
           >
-            <SelectTrigger data-testid="group-col-select">
+            <SelectTrigger
+              aria-label="Group column"
+              data-testid="group-col-select"
+            >
               <SelectValue placeholder="Select column" />
             </SelectTrigger>
             <SelectContent>

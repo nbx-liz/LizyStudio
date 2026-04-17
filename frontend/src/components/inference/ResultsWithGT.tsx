@@ -107,7 +107,10 @@ export function ResultsWithGT({
           <div className="mb-2 flex items-center gap-2">
             <h4 className="text-sm font-medium">Plots</h4>
             <Select value={selectedPlot} onValueChange={setSelectedPlot}>
-              <SelectTrigger className="h-7 w-48 text-xs">
+              <SelectTrigger
+                aria-label="Select plot"
+                className="h-7 w-48 text-xs"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

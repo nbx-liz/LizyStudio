@@ -474,7 +474,10 @@ export function ConfigForm({
                             )
                           }
                         >
-                          <SelectTrigger className="h-8 text-xs">
+                          <SelectTrigger
+                            aria-label="Inner validation method"
+                            className="h-8 text-xs"
+                          >
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
