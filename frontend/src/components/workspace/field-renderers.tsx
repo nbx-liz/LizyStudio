@@ -86,7 +86,7 @@ export function renderEnumField(
         value={String(value ?? defaultValue ?? "")}
         onValueChange={(v) => onChange(path, v)}
       >
-        <SelectTrigger className="h-8 text-xs">
+        <SelectTrigger aria-label={label} className="h-8 text-xs">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -395,7 +395,7 @@ function renderDiscriminatedUnion(
             onChange(path, alt.default ?? {});
           }}
         >
-          <SelectTrigger className="h-8 text-xs">
+          <SelectTrigger aria-label={label} className="h-8 text-xs">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

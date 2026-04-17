@@ -93,7 +93,10 @@ export function ResultsPredOnly({
           <div className="mb-2 flex items-center gap-2">
             <h4 className="text-sm font-medium">Comparison</h4>
             <Select value={compareInfId} onValueChange={setCompareInfId}>
-              <SelectTrigger className="h-7 w-64 text-xs">
+              <SelectTrigger
+                aria-label="Compare past inference"
+                className="h-7 w-64 text-xs"
+              >
                 <SelectValue placeholder="Select past inference" />
               </SelectTrigger>
               <SelectContent>

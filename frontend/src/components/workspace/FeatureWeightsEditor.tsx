@@ -95,7 +95,10 @@ export function FeatureWeightsEditor({
 
           {availableColumns.length > 0 && (
             <Select onValueChange={handleAdd}>
-              <SelectTrigger className="h-7 w-48 text-xs">
+              <SelectTrigger
+                aria-label="Add feature"
+                className="h-7 w-48 text-xs"
+              >
                 <div className="flex items-center gap-1">
                   <Plus className="h-3 w-3" />
                   <SelectValue placeholder="Add feature..." />

@@ -96,7 +96,7 @@ export function SetupPanel({
           onValueChange={onSelectJob}
           disabled={completedJobs.length === 0}
         >
-          <SelectTrigger>
+          <SelectTrigger aria-label="Select completed job">
             <SelectValue placeholder="Select a completed job" />
           </SelectTrigger>
           <SelectContent>
