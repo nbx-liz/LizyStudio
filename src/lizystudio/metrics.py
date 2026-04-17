@@ -52,17 +52,50 @@ ACTIVE_JOBS = Gauge(
     "Currently running ML jobs (0 or 1)",
 )
 
+# H-0066: ML job wall-clock duration. Buckets target real fit / tune
+# workloads (seconds to one hour). prometheus_client's default 5ms–10s
+# ladder would collapse everything into the +Inf bucket for this
+# domain.
+JOBS_DURATION_BUCKETS: tuple[float, ...] = (
+    1.0,
+    5.0,
+    10.0,
+    30.0,
+    60.0,
+    120.0,
+    300.0,
+    600.0,
+    1800.0,
+    3600.0,
+)
+
+JOBS_DURATION = Histogram(
+    "lizystudio_jobs_duration_seconds",
+    "ML job wall-clock duration from claim_active to terminal state",
+    labelnames=("job_type", "status"),
+    buckets=JOBS_DURATION_BUCKETS,
+)
+
 
 JobType = Literal["fit", "tune"]
 TerminalStatus = Literal["completed", "failed", "cancelled"]
 
 
-def record_job_terminal(job_type: JobType, status: TerminalStatus) -> None:
-    """Increment `lizystudio_jobs_total{job_type, status}` by 1.
+def record_job_terminal(
+    job_type: JobType,
+    status: TerminalStatus,
+    duration: float = 0.0,
+) -> None:
+    """Record one terminal transition for a ML job.
 
-    Call this from the service layer once the job reaches a terminal
-    state. Kept as a helper (rather than exposing the raw counter) so
-    the call sites never pass freeform strings — if a future status
-    value is added, update this module's Literal instead.
+    Increments `lizystudio_jobs_total{job_type, status}` by 1 and, when
+    *duration* is known, observes the elapsed seconds in
+    `lizystudio_jobs_duration_seconds{job_type, status}`.
+
+    *duration* defaults to 0.0 for early-fail paths (e.g. retune data
+    missing) where the wall-clock is effectively zero because the job
+    never reached the training phase. Counter emission stays correct
+    even for those paths.
     """
     JOBS_TOTAL.labels(job_type=job_type, status=status).inc()
+    JOBS_DURATION.labels(job_type=job_type, status=status).observe(duration)

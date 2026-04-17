@@ -1688,3 +1688,34 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (e) `/api/metrics` エンドポイント自身は `lizystudio_requests_total` の計測対象から除外する（監視トラフィックが本体メトリクスを埋めるのを防ぐ）。
   - (f) Path label は FastAPI の route template を使い、`/api/jobs/{job_id}/metrics` のように正規化する（生の job_id がカーディナリティ爆発しない）。
 - **Decision:** 2026-04-17 採択 (Issue #30 Phase 2)。Phase 3（system / GPU metrics）は別 Proposal。
+
+---
+
+### H-0066: ML ジョブ所要時間 Histogram とメトリクス仕上げ（Issue #30 Phase 3）
+- **Status:** accepted
+- **Scope:** API / Doc
+- **Related:** BLUEPRINT.md §5.9（更新）
+- **Context:** H-0065 で Prometheus メトリクスの土台を整えたが、`lizystudio_jobs_total` は終了カウントのみで「ジョブがどれだけ時間を食ったか」の分布が観測できない。本番監視で最重要なのは p95 / p99 の fit / tune 所要時間なので、Phase 3 として ML ワークロードに合わせた bucket の histogram を追加する。併せて、H-0065 実装後に実測した Content-Type の `version` 値が BLUEPRINT の記述（`0.0.4`）と一致しない（`prometheus-client>=0.25` のデフォルトは `1.0.0`）ため、ドキュメントを実測値に揃える。
+- **Proposal:**
+  1. `lizystudio_jobs_duration_seconds` Histogram を新設。ラベルは `job_type` ∈ `{fit, tune}` と `status` ∈ `{completed, failed, cancelled}`。bucket は ML ワークロードを意識して `(1, 5, 10, 30, 60, 120, 300, 600, 1800, 3600, +Inf)` 秒。
+  2. `JobStore.claim_active` が成功した時点から terminal status 確定時点までの経過秒を observe する。thread / subprocess 両モードで 1 回だけ emit する。
+  3. BLUEPRINT §5.9 の Content-Type 例を `version=1.0.0` に修正し、メトリクス表に `lizystudio_jobs_duration_seconds` 行を追加。
+  4. Phase 3 当初案で検討した `psutil` 依存追加は取りやめる（`prometheus_client` の default registry が既に `process_resident_memory_bytes` / `process_cpu_seconds_total` / `process_open_fds` 等を公開しているため重複）。GPU メトリクスは LizyStudio 側で扱わない（backend 固有なので別レイヤーで扱う）。
+- **Impact:**
+  - `src/lizystudio/metrics.py`: `JOBS_DURATION` Histogram 追加。`record_job_terminal` に `duration: float = 0.0` optional 引数を追加（既存 call site は後方互換）。
+  - `src/lizystudio/services/training.py`: `_run_job_core` で `claim_active` 後に開始時刻を記録し、`_emit_terminal_metric` に経過秒を渡す。`_run_subprocess_job` の finally 側は `Job.created_at` ↔ `Job.completed_at` から算出。
+  - `src/lizystudio/services/training_retune.py`: `_mark_retune_child_failed` でも duration を 0.0 fallback で記録（data missing は claim 前なので実測不能、fallback で可視化）。
+  - `BLUEPRINT.md` §5.9 更新（行追加 + version fix）。
+  - `tests/test_metrics_api.py`: Histogram presence + bucket 存在 test 追加。
+- **Compatibility:** 非破壊的。`record_job_terminal` の新引数は default 付き。既存メトリクスのラベル / 名前は変わらない。
+- **Alternatives:**
+  1. **選択肢 A（却下）**: bucket を prometheus_client default (`0.005, 0.01, 0.025, ...`) のまま使う。デメリット: 分単位〜時間単位の ML ジョブでは `+Inf` bucket に全て落ちて histogram が役立たない。
+  2. **選択肢 B（却下）**: `lizystudio_jobs_duration_seconds` を Summary にする。メリット: client 側で quantile 計算。デメリット: Summary は aggregation が難しく、複数プロセス環境（k8s replica 等）でのマージが不可能。Histogram の方が汎用性高い。
+  3. **選択肢 C（採用、本提案）**: カスタム bucket Histogram。`status` ラベルで completed / failed / cancelled を切り分け、失敗ジョブが短命か長時間後に失敗するかまで分かる。
+- **Acceptance Criteria:**
+  - (a) `/api/metrics` 出力に `# TYPE lizystudio_jobs_duration_seconds histogram` が含まれる。
+  - (b) fit / tune ジョブ 1 本完了後、該当ラベルの `lizystudio_jobs_duration_seconds_count` が 1 以上、`_sum` が正の値になる。
+  - (c) bucket が ML ワークロード用のカスタム値で出力される（`le="60"` や `le="3600"` の bucket line が存在）。
+  - (d) BLUEPRINT §5.9 の Content-Type 例が `version=1.0.0` と記述されている。
+  - (e) subprocess mode / retune failure path からも duration が記録される（0.0 fallback 可）。
+- **Decision:** 2026-04-17 採択 (Issue #30 Phase 3)。本 PR で Issue #30 は完了。
