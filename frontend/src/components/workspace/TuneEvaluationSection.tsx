@@ -242,7 +242,12 @@ export function TuneEvaluationSection({
       {/* precision_at_k k-value input (H-0034) */}
       {evalMetrics.some((e) => metricEntryName(e) === "precision_at_k") && (
         <div className="flex items-center gap-2 mt-1.5">
-          <Label className="text-xs text-muted-foreground">k</Label>
+          <Label
+            htmlFor="tune-precision-k"
+            className="text-xs text-muted-foreground"
+          >
+            k
+          </Label>
           <CompactStepper
             inputId="tune-precision-k"
             value={tuneKValue}

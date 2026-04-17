@@ -47,4 +47,30 @@ describe("FormRow", () => {
       whiteSpace: "nowrap",
     });
   });
+
+  // Issue #90: associate the label with the child input so axe's
+  // `label` rule passes for steppers / inputs rendered inside FormRow.
+  it("associates the label with a child input via htmlFor / id", () => {
+    render(
+      <FormRow label="N Estimators">
+        <input data-testid="child" />
+      </FormRow>,
+    );
+    const input = screen.getByTestId("child");
+    const id = input.getAttribute("id");
+    expect(id).toBeTruthy();
+    const label = screen.getByText("N Estimators");
+    expect(label.tagName.toLowerCase()).toBe("label");
+    expect(label.getAttribute("for")).toBe(id);
+  });
+
+  it("respects an id the caller already set on the child", () => {
+    render(
+      <FormRow label="K">
+        <input data-testid="child" id="caller-id" />
+      </FormRow>,
+    );
+    expect(screen.getByTestId("child").getAttribute("id")).toBe("caller-id");
+    expect(screen.getByText("K").getAttribute("for")).toBe("caller-id");
+  });
 });
