@@ -7,6 +7,23 @@ body:
       value: |
         Thanks for reporting a bug! Please fill in the details below.
 
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Tier (estimated fix effort)
+      description: |
+        Leave as Unknown if not yet investigated.
+        Tier 1: <5 min, obvious fix. Tier 2: <30 min, root cause known.
+        Tier 3: <1 hour, design judgment needed. Tier 4: >1 hour, multi-file.
+      options:
+        - "Unknown"
+        - "Tier 1: Quick fix (<5 min)"
+        - "Tier 2: Small fix (<30 min)"
+        - "Tier 3: Medium fix (<1 hour)"
+        - "Tier 4: Large fix (>1 hour)"
+    validations:
+      required: true
+
   - type: input
     id: version
     attributes:
@@ -66,6 +83,33 @@ body:
       description: What you expected to happen.
     validations:
       required: true
+
+  - type: textarea
+    id: investigation
+    attributes:
+      label: Investigation notes
+      description: |
+        What has been tried or explored so far?
+        Include failed approaches so the fixer does not repeat them.
+        Leave empty if not yet investigated.
+      placeholder: |
+        - Tried X but failed because Y
+        - Root cause appears to be ...
+    validations:
+      required: false
+
+  - type: textarea
+    id: recommended-approach
+    attributes:
+      label: Recommended fix approach
+      description: |
+        The most promising fix strategy, if known.
+        Be specific enough that someone can start coding immediately.
+      placeholder: |
+        1. Change X in file A
+        2. Add regression test for Y
+    validations:
+      required: false
 
   - type: textarea
     id: logs

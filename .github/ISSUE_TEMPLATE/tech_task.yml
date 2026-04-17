@@ -1,0 +1,113 @@
+name: Tech Task
+description: Refactoring, hardening, chore, test coverage, or other technical work
+labels: ["tech-task"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for technical tasks discovered during exploration phases.
+        Fill in the investigation notes and recommended approach so execution can start immediately.
+
+  - type: dropdown
+    id: tier
+    attributes:
+      label: Tier (estimated effort)
+      description: |
+        Tier 1: <5 min, mechanical change (chore, lint, dep cleanup)
+        Tier 2: <30 min, approach decided (hardening, small refactor)
+        Tier 3: <1 hour, design judgment needed (consolidation, test stabilization)
+        Tier 4: >1 hour, multi-file (large refactor, coverage push)
+      options:
+        - "Tier 1: Quick win (<5 min)"
+        - "Tier 2: Small task (<30 min)"
+        - "Tier 3: Medium task (<1 hour)"
+        - "Tier 4: Large task (>1 hour)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Frontend
+        - Backend / API
+        - Testing
+        - CI / Infra
+        - Cross-cutting
+    validations:
+      required: true
+
+  - type: dropdown
+    id: type
+    attributes:
+      label: Task type
+      options:
+        - Refactor
+        - Hardening
+        - Test coverage
+        - Chore / Cleanup
+        - Performance
+        - CI / Workflow
+        - Documentation
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What needs to be done and why.
+    validations:
+      required: true
+
+  - type: textarea
+    id: investigation
+    attributes:
+      label: Investigation notes
+      description: |
+        What has been tried or explored so far?
+        Include failed approaches so the implementer does not repeat them.
+      placeholder: |
+        - Tried X but failed because Y
+        - Confirmed Z works in isolation
+        - Root cause is ...
+    validations:
+      required: false
+
+  - type: textarea
+    id: recommended-approach
+    attributes:
+      label: Recommended approach
+      description: |
+        The most promising implementation strategy.
+        Be specific enough that someone can start coding immediately.
+      placeholder: |
+        1. Change X in file A
+        2. Add test for Y
+        3. Verify with `uv run pytest tests/...`
+    validations:
+      required: true
+
+  - type: textarea
+    id: batch-candidates
+    attributes:
+      label: Batch candidates
+      description: |
+        Other Issues that could be grouped into the same PR.
+        Tier 1-2 tasks are good batch candidates.
+      placeholder: "Related: #NNN, #NNN"
+    validations:
+      required: false
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: How do we know this is done?
+      placeholder: |
+        - [ ] Tests pass
+        - [ ] Coverage >= 80%
+        - [ ] No lint warnings
+    validations:
+      required: true
