@@ -60,4 +60,30 @@ describe("FormField", () => {
       expect(tooltipText).not.toBeVisible();
     }
   });
+
+  // Issue #90: programmatically wire <Label htmlFor> to the child input
+  // so screen readers announce the label and axe stops flagging the
+  // NumberInput / Input / SelectTrigger pattern as unlabeled.
+  it("associates the label with a child input via htmlFor / id", () => {
+    renderField({
+      label: "Inner Valid Ratio",
+      children: <input data-testid="child" />,
+    });
+    const input = screen.getByTestId("child");
+    const id = input.getAttribute("id");
+    expect(id).toBeTruthy();
+    const label = screen.getByText("Inner Valid Ratio");
+    expect(label.getAttribute("for")).toBe(id);
+  });
+
+  it("respects an id the caller already set on the child", () => {
+    renderField({
+      label: "N Trials",
+      children: <input data-testid="child" id="caller-supplied-id" />,
+    });
+    const input = screen.getByTestId("child");
+    expect(input.getAttribute("id")).toBe("caller-supplied-id");
+    const label = screen.getByText("N Trials");
+    expect(label.getAttribute("for")).toBe("caller-supplied-id");
+  });
 });

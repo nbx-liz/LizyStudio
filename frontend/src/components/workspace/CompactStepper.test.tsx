@@ -152,4 +152,24 @@ describe("CompactStepper", () => {
     );
     expect(screen.getByPlaceholderText("0")).toBeInTheDocument();
   });
+
+  // Issue #90: ensure FormRow / FormField cloneElement injection of
+  // `id` does not silently overwrite an explicit `inputId` from a
+  // caller that was already wiring its own <Label htmlFor>.
+  it("inputId takes precedence over the generic id prop", () => {
+    render(
+      <CompactStepper
+        value={1}
+        onChange={vi.fn()}
+        inputId="legacy-id"
+        id="generic-id"
+      />,
+    );
+    expect(screen.getByRole("textbox").getAttribute("id")).toBe("legacy-id");
+  });
+
+  it("falls back to id when inputId is not provided", () => {
+    render(<CompactStepper value={1} onChange={vi.fn()} id="generic-id" />);
+    expect(screen.getByRole("textbox").getAttribute("id")).toBe("generic-id");
+  });
 });
