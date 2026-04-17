@@ -1653,3 +1653,38 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (d) liveness エンドポイントが **workspace state に依存せず** 単独で応答する（未データロード状態でも 200）。
   - (e) SPA fallback ルートが `/api/health` を奪わない（`/api/` プレフィックスで既に除外されているが、テストで固定）。
 - **Decision:** 2026-04-17 採択 (Issue #30 Phase 1)。Prometheus メトリクス + system metrics は別 Proposal で追加する。
+
+---
+
+### H-0065: Prometheus メトリクスエンドポイントの追加（Issue #30 Phase 2）
+- **Status:** accepted
+- **Scope:** API / Config (runtime dep)
+- **Related:** BLUEPRINT.md §5.9（新設）
+- **Context:** H-0064 で health / readiness probe を追加したが、実運用では「このプロセスは生きているか」だけでなく「どのくらいトラフィックを処理しているか」「ジョブは詰まっていないか」を可視化する必要がある。Issue #30 Phase 2 として Prometheus 互換の `/api/metrics` を提供する。Phase 3（system metrics: メモリ / GPU / CPU）は独立 Proposal にする。
+- **Proposal:** `GET /api/metrics` を追加し、以下 4 系統のメトリクスを Prometheus text format で公開する:
+  - `lizystudio_requests_total{method, path, status}` — Counter。HTTP リクエスト総数。`path` は FastAPI の route template（例: `/api/jobs/{job_id}`）。未マッチ path は `unmatched` に集約してカーディナリティ爆発を防ぐ。
+  - `lizystudio_request_duration_seconds{method, path}` — Histogram。リクエスト処理時間。bucket は prometheus_client のデフォルトを採用。
+  - `lizystudio_jobs_total{job_type, status}` — Counter。ジョブ終了時に `status=completed|failed|cancelled` で増分。`job_type` は `fit|tune`。
+  - `lizystudio_active_jobs` — Gauge。JobStore の active slot が保持されている間は 1、解放されると 0。
+- **Impact:**
+  - 新規 runtime dep: `prometheus-client>=0.20`（pyproject.toml）
+  - 新規: `src/lizystudio/metrics.py`（メトリクス定義 + `record_job_terminal()` helper）
+  - 新規: `src/lizystudio/api/metrics_api.py`（`GET /api/metrics` エンドポイント）
+  - 追加: `src/lizystudio/server.py` にミドルウェア登録 + router include
+  - 追加: `src/lizystudio/services/jobs.py` の `claim_active` / `release_active` / `force_release_active_if` で `ACTIVE_JOBS` gauge を更新
+  - 追加: `src/lizystudio/services/training.py` / `training_retune.py` の terminal status 確定箇所で `record_job_terminal()` 呼び出し
+  - 新規: `tests/test_metrics_api.py`
+  - 追記: BLUEPRINT.md §5.9
+- **Compatibility:** 非破壊的（新規エンドポイント / 新規 runtime dep 追加のみ）。既存エンドポイントの挙動は変わらない。
+- **Alternatives:**
+  1. **選択肢 A（却下）**: prometheus-client を使わず自前で text format を生成する案。メリット: 依存ゼロ。デメリット: Histogram の bucket 生成 / label escape / HELP/TYPE ヘッダの正確な出力を再実装する必要があり、車輪の再発明。
+  2. **選択肢 B（却下）**: OpenTelemetry SDK 経由で Prometheus exporter を吊るす案。メリット: 将来 OTLP に移行しやすい。デメリット: 依存が重く（otel-sdk + otel-instrumentation-fastapi）、Phase 2 のスコープに対して過剰。
+  3. **選択肢 C（採用、本提案）**: `prometheus-client` の素朴な使い方（Counter / Histogram / Gauge + ASGI 公開）。軽量で枯れた選択。
+- **Acceptance Criteria:**
+  - (a) `GET /api/metrics` が 200 と `Content-Type: text/plain; version=0.0.4` を返す。
+  - (b) 任意のリクエスト後に `/api/metrics` を叩くと、`lizystudio_requests_total{...}` の該当ラベル行が 1 以上になる。
+  - (c) Fit / Tune ジョブ完了後、`lizystudio_jobs_total{job_type="fit",status="completed"}` 等が 1 以上になる。
+  - (d) active ジョブが動いている間 `lizystudio_active_jobs` が 1、解放後 0 に戻る。
+  - (e) `/api/metrics` エンドポイント自身は `lizystudio_requests_total` の計測対象から除外する（監視トラフィックが本体メトリクスを埋めるのを防ぐ）。
+  - (f) Path label は FastAPI の route template を使い、`/api/jobs/{job_id}/metrics` のように正規化する（生の job_id がカーディナリティ爆発しない）。
+- **Decision:** 2026-04-17 採択 (Issue #30 Phase 2)。Phase 3（system / GPU metrics）は別 Proposal。

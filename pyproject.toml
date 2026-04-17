@@ -34,6 +34,8 @@ dependencies = [
     # H-0062: explicit pin so pickle usage survives a future lizyml
     # dependency refactor. Already in the tree via lizyml.
     "cloudpickle>=3.0",
+    # H-0065: Prometheus metrics exposition for /api/metrics.
+    "prometheus-client>=0.20",
 ]
 
 [project.scripts]

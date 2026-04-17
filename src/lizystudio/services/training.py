@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from lizystudio.backends.base import BackendAdapter, ProgressCallback
 from lizystudio.backends.types import FitSummary, TuningSummary
+from lizystudio.metrics import record_job_terminal
 from lizystudio.services.jobs import Job, JobStore
 
 if TYPE_CHECKING:
@@ -61,6 +62,24 @@ def _make_cancel_aware_cb(
     return callback
 
 
+def _emit_terminal_metric(job: Job) -> None:
+    """Bump `lizystudio_jobs_total` for *job*'s terminal status.
+
+    Centralises the per-literal dispatch that mypy requires for
+    Literal narrowing (H-0065). Two call sites share this helper:
+    ``_run_job_core``'s finally block (thread mode) and
+    ``_run_subprocess_job``'s finally block (subprocess mode).
+    The ``claim_active`` early-fail path passes a hardcoded literal
+    and calls ``record_job_terminal`` directly.
+    """
+    if job.status == "completed":
+        record_job_terminal(job.job_type, "completed")
+    elif job.status == "failed":
+        record_job_terminal(job.job_type, "failed")
+    elif job.status == "cancelled":
+        record_job_terminal(job.job_type, "cancelled")
+
+
 def _run_job_core(
     *,
     job: Job,
@@ -84,6 +103,7 @@ def _run_job_core(
             broadcaster.send_error(
                 job.job_id, "Another job is already running", code="JOB_CONFLICT"
             )
+        record_job_terminal(job.job_type, "failed")
         return job
 
     job.status = "running"
@@ -127,6 +147,7 @@ def _run_job_core(
     finally:
         job_store.release_active(job.job_id)
         job_store.clear_cancel(job.job_id)
+        _emit_terminal_metric(job)  # H-0065
         job_logger.removeHandler(handler)
         handler.close()
         # Persist captured logs. An OSError here must not propagate out of
@@ -445,10 +466,15 @@ def _run_subprocess_job(
     from lizystudio.services.subprocess_runner import run_job_in_subprocess
     from lizystudio.services.workspace import get_backend_name
 
+    # H-0065: set to True when the caller's on_data_missing callback
+    # handles the terminal-state bookkeeping (including metric
+    # emission) so the finally-block below does not double-emit.
+    terminal_already_recorded = False
     try:
         if ws.data_ref is None or not ws.data_ref.path:
             if on_data_missing is not None:
                 on_data_missing(job)
+                terminal_already_recorded = True
             else:
                 job.status = "failed"
                 job.error = "No data loaded — cannot run subprocess job"
@@ -458,6 +484,8 @@ def _run_subprocess_job(
                     broadcaster.send_error(job.job_id, job.error)
                 with ws._lock:
                     ws.current_job_id = job.job_id
+                record_job_terminal(job.job_type, "failed")
+                terminal_already_recorded = True
             return job
         data_path = ws.data_ref.path
         extra_kwargs: dict[str, Any] = {}
@@ -486,6 +514,14 @@ def _run_subprocess_job(
         return finished
     finally:
         job_store.release_active(job.job_id)
+        # H-0065: subprocess path writes the terminal status on disk
+        # from the child process; re-read it here so the parent emits
+        # exactly one counter increment per job in either mode. Skip
+        # when the early-return paths above already emitted one.
+        if not terminal_already_recorded:
+            latest = job_store.get(job.job_id)
+            if latest is not None:
+                _emit_terminal_metric(latest)  # H-0065
 
 
 def start_fit_async(
