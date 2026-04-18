@@ -76,6 +76,15 @@ JOBS_DURATION = Histogram(
     buckets=JOBS_DURATION_BUCKETS,
 )
 
+# Issue #151: counts progress messages that the WebSocket broadcaster
+# dropped because a subscriber queue was full. Non-terminal messages
+# are droppable; terminal (completed/error) messages are not and will
+# evict an older non-terminal rather than being dropped themselves.
+PROGRESS_DROPPED_TOTAL = Counter(
+    "lizystudio_progress_dropped_total",
+    "Progress messages dropped due to a full subscriber queue",
+)
+
 
 JobType = Literal["fit", "tune"]
 TerminalStatus = Literal["completed", "failed", "cancelled"]
