@@ -1,5 +1,7 @@
 import { ArrowRight } from "lucide-react";
 import type { JobDetail, PlotResponse, TuneResult } from "@/api/types";
+import type { BoundaryReport, TuneRound } from "@/components/retune";
+import { RetuneDashboard } from "@/components/retune";
 import {
   AccordionContent,
   AccordionItem,
@@ -16,8 +18,6 @@ import {
 } from "@/components/ui/table";
 import { formatNum } from "@/lib/utils";
 import { PlotlyChart } from "./PlotlyChart";
-import type { BoundaryReport, TuneRound } from "./retune";
-import { RetuneDashboard } from "./retune";
 
 interface TuneTrialsSectionProps {
   tuneResult: TuneResult;

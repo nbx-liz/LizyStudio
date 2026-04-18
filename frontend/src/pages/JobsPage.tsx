@@ -59,6 +59,7 @@ export function JobsPage() {
             jobNumber={jobNumber}
             onJobDeleted={handleJobDeleted}
             onJobChanged={handleJobChanged}
+            onJobSelect={setSelectedJobId}
           />
         ) : (
           <div className="flex h-full items-center justify-center text-muted-foreground">

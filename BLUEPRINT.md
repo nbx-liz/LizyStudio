@@ -1578,6 +1578,27 @@ Fit 完了と同じ評価項目に加え、探索結果（Best Params・収束�
 - ブラウザを閉じて再アクセスした場合、Results Panel は空（初期状態に戻る）
 - 過去の Job 結果は Workspace には表示しない（Jobs 画面で閲覧する）
 
+##### Re-tune / Resume / Lineage（H-0062 Phase B、H-0067）
+
+Results Panel の完了/失敗 Tune Job 表示には、以下のアクションが常設される:
+
+| 状態 | UI | 説明 |
+|------|----|------|
+| Completed (tune) | `Re-tune (+N trials)` ボタン | 同じ job を parent として新 child job を起動。Optuna study を継続 |
+| Failed (tune) | `Resume (X trials remaining)` ボタン | 最後の checkpoint から study を復元 |
+| 子孫/祖先が存在 | `Lineage` セクション（JobLineageTree） | ツリーノードクリックで Workspace の表示対象 job を切り替え |
+
+実体は `frontend/src/components/retune/` の共有コンポーネント（`RetuneActionButton`, `ResumeActionButton`, `JobLineageTree`）。同じコンポーネントを Jobs 画面（§4.3.2 / §4.3.3）からも import しているため、両画面の挙動は厳密に一致する。
+
+**Workspace と Jobs の使い分け:**
+
+| 画面 | 典型的ワークフロー |
+|------|------------------|
+| Workspace Results Panel | 「いま回した Tune の結果を見て、追加 N trials 回す」セッション内の継続作業 |
+| Jobs 画面 | 「過去の Tune 履歴を辿って、ある地点から系譜を再起動する」アーカイブからの再開作業 |
+
+どちらから起動しても同じ API（`POST /api/jobs/{id}/retune` / `POST /api/jobs/{id}/resume`）を呼び、child job は常に `parent_job_id` 付きで persisted される。
+
 #### 4.2.4 Fit 実行フロー
 
 全 fit/tune はJobとして登録される（§3.4.2）。

@@ -1719,3 +1719,42 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (d) BLUEPRINT §5.9 の Content-Type 例が `version=1.0.0` と記述されている。
   - (e) subprocess mode / retune failure path からも duration が記録される（0.0 fallback 可）。
 - **Decision:** 2026-04-17 採択 (Issue #30 Phase 3)。本 PR で Issue #30 は完了。
+
+---
+
+### H-0067: Re-tune / Resume / Lineage UI を Workspace と Jobs 画面の両方に提供する（Issue #159）
+- **Status:** accepted
+- **Scope:** Frontend / Doc
+- **Related:** BLUEPRINT.md §4.2.3（Workspace Results）、§4.3.2（Jobs 詳細）、§4.3.3（Jobs アクション）
+- **Context:**
+  H-0062 Phase B で Re-tune / Resume / Lineage Tree を Workspace Results Panel にのみ実装したが、BLUEPRINT §4.3 は当初から「Jobs 画面からも系譜を辿って再チューニングできる」ことを要件としていた（2026-04-17 audit で Issue #159 として surfaced）。Workspace は「セッション中の現在結果」、Jobs は「履歴全体管理」というレイヤー責務があり、ユーザーからは「過去の Tune 一覧を辿って再チューン系譜を起こす」UX が現場で必要という判断が出た。
+- **Proposal:**
+  1. **コンポーネント共有化**: `frontend/src/components/workspace/retune/` を `frontend/src/components/retune/` に移動し、Workspace / Jobs 両画面から同一実装を import する。
+  2. **Jobs/JobDetail.tsx 拡張**:
+     - アクションバーに `Re-tune (+N trials)` / `Resume (X trials remaining)` ボタンを追加（Completed tune / Failed tune で state-gated）。
+     - 右パネルの Accordion に `Lineage` セクションを追加（Config / Execution Log と並ぶ、読取り + クリック navigation）。
+     - Re-tune / Resume で child job が作成されたら Jobs 画面内で自動選択（Workspace へは遷移しない）。
+  3. **DeleteDialog に cascade オプション追加**: lineage に子孫がある場合のみ `Delete descendants too` チェックボックスを表示。API は `deleteJob(jobId, { cascade: true })` で既に対応済み。
+  4. **BLUEPRINT 更新**: §4.2.3 の Workspace Results Panel に Retune / Resume / Lineage が常設されることを明記（現在 spec は §4.3 側のみ記述）。§4.3 側の記述はすでに正しい。
+- **Impact:**
+  - `frontend/src/components/retune/*.tsx` (9 ファイル移動、旧 path の参照も全置換)
+  - `frontend/src/components/workspace/ResultsPanel.tsx`, `ResultsCompletedView.tsx` (import path 更新)
+  - `frontend/src/components/jobs/JobDetail.tsx` (action bar 拡張 + Lineage accordion)
+  - `frontend/src/components/jobs/DeleteDialog.tsx` (cascade checkbox + lineage precheck)
+  - `BLUEPRINT.md` §4.2.3 追記
+  - Vitest unit tests 追加（JobDetail actions / DeleteDialog cascade）
+  - Playwright E2E 追加（Jobs から Re-tune → child が Jobs リストに出る）
+- **Compatibility:** 非破壊的 API（新エンドポイント無し・既存 API の引数変更なし）。UI のみ拡張。既存の Workspace 側 UX は変化しない。
+- **Alternatives:**
+  1. **BLUEPRINT を code に合わせて書き換える（却下）**: Workspace のみに retune を置く仕様に変更。メリットは二重導線回避、しかしユーザーの「ジョブ履歴から直接再チューン」ワークフローを排除してしまう。
+  2. **Lineage Tree のみ Jobs に追加、actions は Workspace のまま（却下）**: 導線を分割する中間案だが、「Jobs で Lineage を見て、別画面 (Workspace) へ移動してアクション」という余計なクリックが発生し、ユーザーの期待に反する。
+  3. **両方に実装する（採用、本提案）**: コード共有で重複を回避しつつ、ユーザーはどちらの画面からでも retune できる。
+- **Acceptance Criteria:**
+  - (a) `frontend/src/components/retune/` が新規作成され、Workspace / Jobs 両方から import される。
+  - (b) Jobs 画面のアクションバーに Completed tune で `Re-tune` ボタン、Failed tune で `Resume` ボタンが表示される。
+  - (c) Jobs 詳細の Accordion に `Lineage` が現れ、ノードクリックで左パネルの選択が切り替わる。
+  - (d) Jobs 画面から Re-tune した後、child job が Jobs リストに即座に現れ、自動選択される。
+  - (e) DeleteDialog で lineage に子孫がある場合 `Delete descendants too` checkbox が表示され、cascade クエリで API が呼ばれる。
+  - (f) 既存の Workspace 側 retune 導線の Vitest / Playwright テストが全て pass する（regression なし）。
+  - (g) BLUEPRINT §4.2.3 に Workspace 側の retune UI が記述される。
+- **Decision:** 2026-04-18 採択 (Issue #159)。
