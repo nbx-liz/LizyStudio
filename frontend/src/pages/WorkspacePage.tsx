@@ -159,36 +159,63 @@ export function WorkspacePage() {
       className="h-full"
       id="workspace-panels"
     >
+      {/*
+       * Issue #167: on narrow viewports the inline-styled scroll
+       * wrappers inside react-resizable-panels lack keyboard access
+       * (axe `scrollable-region-focusable`). The panel children are
+       * wrapped in <section tabIndex={0}> so each resizable region is
+       * reachable via Tab and scrollable via arrow keys. The inner
+       * components already render their own h-full wrappers; the
+       * section keeps h-full + flex so layout is unchanged.
+       */}
       <ResizablePanel defaultSize="30%" minSize="20%" maxSize="45%">
-        <DataPanel
-          onDataChanged={handleDataChanged}
-          onTaskChanged={handleTaskChanged}
-          uiSchema={uiSchema}
-        />
+        <section
+          aria-label="Data region"
+          tabIndex={0}
+          className="flex h-full flex-col focus-visible:outline-none"
+        >
+          <DataPanel
+            onDataChanged={handleDataChanged}
+            onTaskChanged={handleTaskChanged}
+            uiSchema={uiSchema}
+          />
+        </section>
       </ResizablePanel>
       <ResizableHandle withHandle />
       <ResizablePanel defaultSize="35%" minSize="20%">
-        <ModelPanel
-          hasData={hasData}
-          task={task}
-          onFit={handleFit}
-          onTune={handleTune}
-          running={running}
-          activeTab={modelTab}
-          onActiveTabChange={setModelTab}
-        />
+        <section
+          aria-label="Model region"
+          tabIndex={0}
+          className="flex h-full flex-col focus-visible:outline-none"
+        >
+          <ModelPanel
+            hasData={hasData}
+            task={task}
+            onFit={handleFit}
+            onTune={handleTune}
+            running={running}
+            activeTab={modelTab}
+            onActiveTabChange={setModelTab}
+          />
+        </section>
       </ResizablePanel>
       <ResizableHandle withHandle />
       <ResizablePanel defaultSize="35%" minSize="20%">
-        <ResultsPanel
-          jobId={currentJobId}
-          hasData={hasData}
-          hasConfig={hasData && config != null}
-          currentConfig={config ?? undefined}
-          onApplyToFit={handleApplyToFit}
-          onJobDone={handleJobDone}
-          onJobStarted={handleJobStarted}
-        />
+        <section
+          aria-label="Results region"
+          tabIndex={0}
+          className="flex h-full flex-col focus-visible:outline-none"
+        >
+          <ResultsPanel
+            jobId={currentJobId}
+            hasData={hasData}
+            hasConfig={hasData && config != null}
+            currentConfig={config ?? undefined}
+            onApplyToFit={handleApplyToFit}
+            onJobDone={handleJobDone}
+            onJobStarted={handleJobStarted}
+          />
+        </section>
       </ResizablePanel>
     </ResizablePanelGroup>
   );
