@@ -150,28 +150,40 @@ def test_nonexistent_directory_returns_empty_entries(
     assert body["entries"] == []
 
 
-def test_nonexistent_directory_path_in_response(
+def test_nonexistent_directory_path_echoes_request(
     client: TestClient, tmp_path: Path
 ) -> None:
-    """Path field reflects requested path even if missing."""
+    """Path field echoes the REQUESTED path for missing directories.
+
+    Issue #157 removed server-side resolved-path echo from error paths
+    to avoid disclosing filesystem topology. The `path` field now
+    reflects whatever the client sent, not the server's resolution.
+    """
     import lizystudio.security as sec
 
     missing = sec.ALLOWED_FILES_ROOT / "no_such_dir"
     response = client.get(f"/api/files?path={missing}")
     assert response.status_code == 200
     body = response.json()
-    assert body["path"] == str(missing.resolve())
+    assert body["path"] == str(missing)
 
 
-def test_nonexistent_directory_has_parent(client: TestClient, tmp_path: Path) -> None:
-    """A non-existent path still reports its parent directory."""
+def test_nonexistent_directory_has_no_parent(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """A non-existent path reports parent=None (Issue #157).
+
+    The legacy behaviour disclosed the server-resolved parent
+    directory, revealing where the allowed-files root lives. The
+    sanitised response omits the parent for all rejected requests.
+    """
     import lizystudio.security as sec
 
     missing = sec.ALLOWED_FILES_ROOT / "ghost_dir"
     response = client.get(f"/api/files?path={missing}")
     assert response.status_code == 200
     body = response.json()
-    assert body["parent"] == str(missing.parent.resolve())
+    assert body["parent"] is None
 
 
 # ---------------------------------------------------------------------------
