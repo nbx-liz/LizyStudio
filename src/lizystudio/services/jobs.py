@@ -205,7 +205,13 @@ class JobStore:
         for jid in removed:
             target = self._job_dir(jid)
             if target.exists():
-                shutil.rmtree(target)
+                # ignore_errors: a concurrent request_cancel (#152) can
+                # briefly stage a tempfile inside the victim tree, and
+                # rmtree's listdir → unlink cycle sees the stale entry
+                # and raises FileNotFoundError. The file is about to be
+                # deleted anyway; swallow the transient error instead
+                # of propagating it out of delete().
+                shutil.rmtree(target, ignore_errors=True)
         return removed
 
     # --- H-0062 lineage helpers ---
@@ -364,23 +370,30 @@ class JobStore:
         # Best-effort file write. Only write if the job_dir already
         # exists — do NOT mkdir it, because that would race with a
         # concurrent delete() of the same job (re-creating the dir
-        # while rmtree enumerates it causes FileNotFoundError). The
-        # in-memory flag remains the source of truth for same-process
-        # callers; the file is only needed for subprocess children,
-        # which always run after the job_dir was persisted.
+        # while rmtree enumerates it). The in-memory flag remains the
+        # source of truth for same-process callers; the file is only
+        # needed for subprocess children, which always run after the
+        # job_dir was persisted.
+        #
+        # Place the staging tempfile in jobs_dir (the parent, never
+        # deleted by delete(job_id)) rather than the job_dir itself,
+        # so a concurrent shutil.rmtree never observes a partially
+        # written or intermittent .tmp entry under the victim
+        # directory — that was the root cause of a FileNotFoundError
+        # surfaced in the concurrent cancel + delete test on 3.11.
         tmp_path: Path | None = None
         try:
             flag_path = self._cancel_flag_path(job_id)
             if not flag_path.parent.exists():
                 return
-            tmp_path = flag_path.with_suffix(".tmp")
+            tmp_path = self.jobs_dir / f".cancel-{job_id}-{os.getpid()}.tmp"
             tmp_path.write_bytes(b"")
             os.replace(tmp_path, flag_path)
         except (OSError, ValueError):
             # OSError: concurrent delete race / filesystem issue.
             # ValueError: malformed job_id rejected by validate_path_within.
             # Clean up any orphaned tmp file so a failed replace does
-            # not leak under the job_dir.
+            # not leak under jobs_dir.
             if tmp_path is not None:
                 with contextlib.suppress(OSError):
                     tmp_path.unlink(missing_ok=True)
