@@ -285,7 +285,13 @@ def _compute_inf_metrics(
         metrics["rmse"] = float((residuals**2).mean() ** 0.5)
         ss_res = float((residuals**2).sum())
         ss_tot = float(((actual - actual.mean()) ** 2).sum())
-        metrics["r2"] = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+        # Issue #156: R² is mathematically undefined when the target
+        # is constant (ss_tot == 0). The legacy fallback of 0.0 was
+        # misleading — a degenerate slice was indistinguishable from
+        # a genuinely mean-level fit. NaN flags the condition so the
+        # UI can render it explicitly (e.g. "—") instead of plotting
+        # a fake zero.
+        metrics["r2"] = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
     else:
         # Classification
         pred_labels = pred

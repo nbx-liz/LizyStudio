@@ -320,11 +320,17 @@ def test_compute_metrics_regression_with_residuals() -> None:
 
 
 def test_compute_metrics_regression_constant_actual() -> None:
-    """_compute_inference_metrics: constant actual prevents division-by-zero (R2=0)."""
+    """_compute_inference_metrics: constant actual → R² is NaN (Issue #156).
+
+    ss_tot == 0 makes R² mathematically undefined; we now report NaN
+    instead of the legacy 0.0 fallback so degenerate slices are
+    visible in the UI rather than silently rendered as a real zero.
+    """
+    import math
+
     pred_df = pd.DataFrame({"pred": [1.0, 2.0, 3.0], "actual": [5.0, 5.0, 5.0]})
     result = _compute_inference_metrics(pred_df, {"task": "regression"})
-    # ss_tot == 0 -> R2 clamped to 0.0
-    assert result["r2"] == pytest.approx(0.0)
+    assert math.isnan(result["r2"])
 
 
 def test_compute_metrics_classification_no_proba() -> None:
