@@ -76,6 +76,19 @@
           }
         }
       }
+    },
+    {
+      "includes": [
+        "src/pages/WorkspacePage.tsx",
+        "src/components/workspace/ModelPanel.tsx"
+      ],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "noNoninteractiveTabindex": "off"
+          }
+        }
+      }
     }
   ]
 }

@@ -306,8 +306,15 @@ export function ModelPanel({
         </div>
       </div>
 
-      {/* Scrollable Content */}
-      <div className="flex-1 overflow-auto p-4">
+      {/* Scrollable Content — tabIndex=0 satisfies axe
+       scrollable-region-focusable (WCAG 2.1.1) on narrow viewports
+       where the panel has no focusable descendant (#167). Biome's
+       a11y/noNoninteractiveTabindex rule conflicts with WCAG here
+       and is overridden in biome.json for this file. */}
+      <div
+        tabIndex={0}
+        className="flex-1 overflow-auto p-4 focus-visible:outline-none"
+      >
         {running && (
           <output
             className="mb-4 flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 p-3 dark:border-blue-800 dark:bg-blue-950"
