@@ -150,36 +150,71 @@ class ColumnsResponse:
 ```python
 # src/lizystudio/backends/base.py
 
+
+class ProgressCallback(Protocol):
+    """Callable invoked by long-running operations to report progress."""
+
+    def __call__(
+        self, *, current: int, total: int, message: str, **extra: Any
+    ) -> None: ...
+
+
 class BackendAdapter(Protocol):
     """ML バックエンドとのインターフェース。"""
 
+    # --- Identification ---
     @property
     def info(self) -> BackendInfo: ...
 
     # --- Config ---
     def get_config_schema(self) -> ConfigSchema: ...
     def get_ui_schema(self) -> dict[str, Any]: ...  # UI メタデータ (H-0026, H-0055)
-    def get_default_config(self, task: str, target: str) -> dict: ...  # 完全なデフォルト Config (H-0025)
-    def validate_config(self, config: dict) -> list[dict]: ...  # エラー一覧 (空=valid)
-    def load_config_from_file(self, content: bytes, filename: str) -> dict: ...
+    def validate_config(self, config: dict[str, Any]) -> list[dict[str, Any]]: ...  # エラー一覧 (空=valid)
+    def get_default_config(self, task: str, target: str) -> dict[str, Any]: ...  # 完全なデフォルト Config (H-0025)
+    def load_config_from_file(self, content: bytes, filename: str) -> dict[str, Any]: ...
 
     # --- Model lifecycle ---
-    def create_model(self, config: dict, dataframe: pd.DataFrame) -> Any: ...  # 内部モデルオブジェクト
-    def fit(self, model: Any, *, params: dict | None = None, on_progress: Callable | None = None) -> FitSummary: ...  # params: H-0012
-    def tune(self, model: Any, *, on_progress: Callable | None = None) -> TuningSummary: ...
-    def predict(self, model: Any, data: pd.DataFrame, *, return_shap: bool = False) -> PredictionSummary: ...  # return_shap: H-0012
+    def create_model(self, config: dict[str, Any], dataframe: pd.DataFrame) -> Any: ...  # 内部モデルオブジェクト
+
+    def fit(
+        self,
+        model: Any,
+        *,
+        params: dict[str, Any] | None = None,  # H-0012
+        on_progress: ProgressCallback | None = None,
+    ) -> FitSummary: ...
+
+    def tune(
+        self,
+        model: Any,
+        *,
+        on_progress: ProgressCallback | None = None,
+        re_tune: dict[str, Any] | None = None,       # H-0061 多ラウンド再チューニング
+        checkpoint_dir: Any = None,                  # H-0062 試行ごとのチェックポイント
+        resume: bool = False,                        # H-0062 Phase B: 既存 study の再開
+    ) -> TuningSummary: ...
+
+    def predict(
+        self, model: Any, data: pd.DataFrame, *, return_shap: bool = False  # H-0012
+    ) -> PredictionSummary: ...
 
     # --- Evaluation ---
-    def evaluate_table(self, model: Any) -> list[dict]: ...
-    def split_summary(self, model: Any) -> list[dict]: ...
-    def importance(self, model: Any, kind: str) -> dict[str, float]: ...
+    def evaluate_table(self, model: Any) -> list[dict[str, Any]]: ...
+    def split_summary(self, model: Any) -> list[dict[str, Any]]: ...
+    def importance(self, model: Any, kind: str = "split") -> dict[str, float]: ...
     def importance_kinds(self, model: Any) -> list[str]: ...  # 利用可能な重要度の種類 (H-0055)
-    def confusion_matrix(self, model: Any, threshold: float) -> dict[str, Any]: ...
-    def plot(self, model: Any, plot_type: str) -> PlotData: ...
+    def learning_curve_metrics(self, model: Any) -> list[str]: ...  # H-0051 学習曲線のメトリック一覧
+    def confusion_matrix(self, model: Any, threshold: float = 0.5) -> dict[str, Any]: ...
+    def plot(self, model: Any, plot_type: str, **kwargs: Any) -> PlotData: ...
     def available_plots(self, model: Any) -> list[str]: ...
+
+    # --- Checkpoint persistence (H-0062) ---
+    def save_checkpoint(self, model: Any, path: Any) -> None: ...  # 原子的に pickle 書き込み
+    def load_checkpoint(self, path: Any, *, allowed_root: Any | None = None) -> Any: ...  # allowed_root で展開先を制限
 
     # --- Persistence ---
     def export_model(self, model: Any, path: str) -> str: ...  # 保存先パス
+    def export_code(self, model: Any, path: str) -> str: ...   # スタンドアロン Python コードへの書き出し
     def load_model(self, path: str) -> Any: ...
     def model_info(self, model: Any) -> dict[str, Any]: ...
 ```
@@ -2287,11 +2322,15 @@ Workspace の `workspace_result` は完了時に自動更新される。
 | GET | `/api/jobs/{job_id}/importance-kinds` | 利用可能な重要度の種類一覧（H-0058） |
 | GET | `/api/jobs/{job_id}/plot/{plot_type}` | Plotly 図 JSON |
 | GET | `/api/jobs/{job_id}/plots` | 利用可能なプロットタイプ一覧 |
+| GET | `/api/jobs/{job_id}/learning-curve/metrics` | 学習曲線のメトリック名一覧（H-0051） |
 | POST | `/api/jobs/{job_id}/export` | モデル/レポートを指定パスにExport |
 | GET | `/api/jobs/{job_id}/export-code` | LizyML 非依存コードを ZIP でダウンロード（H-0027） |
 | GET | `/api/jobs/{job_id}/log` | 実行ログ取得（H-0006） |
 | POST | `/api/jobs/{job_id}/cancel` | Running ジョブのキャンセル（H-0011） |
-| DELETE | `/api/jobs/{job_id}` | ジョブを削除 |
+| POST | `/api/jobs/{job_id}/retune` | 完了 Tune を起点に再チューニング子ジョブを作成（H-0062） |
+| POST | `/api/jobs/{job_id}/resume` | 失敗/中断 Tune の再開子ジョブを作成（H-0062 Phase B） |
+| GET | `/api/jobs/{job_id}/lineage` | ジョブ系譜のサブツリー（H-0062） |
+| DELETE | `/api/jobs/{job_id}` | ジョブを削除（query: `cascade=true` で子孫も削除） |
 
 **POST /api/jobs/{job_id}/export リクエスト:**
 
@@ -2742,9 +2781,28 @@ frontend/src/api/
 
 ### 8.2 フロントエンド
 
-初期段階ではフロントエンドの自動テストは設けない。
-バックエンド API テストでカバーし、フロントエンドは手動確認とする。
-必要に応じて HISTORY.md で提案の上で Vitest / Playwright を導入する。
+H-0019 で以下のテストインフラを導入済み:
+
+| レベル | 対象 | ツール |
+|--------|------|--------|
+| Unit / Component | コンポーネント・フックの個別動作 | Vitest + `@testing-library/react` |
+| API モック | TanStack Query + フェッチ境界 | MSW (Mock Service Worker) |
+| コンポーネントカタログ | ビジュアル検証・ドキュメント | Storybook + test-runner |
+| E2E | 主要ユーザーフロー | Playwright（3 viewport: chromium / tablet / mobile） |
+| Visual Regression | UI 変更の差分検出 | Playwright `toHaveScreenshot` + ゴールデン画像 |
+| Accessibility | 自動 a11y スキャン | Playwright + axe-core |
+
+コマンド:
+
+- `pnpm test` — Vitest（ウォッチ）
+- `pnpm test -- --run` — 一回実行 + coverage（istanbul, 閾値 80/75/80/70）
+- `pnpm test:e2e` — Playwright
+- `pnpm test:e2e:visual` — ビジュアル回帰
+- `pnpm test:e2e:update` — ゴールデン更新
+- `pnpm test:e2e:a11y` — アクセシビリティスキャン
+- `pnpm test:storybook` — Storybook テストランナー
+
+カバレッジの維持目標は backend と揃え 80% を下限とする（`vitest.config.ts` で CI 強制）。
 
 ---
 
@@ -2851,13 +2909,18 @@ LizyStudio/
 │   ├── _version.py
 │   ├── cli.py
 │   ├── server.py
+│   ├── security.py            # パス検証・アップロード制限 (H-0038 他)
+│   ├── metrics.py              # Prometheus メトリクス定義 (H-0065, H-0066)
 │   ├── api/
 │   │   ├── __init__.py
-│   │   ├── workspace.py       # Workspace API (config, data, fit)
+│   │   ├── workspace.py       # Workspace API (config, data, fit/tune)
 │   │   ├── jobs.py            # Jobs API
+│   │   ├── retune.py          # Re-tune / Resume / Lineage (H-0062)
 │   │   ├── inference.py       # Inference API
 │   │   ├── backends.py        # Backend API
 │   │   ├── files.py           # Files API
+│   │   ├── health.py          # Health API (H-0064)
+│   │   ├── metrics_api.py     # /api/metrics Prometheus exposition (H-0065)
 │   │   ├── models.py          # Pydantic リクエスト/レスポンスモデル
 │   │   └── errors.py          # エラーハンドラ
 │   ├── services/
@@ -2865,7 +2928,10 @@ LizyStudio/
 │   │   ├── workspace.py       # Workspace 揮発状態管理
 │   │   ├── data.py            # データ読み込み・カラム分析
 │   │   ├── jobs.py            # Job ライフサイクル + ディスク永続化
-│   │   ├── training.py        # Fit/Tune 実行管理
+│   │   ├── training.py        # Fit/Tune スレッドオーケストレーション
+│   │   ├── training_retune.py # Re-tune / Resume 実行 (H-0062)
+│   │   ├── subprocess_runner.py # Fit/Tune サブプロセス実行 (H-0036)
+│   │   ├── openmp_detect.py   # OpenMP ランタイム検出 (H-0036)
 │   │   ├── inference.py       # 推論実行 + 永続化
 │   │   └── export.py          # Model/Report/Code Export
 │   ├── backends/
@@ -2873,8 +2939,19 @@ LizyStudio/
 │   │   ├── base.py            # BackendAdapter Protocol
 │   │   ├── types.py           # 共通型 (FitSummary, PlotData, DataRef 等)
 │   │   ├── registry.py        # Adapter 登録・取得
-│   │   ├── lizyml.py          # LizyML Adapter 実装
-│   │   └── lizyml_ui_schema.py # LizyML UI メタデータ
+│   │   ├── lizyml/            # LizyML Adapter (mixin 分割)
+│   │   │   ├── __init__.py
+│   │   │   ├── adapter.py
+│   │   │   ├── config_mixin.py
+│   │   │   ├── config_compat.py
+│   │   │   ├── lifecycle_mixin.py
+│   │   │   ├── evaluation_mixin.py
+│   │   │   ├── checkpoint_mixin.py  # H-0062 save/load checkpoint
+│   │   │   ├── pickle_compat.py
+│   │   │   └── serialization.py
+│   │   ├── lizyml_ui_schema.py # LizyML UI メタデータ
+│   │   ├── lizyml_constants.py # LizyML 定数
+│   │   └── lizyml_metrics.py   # LizyML メトリック定義
 │   └── ws/
 │       ├── __init__.py
 │       └── progress.py        # ジョブ進捗 WebSocket
@@ -2930,9 +3007,13 @@ LizyStudio は localhost 専用のデスクトップツールであるが、以�
 
 本番モードで以下のヘッダーを付与する（H-0039）:
 
-- `Content-Security-Policy`: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://localhost:*; img-src 'self' data: blob:; font-src 'self'`
+- `Content-Security-Policy`: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://localhost:* wss://localhost:*; img-src 'self' data: blob:; font-src 'self'`
 - `X-Content-Type-Options: nosniff`
 - `X-Frame-Options: DENY`
+- `Referrer-Policy: strict-origin-when-cross-origin`
+- `Permissions-Policy: camera=(), microphone=(), geolocation=()`
+
+`connect-src` に `wss://localhost:*` を含めるのは、HTTPS リバースプロキシの背後で Studio を運用した場合に WebSocket が `wss://` にアップグレードされる構成を許容するため。
 
 開発モード（`LIZYSTUDIO_RELOAD=1`）では CSP を緩和し、HMR（Hot Module Replacement）を許可する。
 
