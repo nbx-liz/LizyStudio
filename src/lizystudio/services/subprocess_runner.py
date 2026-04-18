@@ -21,10 +21,12 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import IO, TYPE_CHECKING, Any
 
 from lizystudio.services.jobs import Job, JobStore
 
@@ -47,6 +49,100 @@ _WAIT_TIMEOUT = 10.0
 # where the flush->visibility delay is occasionally above that budget.
 _FINAL_FLUSH_RETRIES = 5
 _FINAL_FLUSH_INTERVAL = 0.05
+
+# Issue #150: the child's stderr pipe must be drained concurrently or
+# the child blocks on write(2) once it exceeds the OS pipe buffer
+# (~64 KiB on Linux). We retain only the last _STDERR_TAIL_CHUNKS *
+# _STDERR_READ_SIZE bytes so a chatty child does not grow the parent's
+# memory unboundedly; this tail is what the error-logging path at
+# run_job_in_subprocess reports when the child exits non-zero.
+_STDERR_READ_SIZE = 4096  # bytes per read(2)
+_STDERR_TAIL_CHUNKS = 16  # retain the most recent chunks (~64 KiB)
+
+
+class _StderrDrainer:
+    """Concurrently drain a subprocess stderr pipe on a daemon thread.
+
+    The parent no longer blocks on ``proc.stderr.read()`` only after
+    ``proc.wait()`` — which would deadlock any child that writes more
+    than the OS pipe buffer. Instead, a dedicated daemon thread reads
+    chunks until EOF (or the pipe is closed) and keeps the most
+    recent chunks in a bounded ring for post-mortem logging.
+
+    The drainer does NOT own the ``Popen`` object; callers are
+    expected to ``start()`` right after ``Popen`` and ``join(timeout)``
+    after ``proc.wait()``. ``tail_bytes()`` is safe to call after
+    ``join()`` completes.
+    """
+
+    def __init__(self, stream: IO[bytes]) -> None:
+        self._stream = stream
+        self._buffer: deque[bytes] = deque(maxlen=_STDERR_TAIL_CHUNKS)
+        self._thread = threading.Thread(
+            target=self._run, name="lizystudio-stderr-drain", daemon=True
+        )
+
+    def _run(self) -> None:
+        try:
+            while True:
+                chunk = self._stream.read(_STDERR_READ_SIZE)
+                if not chunk:
+                    # EOF or pipe closed by child exit.
+                    break
+                self._buffer.append(chunk)
+        except (OSError, ValueError):
+            # Stream closed out from under us; nothing to do.
+            return
+        except Exception:
+            # Any other exception would otherwise be silently logged by
+            # threading.excepthook and leave the pipe undrained, which
+            # in turn can re-introduce the #150 deadlock. Log with the
+            # stack trace so diagnosis is possible post-mortem.
+            _logger.exception("stderr drainer thread crashed")
+            return
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def join(self, timeout: float | None = None) -> None:
+        """Wait for the drainer to reach EOF, then close the stream.
+
+        Safe to call multiple times — the second call is a no-op on a
+        terminated thread and an already-closed stream. Callers should
+        invoke ``join`` before ``tail_bytes`` to ensure the drainer has
+        finished writing to the buffer.
+
+        If the drainer does not finish within *timeout*, close the
+        stream anyway — ``read(4096)`` on a closed stream returns
+        ``b""`` or raises, both of which terminate the loop above.
+        """
+        self._thread.join(timeout=timeout)
+        with contextlib.suppress(Exception):
+            self._stream.close()
+        # If the thread was still mid-read when the stream closed,
+        # give it a brief moment to unwind. This is a best-effort
+        # cleanup — daemon=True prevents it from blocking interpreter
+        # shutdown either way.
+        if self._thread.is_alive():
+            self._thread.join(timeout=0.5)
+            if self._thread.is_alive():
+                _logger.warning(
+                    "stderr drainer thread did not exit after join + close; "
+                    "leaving as daemon"
+                )
+
+    def tail_bytes(self) -> bytes:
+        """Return the retained tail of stderr output.
+
+        MUST be called after :meth:`join` returns so the drainer thread
+        is no longer appending to the buffer. Reading earlier is
+        technically memory-safe under CPython's GIL but may return a
+        truncated tail.
+
+        Bounded by the ring's capacity — a chatty child only gets
+        its final chunks logged, not the entire history.
+        """
+        return b"".join(self._buffer)
 
 
 def run_job_in_subprocess(
@@ -108,6 +204,7 @@ def run_job_in_subprocess(
     args_p = Path(args_path)
     progress_path = str(args_p.parent / (args_p.stem + "_progress.jsonl"))
 
+    drainer: _StderrDrainer | None = None
     try:
         proc = subprocess.Popen(
             [
@@ -120,6 +217,13 @@ def run_job_in_subprocess(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
         )
+
+        # Issue #150: drain stderr concurrently so the child cannot
+        # block on write(2) once it exceeds the OS pipe buffer. The
+        # drainer keeps a bounded tail for post-mortem logging below.
+        if proc.stderr is not None:
+            drainer = _StderrDrainer(proc.stderr)
+            drainer.start()
 
         # H-0062 Bugfix 2026-04-14 (5): pass job_store so _poll_progress
         # can honour cancel requests and terminate a hung subprocess.
@@ -142,15 +246,25 @@ def run_job_in_subprocess(
             with contextlib.suppress(subprocess.TimeoutExpired):
                 proc.wait(timeout=_WAIT_TIMEOUT)
 
+        # Wait for the drainer to finish consuming stderr BEFORE reading
+        # the retained tail. Otherwise tail_bytes() can race with the
+        # final appends and return a truncated buffer. join() is safe
+        # to call twice — the finally below is idempotent insurance
+        # against any exception between here and there.
+        if drainer is not None:
+            drainer.join(timeout=2.0)
+
         if proc.returncode not in (0, None):
-            raw = proc.stderr.read() if proc.stderr else b""
-            stderr = (raw or b"").decode(errors="replace")
+            tail = drainer.tail_bytes() if drainer is not None else b""
+            stderr = tail.decode(errors="replace")
             _logger.error(
                 "Subprocess exited with code %d: %s",
                 proc.returncode,
-                stderr[:500],
+                stderr[-500:],
             )
     finally:
+        if drainer is not None:
+            drainer.join(timeout=2.0)
         Path(args_path).unlink(missing_ok=True)
         Path(progress_path).unlink(missing_ok=True)
 
