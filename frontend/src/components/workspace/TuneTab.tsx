@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { MetricEntry } from "@/api/types";
+import { RetuneSettingsSection } from "@/components/retune";
 import {
   Accordion,
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import { RetuneSettingsSection } from "./retune";
 import { groupToCategory, SearchSpaceTable } from "./SearchSpaceTable";
 import { TuneEvaluationSection } from "./TuneEvaluationSection";
 import { TuneSettings } from "./TuneSettings";

@@ -12,6 +12,8 @@ import {
   type LineageNode,
 } from "@/api/jobs";
 import type { JobDetail, MetricEntry } from "@/api/types";
+import { JobLineageTree } from "@/components/retune/JobLineageTree";
+import { RetuneActionButton } from "@/components/retune/RetuneActionButton";
 import { MetricCards } from "@/components/shared/MetricCards";
 import { Accordion } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
@@ -20,8 +22,6 @@ import { pivotMetrics } from "@/lib/metrics";
 import { ConfigDiffBadge } from "./ConfigDiffBadge";
 import { FoldDetailsSection } from "./FoldDetailsSection";
 import { PlotSection } from "./PlotSection";
-import { JobLineageTree } from "./retune/JobLineageTree";
-import { RetuneActionButton } from "./retune/RetuneActionButton";
 import {
   TrialResultsAccordionItem,
   TuneTrialsSection,
