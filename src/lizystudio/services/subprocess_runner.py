@@ -508,8 +508,63 @@ def _forward_progress(
 # --- Child process entry point ---
 
 
+def _install_sigterm_handler() -> None:
+    """Convert SIGTERM into KeyboardInterrupt on the main thread (#153).
+
+    Python's default SIGTERM handler calls ``_exit`` which bypasses
+    every Python-level ``finally`` block. That caused
+    ``_run_job_core.finally`` to skip — no ``execution.log`` write,
+    no ``release_active``, no terminal metric — whenever the parent
+    escalated a cancel to SIGTERM.
+
+    This handler uses ``_thread.interrupt_main()`` to raise
+    ``KeyboardInterrupt`` on the main thread, which takes the
+    ``except (CancelledError, KeyboardInterrupt)`` branch in
+    ``_run_job_core`` and runs the existing ``finally``.
+
+    Single-shot (INV-8): the handler resets itself to ``SIG_DFL``
+    on entry so a second SIGTERM falls through to the OS default —
+    this keeps the parent's ``proc.kill()`` / SIGKILL escalation
+    intact for a truly hung child.
+    """
+    import _thread
+    import signal as _signal
+
+    fired = {"once": False}
+
+    def _handler(signum: int, frame: Any) -> None:  # noqa: ARG001
+        if fired["once"]:
+            # Second SIGTERM: escalate to default action so the parent's
+            # proc.kill() / SIGKILL path still terminates a hung child.
+            # Only re-raise the signal if the SIG_DFL swap succeeded —
+            # otherwise os.kill would re-enter this very handler
+            # because the custom slot is still active, creating a
+            # signal loop.
+            try:
+                _signal.signal(_signal.SIGTERM, _signal.SIG_DFL)
+            except Exception:
+                # SIG_DFL install failed (extremely unlikely on POSIX).
+                # Leave the second escalation to the parent's proc.kill
+                # SIGKILL path rather than risk an infinite re-entry.
+                return
+            os.kill(os.getpid(), _signal.SIGTERM)
+            return
+        fired["once"] = True
+        # First SIGTERM: inject KeyboardInterrupt on the main thread
+        # so _run_job_core.finally runs.
+        _thread.interrupt_main()
+
+    with contextlib.suppress(Exception):
+        _signal.signal(_signal.SIGTERM, _handler)
+
+
 def _child_main(args_path: str, progress_path: str) -> None:
     """Entry point for the child process."""
+    # Issue #153: install SIGTERM → KeyboardInterrupt before doing any
+    # real work so a parent-triggered SIGTERM during setup still runs
+    # the _run_job_core finally block.
+    _install_sigterm_handler()
+
     with open(args_path, encoding="utf-8") as f:
         args = json.load(f)
 
