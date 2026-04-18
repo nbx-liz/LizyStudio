@@ -66,10 +66,18 @@ def validate_path_within(path: Path, allowed_root: Path) -> Path:
     """Resolve *path* and assert it is within *allowed_root*.
 
     Raises ``ValueError`` if the resolved path escapes the root.
+
+    Issue #155: uses ``Path.is_relative_to`` (Python 3.9+) instead of
+    case-sensitive string prefix comparison. On case-insensitive
+    filesystems (HFS+/APFS on macOS, NTFS on Windows), ``Path.resolve``
+    preserves the caller-supplied case, so ``startswith`` produced
+    false negatives for legitimate mixed-case paths. Path semantics
+    also correctly reject prefix-similar siblings (``/root2`` vs
+    ``/root``) without relying on an ``os.sep`` suffix hack.
     """
     resolved = path.resolve()
     root = allowed_root.resolve()
-    if not (resolved == root or str(resolved).startswith(str(root) + os.sep)):
+    if not resolved.is_relative_to(root):
         msg = f"Path {resolved} is outside allowed root {root}"
         raise ValueError(msg)
     return resolved
@@ -79,10 +87,12 @@ def validate_static_path(path: Path, static_dir: Path) -> Path | None:
     """Resolve *path* and return it if it is a file within *static_dir*.
 
     Returns ``None`` if the path escapes the directory or does not exist.
+    Uses ``Path.is_relative_to`` for the same reason as
+    :func:`validate_path_within` (Issue #155).
     """
     resolved = path.resolve()
     root = static_dir.resolve()
-    if not (resolved == root or str(resolved).startswith(str(root) + os.sep)):
+    if not resolved.is_relative_to(root):
         return None
     if not resolved.is_file():
         return None
