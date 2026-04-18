@@ -40,6 +40,7 @@ from lizystudio.api.models import (
     ValidationResponse,
     WorkspaceStatusResponse,
 )
+from lizystudio.metrics import record_job_terminal
 from lizystudio.security import (
     check_dataframe_memory,
     read_upload_checked,
@@ -551,11 +552,18 @@ def workspace_fit(
         job.error = "Previous job still running"
         job_store.update(job)
         job_store.release_active(job.job_id)
+        # Issue #154: record the terminal status so the
+        # lizystudio_jobs_total{status="failed"} counter is not under-
+        # counted on slot-claim-after-claim failures.
+        record_job_terminal(job.job_type, "failed")
         raise JobConflictError(job.job_id) from None
     except Exception:
         # Any other failure after we claimed the slot must release it,
-        # otherwise the slot stays held until server restart.
+        # otherwise the slot stays held until server restart. Emit the
+        # failed metric (#154) before re-raising so the counter
+        # reflects the true failure count.
         job_store.release_active(job.job_id)
+        record_job_terminal(job.job_type, "failed")
         raise
     return {"job_id": job_id}
 
@@ -617,8 +625,11 @@ def workspace_tune(
         job.error = "Previous job still running"
         job_store.update(job)
         job_store.release_active(job.job_id)
+        # Issue #154: record the terminal status (same fix as /fit).
+        record_job_terminal(job.job_type, "failed")
         raise JobConflictError(job.job_id) from None
     except Exception:
         job_store.release_active(job.job_id)
+        record_job_terminal(job.job_type, "failed")
         raise
     return {"job_id": job_id}
