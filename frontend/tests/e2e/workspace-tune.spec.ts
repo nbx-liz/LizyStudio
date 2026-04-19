@@ -233,8 +233,11 @@ test.describe("Workspace tune flow", () => {
     const jobDetail = await pollJobUntilDone(request, jobId);
     expect(jobDetail.status).toBe("completed");
 
-    // 3. Export code — should return a ZIP file
-    const exportRes = await request.post(`${API}/jobs/${jobId}/export-code`);
+    // 3. Export code — should return a ZIP file.
+    // NOTE: the backend route is ``GET /jobs/{id}/export-code`` (see
+    // api/jobs.py). The original v2-11 test used POST, which returned
+    // 405 Method Not Allowed and never exercised the real export path.
+    const exportRes = await request.get(`${API}/jobs/${jobId}/export-code`);
     expect(exportRes.status()).toBe(200);
 
     // Verify response is a ZIP (content-type header)

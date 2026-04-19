@@ -6,7 +6,18 @@ interface CompactStepperProps {
   max?: number;
   placeholder?: string;
   disabled?: boolean;
+  /**
+   * Explicit input id. Pre-existing API used by callers that wire
+   * their own <label htmlFor>.
+   */
   inputId?: string;
+  /**
+   * Generic `id` prop. Issue #90: FormRow / FormField propagate an
+   * auto-generated id via cloneElement so axe's `label` rule passes
+   * for steppers nested inside those wrappers without each call site
+   * having to thread `inputId` manually.
+   */
+  id?: string;
 }
 
 function clamp(value: number, min?: number, max?: number): number {
@@ -25,7 +36,10 @@ export function CompactStepper({
   placeholder,
   disabled = false,
   inputId,
+  id,
 }: CompactStepperProps) {
+  // Prefer the explicit `inputId` (legacy API) when both are passed.
+  const resolvedInputId = inputId ?? id;
   const handleDecrement = () => {
     const current = value ?? 0;
     onChange(clamp(current - step, min, max));
@@ -67,7 +81,7 @@ export function CompactStepper({
         {"−"}
       </button>
       <input
-        id={inputId}
+        id={resolvedInputId}
         type="text"
         inputMode="decimal"
         className="lzs-stepper__input"

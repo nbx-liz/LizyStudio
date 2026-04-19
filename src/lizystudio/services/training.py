@@ -11,6 +11,7 @@ import copy
 import io
 import logging
 import threading
+import time
 import traceback
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -19,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from lizystudio.backends.base import BackendAdapter, ProgressCallback
 from lizystudio.backends.types import FitSummary, TuningSummary
+from lizystudio.metrics import record_job_terminal
 from lizystudio.services.jobs import Job, JobStore
 
 if TYPE_CHECKING:
@@ -61,6 +63,49 @@ def _make_cancel_aware_cb(
     return callback
 
 
+def _subprocess_duration_seconds(job: Job) -> float:
+    """Compute wall-clock duration from a subprocess-owned job.
+
+    H-0066: the subprocess child stamps both ``created_at`` and
+    ``completed_at`` in ISO-8601. The parent cannot share the thread-
+    mode ``time.monotonic()`` baseline, so this helper reconstructs
+    the elapsed seconds from the persisted timestamps.
+
+    Returns 0.0 when either timestamp is missing / unparseable — safer
+    than propagating an exception through the finally-block.
+    """
+    if job.completed_at is None:
+        return 0.0
+    try:
+        created = datetime.fromisoformat(job.created_at)
+        completed = datetime.fromisoformat(job.completed_at)
+    except ValueError:
+        return 0.0
+    return max(0.0, (completed - created).total_seconds())
+
+
+def _emit_terminal_metric(job: Job, duration: float = 0.0) -> None:
+    """Bump `lizystudio_jobs_total` and observe duration (H-0065, H-0066).
+
+    Centralises the per-literal dispatch that mypy requires for
+    Literal narrowing. Two call sites share this helper:
+    ``_run_job_core``'s finally block (thread mode) and
+    ``_run_subprocess_job``'s finally block (subprocess mode).
+    The ``claim_active`` early-fail path passes a hardcoded literal
+    and calls ``record_job_terminal`` directly.
+
+    *duration* is the wall-clock seconds between ``claim_active``
+    success and terminal state; 0.0 for paths that failed before
+    training started.
+    """
+    if job.status == "completed":
+        record_job_terminal(job.job_type, "completed", duration=duration)
+    elif job.status == "failed":
+        record_job_terminal(job.job_type, "failed", duration=duration)
+    elif job.status == "cancelled":
+        record_job_terminal(job.job_type, "cancelled", duration=duration)
+
+
 def _run_job_core(
     *,
     job: Job,
@@ -84,10 +129,17 @@ def _run_job_core(
             broadcaster.send_error(
                 job.job_id, "Another job is already running", code="JOB_CONFLICT"
             )
+        record_job_terminal(job.job_type, "failed")
         return job
 
     job.status = "running"
     job_store.update(job)
+
+    # H-0066: capture wall-clock start for the jobs_duration_seconds
+    # histogram. `time.monotonic()` is guaranteed monotonic by the API
+    # contract, so a system clock adjustment during a long tune
+    # cannot corrupt the sample.
+    start_time = time.monotonic()
 
     cb = _make_cancel_aware_cb(job.job_id, job_store, broadcaster)
 
@@ -127,11 +179,21 @@ def _run_job_core(
     finally:
         job_store.release_active(job.job_id)
         job_store.clear_cancel(job.job_id)
+        elapsed = time.monotonic() - start_time
+        _emit_terminal_metric(job, duration=elapsed)  # H-0065 / H-0066
         job_logger.removeHandler(handler)
         handler.close()
-        log_path = job_store.jobs_dir / job.job_id / "execution.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_path.write_text(log_buffer.getvalue(), encoding="utf-8")
+        # Persist captured logs. An OSError here must not propagate out of
+        # the finally block — doing so would short-circuit the job runner
+        # thread and leave ``ws._job_thread`` pointing at a zombie.
+        try:
+            log_path = job_store.jobs_dir / job.job_id / "execution.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text(log_buffer.getvalue(), encoding="utf-8")
+        except OSError:
+            _logger.warning(
+                "Failed to persist execution log for job %s", job.job_id, exc_info=True
+            )
 
     return job
 
@@ -414,34 +476,90 @@ def _run_subprocess_job(
     ws: WorkspaceState,
     job: Job,
     job_store: JobStore,
-    broadcaster: ProgressBroadcaster,
-) -> None:
-    """Run a job via subprocess and update workspace state (H-0036)."""
+    broadcaster: ProgressBroadcaster | None,
+    *,
+    mode: str | None = None,
+    parent_job_id: str | None = None,
+    retune_n_trials: int | None = None,
+    retune_expand_boundary: bool | None = None,
+    retune_boundary_threshold: float | None = None,
+    on_data_missing: Callable[[Job], None] | None = None,
+) -> Job:
+    """Run a job via subprocess and update workspace state.
+
+    Shared by fit, tune, and retune subprocess paths. Optional keyword
+    arguments carry retune-specific inputs so they can be forwarded to
+    the child process without duplicating the orchestration logic.
+
+    *on_data_missing* is called instead of the default inline failure
+    handling when ``ws.data_ref.path`` is absent; retune uses this to
+    route through ``_mark_retune_child_failed`` which also releases
+    the parent lock.
+    """
     from lizystudio.services.subprocess_runner import run_job_in_subprocess
     from lizystudio.services.workspace import get_backend_name
 
-    if ws.data_ref is None or not ws.data_ref.path:
-        job.status = "failed"
-        job.error = "No data loaded — cannot run subprocess job"
-        job.completed_at = datetime.now(timezone.utc).isoformat()
-        job_store.update(job)
-        if broadcaster is not None:
-            broadcaster.send_error(job.job_id, job.error)
+    # H-0065: set to True when the caller's on_data_missing callback
+    # handles the terminal-state bookkeeping (including metric
+    # emission) so the finally-block below does not double-emit.
+    terminal_already_recorded = False
+    try:
+        if ws.data_ref is None or not ws.data_ref.path:
+            if on_data_missing is not None:
+                on_data_missing(job)
+                terminal_already_recorded = True
+            else:
+                job.status = "failed"
+                job.error = "No data loaded — cannot run subprocess job"
+                job.completed_at = datetime.now(timezone.utc).isoformat()
+                job_store.update(job)
+                if broadcaster is not None:
+                    broadcaster.send_error(job.job_id, job.error)
+                with ws._lock:
+                    ws.current_job_id = job.job_id
+                record_job_terminal(job.job_type, "failed")
+                terminal_already_recorded = True
+            return job
+        data_path = ws.data_ref.path
+        extra_kwargs: dict[str, Any] = {}
+        if mode is not None:
+            extra_kwargs["mode"] = mode
+        if parent_job_id is not None:
+            extra_kwargs["parent_job_id"] = parent_job_id
+        if retune_n_trials is not None:
+            extra_kwargs["retune_n_trials"] = retune_n_trials
+        if retune_expand_boundary is not None:
+            extra_kwargs["retune_expand_boundary"] = retune_expand_boundary
+        if retune_boundary_threshold is not None:
+            extra_kwargs["retune_boundary_threshold"] = retune_boundary_threshold
+        finished = run_job_in_subprocess(
+            job=job,
+            job_store=job_store,
+            broadcaster=broadcaster,
+            backend_name=get_backend_name(ws),
+            data_path=data_path,
+            **extra_kwargs,
+        )
         with ws._lock:
-            ws.current_job_id = job.job_id
-        return
-    data_path = ws.data_ref.path
-    finished = run_job_in_subprocess(
-        job=job,
-        job_store=job_store,
-        broadcaster=broadcaster,
-        backend_name=get_backend_name(ws),
-        data_path=data_path,
-    )
-    with ws._lock:
-        ws.workspace_fit_result = finished.fit_result
-        ws.workspace_tune_result = finished.tune_result
-        ws.current_job_id = finished.job_id
+            ws.workspace_fit_result = finished.fit_result
+            ws.workspace_tune_result = finished.tune_result
+            ws.current_job_id = finished.job_id
+        return finished
+    finally:
+        job_store.release_active(job.job_id)
+        # H-0065: subprocess path writes the terminal status on disk
+        # from the child process; re-read it here so the parent emits
+        # exactly one counter increment per job in either mode. Skip
+        # when the early-return paths above already emitted one.
+        if not terminal_already_recorded:
+            latest = job_store.get(job.job_id)
+            if latest is not None:
+                # H-0066: duration = completed_at - created_at. Fall
+                # back to 0.0 when either timestamp is missing (e.g.
+                # crash before completion was stamped); the counter
+                # still increments so totals stay correct.
+                duration = _subprocess_duration_seconds(latest)
+                _emit_terminal_metric(latest, duration=duration)
 
 
 def start_fit_async(

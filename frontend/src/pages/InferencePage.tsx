@@ -16,10 +16,9 @@ import { SetupPanel } from "@/components/inference/SetupPanel";
 export function InferencePage() {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
-  const initialJobId = searchParams.get("job_id");
 
-  const [selectedJobId, setSelectedJobId] = useState<string | null>(
-    initialJobId,
+  const [selectedJobId, setSelectedJobId] = useState<string | null>(() =>
+    searchParams.get("job_id"),
   );
   const [selectedInfId, setSelectedInfId] = useState<string | null>(null);
 
@@ -34,19 +33,31 @@ export function InferencePage() {
     [allJobs],
   );
 
-  // Auto-select job from URL param
+  // Auto-select job from URL param.
+  //
+  // HIGH-4: read the current value of the `job_id` query param on each
+  // run instead of closing over `initialJobId` from first render. That
+  // older pattern missed subsequent URL updates because the constant
+  // was never recomputed, so navigating to a different job via the URL
+  // bar silently kept the first-loaded selection.
   useEffect(() => {
-    if (initialJobId && completedJobs.some((j) => j.job_id === initialJobId)) {
-      setSelectedJobId(initialJobId);
+    const jobIdParam = searchParams.get("job_id");
+    if (jobIdParam && completedJobs.some((j) => j.job_id === jobIdParam)) {
+      setSelectedJobId(jobIdParam);
     }
-  }, [initialJobId, completedJobs]);
+  }, [searchParams, completedJobs]);
 
-  // Fetch inference history for selected job
+  // Fetch inference history for selected job.
+  //
+  // HIGH-4: inference records are created explicitly by the mutation
+  // below (see onSuccess → invalidate). There is no background source
+  // that can produce new records on its own, so the previous five-second
+  // `refetchInterval` was pure wasted bandwidth. Rely on the mutation's
+  // invalidation instead.
   const { data: history = [] } = useQuery({
     queryKey: ["inf-history", selectedJobId],
     queryFn: () => fetchInferenceHistory(selectedJobId ?? undefined),
     enabled: selectedJobId != null,
-    refetchInterval: 5000,
   });
 
   // Fetch selected inference record

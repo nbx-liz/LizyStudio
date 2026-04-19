@@ -74,7 +74,10 @@ export function CalibrationSection({
             <div className="flex items-center justify-between gap-2">
               <Label className="text-xs text-muted-foreground">method</Label>
               <Select value={method} onValueChange={handleMethodChange}>
-                <SelectTrigger className="h-8 w-32 text-xs">
+                <SelectTrigger
+                  aria-label="Calibration method"
+                  className="h-8 w-32 text-xs"
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

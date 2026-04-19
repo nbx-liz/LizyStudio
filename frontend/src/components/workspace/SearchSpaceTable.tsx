@@ -291,7 +291,10 @@ export function SearchSpaceTable({
               <Select
                 onValueChange={(v) => setAddedParams((prev) => [...prev, v])}
               >
-                <SelectTrigger className="h-7 w-48 text-xs">
+                <SelectTrigger
+                  aria-label="Add parameter to search space"
+                  className="h-7 w-48 text-xs"
+                >
                   <SelectValue placeholder="+ Add parameter" />
                 </SelectTrigger>
                 <SelectContent>

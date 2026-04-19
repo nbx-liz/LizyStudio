@@ -26,7 +26,40 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy src/lizystudio/
-      - run: uv run pytest --cov=src/lizystudio --cov-report=term-missing --cov-fail-under=80 -q
+      # Nightly uses the same flaky-retry policy as CI (Issue #29).
+      - run: uv run pytest --cov=src/lizystudio --cov-report=term-missing --cov-fail-under=80 --reruns 2 --reruns-delay 1 -q
+
+  plotly-cdn:
+    name: Plotly CDN reachability & SRI freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: develop
+      - name: Verify CDN bundle is reachable and SRI hash matches
+        run: |
+          set -euo pipefail
+          # Extract pinned version and SRI from the source of truth
+          VERSION=$(grep '_PLOTLY_VERSION = ' src/lizystudio/services/export.py \
+            | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          EXPECTED_SRI=$(grep '_PLOTLY_SRI = ' src/lizystudio/services/export.py \
+            | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          URL="https://cdn.plot.ly/${VERSION}"
+          echo "Fetching ${URL} ..."
+          # Download the bundle (fail loudly on non-200)
+          curl -fsSL -o /tmp/plotly-bundle.js "${URL}"
+          echo "✓ CDN returned 200"
+          # Compute the actual SRI hash (sha384, base64)
+          ACTUAL_HASH=$(openssl dgst -sha384 -binary /tmp/plotly-bundle.js | openssl base64 -A)
+          ACTUAL_SRI="sha384-${ACTUAL_HASH}"
+          echo "Expected: ${EXPECTED_SRI}"
+          echo "Actual:   ${ACTUAL_SRI}"
+          if [ "${EXPECTED_SRI}" != "${ACTUAL_SRI}" ]; then
+            echo "::error::SRI hash mismatch! The CDN bundle has changed since the hash was pinned."
+            echo "Recompute with: curl -fsSL ${URL} | openssl dgst -sha384 -binary | openssl base64 -A"
+            exit 1
+          fi
+          echo "✓ SRI hash matches"
 
   frontend:
     runs-on: ubuntu-latest

@@ -1596,3 +1596,165 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
     9. `_run_retune_subprocess` と `start_fit_async` / `start_tune_async` の重複統合。
     10. exact trial count 監視テストの brittleness（一部緩和済、残箇所は段階的に）。
 - **Bugfix 2026-04-14 (4) — AUC が low-is-better で最適化される CRITICAL バグ:** ユーザ報告「Tuning 時に AUC スコアが低いほど良い指標になっている」を受けて調査。根本原因は `api/workspace.py::workspace_tune` のデフォルト tuning inject 経路で `direction` が `"minimize"` にハードコードされていたこと。具体的な再現フロー: (1) ユーザが Workspace で task=binary を選ぶ（評価メトリックは default の auc）→ (2) `tuning` セクション未設定のまま Tune ボタンを押す → (3) `POST /api/workspace/tune` でバックエンドが `tuning.optuna.params = {"n_trials": 50, "direction": "minimize", "timeout": None}` を inject → (4) `_prepare_tune_config` の auto-resolve は `"direction" not in params` を見ていたため発火せず → (5) lizyml の `Model.tune()` が Optuna study direction = `"minimize"` で起動 → (6) AUC を最小化（=低いほど良い指標として扱う） → (7) `best_params` が完全に意味不明な値になる。**影響範囲**: すべての fresh tune 実行で auc / auc_pr / r2 / accuracy / f1 / auc_mu が低いほど良いと最適化されていた。ユーザがメトリックを 1 度切り替えた場合のみ TuneEvaluationSection の `handleOptimizationMetricChange` が direction を上書きするため回避されていた。修正 (5 層): **(Fix 1)** `api/workspace.py:437` のハードコード `"direction": "minimize"` を削除し、`_prepare_tune_config` の auto-resolve に一任。**(Fix 2)** `services/training.py::_prepare_tune_config` の direction 補正条件を `"direction" not in params` から「常に metric と整合させる（不整合なら上書き）」に変更。これにより stale な direction や API 直叩きの誤った値も自動修正される。**(Fix 3)** `frontend/src/components/workspace/TuneEvaluationSection.tsx` に defensive useEffect を追加し、メトリック変化時にコンポーネント側でも `optuna.params.direction` を `metricDirection` と整合させる（ユーザがメトリックボタンを押さなくても同期）。**(Fix 4)** リグレッションテスト追加: `tests/test_workspace_coverage.py::test_tune_default_tuning_uses_auc_maximize_for_binary` (workspace_tune → _prepare_tune_config の統合テスト), `tests/test_training_service.py::test_overrides_stale_minimize_direction_for_auc` / `test_overrides_stale_maximize_direction_for_rmse` / `test_keeps_consistent_direction_unchanged`, 既存 `test_preserves_explicit_direction` を `test_overwrites_inconsistent_direction` に差し替え (新しい契約: 「metric が direction の単一の真実」)。E2E `frontend/tests/e2e/workspace-tune.spec.ts` の fixture から `direction: "minimize"` ハードコードを削除し、`tune_result.direction === "maximize"` の assertion を追加。**Fix 5** (このエントリー)。**壊れた job 履歴**: 既存の `direction: minimize` で完了済みの binary + auc tune jobs は best_params が論理的に逆なので破棄推奨。マイグレーション script は不要、ユーザが手動 delete でよい。949 backend tests green, mypy / ruff clean。
+
+### H-0063: `POST /workspace/reset` がアクティブジョブを確実にキャンセルして slot を解放する
+- **Status:** accepted
+- **Scope:** API, Backend
+- **Related:** BLUEPRINT §5 Workspace API / §8 Jobs ライフサイクル, Issue #99
+- **Context:** 現状の `POST /workspace/reset` は `WorkspaceState` のみをクリアし、`JobStore._active_job_id` にはノータッチ。したがって前の fit / tune job がバックグラウンドで走っている状態で reset を押しても、次の fit / tune は `JOB_CONFLICT (409)` で弾かれる可能性がある。ユーザー期待値は「reset ボタンを押したら真っさらな状態から次の操作が始められる」であり、現在の挙動はそれを裏切っている。また E2E テスト側では PR #102 の `afterEach` baseline-diff ガードで workaround しており、そのガード自体が「reset は slot を touch しない」という暗黙の前提に依存している。
+- **Proposal:** `workspace_reset` エンドポイントの挙動を次のように拡張する。
+  1. `job_store.active_job_id` を取得し、非 None でかつ on-disk status が `running` / `pending` の場合に `job_store.request_cancel(active_id)` を呼ぶ。既存の cancel エンドポイント `POST /jobs/{id}/cancel` と同一経路なので、subprocess 経路は `subprocess_runner._poll_progress` が `is_cancel_requested` を検知して `proc.terminate()` → `run_job_in_subprocess.reconcile` で terminal 状態に遷移させる。in-process thread 経路は `_run_job_core` の cancel-aware callback が `CancelledError` を投げて finally で `release_active` を呼ぶ。
+  2. 上記の完了を同期的に短時間待機する: `_RESET_WAIT_TIMEOUT = 12.0s`（subprocess runner の `_WAIT_TIMEOUT = 10s` + buffer 2s）で `has_active_job()` が False になるまで polling（`_RESET_WAIT_INTERVAL = 0.05s`）。待機中に on-disk status が terminal に遷移した場合は runner finally を待たず直接 `force_release_active_if` を呼ぶ（crashed runner 対応）。
+  3. **Force-release on timeout:** タイムアウト内に解放されなかった場合、warn ログを残した上で `force_release_active_if(stuck_id)` で slot を強制解放する。Proposal 初稿では「warn だけ残して 409 は許容」としていたが、RED テストで runner が存在しない orphan slot ケースが露出したため、reset の約束（次の操作はクリーン状態から始められる）を守る方向に方針を強めた。`_RESET_WAIT_TIMEOUT` を subprocess の `_WAIT_TIMEOUT` より長く設定しているので、合法的な subprocess runner には `proc.terminate` + `proc.wait` + 自前の `release_active` まで完了する時間的余裕がある。それでもタイムアウトする場合は orphan slot と判断して差し支えない。
+  4. **Atomic compare-and-release:** force-release の root cause review で TOCTOU ホール（`active_job_id` 読み取り → 別スレッドが新 claim → `release_active` で新 claim を誤削除）を指摘されたため、`JobStore.force_release_active_if(expected_job_id)` を追加。`_active_lock` を保持した単一 critical section 内で compare-and-release を行うので、観測した id と実際の slot holder が一致した場合のみ release する。一致しない場合は no-op。
+  5. workspace state のクリアは 1. / 2. / 3. の **後**に実行する。データフレームやモデル参照が先にクリアされると、終了中の subprocess / thread が解放のタイミングで参照先を失ってクラッシュする余地がある。
+- **Impact:**
+  - `src/lizystudio/api/workspace.py::workspace_reset` — `job_store: JobStore = Depends(get_job_store)` を追加し、上記フローを実装。
+  - `src/lizystudio/services/jobs.py` — 変更なし（既存の `request_cancel` / `has_active_job` / `active_job_id` で十分）。
+  - `tests/regression/test_reg_NNNN_workspace_reset_releases_slot.py`（新規）— (a) active slot を持つ状態で reset を呼ぶと slot が解放される, (b) `request_cancel` が呼ばれる, (c) タイムアウト時も 200 を返して warn ログを残す, の 3 テストを追加。
+  - `frontend/tests/e2e/retune-flow.spec.ts` の `afterEach` baseline-diff ガードは **このPRでは残す**。ガードの撤去は別 PR（動作確認後）にする。
+- **Compatibility:** 非破壊的。既存クライアントから見ると「reset が少しだけ遅くなり、以前より多くの状態をクリアする」という拡張。reset のレスポンスボディは `{"status": "ok"}` で不変。
+- **Alternatives:**
+  1. **選択肢 A（却下）**: `workspace_reset` は現状維持で、新しい `POST /jobs/active/cancel` エンドポイントを追加する案。メリット: reset の影響範囲を変えず、セマンティクス分離が明確。デメリット: ユーザーが「reset」と「cancel active job」を区別して使いこなす必要があり、実際には「reset ボタンを押したのに次の Run が 409 になる」というユーザー期待値ギャップが残る。
+  2. **選択肢 B（却下）**: `JobStore` に heartbeat-based stale detection を追加し、`running` のまま一定時間経過したジョブを stale 扱いして slot を自動再取得する案。メリット: reset 以外の経路でも効く。デメリット: 正当な長時間 tune を誤検知する誤陽性リスクがあり、timeout 値のチューニングが難しい。本質的には root cause（reset が slot を触らない）を修正しないで症状を緩和するだけ。
+  3. **選択肢 C（採用、本提案）**: reset が active slot を同期的にキャンセルする。ユーザー期待値に最も近く、既存の cancel 経路を再利用するだけで実装リスクが低い。
+- **Acceptance Criteria:**
+  - (a) `POST /workspace/reset` 呼び出し前に active job が存在した場合、呼び出し後 `job_store.has_active_job()` は False を返す（タイムアウト内）。
+  - (b) active job に対して `request_cancel` が呼ばれたことが確認できる。
+  - (c) `_RESET_WAIT_TIMEOUT` 内に解放されなくても HTTP 200 を返し、サーバーログに warn を残す。
+  - (d) active job が無い通常ケースでは既存の挙動が変わらない。
+  - (e) 既存の `test_reg_0071` / `test_reg_0072` / retune-flow E2E が regression なく通る。
+- **Decision:** 2026-04-15 採択 (Phase B3)。Option 1 変種 C を採用。E2E workaround 撤去は本 PR 範囲外。
+
+---
+
+### H-0064: Health / readiness エンドポイントの追加（Issue #30 Phase 1）
+- **Status:** accepted
+- **Scope:** API
+- **Related:** BLUEPRINT.md §5.8（新設）
+- **Context:** Issue #30 は Prometheus メトリクス + liveness / readiness probe の追加を要望している。現状、`/api/*` 配下には軽量な liveness エンドポイントが存在せず、k8s / 一般的なリバースプロキシ配下に LizyStudio をデプロイする際に probe を配線する手段がない。Prometheus 対応（Phase 2）は外部依存（`prometheus-client`）と middleware 追加が必要で規模が大きいため、まずは追加依存ゼロで実装できる health / ready 2 エンドポイントを切り出して先に着地させたい。
+- **Proposal:** 以下 2 エンドポイントを `/api/health` 名前空間に追加する:
+  - `GET /api/health` — liveness probe。プロセスが応答可能であれば常に 200 を返す。Body: `{"status": "ok", "version": "<pkg __version__>"}`。
+  - `GET /api/health/ready` — readiness probe。Backend adapter と JobStore の初期化が完了しているか確認する。準備完了なら 200、未完了なら 503。Body: `{"status": "ready" | "not_ready", "backend": "<name>", "jobs_dir": true/false, "version": "..."}`。
+- **Impact:**
+  - 新規: `src/lizystudio/api/health.py`（エンドポイント実装）
+  - 追加: `src/lizystudio/server.py` に `app.include_router(health.router, prefix="/api/health")` 1 行
+  - 新規: `tests/test_health_api.py`
+  - 追記: BLUEPRINT.md §5.8
+- **Compatibility:** 非破壊的（新規エンドポイント追加のみ）。既存のフロントエンドは health を呼ばない。
+- **Alternatives:**
+  1. **選択肢 A（却下）**: `/api/workspace/status` を liveness として流用する案。デメリット: workspace state の依存があり、未初期化時に 500 を返す可能性がある。liveness として誤検知リスクが高い。
+  2. **選択肢 B（却下）**: Issue #30 の 3 フェーズ（health + Prometheus + system metrics）を一括実装する案。デメリット: PR が肥大化し、`prometheus-client` の追加やメトリクス middleware の設計議論でブロックされる。Phase 1 だけでも独立した運用価値がある。
+  3. **選択肢 C（採用、本提案）**: health / ready 2 本のみ、追加依存ゼロで着地。Prometheus は別 Issue / 別 PR で段階的に追加する。
+- **Acceptance Criteria:**
+  - (a) `GET /api/health` が 200 と `{"status": "ok", "version": ...}` を返す。
+  - (b) `GET /api/health/ready` が完全初期化済みアプリに対して 200 と `{"status": "ready", ...}` を返す。
+  - (c) backend adapter / jobs_dir の初期化失敗を ready=false として 503 で返す（未初期化シナリオ）。
+  - (d) liveness エンドポイントが **workspace state に依存せず** 単独で応答する（未データロード状態でも 200）。
+  - (e) SPA fallback ルートが `/api/health` を奪わない（`/api/` プレフィックスで既に除外されているが、テストで固定）。
+- **Decision:** 2026-04-17 採択 (Issue #30 Phase 1)。Prometheus メトリクス + system metrics は別 Proposal で追加する。
+
+---
+
+### H-0065: Prometheus メトリクスエンドポイントの追加（Issue #30 Phase 2）
+- **Status:** accepted
+- **Scope:** API / Config (runtime dep)
+- **Related:** BLUEPRINT.md §5.9（新設）
+- **Context:** H-0064 で health / readiness probe を追加したが、実運用では「このプロセスは生きているか」だけでなく「どのくらいトラフィックを処理しているか」「ジョブは詰まっていないか」を可視化する必要がある。Issue #30 Phase 2 として Prometheus 互換の `/api/metrics` を提供する。Phase 3（system metrics: メモリ / GPU / CPU）は独立 Proposal にする。
+- **Proposal:** `GET /api/metrics` を追加し、以下 4 系統のメトリクスを Prometheus text format で公開する:
+  - `lizystudio_requests_total{method, path, status}` — Counter。HTTP リクエスト総数。`path` は FastAPI の route template（例: `/api/jobs/{job_id}`）。未マッチ path は `unmatched` に集約してカーディナリティ爆発を防ぐ。
+  - `lizystudio_request_duration_seconds{method, path}` — Histogram。リクエスト処理時間。bucket は prometheus_client のデフォルトを採用。
+  - `lizystudio_jobs_total{job_type, status}` — Counter。ジョブ終了時に `status=completed|failed|cancelled` で増分。`job_type` は `fit|tune`。
+  - `lizystudio_active_jobs` — Gauge。JobStore の active slot が保持されている間は 1、解放されると 0。
+- **Impact:**
+  - 新規 runtime dep: `prometheus-client>=0.20`（pyproject.toml）
+  - 新規: `src/lizystudio/metrics.py`（メトリクス定義 + `record_job_terminal()` helper）
+  - 新規: `src/lizystudio/api/metrics_api.py`（`GET /api/metrics` エンドポイント）
+  - 追加: `src/lizystudio/server.py` にミドルウェア登録 + router include
+  - 追加: `src/lizystudio/services/jobs.py` の `claim_active` / `release_active` / `force_release_active_if` で `ACTIVE_JOBS` gauge を更新
+  - 追加: `src/lizystudio/services/training.py` / `training_retune.py` の terminal status 確定箇所で `record_job_terminal()` 呼び出し
+  - 新規: `tests/test_metrics_api.py`
+  - 追記: BLUEPRINT.md §5.9
+- **Compatibility:** 非破壊的（新規エンドポイント / 新規 runtime dep 追加のみ）。既存エンドポイントの挙動は変わらない。
+- **Alternatives:**
+  1. **選択肢 A（却下）**: prometheus-client を使わず自前で text format を生成する案。メリット: 依存ゼロ。デメリット: Histogram の bucket 生成 / label escape / HELP/TYPE ヘッダの正確な出力を再実装する必要があり、車輪の再発明。
+  2. **選択肢 B（却下）**: OpenTelemetry SDK 経由で Prometheus exporter を吊るす案。メリット: 将来 OTLP に移行しやすい。デメリット: 依存が重く（otel-sdk + otel-instrumentation-fastapi）、Phase 2 のスコープに対して過剰。
+  3. **選択肢 C（採用、本提案）**: `prometheus-client` の素朴な使い方（Counter / Histogram / Gauge + ASGI 公開）。軽量で枯れた選択。
+- **Acceptance Criteria:**
+  - (a) `GET /api/metrics` が 200 と `Content-Type: text/plain; version=0.0.4` を返す。
+  - (b) 任意のリクエスト後に `/api/metrics` を叩くと、`lizystudio_requests_total{...}` の該当ラベル行が 1 以上になる。
+  - (c) Fit / Tune ジョブ完了後、`lizystudio_jobs_total{job_type="fit",status="completed"}` 等が 1 以上になる。
+  - (d) active ジョブが動いている間 `lizystudio_active_jobs` が 1、解放後 0 に戻る。
+  - (e) `/api/metrics` エンドポイント自身は `lizystudio_requests_total` の計測対象から除外する（監視トラフィックが本体メトリクスを埋めるのを防ぐ）。
+  - (f) Path label は FastAPI の route template を使い、`/api/jobs/{job_id}/metrics` のように正規化する（生の job_id がカーディナリティ爆発しない）。
+- **Decision:** 2026-04-17 採択 (Issue #30 Phase 2)。Phase 3（system / GPU metrics）は別 Proposal。
+
+---
+
+### H-0066: ML ジョブ所要時間 Histogram とメトリクス仕上げ（Issue #30 Phase 3）
+- **Status:** accepted
+- **Scope:** API / Doc
+- **Related:** BLUEPRINT.md §5.9（更新）
+- **Context:** H-0065 で Prometheus メトリクスの土台を整えたが、`lizystudio_jobs_total` は終了カウントのみで「ジョブがどれだけ時間を食ったか」の分布が観測できない。本番監視で最重要なのは p95 / p99 の fit / tune 所要時間なので、Phase 3 として ML ワークロードに合わせた bucket の histogram を追加する。併せて、H-0065 実装後に実測した Content-Type の `version` 値が BLUEPRINT の記述（`0.0.4`）と一致しない（`prometheus-client>=0.25` のデフォルトは `1.0.0`）ため、ドキュメントを実測値に揃える。
+- **Proposal:**
+  1. `lizystudio_jobs_duration_seconds` Histogram を新設。ラベルは `job_type` ∈ `{fit, tune}` と `status` ∈ `{completed, failed, cancelled}`。bucket は ML ワークロードを意識して `(1, 5, 10, 30, 60, 120, 300, 600, 1800, 3600, +Inf)` 秒。
+  2. `JobStore.claim_active` が成功した時点から terminal status 確定時点までの経過秒を observe する。thread / subprocess 両モードで 1 回だけ emit する。
+  3. BLUEPRINT §5.9 の Content-Type 例を `version=1.0.0` に修正し、メトリクス表に `lizystudio_jobs_duration_seconds` 行を追加。
+  4. Phase 3 当初案で検討した `psutil` 依存追加は取りやめる（`prometheus_client` の default registry が既に `process_resident_memory_bytes` / `process_cpu_seconds_total` / `process_open_fds` 等を公開しているため重複）。GPU メトリクスは LizyStudio 側で扱わない（backend 固有なので別レイヤーで扱う）。
+- **Impact:**
+  - `src/lizystudio/metrics.py`: `JOBS_DURATION` Histogram 追加。`record_job_terminal` に `duration: float = 0.0` optional 引数を追加（既存 call site は後方互換）。
+  - `src/lizystudio/services/training.py`: `_run_job_core` で `claim_active` 後に開始時刻を記録し、`_emit_terminal_metric` に経過秒を渡す。`_run_subprocess_job` の finally 側は `Job.created_at` ↔ `Job.completed_at` から算出。
+  - `src/lizystudio/services/training_retune.py`: `_mark_retune_child_failed` でも duration を 0.0 fallback で記録（data missing は claim 前なので実測不能、fallback で可視化）。
+  - `BLUEPRINT.md` §5.9 更新（行追加 + version fix）。
+  - `tests/test_metrics_api.py`: Histogram presence + bucket 存在 test 追加。
+- **Compatibility:** 非破壊的。`record_job_terminal` の新引数は default 付き。既存メトリクスのラベル / 名前は変わらない。
+- **Alternatives:**
+  1. **選択肢 A（却下）**: bucket を prometheus_client default (`0.005, 0.01, 0.025, ...`) のまま使う。デメリット: 分単位〜時間単位の ML ジョブでは `+Inf` bucket に全て落ちて histogram が役立たない。
+  2. **選択肢 B（却下）**: `lizystudio_jobs_duration_seconds` を Summary にする。メリット: client 側で quantile 計算。デメリット: Summary は aggregation が難しく、複数プロセス環境（k8s replica 等）でのマージが不可能。Histogram の方が汎用性高い。
+  3. **選択肢 C（採用、本提案）**: カスタム bucket Histogram。`status` ラベルで completed / failed / cancelled を切り分け、失敗ジョブが短命か長時間後に失敗するかまで分かる。
+- **Acceptance Criteria:**
+  - (a) `/api/metrics` 出力に `# TYPE lizystudio_jobs_duration_seconds histogram` が含まれる。
+  - (b) fit / tune ジョブ 1 本完了後、該当ラベルの `lizystudio_jobs_duration_seconds_count` が 1 以上、`_sum` が正の値になる。
+  - (c) bucket が ML ワークロード用のカスタム値で出力される（`le="60"` や `le="3600"` の bucket line が存在）。
+  - (d) BLUEPRINT §5.9 の Content-Type 例が `version=1.0.0` と記述されている。
+  - (e) subprocess mode / retune failure path からも duration が記録される（0.0 fallback 可）。
+- **Decision:** 2026-04-17 採択 (Issue #30 Phase 3)。本 PR で Issue #30 は完了。
+
+---
+
+### H-0067: Re-tune / Resume / Lineage UI を Workspace と Jobs 画面の両方に提供する（Issue #159）
+- **Status:** accepted
+- **Scope:** Frontend / Doc
+- **Related:** BLUEPRINT.md §4.2.3（Workspace Results）、§4.3.2（Jobs 詳細）、§4.3.3（Jobs アクション）
+- **Context:**
+  H-0062 Phase B で Re-tune / Resume / Lineage Tree を Workspace Results Panel にのみ実装したが、BLUEPRINT §4.3 は当初から「Jobs 画面からも系譜を辿って再チューニングできる」ことを要件としていた（2026-04-17 audit で Issue #159 として surfaced）。Workspace は「セッション中の現在結果」、Jobs は「履歴全体管理」というレイヤー責務があり、ユーザーからは「過去の Tune 一覧を辿って再チューン系譜を起こす」UX が現場で必要という判断が出た。
+- **Proposal:**
+  1. **コンポーネント共有化**: `frontend/src/components/workspace/retune/` を `frontend/src/components/retune/` に移動し、Workspace / Jobs 両画面から同一実装を import する。
+  2. **Jobs/JobDetail.tsx 拡張**:
+     - アクションバーに `Re-tune (+N trials)` / `Resume (X trials remaining)` ボタンを追加（Completed tune / Failed tune で state-gated）。
+     - 右パネルの Accordion に `Lineage` セクションを追加（Config / Execution Log と並ぶ、読取り + クリック navigation）。
+     - Re-tune / Resume で child job が作成されたら Jobs 画面内で自動選択（Workspace へは遷移しない）。
+  3. **DeleteDialog に cascade オプション追加**: lineage に子孫がある場合のみ `Delete descendants too` チェックボックスを表示。API は `deleteJob(jobId, { cascade: true })` で既に対応済み。
+  4. **BLUEPRINT 更新**: §4.2.3 の Workspace Results Panel に Retune / Resume / Lineage が常設されることを明記（現在 spec は §4.3 側のみ記述）。§4.3 側の記述はすでに正しい。
+- **Impact:**
+  - `frontend/src/components/retune/*.tsx` (9 ファイル移動、旧 path の参照も全置換)
+  - `frontend/src/components/workspace/ResultsPanel.tsx`, `ResultsCompletedView.tsx` (import path 更新)
+  - `frontend/src/components/jobs/JobDetail.tsx` (action bar 拡張 + Lineage accordion)
+  - `frontend/src/components/jobs/DeleteDialog.tsx` (cascade checkbox + lineage precheck)
+  - `BLUEPRINT.md` §4.2.3 追記
+  - Vitest unit tests 追加（JobDetail actions / DeleteDialog cascade）
+  - Playwright E2E 追加（Jobs から Re-tune → child が Jobs リストに出る）
+- **Compatibility:** 非破壊的 API（新エンドポイント無し・既存 API の引数変更なし）。UI のみ拡張。既存の Workspace 側 UX は変化しない。
+- **Alternatives:**
+  1. **BLUEPRINT を code に合わせて書き換える（却下）**: Workspace のみに retune を置く仕様に変更。メリットは二重導線回避、しかしユーザーの「ジョブ履歴から直接再チューン」ワークフローを排除してしまう。
+  2. **Lineage Tree のみ Jobs に追加、actions は Workspace のまま（却下）**: 導線を分割する中間案だが、「Jobs で Lineage を見て、別画面 (Workspace) へ移動してアクション」という余計なクリックが発生し、ユーザーの期待に反する。
+  3. **両方に実装する（採用、本提案）**: コード共有で重複を回避しつつ、ユーザーはどちらの画面からでも retune できる。
+- **Acceptance Criteria:**
+  - (a) `frontend/src/components/retune/` が新規作成され、Workspace / Jobs 両方から import される。
+  - (b) Jobs 画面のアクションバーに Completed tune で `Re-tune` ボタン、Failed tune で `Resume` ボタンが表示される。
+  - (c) Jobs 詳細の Accordion に `Lineage` が現れ、ノードクリックで左パネルの選択が切り替わる。
+  - (d) Jobs 画面から Re-tune した後、child job が Jobs リストに即座に現れ、自動選択される。
+  - (e) DeleteDialog で lineage に子孫がある場合 `Delete descendants too` checkbox が表示され、cascade クエリで API が呼ばれる。
+  - (f) 既存の Workspace 側 retune 導線の Vitest / Playwright テストが全て pass する（regression なし）。
+  - (g) BLUEPRINT §4.2.3 に Workspace 側の retune UI が記述される。
+- **Decision:** 2026-04-18 採択 (Issue #159)。

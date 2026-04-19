@@ -12,15 +12,16 @@ import {
   type LineageNode,
 } from "@/api/jobs";
 import type { JobDetail, MetricEntry } from "@/api/types";
+import { JobLineageTree } from "@/components/retune/JobLineageTree";
+import { RetuneActionButton } from "@/components/retune/RetuneActionButton";
 import { MetricCards } from "@/components/shared/MetricCards";
 import { Accordion } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { pivotMetrics } from "@/lib/metrics";
+import { ConfigDiffBadge } from "./ConfigDiffBadge";
 import { FoldDetailsSection } from "./FoldDetailsSection";
 import { PlotSection } from "./PlotSection";
-import { JobLineageTree } from "./retune/JobLineageTree";
-import { RetuneActionButton } from "./retune/RetuneActionButton";
 import {
   TrialResultsAccordionItem,
   TuneTrialsSection,
@@ -30,6 +31,7 @@ interface ResultsCompletedViewProps {
   job: JobDetail;
   headerLabel: string;
   modelName?: string;
+  currentConfig?: Record<string, unknown>;
   selectedPlot: string;
   onSelectPlot: (p: string) => void;
   onApplyToFit?: (params: Record<string, unknown>) => void;
@@ -41,6 +43,7 @@ export function ResultsCompletedView({
   job,
   headerLabel,
   modelName,
+  currentConfig,
   selectedPlot,
   onSelectPlot,
   onJobStarted,
@@ -252,6 +255,10 @@ export function ResultsCompletedView({
           Completed
         </Badge>
         {primaryMetric && <Badge variant="secondary">{primaryMetric}</Badge>}
+        <ConfigDiffBadge
+          jobConfig={(job.config ?? {}) as Record<string, unknown>}
+          currentConfig={currentConfig}
+        />
         <div className="ml-auto flex gap-2">
           {job.job_type === "tune" && tuneResult && (
             <RetuneActionButton
@@ -261,7 +268,7 @@ export function ResultsCompletedView({
             />
           )}
           <Button
-            variant="outline"
+            variant="default"
             size="sm"
             onClick={() => {
               window.open(`/api/jobs/${job.job_id}/export-code`, "_blank");

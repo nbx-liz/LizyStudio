@@ -13,6 +13,14 @@ from lizystudio.services.jobs import Job
 
 _log = logging.getLogger(__name__)
 
+# Plotly bundle pinned for the HTML report. The SRI hash is verified by
+# the browser before the script is allowed to execute, so a tampered
+# CDN cannot inject arbitrary JavaScript into the report. Bumping the
+# version requires recomputing the hash AND updating the matching
+# constants in tests/regression/test_reg_0074_export_report_plotly_sri.py.
+_PLOTLY_VERSION = "plotly-2.27.0.min.js"
+_PLOTLY_SRI = "sha384-Hl48Kq2HifOWdXEjMsKo6qxqvRLTYqIGbvlENBmkHAxZKIGCXv43H6W1jA671RzC"
+
 
 def export_model(
     *,
@@ -116,7 +124,9 @@ def _build_report_html(
     """Build a minimal self-contained HTML report."""
     import html
     import json
+    import secrets
 
+    nonce = secrets.token_urlsafe(16)
     title = html.escape(f"Job {job.job_id} — {job.job_type.title()} Report")
     task = html.escape(str(info.get("task", "")))
     model_name = html.escape(str(info.get("model_name", "")))
@@ -136,26 +146,64 @@ def _build_report_html(
             f"<table border='1' cellpadding='4'><tr>{header}</tr>{rows_html}</table>"
         )
 
-    # Plotly divs
+    # Plotly divs. ``</script>`` inside a JSON string is perfectly valid
+    # JSON, but drops out of the HTML <script> context and enables
+    # script-injection via plot labels or traces. Escape the ``/`` so the
+    # serialized payload cannot terminate the surrounding script block.
+    def _js_safe(payload: Any) -> str:
+        return json.dumps(payload).replace("</", "<\\/")
+
     plot_divs = ""
     for i, pj in enumerate(plot_jsons):
         parsed = json.loads(pj)
-        data_js = json.dumps(parsed.get("data", []))
-        layout_js = json.dumps(parsed.get("layout", {}))
+        data_js = _js_safe(parsed.get("data", []))
+        layout_js = _js_safe(parsed.get("layout", {}))
         plot_divs += f"""
         <div id="plot-{i}" style="width:100%;height:500px;margin-bottom:20px;"></div>
-        <script>
+        <script nonce="{nonce}">
             Plotly.newPlot('plot-{i}', {data_js}, {layout_js});
         </script>
         """
+
+    # HIGH-5 / Issue #92 / Issue #104: Plotly is pulled from a CDN
+    # because bundling ~4 MB of JS into every HTML report is wasteful.
+    # We layer three mitigations against script injection:
+    #
+    # 1. ``Content-Security-Policy`` whitelists ``cdn.plot.ly`` as the
+    #    only allowed external script origin.
+    # 2. ``integrity="sha384-..."`` (Subresource Integrity) makes the
+    #    browser hash the fetched bundle and refuse to execute it if the
+    #    hash differs from the pinned value.
+    # 3. A per-report CSP **nonce** authorises the inline
+    #    ``Plotly.newPlot(...)`` bootstraps without ``'unsafe-inline'``.
+    #    Each report gets a fresh nonce via ``secrets.token_urlsafe``,
+    #    so an attacker who can inject markup still cannot execute
+    #    scripts unless they also guess the nonce.
+    #
+    # ``crossorigin="anonymous"`` is required for SRI to take effect on
+    # cross-origin scripts.
+    #
+    # When bumping the Plotly version, recompute the SRI hash and
+    # update both ``_PLOTLY_VERSION`` / ``_PLOTLY_SRI`` AND the matching
+    # constants in
+    # ``tests/regression/test_reg_0074_export_report_plotly_sri.py``.
+    csp = (
+        "default-src 'none'; "
+        f"script-src https://cdn.plot.ly 'nonce-{nonce}'; "
+        "style-src 'unsafe-inline'; "
+        "img-src data:;"
+    )
 
     return f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="{csp}">
     <title>{title}</title>
-    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"
-            crossorigin="anonymous"></script>
+    <script src="https://cdn.plot.ly/{_PLOTLY_VERSION}"
+            integrity="{_PLOTLY_SRI}"
+            crossorigin="anonymous"
+            nonce="{nonce}"></script>
     <style>
         body {{ font-family: system-ui, sans-serif;
                max-width: 1000px; margin: 0 auto;

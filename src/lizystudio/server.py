@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -16,13 +17,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from lizystudio.api import backends, files, inference, jobs, workspace
+from lizystudio.api import (
+    backends,
+    files,
+    health,
+    inference,
+    jobs,
+    metrics_api,
+    workspace,
+)
 from lizystudio.api.errors import (
     StudioError,
     studio_error_handler,
     validation_error_handler,
 )
 from lizystudio.backends.registry import get_adapter
+from lizystudio.metrics import REQUEST_DURATION, REQUESTS_TOTAL
 from lizystudio.services.jobs import JobStore
 from lizystudio.services.workspace import WorkspaceState
 from lizystudio.ws.progress import ProgressBroadcaster, websocket_progress
@@ -119,6 +129,44 @@ def create_app() -> FastAPI:
         )
         return response
 
+    # Prometheus metrics middleware (H-0065). Added after security
+    # headers so the decorator-order rule places it outermost: every
+    # request is timed and counted before security_headers runs, which
+    # means the counter reflects the raw HTTP surface rather than
+    # post-filter traffic. `/api/metrics` itself is excluded so scrape
+    # traffic does not pollute the baseline.
+    @application.middleware("http")
+    async def metrics_middleware(
+        request: Request,
+        call_next: Any,  # noqa: ANN401
+    ) -> Response:
+        path = request.url.path
+        if path == "/api/metrics":
+            excluded: Response = await call_next(request)
+            return excluded
+
+        start = time.perf_counter()
+        response: Response = await call_next(request)
+        elapsed = time.perf_counter() - start
+
+        # Collapse path to a route template to keep label cardinality
+        # bounded. `request.scope["route"]` is populated after routing,
+        # but starlette only sets it for matched routes; unmatched 4xx
+        # paths fall back to a sentinel string.
+        route = request.scope.get("route")
+        label_path = getattr(route, "path", None) or "unmatched"
+
+        REQUESTS_TOTAL.labels(
+            method=request.method,
+            path=label_path,
+            status=str(response.status_code),
+        ).inc()
+        REQUEST_DURATION.labels(
+            method=request.method,
+            path=label_path,
+        ).observe(elapsed)
+        return response
+
     # CORS — allow frontend dev server during development
     application.add_middleware(
         CORSMiddleware,
@@ -144,6 +192,12 @@ def create_app() -> FastAPI:
         backends.router, prefix="/api/backends", tags=["backends"]
     )
     application.include_router(files.router, prefix="/api/files", tags=["files"])
+    # BLUEPRINT §5.8 / H-0064 — liveness + readiness probes
+    application.include_router(health.router, prefix="/api/health", tags=["health"])
+    # BLUEPRINT §5.9 / H-0065 — Prometheus metrics exposition
+    application.include_router(
+        metrics_api.router, prefix="/api/metrics", tags=["metrics"]
+    )
 
     # WebSocket route for job progress (BLUEPRINT §5.5)
     @application.websocket("/ws/jobs/{job_id}/progress")

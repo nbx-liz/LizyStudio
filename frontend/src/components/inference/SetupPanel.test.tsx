@@ -139,6 +139,7 @@ describe("SetupPanel", () => {
       completed_at: "2025-01-01T00:01:00Z",
       error: null,
       primary_score: 0.9512,
+      parent_job_id: null,
     } as JobSummary;
     render(
       <SetupPanel {...baseProps} completedJobs={[job]} selectedJobId="j1" />,
@@ -272,6 +273,7 @@ describe("SetupPanel", () => {
       completed_at: "2025-01-01T00:01:00Z",
       error: null,
       primary_score: 0.95,
+      parent_job_id: null,
     } as JobSummary;
 
     render(
@@ -306,6 +308,7 @@ describe("SetupPanel", () => {
       completed_at: "2025-01-01T00:01:00Z",
       error: null,
       primary_score: 0.95,
+      parent_job_id: null,
     } as JobSummary;
 
     render(

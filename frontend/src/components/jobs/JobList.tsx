@@ -134,7 +134,7 @@ export function JobList({ jobs, selectedJobId, onSelectJob }: JobListProps) {
           value={typeFilter}
           onValueChange={(v) => setTypeFilter(v as TypeFilter)}
         >
-          <SelectTrigger className="h-8 text-xs">
+          <SelectTrigger aria-label="Job type filter" className="h-8 text-xs">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

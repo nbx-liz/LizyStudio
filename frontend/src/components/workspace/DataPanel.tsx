@@ -109,7 +109,10 @@ export function DataPanel({
                     onValueChange={handleTargetChange}
                     disabled={allColumnNames.length === 0}
                   >
-                    <SelectTrigger className="h-8 flex-1">
+                    <SelectTrigger
+                      aria-label="Target column"
+                      className="h-8 flex-1"
+                    >
                       <SelectValue placeholder="Select target column" />
                     </SelectTrigger>
                     <SelectContent>

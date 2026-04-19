@@ -1,4 +1,4 @@
-import { cleanup, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithQuery } from "@/test/helpers";
 import { PredictionsTable } from "./PredictionsTable";
@@ -116,5 +116,81 @@ describe("PredictionsTable", () => {
     expect(screen.getByText("3.1416")).toBeInTheDocument();
     // String rendered as-is
     expect(screen.getByText("hello")).toBeInTheDocument();
+  });
+
+  it("navigates to next page when next button is clicked", async () => {
+    // Page 1: return 50 rows, total 100
+    vi.mocked(fetchInferencePredictions).mockResolvedValueOnce({
+      columns: ["x"],
+      data: Array.from({ length: 50 }, (_, i) => ({ x: i })),
+      total_rows: 100,
+    });
+    // Page 2: return 50 rows, total 100
+    vi.mocked(fetchInferencePredictions).mockResolvedValueOnce({
+      columns: ["x"],
+      data: Array.from({ length: 50 }, (_, i) => ({ x: i + 50 })),
+      total_rows: 100,
+    });
+
+    renderWithQuery(<PredictionsTable infId="inf1" jobId="j1" />);
+
+    // Wait for page 1
+    expect(await screen.findByText("Page 1 of 2")).toBeInTheDocument();
+
+    // Click next button (ChevronRight button — it is not disabled on page 1)
+    const buttons = screen.getAllByRole("button");
+    const nextButton = buttons[buttons.length - 1];
+    expect(nextButton).not.toBeDisabled();
+    fireEvent.click(nextButton);
+
+    // Now showing page 2
+    expect(await screen.findByText("Page 2 of 2")).toBeInTheDocument();
+  });
+
+  it("navigates back to previous page when prev button is clicked", async () => {
+    // Page 1 initial load
+    vi.mocked(fetchInferencePredictions).mockResolvedValue({
+      columns: ["x"],
+      data: Array.from({ length: 50 }, (_, i) => ({ x: i })),
+      total_rows: 100,
+    });
+
+    renderWithQuery(<PredictionsTable infId="inf1" jobId="j1" />);
+
+    // Advance to page 2
+    expect(await screen.findByText("Page 1 of 2")).toBeInTheDocument();
+    const buttonsP1 = screen.getAllByRole("button");
+    // Download CSV button is also a button; pagination buttons are at index 1 (prev) and 2 (next)
+    const nextBtn = buttonsP1[buttonsP1.length - 1];
+    fireEvent.click(nextBtn);
+
+    // Confirm page 2 is shown
+    expect(await screen.findByText("Page 2 of 2")).toBeInTheDocument();
+
+    // Click prev button (second button overall: [0]=Download CSV, [1]=Prev, [2]=Next)
+    const buttonsP2 = screen.getAllByRole("button");
+    const prevButton = buttonsP2[1];
+    expect(prevButton).not.toBeDisabled();
+    fireEvent.click(prevButton);
+
+    // Back to page 1
+    expect(await screen.findByText("Page 1 of 2")).toBeInTheDocument();
+  });
+
+  it("renders empty string for null, undefined, and empty-string cell values", async () => {
+    vi.mocked(fetchInferencePredictions).mockResolvedValueOnce({
+      columns: ["a", "b", "c"],
+      data: [{ a: null, b: undefined, c: "" }],
+      total_rows: 1,
+    });
+
+    renderWithQuery(<PredictionsTable infId="inf1" jobId="j1" />);
+
+    // Wait for render; all three cells should be empty strings
+    await screen.findByText("a"); // header
+    const cells = screen.getAllByRole("cell");
+    for (const cell of cells) {
+      expect(cell.textContent).toBe("");
+    }
   });
 });

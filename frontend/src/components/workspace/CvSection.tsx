@@ -160,7 +160,7 @@ export function CvSection({
             value={cv.groupCol ?? ""}
             onValueChange={(v) => update({ groupCol: v })}
           >
-            <SelectTrigger>
+            <SelectTrigger aria-label="Group column">
               <SelectValue placeholder="Select column" />
             </SelectTrigger>
             <SelectContent>
@@ -183,7 +183,7 @@ export function CvSection({
             value={cv.timeCol ?? ""}
             onValueChange={(v) => update({ timeCol: v })}
           >
-            <SelectTrigger>
+            <SelectTrigger aria-label="Time column">
               <SelectValue placeholder="Select column" />
             </SelectTrigger>
             <SelectContent>

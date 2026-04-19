@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { cancelJob, fetchJob, fetchJobLog, fetchJobs } from "@/api/jobs";
 import type { JobDetail, ProgressMessage } from "@/api/types";
 import { connectJobProgress } from "@/api/websocket";
+import { ResumeActionButton } from "@/components/retune/ResumeActionButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,12 +16,12 @@ import {
 } from "@/components/ui/dialog";
 import { ResultsCompletedView } from "./ResultsCompletedView";
 import { ResultsRunningView } from "./ResultsRunningView";
-import { ResumeActionButton } from "./retune/ResumeActionButton";
 
 interface ResultsPanelProps {
   jobId: string | null;
   hasData?: boolean;
   hasConfig?: boolean;
+  currentConfig?: Record<string, unknown>;
   onApplyToFit?: (params: Record<string, unknown>) => void;
   onJobDone?: () => void;
   /**
@@ -35,6 +36,7 @@ export function ResultsPanel({
   jobId,
   hasData = false,
   hasConfig = false,
+  currentConfig,
   onApplyToFit,
   onJobDone,
   onJobStarted,
@@ -308,6 +310,7 @@ export function ResultsPanel({
       job={job}
       headerLabel={headerLabel}
       modelName={modelName}
+      currentConfig={currentConfig}
       selectedPlot={selectedPlot}
       onSelectPlot={setSelectedPlot}
       onApplyToFit={onApplyToFit}

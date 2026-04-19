@@ -6,13 +6,13 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render } from "@testing-library/react";
+import { type RenderResult, render } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { JobDetail, JobSummary } from "@/api/types";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 /** Wrap component with QueryClientProvider + TooltipProvider (no routing). */
-export function renderWithQuery(ui: React.ReactElement) {
+export function renderWithQuery(ui: React.ReactElement): RenderResult {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -27,7 +27,7 @@ export function renderWithQuery(ui: React.ReactElement) {
 export function renderWithProviders(
   ui: React.ReactElement,
   { initialEntries = ["/"] }: { initialEntries?: string[] } = {},
-) {
+): RenderResult {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -54,6 +54,7 @@ export function makeJobSummary(
     completed_at: "2026-01-01T00:01:00Z",
     error: null,
     primary_score: 0.95,
+    parent_job_id: null,
     ...overrides,
   };
 }
@@ -81,6 +82,7 @@ export function makeJob(overrides: Partial<JobDetail> = {}): JobDetail {
     fit_result: null,
     tune_result: null,
     model_path: null,
+    parent_job_id: null,
     ...overrides,
   };
 }

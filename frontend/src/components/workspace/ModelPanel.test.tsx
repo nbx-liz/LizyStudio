@@ -6,6 +6,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { renderWithQuery } from "@/test/helpers";
@@ -800,10 +801,10 @@ describe("ModelPanel", () => {
 
   // --- handleSavePreset ---
 
-  it("saves preset when Save Preset is clicked and name is provided", async () => {
+  it("saves preset via dialog when Save Preset is clicked and name is provided", async () => {
     const { toast } = await import("sonner");
     (toast.success as ReturnType<typeof vi.fn>).mockClear();
-    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("My Preset");
+    const user = userEvent.setup();
 
     renderWithQuery(
       <ModelPanel
@@ -820,19 +821,21 @@ describe("ModelPanel", () => {
       expect(screen.getByTestId("mock-config-form")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /Save Preset/i }));
+    await user.click(screen.getByRole("button", { name: /Save Preset/i }));
 
-    expect(promptSpy).toHaveBeenCalled();
+    // Dialog mounts and auto-focuses the name input.
+    const nameInput = await screen.findByLabelText(/name/i);
+    await user.type(nameInput, "My Preset");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
     expect(toast.success).toHaveBeenCalledWith(
       expect.stringContaining("My Preset"),
     );
-
-    promptSpy.mockRestore();
   });
 
-  it("does nothing when Save Preset prompt is cancelled", async () => {
+  it("does nothing when Save Preset dialog is cancelled", async () => {
     const { toast } = await import("sonner");
-    vi.spyOn(window, "prompt").mockReturnValue(null);
+    const user = userEvent.setup();
 
     renderWithQuery(
       <ModelPanel
@@ -844,12 +847,18 @@ describe("ModelPanel", () => {
       />,
     );
 
+    await waitFor(() => {
+      expect(screen.getByTestId("mock-config-form")).toBeInTheDocument();
+    });
+
     (toast.success as ReturnType<typeof vi.fn>).mockClear();
-    const saveBtn = screen.getByRole("button", { name: /Save Preset/i });
-    fireEvent.click(saveBtn);
+    await user.click(screen.getByRole("button", { name: /Save Preset/i }));
+
+    // Cancel via the dialog's Cancel button.
+    const cancel = await screen.findByRole("button", { name: /cancel/i });
+    await user.click(cancel);
 
     expect(toast.success).not.toHaveBeenCalled();
-    vi.restoreAllMocks();
   });
 
   // --- handleRedo ---
@@ -1056,5 +1065,111 @@ describe("ModelPanel", () => {
       />,
     );
     expect(screen.getByText("A job is currently running")).toBeInTheDocument();
+  });
+
+  // --- Issue #107: deep-equal guard in handleConfigChange ---
+
+  it("skips handleConfigChange PUT when newConfig equals the cached config", async () => {
+    // Regression guard for Issue #107. When useDataPanel.handleTargetChange
+    // broadcasts the merged config into the query cache, ConfigForm's
+    // task/metric auto-select effect may re-fire with an identical config
+    // body. Without a deep-equal guard, this would produce a duplicate
+    // updateConfig PUT and a debounced validate roundtrip, briefly
+    // re-surfacing the transient 'Field required' validation error.
+    const { fetchConfig, updateConfig: mockUpdate } = await import(
+      "@/api/workspace"
+    );
+    const cachedConfig = { model: { name: "lgbm", params: {} } };
+    (fetchConfig as ReturnType<typeof vi.fn>).mockResolvedValue(cachedConfig);
+    (mockUpdate as ReturnType<typeof vi.fn>).mockClear();
+    captured.onChange = null;
+
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(captured.onChange).not.toBeNull();
+    });
+    captured.onChange!({ model: { name: "lgbm", params: {} } });
+
+    // Give the promise chain a tick to settle.
+    await new Promise((r) => setTimeout(r, 50));
+
+    // updateConfig must NOT have been called: the deep-equal guard should
+    // short-circuit the PUT and the debounced validate.
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("skips PUT when newConfig is deep-equal but has different key order", async () => {
+    const { fetchConfig, updateConfig: mockUpdate } = await import(
+      "@/api/workspace"
+    );
+    (fetchConfig as ReturnType<typeof vi.fn>).mockResolvedValue({
+      model: { name: "lgbm", params: { depth: 6 } },
+    });
+    (mockUpdate as ReturnType<typeof vi.fn>).mockClear();
+    captured.onChange = null;
+
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(captured.onChange).not.toBeNull();
+    });
+    // Same values, different key insertion order
+    captured.onChange!({ model: { params: { depth: 6 }, name: "lgbm" } });
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("still PUTs when newConfig differs from the cached config", async () => {
+    // Dual guard: make sure the deep-equal short-circuit does not block
+    // legitimate config edits. A changed model name must still trigger
+    // updateConfig.
+    const { fetchConfig, updateConfig: mockUpdate } = await import(
+      "@/api/workspace"
+    );
+    (fetchConfig as ReturnType<typeof vi.fn>).mockResolvedValue({
+      model: { name: "lgbm", params: {} },
+    });
+    (mockUpdate as ReturnType<typeof vi.fn>).mockClear();
+    (mockUpdate as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    captured.onChange = null;
+
+    renderWithQuery(
+      <ModelPanel
+        hasData={true}
+        task="binary"
+        onFit={vi.fn()}
+        onTune={vi.fn()}
+        running={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(captured.onChange).not.toBeNull();
+    });
+    captured.onChange!({ model: { name: "xgb", params: {} } });
+
+    await waitFor(() => {
+      expect(mockUpdate).toHaveBeenCalledWith({
+        model: { name: "xgb", params: {} },
+      });
+    });
   });
 });

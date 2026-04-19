@@ -110,6 +110,15 @@ def strip_internal_keys(config: dict[str, Any]) -> dict[str, Any]:
     tuning = result.get("tuning")
     if isinstance(tuning, dict):
         result["tuning"] = {k: v for k, v in tuning.items() if k in ("optuna",)}
+        optuna = result["tuning"].get("optuna")
+        if isinstance(optuna, dict):
+            result["tuning"]["optuna"] = {
+                k: v for k, v in optuna.items() if not k.startswith("_")
+            }
+    # Strip the 'result' section entirely — it carries runtime-only
+    # bookkeeping (_runtime_ms, _cache_hit, etc.) that is not part of
+    # the LizyML config schema.
+    result.pop("result", None)
     return result
 
 

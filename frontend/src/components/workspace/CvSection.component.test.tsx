@@ -76,6 +76,44 @@ vi.mock("./NumberInput", () => ({
   ),
 }));
 
+vi.mock("./NullableNumberField", () => ({
+  NullableNumberField: ({
+    label,
+    value,
+    onChange,
+    placeholder,
+  }: {
+    label: string;
+    value: number | undefined;
+    onChange: (v: number | undefined) => void;
+    placeholder?: string;
+    autoHint?: boolean;
+  }) => {
+    const labelId = `nullable-label-${label.toLowerCase().replace(/\s+/g, "-")}`;
+    return (
+      <div>
+        <label id={labelId} htmlFor={`nullable-input-${placeholder ?? "auto"}`}>
+          {label}
+        </label>
+        <input
+          id={`nullable-input-${placeholder ?? "auto"}`}
+          // Preserve number-input-{placeholder} testid for existing test compatibility
+          data-testid={`number-input-${placeholder ?? "auto"}`}
+          aria-labelledby={labelId}
+          type="number"
+          value={value ?? ""}
+          placeholder={placeholder ?? "Auto"}
+          onChange={(e) => {
+            const v =
+              e.target.value === "" ? undefined : Number(e.target.value);
+            onChange(v);
+          }}
+        />
+      </div>
+    );
+  },
+}));
+
 // --- Test helpers ---
 
 const sampleCols: ColumnInfo[] = [
@@ -447,5 +485,170 @@ describe("CvSection", () => {
     // Fields hidden by the blocked_group_kfold guard
     expect(screen.queryByText("Min Train Rows")).not.toBeInTheDocument();
     expect(screen.queryByText("Min Valid Rows")).not.toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // Coverage: NullableNumberField onChange callbacks (lines 213-258)
+  // NullableNumberField mock uses data-testid="number-input-{placeholder}".
+  // Use getByRole("spinbutton", { name: /label/i }) to disambiguate same-
+  // placeholder inputs rendered together (e.g. both "Purge Gap" and "Embargo"
+  // have placeholder "0").
+  // -------------------------------------------------------------------------
+
+  it("calls onChange with updated purgeGap value for purged_time_series", () => {
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "purged_time_series", purgeGap: 0 })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    // aria-labelledby set by mock connects label "Purge Gap" to this spinbutton
+    const input = screen.getByRole("spinbutton", { name: /purge gap/i });
+    fireEvent.change(input, { target: { value: "5" } });
+
+    expect(mockOnChange).toHaveBeenCalledWith(
+      expect.objectContaining({ purgeGap: 5 }),
+    );
+  });
+
+  it("calls onChange with updated embargo value for purged_time_series", () => {
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "purged_time_series", embargo: 0 })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    const input = screen.getByRole("spinbutton", { name: /embargo/i });
+    fireEvent.change(input, { target: { value: "2" } });
+
+    expect(mockOnChange).toHaveBeenCalledWith(
+      expect.objectContaining({ embargo: 2 }),
+    );
+  });
+
+  it("calls onChange with updated trainSizeMax value for time_series", () => {
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "time_series", trainSizeMax: undefined })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    const input = screen.getByRole("spinbutton", { name: /train size max/i });
+    fireEvent.change(input, { target: { value: "1000" } });
+
+    expect(mockOnChange).toHaveBeenCalledWith(
+      expect.objectContaining({ trainSizeMax: 1000 }),
+    );
+  });
+
+  it("calls onChange with updated testSizeMax value for time_series", () => {
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "time_series", testSizeMax: undefined })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    const input = screen.getByRole("spinbutton", { name: /test size max/i });
+    fireEvent.change(input, { target: { value: "200" } });
+
+    expect(mockOnChange).toHaveBeenCalledWith(
+      expect.objectContaining({ testSizeMax: 200 }),
+    );
+  });
+
+  it("min_train_rows and min_valid_rows are never rendered for non-blocked strategies", () => {
+    // blocked_group_kfold has min_train_rows/min_valid_rows in CV_STRATEGY_FIELDS,
+    // but those are guarded by strategy !== blocked_group_kfold, so they NEVER render.
+    // This test documents that invariant across two representative strategies.
+    for (const strategy of ["kfold", "purged_time_series"]) {
+      render(
+        <CvSection
+          cv={makeCvState({ strategy })}
+          onChange={mockOnChange}
+          nonExcludedCols={sampleCols}
+        />,
+      );
+      expect(screen.queryByText("Min Train Rows")).not.toBeInTheDocument();
+      expect(screen.queryByText("Min Valid Rows")).not.toBeInTheDocument();
+      cleanup();
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // Coverage: Group column / Time column Select onValueChange (lines 161, 184)
+  // -------------------------------------------------------------------------
+
+  it("calls onChange with updated groupCol when group column is selected", async () => {
+    const user = userEvent.setup();
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "group_kfold", groupCol: undefined })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    // Open the Select trigger and click an option
+    const trigger = screen.getByRole("combobox");
+    await user.click(trigger);
+
+    const option = await screen.findByRole("option", { name: "col_a" });
+    await user.click(option);
+
+    expect(mockOnChange).toHaveBeenCalledWith(
+      expect.objectContaining({ groupCol: "col_a" }),
+    );
+  });
+
+  it("calls onChange with updated timeCol when time column is selected", async () => {
+    const user = userEvent.setup();
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "time_series", timeCol: undefined })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    const trigger = screen.getByRole("combobox");
+    await user.click(trigger);
+
+    const option = await screen.findByRole("option", { name: "col_b" });
+    await user.click(option);
+
+    expect(mockOnChange).toHaveBeenCalledWith(
+      expect.objectContaining({ timeCol: "col_b" }),
+    );
+  });
+
+  it("calls onChange with updated groupCol when group column is selected for group_time_series", async () => {
+    const user = userEvent.setup();
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "group_time_series" })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    // In CvSection, group_col Select (line 154) renders before time_col Select
+    // (line 177). For group_time_series both are present; triggers[0]=group_col.
+    const triggers = screen.getAllByRole("combobox");
+    await user.click(triggers[0]);
+
+    const option = await screen.findByRole("option", { name: "col_a" });
+    await user.click(option);
+
+    expect(mockOnChange).toHaveBeenCalledWith(
+      expect.objectContaining({ groupCol: "col_a" }),
+    );
   });
 });

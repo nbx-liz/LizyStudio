@@ -83,4 +83,65 @@ describe("CommandPalette", () => {
 
     expect(screen.getByText("No commands found")).toBeInTheDocument();
   });
+
+  it("includes Tune command when onTune is provided", () => {
+    renderPalette({ onTune: vi.fn() });
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+
+    expect(screen.getByText("Run Tune")).toBeInTheDocument();
+  });
+
+  it("calls onTune action and closes on Run Tune click", () => {
+    const onTune = vi.fn();
+    renderPalette({ onTune });
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+
+    fireEvent.click(screen.getByText("Run Tune"));
+
+    expect(onTune).toHaveBeenCalled();
+    expect(screen.queryByPlaceholderText("Type a command...")).toBeNull();
+  });
+
+  it("shows Toggle Dark Mode command", () => {
+    renderPalette();
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+
+    expect(screen.getByText("Toggle Dark Mode")).toBeInTheDocument();
+  });
+
+  it("clicking Toggle Dark Mode calls action and closes palette", () => {
+    renderPalette();
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+
+    fireEvent.click(screen.getByText("Toggle Dark Mode"));
+
+    expect(screen.queryByPlaceholderText("Type a command...")).toBeNull();
+  });
+
+  it("closing palette via Escape clears the search query", () => {
+    renderPalette();
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+
+    const input = screen.getByPlaceholderText("Type a command...");
+    fireEvent.change(input, { target: { value: "jobs" } });
+    expect(input).toHaveValue("jobs");
+
+    // Close by pressing Escape
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    // Re-open and check query is cleared
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    expect(screen.getByPlaceholderText("Type a command...")).toHaveValue("");
+  });
+
+  it("Ctrl+K toggles palette closed when already open", () => {
+    renderPalette();
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    expect(
+      screen.getByPlaceholderText("Type a command..."),
+    ).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    expect(screen.queryByPlaceholderText("Type a command...")).toBeNull();
+  });
 });

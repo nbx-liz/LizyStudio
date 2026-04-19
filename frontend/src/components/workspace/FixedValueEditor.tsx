@@ -19,6 +19,10 @@ interface FixedValueEditorProps {
   onChange: (value: unknown) => void;
   options?: string[];
   step?: number;
+  /** Accessible name for the rendered control (used as aria-label on
+   * the Select trigger when options overflow to a dropdown). Falls back
+   * to "Value" so screen readers still announce something meaningful. */
+  ariaLabel?: string;
 }
 
 /**
@@ -36,6 +40,7 @@ export function FixedValueEditor({
   onChange,
   options,
   step,
+  ariaLabel,
 }: FixedValueEditorProps) {
   if (paramType === "number" || paramType === "integer") {
     const numericValue = value == null ? undefined : Number(value);
@@ -91,7 +96,10 @@ export function FixedValueEditor({
     }
     return (
       <Select value={strValue} onValueChange={(v) => onChange(v)}>
-        <SelectTrigger className="h-7 w-36 text-xs">
+        <SelectTrigger
+          aria-label={ariaLabel ?? "Value"}
+          className="h-7 w-36 text-xs"
+        >
           <SelectValue />
         </SelectTrigger>
         <SelectContent>

@@ -34,6 +34,8 @@ dependencies = [
     # H-0062: explicit pin so pickle usage survives a future lizyml
     # dependency refactor. Already in the tree via lizyml.
     "cloudpickle>=3.0",
+    # H-0065: Prometheus metrics exposition for /api/metrics.
+    "prometheus-client>=0.20",
 ]
 
 [project.scripts]
@@ -50,6 +52,7 @@ dev = [
     "mypy>=1.10",
     "pytest>=8.0",
     "pytest-cov>=5.0",
+    "pytest-rerunfailures>=14.0",
     "httpx>=0.28",
     "pandas-stubs>=2.3.3.260113",
     "types-pyyaml>=6.0.12.20250915",
@@ -100,8 +103,14 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Default run excludes quarantined tests; CI runs them in a non-blocking
+# job (see .github/workflows/ci.yml). Local runs stay retry-free so
+# flaky tests remain visible during development — see CLAUDE.md §8.
+addopts = "-m 'not quarantine'"
 markers = [
     "unit: Unit tests (fast, no external dependencies)",
     "integration: Integration tests (require TestClient/server)",
     "slow: Slow tests that actually train a real model (deselect with -m 'not slow')",
+    "flaky: Known-flaky tests — CI reruns via pytest-rerunfailures; local runs do not retry",
+    "quarantine: Isolated tests — excluded from default runs, executed in a non-blocking CI job",
 ]

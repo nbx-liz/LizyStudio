@@ -1,5 +1,5 @@
-import { cleanup, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithQuery } from "@/test/helpers";
 
 vi.mock("@/api/inference", () => ({
@@ -25,7 +25,12 @@ vi.mock("@/components/workspace/PlotlyChart", () => ({
   ),
 }));
 
-import type { InferenceRecord } from "@/api/inference";
+import {
+  fetchInferenceComparison,
+  fetchInferencePlot,
+  fetchInferenceShapPlot,
+  type InferenceRecord,
+} from "@/api/inference";
 import { ResultsPredOnly } from "./ResultsPredOnly";
 
 function makeRecord(overrides: Partial<InferenceRecord> = {}): InferenceRecord {
@@ -48,6 +53,15 @@ function makeRecord(overrides: Partial<InferenceRecord> = {}): InferenceRecord {
 }
 
 afterEach(cleanup);
+
+beforeEach(() => {
+  vi.mocked(fetchInferencePlot).mockResolvedValue(null as never);
+  vi.mocked(fetchInferenceShapPlot).mockResolvedValue(null as never);
+  vi.mocked(fetchInferenceComparison).mockResolvedValue({
+    current: {},
+    other: {},
+  });
+});
 
 describe("ResultsPredOnly", () => {
   it("renders header with inference number and job label", () => {
@@ -205,5 +219,217 @@ describe("ResultsPredOnly", () => {
     expect(screen.getByText("Predictions")).toBeInTheDocument();
     // No comparison section since history is empty
     expect(screen.queryByText("Comparison")).not.toBeInTheDocument();
+  });
+
+  // --- ComparisonTable / formatStatName coverage (lines 140-173) ---
+
+  it("renders ComparisonTable with stat rows after selecting comparison inference", async () => {
+    vi.mocked(fetchInferenceComparison).mockResolvedValueOnce({
+      current: { mean: 0.5, std: 0.1, positive_pct: 0.3 },
+      other: { mean: 0.6, std: 0.2, positive_pct: 0.4 },
+    });
+
+    const record = makeRecord({ inf_id: "inf-001" });
+    const otherRecord = makeRecord({ inf_id: "inf-002" });
+    const history = [otherRecord, record];
+
+    const { getByRole } = renderWithQuery(
+      <ResultsPredOnly
+        record={record}
+        infNumber={2}
+        jobLabel="job"
+        history={history}
+      />,
+    );
+
+    // Open the Select dropdown
+    const trigger = getByRole("combobox");
+    trigger.click();
+
+    // Radix UI renders option text split across spans; use role="option"
+    const options = await screen.findAllByRole("option");
+    expect(options.length).toBeGreaterThan(0);
+    options[0].click();
+
+    // Wait for ComparisonTable rows to appear
+    await waitFor(() => {
+      expect(screen.getByText("Mean")).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("Std")).toBeInTheDocument();
+    // formatStatName maps "positive_pct" -> "Positive %"
+    expect(screen.getByText("Positive %")).toBeInTheDocument();
+  });
+
+  it("formatStatName capitalises generic stat keys", async () => {
+    vi.mocked(fetchInferenceComparison).mockResolvedValueOnce({
+      current: { median: 0.5 },
+      other: { median: 0.6 },
+    });
+
+    const record = makeRecord({ inf_id: "inf-001" });
+    const other = makeRecord({ inf_id: "inf-002" });
+    const history = [other, record];
+
+    const { getByRole } = renderWithQuery(
+      <ResultsPredOnly
+        record={record}
+        infNumber={2}
+        jobLabel="job"
+        history={history}
+      />,
+    );
+
+    const trigger = getByRole("combobox");
+    trigger.click();
+
+    const options = await screen.findAllByRole("option");
+    expect(options.length).toBeGreaterThan(0);
+    options[0].click();
+
+    await waitFor(() => {
+      expect(screen.getByText("Median")).toBeInTheDocument();
+    });
+  });
+
+  // --- PredDistributionPlot conditional branches (lines 194-195) ---
+
+  it("renders PlotlyChart inside PredDistributionPlot when data is available", async () => {
+    vi.mocked(fetchInferencePlot).mockResolvedValueOnce({
+      plotly_json: '{"data":[]}',
+    });
+
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsPredOnly
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        history={[record]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("plotly-chart")).toBeInTheDocument();
+    });
+  });
+
+  it("renders nothing for PredDistributionPlot when data is null", () => {
+    // fetchInferencePlot already defaults to null in the module mock
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsPredOnly
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        history={[record]}
+      />,
+    );
+
+    // No PlotlyChart should appear (no shap data either)
+    expect(screen.queryByTestId("plotly-chart")).not.toBeInTheDocument();
+  });
+
+  // --- ShapAndWarningsAccordion coverage (lines 199-250) ---
+
+  it("renders SHAP Summary accordion when shap data is available", async () => {
+    vi.mocked(fetchInferenceShapPlot).mockResolvedValueOnce({
+      plotly_json: '{"data":[]}',
+    });
+
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsPredOnly
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        history={[record]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("SHAP Summary")).toBeInTheDocument();
+    });
+  });
+
+  it("renders SHAP Summary accordion trigger while loading", async () => {
+    // Use a never-resolving promise to hold the loading state
+    vi.mocked(fetchInferenceShapPlot).mockReturnValueOnce(
+      new Promise(() => {}),
+    );
+
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsPredOnly
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        history={[record]}
+      />,
+    );
+
+    // hasShap is true while loading, so the accordion appears immediately
+    await waitFor(() => {
+      expect(screen.getByText("SHAP Summary")).toBeInTheDocument();
+    });
+  });
+
+  it("renders both SHAP Summary and Warnings accordions together", async () => {
+    vi.mocked(fetchInferenceShapPlot).mockResolvedValueOnce({
+      plotly_json: '{"data":[]}',
+    });
+
+    const record = makeRecord({ warnings: ["Some warning"] });
+    renderWithQuery(
+      <ResultsPredOnly
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        history={[record]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("SHAP Summary")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Warnings")).toBeInTheDocument();
+  });
+
+  it("renders only Warnings accordion when shap data is null and warnings present", async () => {
+    // fetchInferenceShapPlot returns null (default mock) — hasShap becomes false after load
+    const record = makeRecord({ warnings: ["Low variance"] });
+    renderWithQuery(
+      <ResultsPredOnly
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        history={[record]}
+      />,
+    );
+
+    // Warnings accordion should be visible
+    expect(screen.getByText("Warnings")).toBeInTheDocument();
+    // Wait for any in-flight queries to settle, then confirm SHAP is absent
+    await waitFor(() => {
+      expect(screen.queryByText("SHAP Summary")).not.toBeInTheDocument();
+    });
+  });
+
+  it("renders nothing for ShapAndWarningsAccordion when no shap and no warnings", async () => {
+    const record = makeRecord({ warnings: [] });
+    renderWithQuery(
+      <ResultsPredOnly
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        history={[record]}
+      />,
+    );
+
+    // Wait for queries to settle so we are past the isLoading phase
+    await waitFor(() => {
+      expect(screen.queryByText("SHAP Summary")).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText("Warnings")).not.toBeInTheDocument();
   });
 });

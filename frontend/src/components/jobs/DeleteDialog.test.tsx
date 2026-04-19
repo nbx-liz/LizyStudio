@@ -104,4 +104,77 @@ describe("DeleteDialog", () => {
       expect(toast.success).toHaveBeenCalledWith("Job #3 deleted");
     });
   });
+
+  // ---------------------------------------------------------------
+  // H-0067: cascade checkbox for deleting descendants.
+  // ---------------------------------------------------------------
+
+  it("hides the cascade checkbox when descendantCount is 0", () => {
+    render(<DeleteDialog {...defaultProps} descendantCount={0} />);
+    expect(
+      screen.queryByRole("checkbox", { name: /cascade/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the cascade checkbox when descendantCount is > 0", () => {
+    render(<DeleteDialog {...defaultProps} descendantCount={2} />);
+    expect(
+      screen.getByText(/also delete 2 descendant jobs \(cascade\)/i),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the singular form when descendantCount is 1", () => {
+    render(<DeleteDialog {...defaultProps} descendantCount={1} />);
+    expect(
+      screen.getByText(/also delete 1 descendant job \(cascade\)/i),
+    ).toBeInTheDocument();
+  });
+
+  it("calls deleteJob without cascade option when checkbox unchecked", async () => {
+    const { deleteJob } = await import("@/api/jobs");
+    (deleteJob as ReturnType<typeof vi.fn>).mockResolvedValue({});
+
+    render(<DeleteDialog {...defaultProps} descendantCount={2} />);
+    const { fireEvent, waitFor } = await import("@testing-library/react");
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => {
+      expect(deleteJob).toHaveBeenCalledWith("job-abc");
+    });
+  });
+
+  it("calls deleteJob with cascade=true when checkbox checked", async () => {
+    const { deleteJob } = await import("@/api/jobs");
+    (deleteJob as ReturnType<typeof vi.fn>).mockResolvedValue({
+      removed_job_ids: ["job-abc", "job-child-1", "job-child-2"],
+    });
+
+    render(<DeleteDialog {...defaultProps} descendantCount={2} />);
+    const { fireEvent, waitFor } = await import("@testing-library/react");
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => {
+      expect(deleteJob).toHaveBeenCalledWith("job-abc", { cascade: true });
+    });
+  });
+
+  it("shows cascade success toast with descendant count", async () => {
+    const { deleteJob } = await import("@/api/jobs");
+    (deleteJob as ReturnType<typeof vi.fn>).mockResolvedValue({
+      removed_job_ids: ["job-abc", "job-child-1", "job-child-2"],
+    });
+    const { toast } = await import("sonner");
+
+    render(<DeleteDialog {...defaultProps} descendantCount={2} />);
+    const { fireEvent, waitFor } = await import("@testing-library/react");
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith(
+        "Job #3 and 2 descendant(s) deleted",
+      );
+    });
+  });
 });

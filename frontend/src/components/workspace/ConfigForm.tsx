@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   Accordion,
   AccordionContent,
@@ -57,12 +57,22 @@ export function ConfigForm({
   uiSchema,
   columns = [],
 }: ConfigFormProps) {
+  // HIGH-5: keep a ref to the latest config so field-change updates
+  // always apply on top of the freshest snapshot. Previously the
+  // inner_valid reset effect and the objective/metric auto-select
+  // effect could both capture the same ``config`` closure in a single
+  // render. When both fired the second call would rebuild the config
+  // from the stale snapshot and wipe the first effect's write.
+  const configRef = useRef(config);
+  configRef.current = config;
+
   const handleFieldChange = useCallback(
     (path: string[], value: unknown) => {
-      const updated = setNestedValue(config, path, value);
+      const updated = setNestedValue(configRef.current, path, value);
+      configRef.current = updated;
       onChange(updated);
     },
-    [config, onChange],
+    [onChange],
   );
 
   const defs = useMemo(
@@ -109,13 +119,21 @@ export function ConfigForm({
   // Auto-reset inner_valid when current selection is not in filtered options
   const currentInnerValid = (innerValid.method as string) ?? "holdout";
   useEffect(() => {
+    // Same guard as the objective/metric effect below: avoid partial-PUT
+    // races while the config is still being seeded by useDataPanel.
+    if (!config.config_version) return;
     if (
       filteredInnerValidOptions.length > 0 &&
       !filteredInnerValidOptions.includes(currentInnerValid)
     ) {
       handleFieldChange(["training", "inner_valid", "method"], "holdout");
     }
-  }, [filteredInnerValidOptions, currentInnerValid, handleFieldChange]);
+  }, [
+    filteredInnerValidOptions,
+    currentInnerValid,
+    handleFieldChange,
+    config.config_version,
+  ]);
 
   // Calibration
   const calibration =
@@ -201,6 +219,14 @@ export function ConfigForm({
   // LGBM rejects a multiclass objective on a binary target.
   useEffect(() => {
     if (!task || !uiSchema?.option_sets) return;
+    // Issue #107 regression guard: skip auto-select while the config is
+    // still empty or only partially seeded. Writing to an empty config
+    // here produces a partial-only PUT like {model:{params:{objective}}}
+    // that overwrites the server-side config via the router's assignment
+    // semantics, re-surfacing 'config_version / task / split: Field
+    // required' validation errors. Wait until useDataPanel has seeded a
+    // full config (recognised by config_version being set).
+    if (!config.config_version) return;
 
     // Objective: single-select. Reset when empty OR when current value
     // is not in the list of objectives valid for the current task.
@@ -248,7 +274,7 @@ export function ConfigForm({
         );
       }
     }
-  }, [task, uiSchema, modelParams, handleFieldChange]);
+  }, [task, uiSchema, modelParams, handleFieldChange, config.config_version]);
 
   if (!rawProperties) return null;
 
@@ -448,7 +474,10 @@ export function ConfigForm({
                             )
                           }
                         >
-                          <SelectTrigger className="h-8 text-xs">
+                          <SelectTrigger
+                            aria-label="Inner validation method"
+                            className="h-8 text-xs"
+                          >
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>

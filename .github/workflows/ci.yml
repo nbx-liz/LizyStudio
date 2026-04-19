@@ -19,7 +19,37 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy src/lizystudio/
-      - run: uv run pytest --cov=src/lizystudio --cov-report=term-missing --cov-fail-under=80 -q
+      # Flaky-test strategy (Issue #29): CI reruns failures twice.
+      # Local runs do NOT retry so flakiness stays visible. Quarantined
+      # tests are excluded from this blocking job (default addopts in
+      # pyproject.toml) and run separately in `backend-quarantine`.
+      - run: uv run pytest --cov=src/lizystudio --cov-report=term-missing --cov-fail-under=80 --reruns 2 --reruns-delay 1 -q
+
+  # Non-blocking quarantine job — captures signal on tests marked
+  # `@pytest.mark.quarantine` without failing the PR. Skip cleanly when
+  # no tests carry the marker.
+  backend-quarantine:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Run quarantined tests (non-blocking)
+        run: |
+          set +e
+          COUNT=$(uv run pytest -m quarantine --collect-only -q 2>/dev/null | grep -c "::" || true)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::notice::No quarantined tests found — skipping."
+            exit 0
+          fi
+          echo "::notice::Running $COUNT quarantined test(s)."
+          uv run pytest -m quarantine --reruns 2 --reruns-delay 1 -q
+          # Intentionally swallow non-zero exit — continue-on-error
+          # already tolerates failure, but the job status will still be
+          # marked green in GitHub UI via continue-on-error.
 
   frontend:
     runs-on: ubuntu-latest

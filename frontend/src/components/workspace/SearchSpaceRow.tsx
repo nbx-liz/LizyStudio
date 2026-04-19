@@ -161,6 +161,7 @@ export function SearchSpaceRow({
               onChange={(v) => onModelParamChange(param.key, v)}
               step={stepMap?.[param.key]}
               options={getChoiceOptions(param.key)}
+              ariaLabel={param.key}
             />
           ) : (
             String(
@@ -199,7 +200,10 @@ export function SearchSpaceRow({
               value={entry.log ? "log-uniform" : "uniform"}
               onValueChange={(v) => onDistributionChange(param.key, v)}
             >
-              <SelectTrigger className="h-7 w-36 text-xs">
+              <SelectTrigger
+                aria-label={`${param.key} distribution`}
+                className="h-7 w-36 text-xs"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

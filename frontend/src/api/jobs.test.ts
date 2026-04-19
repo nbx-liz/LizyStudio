@@ -12,11 +12,15 @@ import {
   fetchJob,
   fetchJobImportance,
   fetchJobImportanceKinds,
+  fetchJobLearningCurveMetrics,
+  fetchJobLineage,
   fetchJobLog,
   fetchJobPlot,
   fetchJobPlots,
   fetchJobSplitSummary,
   fetchJobs,
+  resumeJob,
+  retuneJob,
 } from "./jobs";
 
 const mockApiFetch = vi.mocked(apiFetch);
@@ -183,5 +187,120 @@ describe("exportJob", () => {
         output_path: "/reports",
       }),
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// retuneJob
+// ---------------------------------------------------------------------------
+describe("retuneJob", () => {
+  it("sends POST to /jobs/:id/retune with body", async () => {
+    mockApiFetch.mockResolvedValue({ job_id: "j2", parent_job_id: "j1" });
+    const body = { n_trials: 50 };
+    await retuneJob("j1", body);
+    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1/retune", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  });
+
+  it("encodes job id in URL", async () => {
+    mockApiFetch.mockResolvedValue({ job_id: "j2", parent_job_id: "j1/sub" });
+    await retuneJob("j1/sub", { n_trials: 10 });
+    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1%2Fsub/retune", {
+      method: "POST",
+      body: JSON.stringify({ n_trials: 10 }),
+    });
+  });
+
+  it("includes expand_boundary and boundary_threshold when provided", async () => {
+    mockApiFetch.mockResolvedValue({ job_id: "j2", parent_job_id: "j1" });
+    const body = {
+      n_trials: 20,
+      expand_boundary: true,
+      boundary_threshold: 0.9,
+    };
+    await retuneJob("j1", body);
+    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1/retune", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resumeJob
+// ---------------------------------------------------------------------------
+describe("resumeJob", () => {
+  it("sends POST to /jobs/:id/resume with empty body by default", async () => {
+    mockApiFetch.mockResolvedValue({ job_id: "j2", parent_job_id: "j1" });
+    await resumeJob("j1");
+    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1/resume", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  });
+
+  it("sends POST with n_trials when provided", async () => {
+    mockApiFetch.mockResolvedValue({ job_id: "j2", parent_job_id: "j1" });
+    await resumeJob("j1", { n_trials: 30 });
+    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1/resume", {
+      method: "POST",
+      body: JSON.stringify({ n_trials: 30 }),
+    });
+  });
+
+  it("encodes job id in URL", async () => {
+    mockApiFetch.mockResolvedValue({ job_id: "j2", parent_job_id: "j1/sub" });
+    await resumeJob("j1/sub", {});
+    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1%2Fsub/resume", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchJobLineage
+// ---------------------------------------------------------------------------
+describe("fetchJobLineage", () => {
+  it("calls /jobs/:id/lineage and returns tree", async () => {
+    const tree = {
+      job_id: "j1",
+      status: "completed",
+      job_type: "fit",
+      children: [],
+    };
+    mockApiFetch.mockResolvedValue({ tree });
+    const result = await fetchJobLineage("j1");
+    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1/lineage");
+    expect(result).toEqual({ tree });
+  });
+
+  it("encodes job id in URL", async () => {
+    mockApiFetch.mockResolvedValue({
+      tree: {
+        job_id: "j1/sub",
+        status: "completed",
+        job_type: "fit",
+        children: [],
+      },
+    });
+    await fetchJobLineage("j1/sub");
+    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1%2Fsub/lineage");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchJobLearningCurveMetrics
+// ---------------------------------------------------------------------------
+describe("fetchJobLearningCurveMetrics", () => {
+  it("calls /jobs/:id/learning-curve/metrics", async () => {
+    mockApiFetch.mockResolvedValue(["auc", "logloss"]);
+    const result = await fetchJobLearningCurveMetrics("j1");
+    expect(mockApiFetch).toHaveBeenCalledWith(
+      "/jobs/j1/learning-curve/metrics",
+    );
+    expect(result).toEqual(["auc", "logloss"]);
   });
 });

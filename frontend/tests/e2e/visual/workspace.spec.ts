@@ -1,5 +1,9 @@
 import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
+import {
+  isMobileProject,
+  openWorkspaceSectionIfMobile,
+} from "../helpers/mobile";
 import { dismissOnboarding } from "../helpers/onboarding";
 import { waitForPlotly, waitForStableUI } from "../helpers/visual";
 
@@ -13,31 +17,6 @@ function createTestCsv(rows = 100): string {
   }
   fs.writeFileSync(csvPath, lines.join("\n"));
   return csvPath;
-}
-
-async function setupAndFit(
-  request: import("@playwright/test").APIRequestContext,
-  csvPath: string,
-): Promise<string> {
-  const loadRes = await request.post(`${API}/workspace/data/path`, {
-    data: { path: csvPath },
-  });
-  expect(loadRes.status()).toBe(200);
-
-  const defaultsRes = await request.get(
-    `${API}/workspace/config/defaults?task=binary&target=target`,
-  );
-  expect(defaultsRes.status()).toBe(200);
-  const config = await defaultsRes.json();
-
-  const putRes = await request.put(`${API}/workspace/config`, {
-    data: config,
-  });
-  expect(putRes.status()).toBe(200);
-
-  const fitRes = await request.post(`${API}/workspace/fit`);
-  expect(fitRes.status()).toBe(200);
-  return (await fitRes.json()).job_id as string;
 }
 
 async function waitForJobDone(
@@ -65,7 +44,16 @@ test.describe("Workspace visual regression @visual", () => {
     await dismissOnboarding(page);
   });
 
-  test("initial 3-panel layout", async ({ page }) => {
+  test("initial 3-panel layout", async ({ page }, testInfo) => {
+    // Issue #178: mobile uses a bottom-tab layout; the 3 panels are
+    // never visible simultaneously so a "3-panel layout" golden is
+    // irrelevant there. Per-panel mobile goldens live in other tests
+    // in this suite.
+    test.skip(
+      isMobileProject(testInfo),
+      "3-panel layout is desktop/tablet only (Issue #178)",
+    );
+
     await page.goto("/");
     await waitForStableUI(page);
 
@@ -100,9 +88,11 @@ test.describe("Workspace visual regression @visual", () => {
     await expect(page).toHaveScreenshot("workspace-data-loaded.png");
   });
 
-  test("tune tab with search space", async ({ page }) => {
+  test("tune tab with search space", async ({ page }, testInfo) => {
     await page.goto("/");
     await waitForStableUI(page);
+
+    await openWorkspaceSectionIfMobile(page, testInfo, "model");
 
     await page.getByRole("tab", { name: "Tune" }).click();
     await page.waitForTimeout(500);

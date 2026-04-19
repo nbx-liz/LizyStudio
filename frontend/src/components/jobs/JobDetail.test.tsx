@@ -16,6 +16,24 @@ vi.mock("@/api/jobs", () => ({
   fetchJob: (...args: unknown[]) => mockFetchJob(...args),
   fetchJobLog: vi.fn().mockResolvedValue({ log: "test log" }),
   cancelJob: vi.fn(),
+  // H-0067: retune / resume / lineage surface used by the embedded
+  // RetuneActionButton / ResumeActionButton / JobLineageTree.
+  retuneJob: vi.fn().mockResolvedValue({
+    job_id: "child-job",
+    parent_job_id: "parent-job",
+  }),
+  resumeJob: vi.fn().mockResolvedValue({
+    job_id: "child-job",
+    parent_job_id: "parent-job",
+  }),
+  fetchJobLineage: vi.fn().mockResolvedValue({
+    tree: {
+      job_id: "test-job-1",
+      status: "completed",
+      job_type: "tune",
+      children: [],
+    },
+  }),
 }));
 vi.mock("@/api/websocket", () => ({
   connectJobProgress: vi.fn().mockReturnValue(() => {}),
@@ -1215,5 +1233,132 @@ describe("JobDetailPanel - ExecutionLogContent accordion", () => {
     await waitFor(() => {
       expect(screen.getByText("test log")).toBeInTheDocument();
     });
+  });
+
+  // ----------------------------------------------------------------
+  // H-0067: Re-tune / Resume / Lineage in the Jobs page.
+  // ----------------------------------------------------------------
+
+  it("shows Re-tune button on a completed tune job", async () => {
+    mockFetchJob.mockResolvedValue(
+      makeJob({ status: "completed", job_type: "tune" }),
+    );
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    await screen.findAllByText(/Completed/);
+    expect(
+      screen.getByRole("button", {
+        name: /Re-tune with additional trials/i,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("does NOT show Re-tune on a completed fit job", async () => {
+    mockFetchJob.mockResolvedValue(
+      makeJob({ status: "completed", job_type: "fit" }),
+    );
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    await screen.findAllByText(/Completed/);
+    expect(
+      screen.queryByRole("button", {
+        name: /Re-tune with additional trials/i,
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows Resume button on a failed tune job", async () => {
+    mockFetchJob.mockResolvedValue(
+      makeJob({ status: "failed", job_type: "tune", completed_at: null }),
+    );
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    await screen.findByText(/Failed/);
+    expect(
+      screen.getByRole("button", {
+        name: /Resume tuning from checkpoint/i,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("does NOT show Resume on a failed fit job", async () => {
+    mockFetchJob.mockResolvedValue(
+      makeJob({ status: "failed", job_type: "fit", completed_at: null }),
+    );
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    await screen.findByText(/Failed/);
+    expect(
+      screen.queryByRole("button", {
+        name: /Resume tuning from checkpoint/i,
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the Lineage accordion when the lineage has children", async () => {
+    mockFetchJob.mockResolvedValue(
+      makeJob({ status: "completed", job_type: "tune" }),
+    );
+    const { fetchJobLineage } = await import("@/api/jobs");
+    (fetchJobLineage as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      tree: {
+        job_id: "test-job-1",
+        status: "completed",
+        job_type: "tune",
+        children: [
+          {
+            job_id: "child-1",
+            status: "running",
+            job_type: "tune",
+            children: [],
+          },
+        ],
+      },
+    });
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    await screen.findAllByText(/Completed/);
+    // Lineage trigger appears once fetchJobLineage resolves.
+    expect(await screen.findByText("Lineage")).toBeInTheDocument();
   });
 });

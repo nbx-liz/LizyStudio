@@ -150,36 +150,71 @@ class ColumnsResponse:
 ```python
 # src/lizystudio/backends/base.py
 
+
+class ProgressCallback(Protocol):
+    """Callable invoked by long-running operations to report progress."""
+
+    def __call__(
+        self, *, current: int, total: int, message: str, **extra: Any
+    ) -> None: ...
+
+
 class BackendAdapter(Protocol):
     """ML バックエンドとのインターフェース。"""
 
+    # --- Identification ---
     @property
     def info(self) -> BackendInfo: ...
 
     # --- Config ---
     def get_config_schema(self) -> ConfigSchema: ...
     def get_ui_schema(self) -> dict[str, Any]: ...  # UI メタデータ (H-0026, H-0055)
-    def get_default_config(self, task: str, target: str) -> dict: ...  # 完全なデフォルト Config (H-0025)
-    def validate_config(self, config: dict) -> list[dict]: ...  # エラー一覧 (空=valid)
-    def load_config_from_file(self, content: bytes, filename: str) -> dict: ...
+    def validate_config(self, config: dict[str, Any]) -> list[dict[str, Any]]: ...  # エラー一覧 (空=valid)
+    def get_default_config(self, task: str, target: str) -> dict[str, Any]: ...  # 完全なデフォルト Config (H-0025)
+    def load_config_from_file(self, content: bytes, filename: str) -> dict[str, Any]: ...
 
     # --- Model lifecycle ---
-    def create_model(self, config: dict, dataframe: pd.DataFrame) -> Any: ...  # 内部モデルオブジェクト
-    def fit(self, model: Any, *, params: dict | None = None, on_progress: Callable | None = None) -> FitSummary: ...  # params: H-0012
-    def tune(self, model: Any, *, on_progress: Callable | None = None) -> TuningSummary: ...
-    def predict(self, model: Any, data: pd.DataFrame, *, return_shap: bool = False) -> PredictionSummary: ...  # return_shap: H-0012
+    def create_model(self, config: dict[str, Any], dataframe: pd.DataFrame) -> Any: ...  # 内部モデルオブジェクト
+
+    def fit(
+        self,
+        model: Any,
+        *,
+        params: dict[str, Any] | None = None,  # H-0012
+        on_progress: ProgressCallback | None = None,
+    ) -> FitSummary: ...
+
+    def tune(
+        self,
+        model: Any,
+        *,
+        on_progress: ProgressCallback | None = None,
+        re_tune: dict[str, Any] | None = None,       # H-0061 多ラウンド再チューニング
+        checkpoint_dir: Any = None,                  # H-0062 試行ごとのチェックポイント
+        resume: bool = False,                        # H-0062 Phase B: 既存 study の再開
+    ) -> TuningSummary: ...
+
+    def predict(
+        self, model: Any, data: pd.DataFrame, *, return_shap: bool = False  # H-0012
+    ) -> PredictionSummary: ...
 
     # --- Evaluation ---
-    def evaluate_table(self, model: Any) -> list[dict]: ...
-    def split_summary(self, model: Any) -> list[dict]: ...
-    def importance(self, model: Any, kind: str) -> dict[str, float]: ...
+    def evaluate_table(self, model: Any) -> list[dict[str, Any]]: ...
+    def split_summary(self, model: Any) -> list[dict[str, Any]]: ...
+    def importance(self, model: Any, kind: str = "split") -> dict[str, float]: ...
     def importance_kinds(self, model: Any) -> list[str]: ...  # 利用可能な重要度の種類 (H-0055)
-    def confusion_matrix(self, model: Any, threshold: float) -> dict[str, Any]: ...
-    def plot(self, model: Any, plot_type: str) -> PlotData: ...
+    def learning_curve_metrics(self, model: Any) -> list[str]: ...  # H-0051 学習曲線のメトリック一覧
+    def confusion_matrix(self, model: Any, threshold: float = 0.5) -> dict[str, Any]: ...
+    def plot(self, model: Any, plot_type: str, **kwargs: Any) -> PlotData: ...
     def available_plots(self, model: Any) -> list[str]: ...
+
+    # --- Checkpoint persistence (H-0062) ---
+    def save_checkpoint(self, model: Any, path: Any) -> None: ...  # 原子的に pickle 書き込み
+    def load_checkpoint(self, path: Any, *, allowed_root: Any | None = None) -> Any: ...  # allowed_root で展開先を制限
 
     # --- Persistence ---
     def export_model(self, model: Any, path: str) -> str: ...  # 保存先パス
+    def export_code(self, model: Any, path: str) -> str: ...   # スタンドアロン Python コードへの書き出し
     def load_model(self, path: str) -> Any: ...
     def model_info(self, model: Any) -> dict[str, Any]: ...
 ```
@@ -1543,6 +1578,27 @@ Fit 完了と同じ評価項目に加え、探索結果（Best Params・収束�
 - ブラウザを閉じて再アクセスした場合、Results Panel は空（初期状態に戻る）
 - 過去の Job 結果は Workspace には表示しない（Jobs 画面で閲覧する）
 
+##### Re-tune / Resume / Lineage（H-0062 Phase B、H-0067）
+
+Results Panel の完了/失敗 Tune Job 表示には、以下のアクションが常設される:
+
+| 状態 | UI | 説明 |
+|------|----|------|
+| Completed (tune) | `Re-tune (+N trials)` ボタン | 同じ job を parent として新 child job を起動。Optuna study を継続 |
+| Failed (tune) | `Resume (X trials remaining)` ボタン | 最後の checkpoint から study を復元 |
+| 子孫/祖先が存在 | `Lineage` セクション（JobLineageTree） | ツリーノードクリックで Workspace の表示対象 job を切り替え |
+
+実体は `frontend/src/components/retune/` の共有コンポーネント（`RetuneActionButton`, `ResumeActionButton`, `JobLineageTree`）。同じコンポーネントを Jobs 画面（§4.3.2 / §4.3.3）からも import しているため、両画面の挙動は厳密に一致する。
+
+**Workspace と Jobs の使い分け:**
+
+| 画面 | 典型的ワークフロー |
+|------|------------------|
+| Workspace Results Panel | 「いま回した Tune の結果を見て、追加 N trials 回す」セッション内の継続作業 |
+| Jobs 画面 | 「過去の Tune 履歴を辿って、ある地点から系譜を再起動する」アーカイブからの再開作業 |
+
+どちらから起動しても同じ API（`POST /api/jobs/{id}/retune` / `POST /api/jobs/{id}/resume`）を呼び、child job は常に `parent_job_id` 付きで persisted される。
+
 #### 4.2.4 Fit 実行フロー
 
 全 fit/tune はJobとして登録される（§3.4.2）。
@@ -2287,11 +2343,15 @@ Workspace の `workspace_result` は完了時に自動更新される。
 | GET | `/api/jobs/{job_id}/importance-kinds` | 利用可能な重要度の種類一覧（H-0058） |
 | GET | `/api/jobs/{job_id}/plot/{plot_type}` | Plotly 図 JSON |
 | GET | `/api/jobs/{job_id}/plots` | 利用可能なプロットタイプ一覧 |
+| GET | `/api/jobs/{job_id}/learning-curve/metrics` | 学習曲線のメトリック名一覧（H-0051） |
 | POST | `/api/jobs/{job_id}/export` | モデル/レポートを指定パスにExport |
 | GET | `/api/jobs/{job_id}/export-code` | LizyML 非依存コードを ZIP でダウンロード（H-0027） |
 | GET | `/api/jobs/{job_id}/log` | 実行ログ取得（H-0006） |
 | POST | `/api/jobs/{job_id}/cancel` | Running ジョブのキャンセル（H-0011） |
-| DELETE | `/api/jobs/{job_id}` | ジョブを削除 |
+| POST | `/api/jobs/{job_id}/retune` | 完了 Tune を起点に再チューニング子ジョブを作成（H-0062） |
+| POST | `/api/jobs/{job_id}/resume` | 失敗/中断 Tune の再開子ジョブを作成（H-0062 Phase B） |
+| GET | `/api/jobs/{job_id}/lineage` | ジョブ系譜のサブツリー（H-0062） |
+| DELETE | `/api/jobs/{job_id}` | ジョブを削除（query: `cascade=true` で子孫も削除） |
 
 **POST /api/jobs/{job_id}/export リクエスト:**
 
@@ -2556,6 +2616,112 @@ Workspace の `workspace_result` は完了時に自動更新される。
 }
 ```
 
+### 5.8 Health API
+
+運用基盤（k8s / リバースプロキシ）からプロセスの生死と準備状況を確認するための軽量エンドポイント。Issue #30 Phase 1 / H-0064。
+
+#### GET `/api/health`
+
+Liveness probe。プロセスが応答可能であれば常に `200 OK` を返す。Workspace state や Backend adapter には依存しない。
+
+**Response 200:**
+```json
+{"status": "ok", "version": "0.2.0"}
+```
+
+#### GET `/api/health/ready`
+
+Readiness probe。Backend adapter と JobStore の初期化が完了し、トラフィックを受け付けられる状態かを確認する。
+
+**Response 200 (ready):**
+```json
+{
+  "status": "ready",
+  "version": "0.2.0",
+  "backend": "lizyml",
+  "jobs_dir": true
+}
+```
+
+**Response 503 (not_ready):**
+```json
+{
+  "status": "not_ready",
+  "version": "0.2.0",
+  "backend": null,
+  "jobs_dir": false
+}
+```
+
+- `backend`: `request.app.state.workspace.backend.info.name`（取得失敗時は `null`）
+- `jobs_dir`: `request.app.state.job_store.base_dir.is_dir()` の結果
+
+#### 運用上の注意
+
+- **liveness は必ず `/api/health` を使う**。`/api/health/ready` は未初期化時に 503 を返すため、liveness probe に設定すると k8s が pod を restart loop に入れる恐れがある。
+- **認証不要**。これは probe 用であり、エンドポイントからは backend 名と pkg version しか露出しない（新規に秘匿情報を追加しないこと）。
+
+### 5.9 Metrics API
+
+Prometheus 互換の観測エンドポイント。Issue #30 Phase 2 / H-0065。
+
+#### GET `/api/metrics`
+
+Prometheus text format (version 0.0.4) で 4 系統のメトリクスを返す。認証不要（probe と同じポジショニング）。
+
+**Response 200:**
+```
+Content-Type: text/plain; version=1.0.0; charset=utf-8
+
+# HELP lizystudio_requests_total HTTP requests handled by LizyStudio
+# TYPE lizystudio_requests_total counter
+lizystudio_requests_total{method="GET",path="/api/workspace/status",status="200"} 42.0
+lizystudio_requests_total{method="POST",path="/api/workspace/fit",status="200"} 3.0
+
+# HELP lizystudio_request_duration_seconds HTTP request latency
+# TYPE lizystudio_request_duration_seconds histogram
+lizystudio_request_duration_seconds_bucket{method="GET",path="/api/workspace/status",le="0.005"} 40.0
+...
+
+# HELP lizystudio_jobs_total ML jobs by terminal status
+# TYPE lizystudio_jobs_total counter
+lizystudio_jobs_total{job_type="fit",status="completed"} 3.0
+
+# HELP lizystudio_active_jobs Currently running ML jobs (0 or 1)
+# TYPE lizystudio_active_jobs gauge
+lizystudio_active_jobs 0.0
+```
+
+#### メトリクス定義
+
+| Name | Type | Labels | 意味 |
+|------|------|--------|------|
+| `lizystudio_requests_total` | Counter | `method`, `path`, `status` | HTTP リクエスト総数 |
+| `lizystudio_request_duration_seconds` | Histogram | `method`, `path` | HTTP レイテンシ（bucket は prometheus_client default） |
+| `lizystudio_jobs_total` | Counter | `job_type`, `status` | ML ジョブ終了カウンタ。`job_type` ∈ `{fit, tune}`、`status` ∈ `{completed, failed, cancelled}` |
+| `lizystudio_jobs_duration_seconds` | Histogram | `job_type`, `status` | ML ジョブ所要時間（H-0066）。bucket は ML ワークロード用: `(1, 5, 10, 30, 60, 120, 300, 600, 1800, 3600, +Inf)` 秒 |
+| `lizystudio_active_jobs` | Gauge | なし | JobStore active slot の使用状態 (0 または 1) |
+
+#### カーディナリティ方針
+
+- **`path` label は FastAPI の route template を使う**（例: `/api/jobs/{job_id}`）。生の job_id や inf_id を label 化すると長期的に Prometheus の series が爆発するため禁止。
+- route に未マッチの path（404 経路）は `path="unmatched"` に集約する。
+- 静的ファイル (`/assets/...` / SPA fallback) は label 化せず集約カテゴリで数える（metrics router がアタッチされる前の middleware で扱う）。
+
+#### 計測対象からの除外
+
+- `/api/metrics` 自身の呼び出しは `lizystudio_requests_total` / `lizystudio_request_duration_seconds` に含めない。監視ツール由来のトラフィックが本体メトリクスのベースロードを汚染するのを防ぐため。
+- `/api/health` と `/api/health/ready` は計測に含める（probe 頻度も重要な観測情報）。
+
+#### 運用上の注意
+
+- **認証不要** — health / readiness と同じく公開エンドポイント。露出する情報は以下のみ:
+  - LizyStudio 定義のカウンタ / ヒストグラム / ゲージ（本節の冒頭表）
+  - `prometheus_client` デフォルトレジストリが自動追加する `python_info`（実装 / マイナー / パッチレベル）と `process_*`（RSS、CPU時間、FD数、スタート時刻）
+
+  運用時に Python バージョンやプロセスメモリを外部に出したくない場合は、リバースプロキシで `/api/metrics` を内部ネットワーク限定に制限すること。アプリケーション側では無効化しない（Prometheus のデフォルト挙動を保ち、ツール互換性を優先）。
+- **レート制限なし** — Prometheus の scrape 間隔（通常 15s）を前提に設計。外部公開する場合はリバースプロキシ側で rate limit を設定する想定。
+
 ---
 
 ## 6. エラーハンドリング
@@ -2636,9 +2802,55 @@ frontend/src/api/
 
 ### 8.2 フロントエンド
 
-初期段階ではフロントエンドの自動テストは設けない。
-バックエンド API テストでカバーし、フロントエンドは手動確認とする。
-必要に応じて HISTORY.md で提案の上で Vitest / Playwright を導入する。
+H-0019 で以下のテストインフラを導入済み:
+
+| レベル | 対象 | ツール |
+|--------|------|--------|
+| Unit / Component | コンポーネント・フックの個別動作 | Vitest + `@testing-library/react` |
+| API モック | TanStack Query + フェッチ境界 | MSW (Mock Service Worker) |
+| コンポーネントカタログ | ビジュアル検証・ドキュメント | Storybook + test-runner |
+| E2E | 主要ユーザーフロー | Playwright（3 viewport: chromium / tablet / mobile） |
+| Visual Regression | UI 変更の差分検出 | Playwright `toHaveScreenshot` + ゴールデン画像 |
+| Accessibility | 自動 a11y スキャン | Playwright + axe-core |
+
+コマンド:
+
+- `pnpm test` — Vitest（ウォッチ）
+- `pnpm test -- --run` — 一回実行 + coverage（istanbul, 閾値 80/75/80/70）
+- `pnpm test:e2e` — Playwright
+- `pnpm test:e2e:visual` — ビジュアル回帰
+- `pnpm test:e2e:update` — ゴールデン更新
+- `pnpm test:e2e:a11y` — アクセシビリティスキャン
+- `pnpm test:storybook` — Storybook テストランナー
+
+カバレッジの維持目標は backend と揃え 80% を下限とする（`vitest.config.ts` で CI 強制）。
+
+### 8.3 Flaky テスト運用（Issue #29）
+
+CI の red を抑えつつ本物の regression を見逃さないため、以下のマーカー／仕組みを使う。
+
+#### マーカー
+
+| marker | 用途 | 定義場所 |
+|--------|------|----------|
+| `@pytest.mark.flaky` | 既知の不安定テスト（タイミング依存など）。`pytest-rerunfailures` が CI 時に rerun | `pyproject.toml` |
+| `@pytest.mark.quarantine` | 失敗頻度が高く一時隔離。default run 対象外、CI は non-blocking job で実行 | `pyproject.toml` |
+| `@pytest.mark.slow` | 実モデルを学習する高コストテスト | 既存 |
+
+Playwright 側はテストごとの marker 機構がないため、`playwright.config.ts` の `retries` 設定で一括制御する（CI 時のみ chromium=2, tablet/mobile=1）。
+
+#### 運用ルール
+
+1. **ローカルは retry なし** — `uv run pytest` / `pnpm test:e2e` は retry せず、flaky を見える化する。
+2. **CI の自動 rerun** — backend は `pytest --reruns 2 --reruns-delay 1`、frontend E2E は Playwright の `retries`。rerun で救われた場合も CI ログ / JUnit に警告が残る。
+3. **quarantine の追加** — `pytest.mark.quarantine` を付与するだけで default run から除外される。CI は `backend-quarantine` ジョブ（`continue-on-error: true`）で実行され、失敗しても PR を block しない。
+4. **quarantine からの復帰** — 連続 10 回 green の実績を confirm してから marker 削除、対応 PR に根拠を明記する。
+5. **追跡の義務** — `flaky` / `quarantine` を付けるときは同時に追跡 Issue を起票する。塩漬けを許容しない。
+
+#### 禁止事項
+
+- 真の regression を flaky 扱いして隠蔽しない。rerun で救われた失敗は必ず原因調査する。
+- Playwright の `retries` を test 単位で上書きして特定テストを無制限に retry しない。恒常的に失敗するテストは quarantine もしくは修正する。
 
 ---
 
@@ -2745,13 +2957,18 @@ LizyStudio/
 │   ├── _version.py
 │   ├── cli.py
 │   ├── server.py
+│   ├── security.py            # パス検証・アップロード制限 (H-0038 他)
+│   ├── metrics.py              # Prometheus メトリクス定義 (H-0065, H-0066)
 │   ├── api/
 │   │   ├── __init__.py
-│   │   ├── workspace.py       # Workspace API (config, data, fit)
+│   │   ├── workspace.py       # Workspace API (config, data, fit/tune)
 │   │   ├── jobs.py            # Jobs API
+│   │   ├── retune.py          # Re-tune / Resume / Lineage (H-0062)
 │   │   ├── inference.py       # Inference API
 │   │   ├── backends.py        # Backend API
 │   │   ├── files.py           # Files API
+│   │   ├── health.py          # Health API (H-0064)
+│   │   ├── metrics_api.py     # /api/metrics Prometheus exposition (H-0065)
 │   │   ├── models.py          # Pydantic リクエスト/レスポンスモデル
 │   │   └── errors.py          # エラーハンドラ
 │   ├── services/
@@ -2759,7 +2976,10 @@ LizyStudio/
 │   │   ├── workspace.py       # Workspace 揮発状態管理
 │   │   ├── data.py            # データ読み込み・カラム分析
 │   │   ├── jobs.py            # Job ライフサイクル + ディスク永続化
-│   │   ├── training.py        # Fit/Tune 実行管理
+│   │   ├── training.py        # Fit/Tune スレッドオーケストレーション
+│   │   ├── training_retune.py # Re-tune / Resume 実行 (H-0062)
+│   │   ├── subprocess_runner.py # Fit/Tune サブプロセス実行 (H-0036)
+│   │   ├── openmp_detect.py   # OpenMP ランタイム検出 (H-0036)
 │   │   ├── inference.py       # 推論実行 + 永続化
 │   │   └── export.py          # Model/Report/Code Export
 │   ├── backends/
@@ -2767,8 +2987,19 @@ LizyStudio/
 │   │   ├── base.py            # BackendAdapter Protocol
 │   │   ├── types.py           # 共通型 (FitSummary, PlotData, DataRef 等)
 │   │   ├── registry.py        # Adapter 登録・取得
-│   │   ├── lizyml.py          # LizyML Adapter 実装
-│   │   └── lizyml_ui_schema.py # LizyML UI メタデータ
+│   │   ├── lizyml/            # LizyML Adapter (mixin 分割)
+│   │   │   ├── __init__.py
+│   │   │   ├── adapter.py
+│   │   │   ├── config_mixin.py
+│   │   │   ├── config_compat.py
+│   │   │   ├── lifecycle_mixin.py
+│   │   │   ├── evaluation_mixin.py
+│   │   │   ├── checkpoint_mixin.py  # H-0062 save/load checkpoint
+│   │   │   ├── pickle_compat.py
+│   │   │   └── serialization.py
+│   │   ├── lizyml_ui_schema.py # LizyML UI メタデータ
+│   │   ├── lizyml_constants.py # LizyML 定数
+│   │   └── lizyml_metrics.py   # LizyML メトリック定義
 │   └── ws/
 │       ├── __init__.py
 │       └── progress.py        # ジョブ進捗 WebSocket
@@ -2824,9 +3055,13 @@ LizyStudio は localhost 専用のデスクトップツールであるが、以�
 
 本番モードで以下のヘッダーを付与する（H-0039）:
 
-- `Content-Security-Policy`: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://localhost:*; img-src 'self' data: blob:; font-src 'self'`
+- `Content-Security-Policy`: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://localhost:* wss://localhost:*; img-src 'self' data: blob:; font-src 'self'`
 - `X-Content-Type-Options: nosniff`
 - `X-Frame-Options: DENY`
+- `Referrer-Policy: strict-origin-when-cross-origin`
+- `Permissions-Policy: camera=(), microphone=(), geolocation=()`
+
+`connect-src` に `wss://localhost:*` を含めるのは、HTTPS リバースプロキシの背後で Studio を運用した場合に WebSocket が `wss://` にアップグレードされる構成を許容するため。
 
 開発モード（`LIZYSTUDIO_RELOAD=1`）では CSP を緩和し、HMR（Hot Module Replacement）を許可する。
 

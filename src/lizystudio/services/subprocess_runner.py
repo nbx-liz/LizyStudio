@@ -21,9 +21,12 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import IO, TYPE_CHECKING, Any
 
 from lizystudio.services.jobs import Job, JobStore
 
@@ -38,6 +41,108 @@ _POLL_INTERVAL = 0.2  # seconds between progress file polls
 # for normal tail flushing but small enough that a hung child does not
 # keep the daemon worker thread alive forever (H-0062 Bugfix 2026-04-14).
 _WAIT_TIMEOUT = 10.0
+
+# Issue #87: after the subprocess exits, retry the progress reader a
+# handful of times so writes that the child flushed moments before
+# ``SIGTERM`` still land on the parent's WebSocket broadcaster. The
+# legacy single 50 ms sleep was unreliable on NFS / docker overlay2
+# where the flush->visibility delay is occasionally above that budget.
+_FINAL_FLUSH_RETRIES = 5
+_FINAL_FLUSH_INTERVAL = 0.05
+
+# Issue #150: the child's stderr pipe must be drained concurrently or
+# the child blocks on write(2) once it exceeds the OS pipe buffer
+# (~64 KiB on Linux). We retain only the last _STDERR_TAIL_CHUNKS *
+# _STDERR_READ_SIZE bytes so a chatty child does not grow the parent's
+# memory unboundedly; this tail is what the error-logging path at
+# run_job_in_subprocess reports when the child exits non-zero.
+_STDERR_READ_SIZE = 4096  # bytes per read(2)
+_STDERR_TAIL_CHUNKS = 16  # retain the most recent chunks (~64 KiB)
+
+
+class _StderrDrainer:
+    """Concurrently drain a subprocess stderr pipe on a daemon thread.
+
+    The parent no longer blocks on ``proc.stderr.read()`` only after
+    ``proc.wait()`` — which would deadlock any child that writes more
+    than the OS pipe buffer. Instead, a dedicated daemon thread reads
+    chunks until EOF (or the pipe is closed) and keeps the most
+    recent chunks in a bounded ring for post-mortem logging.
+
+    The drainer does NOT own the ``Popen`` object; callers are
+    expected to ``start()`` right after ``Popen`` and ``join(timeout)``
+    after ``proc.wait()``. ``tail_bytes()`` is safe to call after
+    ``join()`` completes.
+    """
+
+    def __init__(self, stream: IO[bytes]) -> None:
+        self._stream = stream
+        self._buffer: deque[bytes] = deque(maxlen=_STDERR_TAIL_CHUNKS)
+        self._thread = threading.Thread(
+            target=self._run, name="lizystudio-stderr-drain", daemon=True
+        )
+
+    def _run(self) -> None:
+        try:
+            while True:
+                chunk = self._stream.read(_STDERR_READ_SIZE)
+                if not chunk:
+                    # EOF or pipe closed by child exit.
+                    break
+                self._buffer.append(chunk)
+        except (OSError, ValueError):
+            # Stream closed out from under us; nothing to do.
+            return
+        except Exception:
+            # Any other exception would otherwise be silently logged by
+            # threading.excepthook and leave the pipe undrained, which
+            # in turn can re-introduce the #150 deadlock. Log with the
+            # stack trace so diagnosis is possible post-mortem.
+            _logger.exception("stderr drainer thread crashed")
+            return
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def join(self, timeout: float | None = None) -> None:
+        """Wait for the drainer to reach EOF, then close the stream.
+
+        Safe to call multiple times — the second call is a no-op on a
+        terminated thread and an already-closed stream. Callers should
+        invoke ``join`` before ``tail_bytes`` to ensure the drainer has
+        finished writing to the buffer.
+
+        If the drainer does not finish within *timeout*, close the
+        stream anyway — ``read(4096)`` on a closed stream returns
+        ``b""`` or raises, both of which terminate the loop above.
+        """
+        self._thread.join(timeout=timeout)
+        with contextlib.suppress(Exception):
+            self._stream.close()
+        # If the thread was still mid-read when the stream closed,
+        # give it a brief moment to unwind. This is a best-effort
+        # cleanup — daemon=True prevents it from blocking interpreter
+        # shutdown either way.
+        if self._thread.is_alive():
+            self._thread.join(timeout=0.5)
+            if self._thread.is_alive():
+                _logger.warning(
+                    "stderr drainer thread did not exit after join + close; "
+                    "leaving as daemon"
+                )
+
+    def tail_bytes(self) -> bytes:
+        """Return the retained tail of stderr output.
+
+        MUST be called after :meth:`join` returns so the drainer thread
+        is no longer appending to the buffer. Reading earlier is
+        technically memory-safe under CPython's GIL but may return a
+        truncated tail.
+
+        Bounded by the ring's capacity — a chatty child only gets
+        its final chunks logged, not the entire history.
+        """
+        return b"".join(self._buffer)
 
 
 def run_job_in_subprocess(
@@ -99,6 +204,7 @@ def run_job_in_subprocess(
     args_p = Path(args_path)
     progress_path = str(args_p.parent / (args_p.stem + "_progress.jsonl"))
 
+    drainer: _StderrDrainer | None = None
     try:
         proc = subprocess.Popen(
             [
@@ -111,6 +217,13 @@ def run_job_in_subprocess(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
         )
+
+        # Issue #150: drain stderr concurrently so the child cannot
+        # block on write(2) once it exceeds the OS pipe buffer. The
+        # drainer keeps a bounded tail for post-mortem logging below.
+        if proc.stderr is not None:
+            drainer = _StderrDrainer(proc.stderr)
+            drainer.start()
 
         # H-0062 Bugfix 2026-04-14 (5): pass job_store so _poll_progress
         # can honour cancel requests and terminate a hung subprocess.
@@ -133,15 +246,25 @@ def run_job_in_subprocess(
             with contextlib.suppress(subprocess.TimeoutExpired):
                 proc.wait(timeout=_WAIT_TIMEOUT)
 
+        # Wait for the drainer to finish consuming stderr BEFORE reading
+        # the retained tail. Otherwise tail_bytes() can race with the
+        # final appends and return a truncated buffer. join() is safe
+        # to call twice — the finally below is idempotent insurance
+        # against any exception between here and there.
+        if drainer is not None:
+            drainer.join(timeout=2.0)
+
         if proc.returncode not in (0, None):
-            raw = proc.stderr.read() if proc.stderr else b""
-            stderr = (raw or b"").decode(errors="replace")
+            tail = drainer.tail_bytes() if drainer is not None else b""
+            stderr = tail.decode(errors="replace")
             _logger.error(
                 "Subprocess exited with code %d: %s",
                 proc.returncode,
-                stderr[:500],
+                stderr[-500:],
             )
     finally:
+        if drainer is not None:
+            drainer.join(timeout=2.0)
         Path(args_path).unlink(missing_ok=True)
         Path(progress_path).unlink(missing_ok=True)
 
@@ -152,7 +275,127 @@ def run_job_in_subprocess(
         job.status = "failed"
         job.error = "Subprocess did not persist job result"
         return job
+
+    # If the child was killed mid-run (Cancel -> SIGTERM, or hard kill
+    # after _WAIT_TIMEOUT), it never reached ``_run_job_core.finally``
+    # and so never wrote a terminal state back to disk. Reconcile here
+    # based on the cancel flag so waiters downstream (E2E, UI) see the
+    # final status instead of spinning on ``running`` forever.
+    if updated.status in ("pending", "running"):
+        now = datetime.now(timezone.utc).isoformat()
+        if job_store.is_cancel_requested(job.job_id):
+            updated.status = "cancelled"
+            if broadcaster is not None:
+                broadcaster.send_error(
+                    job.job_id, "Job cancelled", code="JOB_CANCELLED"
+                )
+        else:
+            updated.status = "failed"
+            updated.error = (
+                f"Subprocess exited with code {proc.returncode} "
+                f"without persisting a terminal status"
+            )
+            if broadcaster is not None:
+                broadcaster.send_error(job.job_id, updated.error)
+        updated.completed_at = now
+        job_store.update(updated)
+        job_store.clear_cancel(job.job_id)
     return updated
+
+
+class _ProgressReader:
+    """Tail-read the progress JSONL file one new chunk at a time.
+
+    Issue #87: the legacy poll loop read the whole progress file via
+    ``Path.read_text().splitlines()`` on every 200 ms tick and tracked a
+    consumed-line counter. That is O(N) per poll in the number of lines
+    already seen, so a long tune with hundreds of trials quadratically
+    degrades the parent thread as the file grows. It also silently
+    dropped partial writes (a ``write()`` that landed but whose
+    terminating newline had not flushed yet was parsed as invalid JSON
+    and thrown away, never to be retried).
+
+    This reader keeps an open file handle and reads only the new bytes
+    since the last call (``file.read()`` on a regular file with a live
+    offset). A small ``_buffer`` holds any unterminated trailing text
+    across calls so it is never lost — the next call stitches the
+    continuation on and returns the completed line.
+
+    The reader also handles the common "file does not exist yet"
+    startup case: ``_ensure_open`` retries on every call until the
+    child creates the file, at which point the handle opens and
+    subsequent calls stream from offset 0.
+    """
+
+    def __init__(self, path: str) -> None:
+        self._path = path
+        self._file: Any = None  # typing.IO[str] once opened
+        self._buffer = ""
+
+    def _ensure_open(self) -> bool:
+        """Open the file lazily if it has appeared on disk.
+
+        Returns True if a live handle is available after the call, and
+        False if the file still does not exist.
+        """
+        if self._file is not None:
+            return True
+        if not Path(self._path).exists():
+            return False
+        # Text mode with UTF-8 to match _write_progress; errors="replace"
+        # so a corrupt byte sequence in the middle of a long tune does
+        # not raise UnicodeDecodeError and kill the poll loop. A broken
+        # line will fail JSON parsing in _forward_progress and be
+        # dropped there with logging, which is the right failure mode.
+        self._file = open(  # noqa: SIM115 — handle lives with the reader
+            self._path, encoding="utf-8", errors="replace"
+        )
+        return True
+
+    def read_new_lines(self) -> list[str]:
+        """Return complete lines written since the last call.
+
+        Any partial trailing content (no terminating newline) is stashed
+        on ``self._buffer`` and only released once its continuation has
+        been written.
+        """
+        if not self._ensure_open():
+            return []
+        chunk = self._file.read()
+        if not chunk:
+            return []
+        data = self._buffer + chunk
+        # If the chunk ends with a newline, every line is complete and
+        # the buffer is empty; otherwise the last fragment is partial
+        # and we hold it until a later call completes it.
+        if data.endswith("\n"):
+            self._buffer = ""
+            return [ln for ln in data.splitlines() if ln]
+        parts = data.split("\n")
+        self._buffer = parts[-1]
+        return [ln for ln in parts[:-1] if ln]
+
+    def final_flush(self) -> list[str]:
+        """Return any buffered partial line and clear the buffer.
+
+        Called by ``_poll_progress`` after the subprocess has exited and
+        the poll retries have finished. If the child was killed
+        mid-write, its last bytes live here as a best-effort tail; the
+        caller decides whether to forward them (they probably fail JSON
+        parsing, but at least they land in logs).
+        """
+        if not self._buffer:
+            return []
+        tail = self._buffer
+        self._buffer = ""
+        return [tail]
+
+    def close(self) -> None:
+        """Release the file handle. Safe to call multiple times."""
+        if self._file is not None:
+            with contextlib.suppress(Exception):
+                self._file.close()
+            self._file = None
 
 
 def _poll_progress(
@@ -171,40 +414,58 @@ def _poll_progress(
     Without this escape hatch, a hung child process kept the daemon
     worker thread alive forever and the next retune attempt permanently
     failed with ``PreviousJobStillRunningError``.
+
+    Issue #87: uses an incremental ``_ProgressReader`` instead of
+    re-reading the entire file each tick. See that class's docstring
+    for the rationale; the behavioural contract here is unchanged —
+    only the cost model is.
     """
-    lines_read = 0
-    path = Path(progress_path)
+    reader = _ProgressReader(progress_path)
     terminated = False
 
-    while proc.poll() is None:
-        if path.exists():
-            lines = path.read_text(encoding="utf-8").splitlines()
-            for line in lines[lines_read:]:
-                lines_read += 1
+    try:
+        while proc.poll() is None:
+            for line in reader.read_new_lines():
                 _forward_progress(line, job_id, broadcaster)
-        if (
-            not terminated
-            and job_store is not None
-            and job_store.is_cancel_requested(job_id)
-        ):
-            _logger.info("cancel requested for job %s; terminating subprocess", job_id)
-            terminated = True
-            with contextlib.suppress(Exception):
-                proc.terminate()
-            # Give the child a brief moment to flush then escalate if
-            # still alive. The outer run_job_in_subprocess does the
-            # real proc.wait() with _WAIT_TIMEOUT, so here we just
-            # break out of the polling loop.
-            break
-        time.sleep(_POLL_INTERVAL)
+            if (
+                not terminated
+                and job_store is not None
+                and job_store.is_cancel_requested(job_id)
+            ):
+                _logger.info(
+                    "cancel requested for job %s; terminating subprocess", job_id
+                )
+                terminated = True
+                with contextlib.suppress(Exception):
+                    proc.terminate()
+                # Give the child a brief moment to flush then escalate
+                # if still alive. The outer run_job_in_subprocess does
+                # the real proc.wait() with _WAIT_TIMEOUT, so here we
+                # just break out of the polling loop.
+                break
+            time.sleep(_POLL_INTERVAL)
 
-    # Final flush — read any remaining lines after subprocess exits.
-    # Retry once to handle partial writes at EOF.
-    time.sleep(0.05)
-    if path.exists():
-        lines = path.read_text(encoding="utf-8").splitlines()
-        for line in lines[lines_read:]:
+        # Final flush — the child has exited (or we terminated it).
+        # Retry a handful of times to cover the NFS / overlay2 visibility
+        # gap where the kernel flushed the bytes but the parent's view
+        # has not caught up yet. Each iteration reads whatever new lines
+        # are now visible; if nothing arrives in a full retry cycle we
+        # give up and forward the buffered partial as best-effort.
+        for _ in range(_FINAL_FLUSH_RETRIES):
+            time.sleep(_FINAL_FLUSH_INTERVAL)
+            new_lines = reader.read_new_lines()
+            if not new_lines:
+                continue
+            for line in new_lines:
+                _forward_progress(line, job_id, broadcaster)
+
+        # Anything still buffered is an incomplete last write — forward
+        # it so the information at least reaches _forward_progress's
+        # logging path, even if it fails JSON parsing.
+        for line in reader.final_flush():
             _forward_progress(line, job_id, broadcaster)
+    finally:
+        reader.close()
 
 
 def _forward_progress(
@@ -247,8 +508,63 @@ def _forward_progress(
 # --- Child process entry point ---
 
 
+def _install_sigterm_handler() -> None:
+    """Convert SIGTERM into KeyboardInterrupt on the main thread (#153).
+
+    Python's default SIGTERM handler calls ``_exit`` which bypasses
+    every Python-level ``finally`` block. That caused
+    ``_run_job_core.finally`` to skip — no ``execution.log`` write,
+    no ``release_active``, no terminal metric — whenever the parent
+    escalated a cancel to SIGTERM.
+
+    This handler uses ``_thread.interrupt_main()`` to raise
+    ``KeyboardInterrupt`` on the main thread, which takes the
+    ``except (CancelledError, KeyboardInterrupt)`` branch in
+    ``_run_job_core`` and runs the existing ``finally``.
+
+    Single-shot (INV-8): the handler resets itself to ``SIG_DFL``
+    on entry so a second SIGTERM falls through to the OS default —
+    this keeps the parent's ``proc.kill()`` / SIGKILL escalation
+    intact for a truly hung child.
+    """
+    import _thread
+    import signal as _signal
+
+    fired = {"once": False}
+
+    def _handler(signum: int, frame: Any) -> None:  # noqa: ARG001
+        if fired["once"]:
+            # Second SIGTERM: escalate to default action so the parent's
+            # proc.kill() / SIGKILL path still terminates a hung child.
+            # Only re-raise the signal if the SIG_DFL swap succeeded —
+            # otherwise os.kill would re-enter this very handler
+            # because the custom slot is still active, creating a
+            # signal loop.
+            try:
+                _signal.signal(_signal.SIGTERM, _signal.SIG_DFL)
+            except Exception:
+                # SIG_DFL install failed (extremely unlikely on POSIX).
+                # Leave the second escalation to the parent's proc.kill
+                # SIGKILL path rather than risk an infinite re-entry.
+                return
+            os.kill(os.getpid(), _signal.SIGTERM)
+            return
+        fired["once"] = True
+        # First SIGTERM: inject KeyboardInterrupt on the main thread
+        # so _run_job_core.finally runs.
+        _thread.interrupt_main()
+
+    with contextlib.suppress(Exception):
+        _signal.signal(_signal.SIGTERM, _handler)
+
+
 def _child_main(args_path: str, progress_path: str) -> None:
     """Entry point for the child process."""
+    # Issue #153: install SIGTERM → KeyboardInterrupt before doing any
+    # real work so a parent-triggered SIGTERM during setup still runs
+    # the _run_job_core finally block.
+    _install_sigterm_handler()
+
     with open(args_path, encoding="utf-8") as f:
         args = json.load(f)
 

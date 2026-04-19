@@ -86,7 +86,7 @@ export function renderEnumField(
         value={String(value ?? defaultValue ?? "")}
         onValueChange={(v) => onChange(path, v)}
       >
-        <SelectTrigger className="h-8 text-xs">
+        <SelectTrigger aria-label={label} className="h-8 text-xs">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -201,6 +201,18 @@ function renderArrayField(
 
   // Array of objects
   if (prop.items?.type === "object" && prop.items.properties) {
+    // HIGH-9: avoid bare index keys. On Remove, React would otherwise
+    // keep the trailing child components' state on the wrong row. Use
+    // a content-derived key plus the index so that (a) removing a row
+    // shifts the key for subsequent rows along with their state, and
+    // (b) duplicate structural items still remain distinguishable.
+    const itemKey = (item: Record<string, unknown>, idx: number) => {
+      try {
+        return `${idx}-${JSON.stringify(item)}`;
+      } catch {
+        return `${idx}`;
+      }
+    };
     return (
       <div key={name} className="space-y-2">
         <FormField label={label} description={description}>
@@ -208,7 +220,10 @@ function renderArrayField(
         </FormField>
         <div className="space-y-3">
           {(arrValue as Record<string, unknown>[]).map((item, idx) => (
-            <div key={String(idx)} className="space-y-2 border-l pl-3 relative">
+            <div
+              key={itemKey(item, idx)}
+              className="space-y-2 border-l pl-3 relative"
+            >
               <div className="flex items-center justify-between">
                 <span className="text-xs text-muted-foreground font-medium">
                   Item {idx + 1}
@@ -380,7 +395,7 @@ function renderDiscriminatedUnion(
             onChange(path, alt.default ?? {});
           }}
         >
-          <SelectTrigger className="h-8 text-xs">
+          <SelectTrigger aria-label={label} className="h-8 text-xs">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

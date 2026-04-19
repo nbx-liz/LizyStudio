@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { API, createTestCsv } from "./helpers/api";
+import { openWorkspaceSectionIfMobile } from "./helpers/mobile";
 import { dismissOnboarding } from "./helpers/onboarding";
 
 /**
@@ -35,11 +36,12 @@ test.describe("ModelPanel interactions", () => {
   test("Tab switch: clicking Tune tab changes action button text", async ({
     page,
     request,
-  }) => {
+  }, testInfo) => {
     await setupDataAndConfig(request);
     await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
+    await openWorkspaceSectionIfMobile(page, testInfo, "model");
 
     // Fit tab should be active by default
     const fitTab = page.getByRole("tab", { name: "Fit" });
@@ -73,18 +75,19 @@ test.describe("ModelPanel interactions", () => {
   test("Export YAML: clicking Export YAML button triggers download", async ({
     page,
     request,
-  }) => {
+  }, testInfo) => {
     await setupDataAndConfig(request);
     await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
+    await openWorkspaceSectionIfMobile(page, testInfo, "model");
 
     // The Export YAML button should be visible in the footer
     const exportButton = page.getByRole("button", { name: "Export YAML" });
     await expect(exportButton).toBeVisible();
 
     // Intercept the window.open call triggered by handleExport
-    const [popup] = await Promise.all([
+    await Promise.all([
       page.waitForEvent("popup", { timeout: 5000 }).catch(() => null),
       exportButton.click(),
     ]);
@@ -98,23 +101,30 @@ test.describe("ModelPanel interactions", () => {
   test("Save Preset: dialog accepts preset name and saves", async ({
     page,
     request,
-  }) => {
+  }, testInfo) => {
     await setupDataAndConfig(request);
     await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
+    await openWorkspaceSectionIfMobile(page, testInfo, "model");
 
     const savePresetButton = page.getByRole("button", { name: "Save Preset" });
     await expect(savePresetButton).toBeVisible();
 
-    // Set up dialog handler before clicking
-    page.on("dialog", async (dialog) => {
-      expect(dialog.type()).toBe("prompt");
-      expect(dialog.message()).toBe("Preset name:");
-      await dialog.accept("my-test-preset");
-    });
-
+    // CRITICAL-4 (code review): window.prompt() was replaced with a
+    // shadcn Dialog-based SavePresetDialog. The test now drives the
+    // real modal instead of listening for a native dialog event.
     await savePresetButton.click();
+
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible({ timeout: 3000 });
+    await expect(dialog.getByText("Save preset")).toBeVisible();
+
+    const nameInput = dialog.getByLabel("Name");
+    await expect(nameInput).toBeFocused();
+    await nameInput.fill("my-test-preset");
+
+    await dialog.getByRole("button", { name: /^save$/i }).click();
 
     // After saving, a toast notification should appear
     await expect(
@@ -129,11 +139,12 @@ test.describe("ModelPanel interactions", () => {
   test("Undo/Redo: buttons enable after config change", async ({
     page,
     request,
-  }) => {
+  }, testInfo) => {
     await setupDataAndConfig(request);
     await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
+    await openWorkspaceSectionIfMobile(page, testInfo, "model");
 
     // Initially, Undo and Redo should be disabled
     const undoButton = page.getByRole("button", { name: "Undo" });
@@ -154,6 +165,7 @@ test.describe("ModelPanel interactions", () => {
     // Reload the page to pick up the changed config
     await page.reload();
     await page.waitForLoadState("networkidle");
+    await openWorkspaceSectionIfMobile(page, testInfo, "model");
 
     // After reload, config history is reset in the frontend.
     // To test undo/redo, we need to trigger a change through the UI.
@@ -166,8 +178,7 @@ test.describe("ModelPanel interactions", () => {
     const inputVisible = await numberInput.isVisible().catch(() => false);
 
     if (inputVisible) {
-      // Get current value, change it, then verify undo enables
-      const currentValue = await numberInput.inputValue();
+      // Change the value, then verify undo enables
       await numberInput.fill("42");
       await numberInput.press("Tab"); // Trigger blur/change event
 
@@ -197,11 +208,12 @@ test.describe("ModelPanel interactions", () => {
   test("Tab switch: Fit/Tune tabs render correct content areas", async ({
     page,
     request,
-  }) => {
+  }, testInfo) => {
     await setupDataAndConfig(request);
     await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
+    await openWorkspaceSectionIfMobile(page, testInfo, "model");
 
     // On Fit tab, config form area should be visible
     const configFormArea = page.locator('[data-testid="config-form-area"]');
@@ -221,22 +233,27 @@ test.describe("ModelPanel interactions", () => {
   test("Import YAML button is visible and clickable", async ({
     page,
     request,
-  }) => {
+  }, testInfo) => {
     await setupDataAndConfig(request);
     await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
+    await openWorkspaceSectionIfMobile(page, testInfo, "model");
 
     const importButton = page.getByRole("button", { name: "Import YAML" });
     await expect(importButton).toBeVisible();
     await expect(importButton).toBeEnabled();
   });
 
-  test("Raw Config button opens dialog", async ({ page, request }) => {
+  test("Raw Config button opens dialog", async ({
+    page,
+    request,
+  }, testInfo) => {
     await setupDataAndConfig(request);
     await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
+    await openWorkspaceSectionIfMobile(page, testInfo, "model");
 
     const rawConfigButton = page.getByRole("button", { name: "Raw Config" });
     await expect(rawConfigButton).toBeVisible();

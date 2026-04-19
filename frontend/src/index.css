@@ -12,7 +12,10 @@
     --card-foreground: 222.2 84% 4.9%;
     --popover: 0 0% 100%;
     --popover-foreground: 222.2 84% 4.9%;
-    --primary: 217 91% 60%;
+    /* Issue #90: lowered from 60% -> 50% lightness so white text on
+       --primary backgrounds (Apply to Fit, Re-Tune, Export Code, etc.)
+       satisfies WCAG AA contrast (4.5:1). */
+    --primary: 217 91% 50%;
     --primary-foreground: 0 0% 100%;
     --secondary: 210 40% 96.1%;
     --secondary-foreground: 222.2 47.4% 11.2%;
@@ -33,7 +36,9 @@
     --chart-5: 27 87% 67%;
     --sidebar-background: 0 0% 98%;
     --sidebar-foreground: 240 5.3% 26.1%;
-    --sidebar-primary: 217 91% 60%;
+    /* Issue #90: lowered from 60% -> 50% lightness to satisfy WCAG AA
+       contrast (4.5:1) against the sidebar background. */
+    --sidebar-primary: 217 91% 50%;
     --sidebar-primary-foreground: 0 0% 100%;
     --sidebar-accent: 240 4.8% 95.9%;
     --sidebar-accent-foreground: 240 5.9% 10%;
@@ -85,5 +90,20 @@
     font-family:
       ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
       Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+}
+
+/* Issue #126: bridge Tailwind v3 outline-none semantics to match v4. In
+   Tailwind v3, `.outline-none` compiles to `outline: 2px solid transparent;
+   outline-offset: 2px` (a high-contrast-mode hack). With `outline-offset: 2px`
+   the transparent outline sits 2px outside the border and renders as a
+   faint double-border around shadcn/ui controls (SelectTrigger, Input,
+   Button, etc.). Tailwind v4 and the shadcn/ui base classes assume
+   `outline-none` is truly `outline-style: none`. This override bridges the
+   two until the project migrates to Tailwind v4 (Issue #125). */
+@layer utilities {
+  .outline-none {
+    outline-style: none;
+    outline-offset: 0;
   }
 }

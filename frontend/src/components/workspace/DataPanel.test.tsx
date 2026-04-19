@@ -1,12 +1,7 @@
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { renderWithQuery as render } from "@/test/helpers";
 
 const mockLoadDataFromPath = vi.fn();
 const mockUploadData = vi.fn();
@@ -431,11 +426,11 @@ describe("DataPanel", () => {
     });
   });
 
-  // Note: Radix Select interactions don't work reliably in jsdom,
-  // so we skip tests that require Select option clicking.
+  // Note: Radix Select interactions don't work reliably in headless DOM
+  // environments, so we skip tests that require Select option clicking.
 
   // Column grid rendering requires a complex async chain (load → fetchColumns
-  // → fetchConfigDefaults → updateConfig) that is unreliable in jsdom.
+  // → fetchConfigDefaults → updateConfig) that is unreliable in headless DOM.
   // These paths are covered by E2E visual regression tests instead.
   it.skip("renders column settings grid when data is loaded with target", async () => {
     mockLoadDataFromPath.mockResolvedValue({
@@ -585,7 +580,7 @@ describe("DataPanel", () => {
 // syncConfig abort, Feature Summary, column type/exclude toggles
 // ---------------------------------------------------------------------------
 
-// Polyfill Radix UI pointer events that jsdom does not implement
+// Polyfill Radix UI pointer events that headless DOM does not implement
 beforeAll(() => {
   window.HTMLElement.prototype.hasPointerCapture = vi
     .fn()
@@ -1147,7 +1142,12 @@ describe("DataPanel — handleColumnExpand (column statistics)", () => {
     expect(mockFetchColumnStats).toHaveBeenCalledTimes(1);
   });
 
-  it("silently ignores fetchColumnStats errors (no toast shown)", async () => {
+  it("surfaces fetchColumnStats errors via toast (HIGH-1)", async () => {
+    // Before the fix, fetchColumnStats failures were silently dropped
+    // and users only saw "the bar never renders" with no explanation.
+    // The contract now is: a toast is shown so the failure is visible,
+    // and the distribution bar remains hidden so UI state is still
+    // consistent with the missing stats.
     mockFetchColumnStats.mockRejectedValue(new Error("stats API down"));
     const { toast } = await import("sonner");
 
@@ -1155,14 +1155,15 @@ describe("DataPanel — handleColumnExpand (column statistics)", () => {
 
     await userEvent.click(screen.getByTestId("column-row-age"));
 
-    // Wait briefly to let the rejection settle
     await waitFor(() => {
       expect(mockFetchColumnStats).toHaveBeenCalled();
     });
 
-    // No error toast should be shown — errors are silently swallowed per spec
-    expect(toast.error).not.toHaveBeenCalled();
-    // Distribution bar should not appear
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to load column stats"),
+      );
+    });
     expect(screen.queryByTestId("column-dist-age")).not.toBeInTheDocument();
   });
 });
@@ -1277,18 +1278,18 @@ describe("DataPanel — syncConfig AbortController", () => {
     vi.clearAllMocks();
   });
 
+  // Issue #107: after handleTargetChange completes, useDataPanel now
+  // pre-seeds prevSyncKey with the post-change state so the
+  // target/task/overrides/cv effect does not re-fire syncConfig for an
+  // identical body. These tests therefore trigger syncConfig via a
+  // subsequent column exclude toggle (which legitimately changes
+  // overrides) instead of the target selection itself.
+
   it("does not call onDataChanged when request is aborted mid-flight", async () => {
-    // Simulate a slow fetchConfig that gets aborted
-    let rejectFn!: (reason: unknown) => void;
-    mockFetchConfig.mockImplementation(
-      ({ signal }: { signal?: AbortSignal }) =>
-        new Promise((_, reject) => {
-          rejectFn = reject;
-          signal?.addEventListener("abort", () => {
-            reject(new DOMException("Aborted", "AbortError"));
-          });
-        }),
-    );
+    // handleTargetChange's inlined updateConfig should succeed so we reach
+    // the post-target state where the column grid is mounted. The slow
+    // fetchConfig mock governs the *follow-up* syncConfig triggered by
+    // toggling a column exclude.
     mockFetchConfigDefaults.mockResolvedValue({
       task: "binary",
       data: {},
@@ -1296,19 +1297,42 @@ describe("DataPanel — syncConfig AbortController", () => {
       split: {},
     });
     mockUpdateConfig.mockResolvedValue({ config: {}, errors: [] });
-
-    const onDataChanged = vi.fn();
-    render(<DataPanel onDataChanged={onDataChanged} />);
-    await loadDataViaPath();
-
-    mockFetchColumns.mockClear();
     mockFetchColumns.mockResolvedValue({
       columns: COLUMNS_BINARY,
       suggested_task: "binary",
       target: "target",
     });
 
+    const onDataChanged = vi.fn();
+    render(<DataPanel onDataChanged={onDataChanged} />);
+    await loadDataViaPath();
+
     await selectTarget("target");
+
+    // Let handleTargetChange complete and the column grid render.
+    await waitFor(() => {
+      expect(screen.getByTestId("column-row-age")).toBeInTheDocument();
+    });
+
+    // Now arm fetchConfig as a slow, abortable request that will govern
+    // the follow-up syncConfig triggered by the exclude toggle below.
+    let rejectFn!: (reason: unknown) => void;
+    mockFetchConfig.mockImplementation(
+      ({ signal }: { signal?: AbortSignal } = {}) =>
+        new Promise((_, reject) => {
+          rejectFn = reject;
+          signal?.addEventListener("abort", () => {
+            reject(new DOMException("Aborted", "AbortError"));
+          });
+        }),
+    );
+    const callsBeforeToggle = onDataChanged.mock.calls.length;
+
+    // Toggle an exclude checkbox — this changes overrides, which the
+    // target/task/overrides/cv effect observes and dispatches syncConfig.
+    const ageRow = screen.getByTestId("column-row-age");
+    const checkbox = ageRow.querySelector('[role="checkbox"]') as HTMLElement;
+    await userEvent.click(checkbox);
 
     // Wait for syncConfig to start
     await waitFor(() => {
@@ -1318,18 +1342,14 @@ describe("DataPanel — syncConfig AbortController", () => {
     // Abort the in-flight request
     rejectFn(new DOMException("Aborted", "AbortError"));
 
-    // onDataChanged should not be called from the aborted sync
+    // onDataChanged should not be called from the aborted sync.
     await new Promise((r) => setTimeout(r, 50));
-    // Only calls from the initial load path, not from the aborted sync
-    const callCount = onDataChanged.mock.calls.length;
-
-    // Re-verify: no extra onDataChanged calls after abort
-    await new Promise((r) => setTimeout(r, 50));
-    expect(onDataChanged.mock.calls.length).toBe(callCount);
+    expect(onDataChanged.mock.calls.length).toBe(callsBeforeToggle);
   });
 
   it("shows error toast when syncConfig encounters a non-abort error", async () => {
-    mockFetchConfig.mockRejectedValue(new Error("network error"));
+    // Same rationale: trigger syncConfig via a column exclude toggle so
+    // the post-Issue-#107 prevSyncKey pre-seed does not prevent it.
     mockFetchConfigDefaults.mockResolvedValue({
       task: "binary",
       data: {},
@@ -1337,19 +1357,29 @@ describe("DataPanel — syncConfig AbortController", () => {
       split: {},
     });
     mockUpdateConfig.mockResolvedValue({ config: {}, errors: [] });
-    const { toast } = await import("sonner");
-
-    render(<DataPanel onDataChanged={vi.fn()} />);
-    await loadDataViaPath();
-
-    mockFetchColumns.mockClear();
     mockFetchColumns.mockResolvedValue({
       columns: COLUMNS_BINARY,
       suggested_task: "binary",
       target: "target",
     });
+    const { toast } = await import("sonner");
+
+    render(<DataPanel onDataChanged={vi.fn()} />);
+    await loadDataViaPath();
 
     await selectTarget("target");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("column-row-age")).toBeInTheDocument();
+    });
+
+    // Now arm fetchConfig to reject with a non-abort error for the
+    // follow-up syncConfig.
+    mockFetchConfig.mockRejectedValue(new Error("network error"));
+
+    const ageRow = screen.getByTestId("column-row-age");
+    const checkbox = ageRow.querySelector('[role="checkbox"]') as HTMLElement;
+    await userEvent.click(checkbox);
 
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith(

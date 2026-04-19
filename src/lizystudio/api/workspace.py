@@ -6,7 +6,9 @@ Covers: status, reset, data, config, fit, tune.
 from __future__ import annotations
 
 import copy
+import logging
 import tempfile
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -38,6 +40,7 @@ from lizystudio.api.models import (
     ValidationResponse,
     WorkspaceStatusResponse,
 )
+from lizystudio.metrics import record_job_terminal
 from lizystudio.security import (
     check_dataframe_memory,
     read_upload_checked,
@@ -71,6 +74,7 @@ from lizystudio.services.workspace import (
 from lizystudio.ws.progress import ProgressBroadcaster
 
 router = APIRouter()
+_log = logging.getLogger(__name__)
 
 
 # --- Status / Reset ---
@@ -100,9 +104,131 @@ def workspace_status(
     }
 
 
+# H-0063 / Issue #99: the reset wait must be long enough to let a
+# subprocess runner complete its cancel + proc.wait cycle. The
+# subprocess path uses ``_WAIT_TIMEOUT = 10s`` in
+# ``subprocess_runner.run_job_in_subprocess``, so we give the cancel
+# that much plus a small buffer before declaring the slot orphaned and
+# force-releasing. Without this margin, a reset during a legitimate
+# tune could force-release the slot seconds before the subprocess is
+# done tearing down, leaving a zombie child still writing to the
+# progress file while the parent has already accepted a new fit.
+_RESET_WAIT_TIMEOUT = 12.0
+_RESET_WAIT_INTERVAL = 0.05
+
+
 @router.post("/reset")
-def workspace_reset(ws: WorkspaceState = Depends(get_workspace)) -> dict[str, str]:
-    """Reset all workspace state."""
+def workspace_reset(
+    ws: WorkspaceState = Depends(get_workspace),
+    job_store: JobStore = Depends(get_job_store),
+) -> dict[str, str]:
+    """Reset all workspace state.
+
+    H-0063 / Issue #99: if a fit / tune is still running in the
+    background, reset must also cancel it and release the JobStore
+    active slot. Otherwise the next Fit / Tune click gets a
+    JOB_CONFLICT 409, directly contradicting the user's expectation
+    that "reset" yields a clean slate.
+
+    The cancel path mirrors the existing ``POST /jobs/{id}/cancel``
+    endpoint: we call ``request_cancel`` and rely on the runner (either
+    the in-process thread via ``_run_job_core``'s cancel-aware callback
+    or the subprocess via ``_poll_progress``'s cancel polling) to
+    transition the job to ``cancelled`` and release the slot from its
+    finally block. We then wait briefly for the slot to become free
+    so the caller can immediately start a new Fit / Tune without
+    racing the cancel.
+
+    Degraded paths we explicitly tolerate:
+
+    1. **Terminal holder (crashed runner finally)** — if the slot is
+       held but the job's on-disk status is already terminal, no one
+       will ever call ``release_active`` for it. We short-circuit by
+       calling ``force_release_active_if`` directly.
+    2. **No live runner (orphan slot)** — the slot may have been
+       claimed by a previous process / test / client that died
+       without draining the slot. The cancel flag lands in memory but
+       no runner observes it, so the wait loop would time out. In
+       that case we **force-release the slot** from reset itself.
+       Rationale: the user clicked reset expressly to clear state;
+       returning 200 with the slot still held would reintroduce the
+       exact ``JOB_CONFLICT`` regression this fix is trying to remove.
+       The wait budget (``_RESET_WAIT_TIMEOUT``) is deliberately set
+       longer than ``subprocess_runner._WAIT_TIMEOUT`` so that a
+       legitimate subprocess runner has time to finish its
+       ``proc.terminate`` / ``proc.wait`` cycle and call
+       ``release_active`` from its own finally, before we fall
+       through to the force-release branch. If we still time out,
+       the most plausible explanation is an orphaned slot with no
+       runner behind it, and force-releasing is strictly better than
+       leaving the user with a broken reset button.
+
+    The force-release uses ``force_release_active_if`` which is
+    atomic under ``JobStore._active_lock``: the slot is released only
+    if it still holds the exact id we observed, so a racy
+    ``create_and_claim_active`` from another thread between the
+    observation and the release cannot accidentally clear the new
+    owner's slot.
+
+    Workspace state is cleared AFTER the cancel + slot wait so the
+    shutting-down runner thread still sees live ``ws.dataframe`` /
+    ``ws.model`` references during its finally path.
+    """
+    active_id = job_store.active_job_id
+    if active_id is not None:
+        active_job = job_store.get(active_id)
+        is_terminal = active_job is not None and active_job.status in (
+            "completed",
+            "failed",
+            "cancelled",
+        )
+        if not is_terminal:
+            job_store.request_cancel(active_id)
+
+        deadline = time.monotonic() + _RESET_WAIT_TIMEOUT
+        released = False
+        while time.monotonic() < deadline:
+            if not job_store.has_active_job():
+                released = True
+                break
+            # Degraded path 1: the holder became terminal on disk
+            # without release_active being called (crashed runner
+            # finally block). Reclaim the slot atomically so we do
+            # not race a new claim from a parallel request.
+            current = job_store.active_job_id
+            if current is not None:
+                current_job = job_store.get(current)
+                if (
+                    current_job is not None
+                    and current_job.status
+                    in (
+                        "completed",
+                        "failed",
+                        "cancelled",
+                    )
+                    and job_store.force_release_active_if(current)
+                ):
+                    released = True
+                    break
+            time.sleep(_RESET_WAIT_INTERVAL)
+
+        if not released:
+            # Degraded path 2: no runner picked up the cancel within
+            # the budget. Force-release atomically to keep reset
+            # honest — the compare-and-release inside
+            # force_release_active_if guarantees we only clear the
+            # exact id we observed, never a new claim that landed in
+            # between.
+            stuck_id = job_store.active_job_id
+            if stuck_id is not None and job_store.force_release_active_if(stuck_id):
+                _log.warning(
+                    "workspace_reset: active slot %s did not release "
+                    "within %.2fs; force-released so the next fit / "
+                    "tune does not JOB_CONFLICT",
+                    stuck_id,
+                    _RESET_WAIT_TIMEOUT,
+                )
+
     ws.reset()
     return {"status": "ok"}
 
@@ -119,21 +245,30 @@ def data_load_path(
     body: DataPathRequest,
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, Any]:
-    """Load data from a local file path."""
-    path = body.path
+    """Load data from a local file path.
+
+    Uses the resolved path from ``validate_path_within`` for the
+    subsequent exists / read operations so a symlink swap between the
+    allow-list check and the actual load cannot redirect to a file
+    outside ``ALLOWED_FILES_ROOT``.
+    """
     try:
-        validate_path_within(Path(path), security.ALLOWED_FILES_ROOT)
+        resolved = validate_path_within(Path(body.path), security.ALLOWED_FILES_ROOT)
     except ValueError as exc:
         raise PathNotFoundError(str(exc)) from exc
-    if not Path(path).exists():
-        raise PathNotFoundError(path)
+    if not resolved.exists():
+        raise PathNotFoundError(str(resolved))
     try:
-        df = load_dataframe(path)
-    except Exception as exc:
+        df = load_dataframe(str(resolved))
+    except (FileNotFoundError, OSError) as exc:
+        # File vanished between the exists() check and the read, or the
+        # filesystem rejected the access outright.
+        raise PathNotFoundError(str(resolved)) from exc
+    except Exception as exc:  # noqa: BLE001 - pandas raises a wide variety
         raise FileInvalidError(str(exc)) from exc
     memory_usage_bytes = check_dataframe_memory(df)
     data_ref = make_data_ref(
-        df, source_type="path", path=path, filename=Path(path).name
+        df, source_type="path", path=str(resolved), filename=resolved.name
     )
     ws.set_data(df, data_ref)
     return {"data_ref": asdict(data_ref), "memory_usage_bytes": memory_usage_bytes}
@@ -384,8 +519,6 @@ def workspace_fit(
     job_store: JobStore = Depends(get_job_store),
 ) -> dict[str, Any]:
     """Create a fit job (thread managed by Service layer)."""
-    if job_store.has_active_job():
-        raise JobConflictError(job_store.active_job_id or "unknown")
     if not ws.config:
         raise WorkspaceNoConfigError()
     if ws.dataframe is None or ws.data_ref is None:
@@ -393,12 +526,18 @@ def workspace_fit(
     errors = validate_config(ws, ws.config)
     if errors:
         raise ValidationError(errors)
-    job = job_store.create(
+    # CRITICAL-2: atomically claim the active slot and create the job
+    # metadata in a single critical section so two concurrent
+    # /fit requests cannot race past the has_active_job check and
+    # leave an orphan "failed" job on disk.
+    job = job_store.create_and_claim_active(
         backend_name=get_backend_name(ws),
         config=ws.config,
         data_ref=ws.data_ref,
         job_type="fit",
     )
+    if job is None:
+        raise JobConflictError(job_store.active_job_id or "unknown")
     try:
         job_id = start_fit_async(
             ws=ws,
@@ -412,7 +551,20 @@ def workspace_fit(
         job.status = "failed"
         job.error = "Previous job still running"
         job_store.update(job)
+        job_store.release_active(job.job_id)
+        # Issue #154: record the terminal status so the
+        # lizystudio_jobs_total{status="failed"} counter is not under-
+        # counted on slot-claim-after-claim failures.
+        record_job_terminal(job.job_type, "failed")
         raise JobConflictError(job.job_id) from None
+    except Exception:
+        # Any other failure after we claimed the slot must release it,
+        # otherwise the slot stays held until server restart. Emit the
+        # failed metric (#154) before re-raising so the counter
+        # reflects the true failure count.
+        job_store.release_active(job.job_id)
+        record_job_terminal(job.job_type, "failed")
+        raise
     return {"job_id": job_id}
 
 
@@ -423,8 +575,6 @@ def workspace_tune(
     job_store: JobStore = Depends(get_job_store),
 ) -> dict[str, Any]:
     """Create a tune job (thread managed by Service layer)."""
-    if job_store.has_active_job():
-        raise JobConflictError(job_store.active_job_id or "unknown")
     if not ws.config:
         raise WorkspaceNoConfigError()
     if ws.dataframe is None or ws.data_ref is None:
@@ -452,12 +602,15 @@ def workspace_tune(
     errors = validate_config(ws, ws.config)
     if errors:
         raise ValidationError(errors)
-    job = job_store.create(
+    # CRITICAL-2: atomic create + slot claim, see workspace_fit above.
+    job = job_store.create_and_claim_active(
         backend_name=get_backend_name(ws),
         config=ws.config,
         data_ref=ws.data_ref,
         job_type="tune",
     )
+    if job is None:
+        raise JobConflictError(job_store.active_job_id or "unknown")
     try:
         job_id = start_tune_async(
             ws=ws,
@@ -471,5 +624,12 @@ def workspace_tune(
         job.status = "failed"
         job.error = "Previous job still running"
         job_store.update(job)
+        job_store.release_active(job.job_id)
+        # Issue #154: record the terminal status (same fix as /fit).
+        record_job_terminal(job.job_type, "failed")
         raise JobConflictError(job.job_id) from None
+    except Exception:
+        job_store.release_active(job.job_id)
+        record_job_terminal(job.job_type, "failed")
+        raise
     return {"job_id": job_id}

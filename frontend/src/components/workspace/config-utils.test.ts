@@ -200,6 +200,100 @@ describe("resolveSchema", () => {
   });
 });
 
+it("resolves oneOf with discriminator — picks matching variant", () => {
+  const variantA: SchemaProperty = {
+    type: "object",
+    title: "VariantA",
+    properties: {
+      kind: { const: "a" },
+      x: { type: "number" },
+    },
+  };
+  const variantB: SchemaProperty = {
+    type: "object",
+    title: "VariantB",
+    properties: {
+      kind: { const: "b" },
+      y: { type: "string" },
+    },
+  };
+  const prop: SchemaProperty = {
+    title: "Discriminated",
+    oneOf: [variantA, variantB],
+    discriminator: { propertyName: "kind" },
+  };
+  // Value with kind="b" should resolve to VariantB
+  const result = resolveSchema(prop, {}, { kind: "b", y: "hello" });
+  expect(result.properties?.y).toBeDefined();
+  expect(result.title).toBe("Discriminated");
+});
+
+it("resolves oneOf with discriminator — falls back to first variant when no match", () => {
+  const variantA: SchemaProperty = {
+    type: "object",
+    title: "VariantA",
+    properties: {
+      kind: { const: "a" },
+      x: { type: "number" },
+    },
+  };
+  const variantB: SchemaProperty = {
+    type: "object",
+    title: "VariantB",
+    properties: {
+      kind: { const: "b" },
+      y: { type: "string" },
+    },
+  };
+  const prop: SchemaProperty = {
+    title: "Discriminated",
+    oneOf: [variantA, variantB],
+    discriminator: { propertyName: "kind" },
+  };
+  // Value with kind="unknown" — no match → falls back to first variant
+  const result = resolveSchema(prop, {}, { kind: "unknown" });
+  expect(result.properties?.x).toBeDefined();
+  expect(result.title).toBe("Discriminated");
+});
+
+it("resolves oneOf with discriminator — no currentValue uses first variant", () => {
+  const variantA: SchemaProperty = {
+    type: "object",
+    title: "VariantA",
+    properties: {
+      kind: { const: "a" },
+      x: { type: "number" },
+    },
+  };
+  const prop: SchemaProperty = {
+    title: "Disc",
+    oneOf: [variantA],
+    discriminator: { propertyName: "kind" },
+  };
+  const result = resolveSchema(prop, {});
+  expect(result.title).toBe("Disc");
+});
+
+it("resolves oneOf without discriminator — uses first variant", () => {
+  const variantA: SchemaProperty = {
+    type: "object",
+    title: "First",
+    properties: { a: { type: "number" } },
+  };
+  const variantB: SchemaProperty = {
+    type: "object",
+    title: "Second",
+    properties: { b: { type: "string" } },
+  };
+  const prop: SchemaProperty = {
+    title: "NoDisc",
+    oneOf: [variantA, variantB],
+  };
+  const result = resolveSchema(prop, {});
+  expect(result.title).toBe("NoDisc");
+  expect(result.properties?.a).toBeDefined();
+});
+
 // --- isNullableUnion ---
 
 describe("isNullableUnion", () => {

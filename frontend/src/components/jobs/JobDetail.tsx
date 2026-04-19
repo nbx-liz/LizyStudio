@@ -1,11 +1,27 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Download, RotateCcw, Trash2, X } from "lucide-react";
+import {
+  ArrowRight,
+  Download,
+  ExternalLink,
+  RotateCcw,
+  Trash2,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { cancelJob, fetchJob, fetchJobLog } from "@/api/jobs";
+import {
+  cancelJob,
+  fetchJob,
+  fetchJobLineage,
+  fetchJobLog,
+  type LineageNode,
+} from "@/api/jobs";
 import type { JobDetail as JobDetailType, ProgressMessage } from "@/api/types";
 import { connectJobProgress } from "@/api/websocket";
+import { JobLineageTree } from "@/components/retune/JobLineageTree";
+import { ResumeActionButton } from "@/components/retune/ResumeActionButton";
+import { RetuneActionButton } from "@/components/retune/RetuneActionButton";
 import {
   Accordion,
   AccordionContent,
@@ -32,6 +48,13 @@ interface JobDetailProps {
   jobNumber: number;
   onJobDeleted: () => void;
   onJobChanged: () => void;
+  /**
+   * H-0067: switch the Jobs-page left-panel selection to *newJobId*.
+   * Fired when the user clicks a node in the Lineage tree or right
+   * after a Re-tune / Resume starts (so the new child becomes the
+   * focused job without leaving the Jobs page).
+   */
+  onJobSelect?: (newJobId: string) => void;
 }
 
 export function JobDetailPanel({
@@ -39,6 +62,7 @@ export function JobDetailPanel({
   jobNumber,
   onJobDeleted,
   onJobChanged,
+  onJobSelect,
 }: JobDetailProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -57,6 +81,36 @@ export function JobDetailPanel({
       return data?.status === "running" ? 2000 : false;
     },
   });
+
+  // H-0067: Re-tune / Resume / Lineage in the Jobs page. Lineage is
+  // auxiliary info — swallow errors silently. Only fetch for tune
+  // jobs because only tune jobs can have a lineage.
+  const { data: lineageData } = useQuery({
+    queryKey: ["job-lineage", jobId],
+    queryFn: () => fetchJobLineage(jobId),
+    enabled: job?.job_type === "tune",
+    retry: false,
+  });
+  const lineageRoot: LineageNode | null = lineageData?.tree ?? null;
+  const showLineage =
+    lineageRoot != null &&
+    (lineageRoot.children.length > 0 || job?.parent_job_id != null);
+  // descendantCount counts nodes strictly under the current job
+  // (excluding the current job itself). Used by DeleteDialog to
+  // show the cascade checkbox only when it makes a difference.
+  const descendantCount = lineageRoot
+    ? _countDescendants(lineageRoot, jobId)
+    : 0;
+
+  const handleRetuneStarted = useCallback(
+    (childJobId: string) => {
+      // Invalidate the list so the new child shows up immediately in
+      // the left panel, then switch selection to it.
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      onJobSelect?.(childJobId);
+    },
+    [queryClient, onJobSelect],
+  );
 
   const modelName = (job?.config?.model as Record<string, unknown>)?.name as
     | string
@@ -119,8 +173,20 @@ export function JobDetailPanel({
     navigate("/", { state: { refitJobId: jobId } });
   }, [navigate, jobId]);
 
+  const handleOpenInWorkspace = useCallback(() => {
+    // Issue #101: hydrate the Workspace with this job selected so the
+    // user can see its Results panel, Re-tune button, lineage panel,
+    // etc. WorkspacePage reads the ?job_id= query param (see
+    // WorkspacePage.tsx). This is the first-party way to "promote" a
+    // historical job back into the live editing surface — before this,
+    // the Workspace only ever hosted the latest fit / tune started via
+    // its own UI. encodeURIComponent keeps this robust if job ids ever
+    // start carrying reserved URL characters.
+    navigate(`/?job_id=${encodeURIComponent(jobId)}`);
+  }, [navigate, jobId]);
+
   const handleInference = useCallback(() => {
-    navigate(`/inference?job_id=${jobId}`);
+    navigate(`/inference?job_id=${encodeURIComponent(jobId)}`);
   }, [navigate, jobId]);
 
   if (!job) {
@@ -173,7 +239,7 @@ export function JobDetailPanel({
           />
         )}
 
-        {/* Config + Execution Log accordions (all states) */}
+        {/* Config + Execution Log + Lineage accordions (all states) */}
         <Accordion type="multiple" className="mt-4">
           <AccordionItem value="config">
             <AccordionTrigger>Config</AccordionTrigger>
@@ -191,6 +257,21 @@ export function JobDetailPanel({
               </AccordionContent>
             </AccordionItem>
           )}
+          {/* H-0067: Lineage tree. Only show when relations exist
+           so jobs with no parent / no children do not render an
+           empty accordion. Clicking a node switches the left-panel
+           selection (onJobSelect prop). */}
+          {showLineage && lineageRoot && (
+            <AccordionItem value="lineage">
+              <AccordionTrigger>Lineage</AccordionTrigger>
+              <AccordionContent>
+                <JobLineageTree
+                  root={lineageRoot}
+                  onSelect={(newJobId) => onJobSelect?.(newJobId)}
+                />
+              </AccordionContent>
+            </AccordionItem>
+          )}
         </Accordion>
       </div>
 
@@ -198,6 +279,15 @@ export function JobDetailPanel({
       <div className="flex items-center gap-2 border-t px-6 py-3">
         {isCompleted && (
           <>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleOpenInWorkspace}
+              data-testid="open-in-workspace"
+            >
+              <ExternalLink className="mr-1 h-3 w-3" />
+              Open in Workspace
+            </Button>
             <Button variant="outline" size="sm" onClick={handleInference}>
               <ArrowRight className="mr-1 h-3 w-3" />
               Inference
@@ -218,6 +308,31 @@ export function JobDetailPanel({
             Re-fit
           </Button>
         )}
+        {/* H-0067: Re-tune for completed tune jobs (continue the
+         Optuna study for +N trials). Mirrors the Workspace-side
+         button in ResultsCompletedView so users can launch the
+         same action from the Jobs history. */}
+        {isCompleted && job.job_type === "tune" && (
+          <RetuneActionButton
+            jobId={job.job_id}
+            defaultNTrials={_defaultRetuneTrials(job)}
+            onStarted={handleRetuneStarted}
+          />
+        )}
+        {/* H-0067: Resume for failed tune jobs. The "re-tune child
+         cannot be resumed" constraint from H-0062 is preserved. */}
+        {isFailed && job.job_type === "tune" && (
+          <ResumeActionButton
+            jobId={job.job_id}
+            remainingTrials={_computeRemainingTrials(job)}
+            disabledReason={
+              job.parent_job_id
+                ? "Resume of a re-tune child is not supported. Start from the original parent job."
+                : null
+            }
+            onStarted={handleRetuneStarted}
+          />
+        )}
         {isRunning && (
           <Button
             variant="outline"
@@ -229,10 +344,15 @@ export function JobDetailPanel({
           </Button>
         )}
         {!isRunning && (
+          // text-red-700 / dark:text-red-400 meet WCAG 2 AA contrast
+          // against the outline button's white / dark surface; the
+          // default text-destructive token (hsl(0 84.2% 60.2%)) is
+          // only 3.76:1 which axe flags as a serious violation (#168
+          // scope expansion — same audit surfaced this button).
           <Button
             variant="outline"
             size="sm"
-            className="ml-auto text-destructive hover:text-destructive"
+            className="ml-auto text-red-700 hover:text-red-700 dark:text-red-400 dark:hover:text-red-400"
             onClick={() => setDeleteOpen(true)}
           >
             <Trash2 className="mr-1 h-3 w-3" />
@@ -274,6 +394,7 @@ export function JobDetailPanel({
         jobId={jobId}
         jobNumber={jobNumber}
         onDeleted={onJobDeleted}
+        descendantCount={descendantCount}
       />
 
       <LogDialog open={logOpen} onOpenChange={setLogOpen} jobId={job.job_id} />
@@ -308,8 +429,11 @@ function JobHeader({
 function StatusBadge({ status }: { status: string }) {
   switch (status) {
     case "completed":
+      // bg-green-700 (#15803d) meets WCAG 2 AA contrast (~4.5:1)
+      // against white; the previous bg-green-600 (#16a34a) scored
+      // only 3.29:1 (Issue #168).
       return (
-        <Badge variant="default" className="bg-green-600">
+        <Badge variant="default" className="bg-green-700">
           {"\u2713"} Completed
         </Badge>
       );
@@ -449,4 +573,72 @@ function LogDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+// ---------------------------------------------------------------------------
+// H-0067: default-trials helpers shared with the Workspace side
+// (ResultsCompletedView._defaultRetuneTrials and
+// ResultsPanel._computeRemainingTrials). Kept local here to avoid a
+// component-to-component util dependency; a future refactor can lift
+// these into `components/retune/trial-defaults.ts` once the call
+// surface stabilises.
+// ---------------------------------------------------------------------------
+
+function _defaultRetuneTrials(job: JobDetailType): number {
+  const config = job.config as Record<string, unknown> | undefined;
+  const tuning = config?.tuning as Record<string, unknown> | undefined;
+  const optuna = tuning?.optuna as Record<string, unknown> | undefined;
+  const params = optuna?.params as Record<string, unknown> | undefined;
+  const raw = params?.n_trials;
+  if (typeof raw === "number" && raw > 0) {
+    return raw;
+  }
+  return 50;
+}
+
+/**
+ * Count lineage nodes strictly under *rootJobId* (the clicked job).
+ * The lineage tree may be rooted at an ancestor (H-0062: lineage is
+ * rooted at the oldest ancestor), so we first locate the node whose
+ * ``job_id === rootJobId`` and then tally all nodes below it.
+ */
+function _countDescendants(tree: LineageNode, rootJobId: string): number {
+  const node = _findNode(tree, rootJobId);
+  if (!node) return 0;
+  let count = 0;
+  const stack: LineageNode[] = [...node.children];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) continue;
+    count += 1;
+    stack.push(...current.children);
+  }
+  return count;
+}
+
+function _findNode(tree: LineageNode, jobId: string): LineageNode | null {
+  if (tree.job_id === jobId) return tree;
+  for (const child of tree.children) {
+    const hit = _findNode(child, jobId);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function _computeRemainingTrials(job: JobDetailType): number {
+  const config = job.config as Record<string, unknown> | undefined;
+  const tuning = config?.tuning as Record<string, unknown> | undefined;
+  const optuna = tuning?.optuna as Record<string, unknown> | undefined;
+  const params = optuna?.params as Record<string, unknown> | undefined;
+  const originalRaw = params?.n_trials;
+  const original =
+    typeof originalRaw === "number" && originalRaw > 0 ? originalRaw : 50;
+  const tuneResult = job.tune_result as
+    | { trials?: unknown[] | null }
+    | null
+    | undefined;
+  const completed = Array.isArray(tuneResult?.trials)
+    ? (tuneResult?.trials?.length ?? 0)
+    : 0;
+  return Math.max(1, original - completed);
 }

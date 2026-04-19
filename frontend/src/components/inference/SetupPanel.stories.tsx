@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react";
-import { fn } from "@storybook/test";
+import { fn } from "storybook/test";
 import type { JobSummary } from "@/api/types";
 import { SetupPanel } from "./SetupPanel";
 
@@ -28,6 +28,7 @@ function makeJob(overrides: Partial<JobSummary>): JobSummary {
     completed_at: new Date().toISOString(),
     error: null,
     primary_score: 0.95,
+    parent_job_id: null,
     ...overrides,
   };
 }

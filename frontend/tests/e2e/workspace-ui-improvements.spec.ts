@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
+import { openWorkspaceSectionIfMobile } from "./helpers/mobile";
 import { dismissOnboarding } from "./helpers/onboarding";
 
 const API = "http://localhost:8501/api";
@@ -123,10 +124,14 @@ test.describe("Workspace UI Improvements", () => {
     await expect(page).toHaveScreenshot("data-panel-segments.png");
   });
 
-  test("UI: Model Panel — no Auto button visible", async ({ page }) => {
+  test("UI: Model Panel — no Auto button visible", async ({
+    page,
+  }, testInfo) => {
     await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
+
+    await openWorkspaceSectionIfMobile(page, testInfo, "model");
 
     // Fit tab should be active by default
     await expect(page.getByRole("tab", { name: "Fit" })).toBeVisible();
@@ -145,10 +150,12 @@ test.describe("Workspace UI Improvements", () => {
 
   test("UI: Tune tab shows metric chips instead of direction select", async ({
     page,
-  }) => {
+  }, testInfo) => {
     await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
+
+    await openWorkspaceSectionIfMobile(page, testInfo, "model");
 
     // Switch to Tune tab
     await page.getByRole("tab", { name: "Tune" }).click();
@@ -180,8 +187,6 @@ test.describe("Workspace UI Improvements", () => {
     // Timeout section
     await expect(page.getByText("Timeout")).toBeVisible();
 
-    // Direction select should NOT exist
-    const directionSelect = page.locator("text=minimize").first();
     // Direction auto-display only appears after metric selection, not as a standalone select
     await expect(
       page.getByRole("combobox").filter({ hasText: /minimize|maximize/ }),
@@ -190,17 +195,25 @@ test.describe("Workspace UI Improvements", () => {
     await expect(page).toHaveScreenshot("tune-tab.png");
   });
 
-  test("UI: Search Space shows segment buttons for Mode", async ({ page }) => {
+  test("UI: Search Space shows segment buttons for Mode", async ({
+    page,
+  }, testInfo) => {
     await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
+
+    await openWorkspaceSectionIfMobile(page, testInfo, "model");
 
     // Switch to Tune tab
     await page.getByRole("tab", { name: "Tune" }).click();
     await page.waitForTimeout(500);
 
-    // Search Space accordion
-    await expect(page.getByText("Search Space")).toBeVisible();
+    // Search Space accordion. Use the accordion trigger button locator
+    // because there is also a description paragraph containing
+    // "Search Space" further down, which would break a bare getByText.
+    await expect(
+      page.getByRole("button", { name: "Search Space" }),
+    ).toBeVisible();
 
     // Each parameter row should have Fixed/Range or Fixed/Choice as segment radio buttons
     // Look for the Fixed radio buttons in the search space table
@@ -208,8 +221,12 @@ test.describe("Workspace UI Improvements", () => {
     const fixedCount = await fixedRadios.count();
     // Should have at least several Fixed radios (one per parameter)
     expect(fixedCount).toBeGreaterThan(0);
-
-    await expect(page).toHaveScreenshot("search-space.png");
+    // Note: no toHaveScreenshot here. The Tune tab's full visual is
+    // already covered by `tune-tab.png` in the previous test, and the
+    // search-space.png baseline was never committed to git (caught by
+    // the repo's `*.png` ignore rule), so adding it back would require
+    // an explicit `git add -f` and a separate review of what the canon
+    // baseline should look like.
   });
 
   test("API+UI: full data load → target select → task segment buttons appear", async ({

@@ -1,6 +1,9 @@
 /* Global design tokens — available everywhere */
 :root {
-  --lzs-accent: hsl(207, 90%, 54%);
+  /* Issue #90: lowered from 54% -> 42% lightness so white text on the
+     active SegmentGroup / chip background satisfies WCAG AA contrast
+     (4.5:1) — was 3.18:1 at 54%. */
+  --lzs-accent: hsl(207, 90%, 42%);
   --lzs-accent-fg: #fff;
   --lzs-border: hsl(0, 0%, 85%);
   --lzs-bg-subtle: hsl(0, 0%, 96%);

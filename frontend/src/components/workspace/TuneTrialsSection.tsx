@@ -1,5 +1,7 @@
 import { ArrowRight } from "lucide-react";
 import type { JobDetail, PlotResponse, TuneResult } from "@/api/types";
+import type { BoundaryReport, TuneRound } from "@/components/retune";
+import { RetuneDashboard } from "@/components/retune";
 import {
   AccordionContent,
   AccordionItem,
@@ -16,8 +18,6 @@ import {
 } from "@/components/ui/table";
 import { formatNum } from "@/lib/utils";
 import { PlotlyChart } from "./PlotlyChart";
-import type { BoundaryReport, TuneRound } from "./retune";
-import { RetuneDashboard } from "./retune";
 
 interface TuneTrialsSectionProps {
   tuneResult: TuneResult;
@@ -159,9 +159,18 @@ export function TrialResultsAccordionItem({
                   const isBest =
                     Math.abs(trialScore - Number(tuneResult.best_score ?? 0)) <
                     1e-10;
+                  // HIGH-7: key by the trial's stable number (set by
+                  // Optuna) so sort order changes do not blow away row
+                  // state. Fall back to a synthetic key only if number
+                  // is missing on legacy payloads.
+                  const trialNumber = trialRecord.number;
+                  const rowKey =
+                    typeof trialNumber === "number"
+                      ? `trial-num-${trialNumber}`
+                      : `trial-idx-${i}`;
                   return (
                     <TableRow
-                      key={`trial-${i}`}
+                      key={rowKey}
                       className={
                         isBest
                           ? "bg-green-50 dark:bg-green-950/30 font-medium"

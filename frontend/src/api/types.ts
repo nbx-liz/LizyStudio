@@ -112,6 +112,11 @@ export interface JobSummary {
   completed_at: string | null;
   error: string | null;
   primary_score: number | null;
+  // H-0062: lineage link — null for standalone / root jobs, set to the
+  // parent job id for Re-tune and Resume children. Always present in
+  // the API response so callers can rely on === null rather than
+  // checking for the key's existence.
+  parent_job_id: string | null;
 }
 
 export interface JobDetail extends JobSummary {
@@ -120,9 +125,6 @@ export interface JobDetail extends JobSummary {
   fit_result: FitResult | null;
   tune_result: TuneResult | null;
   model_path: string | null;
-  // H-0062: optional parent lineage link. null for standalone jobs and
-  // for legacy jobs written before Phase B.
-  parent_job_id?: string | null;
 }
 
 export interface FitResultParam {

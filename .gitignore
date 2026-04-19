@@ -61,6 +61,9 @@ data/**/*.pkl
 data/**/*.feather
 data/**/*.xlsx
 
+# Analysis reports (not part of package)
+analysis/
+
 # AI & Automation (Abstra, Cursor, etc)
 .abstra/
 .ai_settings/
