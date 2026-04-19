@@ -40,6 +40,56 @@ export interface paths {
         /**
          * Workspace Reset
          * @description Reset all workspace state.
+         *
+         *     H-0063 / Issue #99: if a fit / tune is still running in the
+         *     background, reset must also cancel it and release the JobStore
+         *     active slot. Otherwise the next Fit / Tune click gets a
+         *     JOB_CONFLICT 409, directly contradicting the user's expectation
+         *     that "reset" yields a clean slate.
+         *
+         *     The cancel path mirrors the existing ``POST /jobs/{id}/cancel``
+         *     endpoint: we call ``request_cancel`` and rely on the runner (either
+         *     the in-process thread via ``_run_job_core``'s cancel-aware callback
+         *     or the subprocess via ``_poll_progress``'s cancel polling) to
+         *     transition the job to ``cancelled`` and release the slot from its
+         *     finally block. We then wait briefly for the slot to become free
+         *     so the caller can immediately start a new Fit / Tune without
+         *     racing the cancel.
+         *
+         *     Degraded paths we explicitly tolerate:
+         *
+         *     1. **Terminal holder (crashed runner finally)** — if the slot is
+         *        held but the job's on-disk status is already terminal, no one
+         *        will ever call ``release_active`` for it. We short-circuit by
+         *        calling ``force_release_active_if`` directly.
+         *     2. **No live runner (orphan slot)** — the slot may have been
+         *        claimed by a previous process / test / client that died
+         *        without draining the slot. The cancel flag lands in memory but
+         *        no runner observes it, so the wait loop would time out. In
+         *        that case we **force-release the slot** from reset itself.
+         *        Rationale: the user clicked reset expressly to clear state;
+         *        returning 200 with the slot still held would reintroduce the
+         *        exact ``JOB_CONFLICT`` regression this fix is trying to remove.
+         *        The wait budget (``_RESET_WAIT_TIMEOUT``) is deliberately set
+         *        longer than ``subprocess_runner._WAIT_TIMEOUT`` so that a
+         *        legitimate subprocess runner has time to finish its
+         *        ``proc.terminate`` / ``proc.wait`` cycle and call
+         *        ``release_active`` from its own finally, before we fall
+         *        through to the force-release branch. If we still time out,
+         *        the most plausible explanation is an orphaned slot with no
+         *        runner behind it, and force-releasing is strictly better than
+         *        leaving the user with a broken reset button.
+         *
+         *     The force-release uses ``force_release_active_if`` which is
+         *     atomic under ``JobStore._active_lock``: the slot is released only
+         *     if it still holds the exact id we observed, so a racy
+         *     ``create_and_claim_active`` from another thread between the
+         *     observation and the release cannot accidentally clear the new
+         *     owner's slot.
+         *
+         *     Workspace state is cleared AFTER the cancel + slot wait so the
+         *     shutting-down runner thread still sees live ``ws.dataframe`` /
+         *     ``ws.model`` references during its finally path.
          */
         post: operations["workspace_reset_api_workspace_reset_post"];
         delete?: never;
@@ -60,6 +110,11 @@ export interface paths {
         /**
          * Data Load Path
          * @description Load data from a local file path.
+         *
+         *     Uses the resolved path from ``validate_path_within`` for the
+         *     subsequent exists / read operations so a symlink swap between the
+         *     allow-list check and the actual load cannot redirect to a file
+         *     outside ``ALLOWED_FILES_ROOT``.
          */
         post: operations["data_load_path_api_workspace_data_path_post"];
         delete?: never;
@@ -399,6 +454,11 @@ export interface paths {
         /**
          * Delete Job
          * @description Delete a job. Running jobs cannot be deleted (v2-13 task 2).
+         *
+         *     Pass ``?cascade=true`` to remove the entire descendant subtree
+         *     created by Re-tune / Resume children (H-0062). When children are
+         *     currently pending or running, cascade is required; otherwise the
+         *     request is rejected with ``PARENT_HAS_ACTIVE_CHILDREN``.
          */
         delete: operations["delete_job_api_jobs__job_id__delete"];
         options?: never;
@@ -546,6 +606,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/learning-curve/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job Learning Curve Metrics Endpoint
+         * @description Get the metric names recorded in the learning curve history.
+         *
+         *     These are the values accepted by the learning-curve plot's ``metrics``
+         *     filter. Sourced from the actual training eval history — they may
+         *     differ from the user's configured evaluation metrics.
+         */
+        get: operations["get_job_learning_curve_metrics_endpoint_api_jobs__job_id__learning_curve_metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/plot/{plot_type}": {
         parameters: {
             query?: never;
@@ -621,6 +705,66 @@ export interface paths {
          * @description Generate standalone Python code and return it as a ZIP download (H-0027).
          */
         get: operations["export_code_api_jobs__job_id__export_code_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/retune": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retune Job
+         * @description Start a Re-tune child job from a completed parent Tune (H-0062).
+         */
+        post: operations["retune_job_api_jobs__job_id__retune_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume Job
+         * @description Resume a failed Tune Job from its last saved checkpoint (H-0062).
+         */
+        post: operations["resume_job_api_jobs__job_id__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/lineage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job Lineage
+         * @description Return the lineage subtree rooted at *job_id* (H-0062).
+         */
+        get: operations["get_job_lineage_api_jobs__job_id__lineage_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -859,6 +1003,14 @@ export interface paths {
         /**
          * List Directory
          * @description List directory contents, filtered to supported data file types.
+         *
+         *     Issue #157: rejected requests (out-of-root traversal, missing
+         *     directory, permission denied) do NOT echo the server-side
+         *     resolved path back to the caller. Successful requests still
+         *     return the resolved path/parent so the frontend can render
+         *     breadcrumb navigation. The error-path response shape is kept
+         *     (200 + empty entries + parent=None) for backward compatibility;
+         *     only the leaked server path is sanitised.
          */
         get: operations["list_directory_api_files_get"];
         put?: never;
@@ -869,7 +1021,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/{full_path}": {
+    "/api/health": {
         parameters: {
             query?: never;
             header?: never;
@@ -877,10 +1029,60 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Serve Spa
-         * @description Serve the SPA — all non-API/WS routes return index.html.
+         * Liveness
+         * @description Liveness probe — always 200 while the ASGI app can serve requests.
+         *
+         *     Must not touch app.state or any adapter; a flaky backend must not
+         *     make k8s restart the whole pod.
          */
-        get: operations["serve_spa__full_path__get"];
+        get: operations["liveness_api_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/health/ready": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Readiness
+         * @description Readiness probe — 200 when the app is ready to accept traffic.
+         *
+         *     Checks the two heavyweight startup-time resources: the backend
+         *     adapter (must expose `info.name`) and the JobStore base directory
+         *     (must exist on disk). Returns 503 otherwise so upstream load
+         *     balancers stop sending traffic.
+         */
+        get: operations["readiness_api_health_ready_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Metrics
+         * @description Return all registered Prometheus metrics in text format.
+         *
+         *     Authentication-free, mirroring the probe philosophy of `/api/health`.
+         */
+        get: operations["metrics_api_metrics_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -941,6 +1143,40 @@ export interface components {
             suggested_task?: ("binary" | "multiclass" | "regression") | null;
             /** Columns */
             columns: components["schemas"]["ColumnInfoResponse"][];
+        };
+        /**
+         * ComparisonGroupStats
+         * @description Summary statistics for one inference run in a comparison.
+         *
+         *     Optional keys (``median`` for regression, ``positive_pct`` for
+         *     binary classification) appear only when the task warrants them —
+         *     ``extra='allow'`` lets them flow through without validation errors.
+         */
+        ComparisonGroupStats: {
+            /** Mean */
+            mean: number;
+            /** Std */
+            std: number;
+            /** Min */
+            min: number;
+            /** Max */
+            max: number;
+            /** Count */
+            count: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ComparisonStatsResponse
+         * @description Response from ``GET /api/inference/{inf_id}/comparison/{other_inf_id}``.
+         */
+        ComparisonStatsResponse: {
+            current: components["schemas"]["ComparisonGroupStats"];
+            other: components["schemas"]["ComparisonGroupStats"];
+            current_proba?: components["schemas"]["ComparisonGroupStats"] | null;
+            other_proba?: components["schemas"]["ComparisonGroupStats"] | null;
+        } & {
+            [key: string]: unknown;
         };
         /** ConfigPatchResponse */
         ConfigPatchResponse: {
@@ -1049,6 +1285,94 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /**
+         * InferenceDataRefResponse
+         * @description DataRef embedded inside :class:`InferenceRecordResponse`.
+         *
+         *     Uses ``extra='allow'`` so fields like ``mtime`` that the backend
+         *     may record on uploads still round-trip without validation errors.
+         */
+        InferenceDataRefResponse: {
+            /**
+             * Source Type
+             * @enum {string}
+             */
+            source_type: "path" | "upload";
+            /** Path */
+            path: string;
+            /** Filename */
+            filename: string;
+            /** Fingerprint */
+            fingerprint: string;
+            /** Shape */
+            shape: number[];
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * InferenceMetricsResponse
+         * @description Inference metrics — regression vs. classification share one shape.
+         *
+         *     The exact metric set is backend- and task-dependent. The known keys
+         *     emitted by :func:`lizystudio.services.inference.evaluate_predictions`
+         *     are declared here so the generated TypeScript type exposes concrete
+         *     fields, while ``extra='allow'`` keeps forward-compatibility when a
+         *     backend adds a new metric (e.g. ``f1`` for multiclass).  All fields
+         *     are optional because no single task emits every one of them.
+         */
+        InferenceMetricsResponse: {
+            /** Mae */
+            mae?: number | null;
+            /** Rmse */
+            rmse?: number | null;
+            /** Accuracy */
+            accuracy?: number | null;
+            /** Auc */
+            auc?: number | null;
+            /** Logloss */
+            logloss?: number | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * InferenceRecordResponse
+         * @description Persisted inference record (history entry / GET by id).
+         */
+        InferenceRecordResponse: {
+            /** Inf Id */
+            inf_id: string;
+            /** Job Id */
+            job_id: string;
+            data_ref: components["schemas"]["InferenceDataRefResponse"];
+            /** Has Ground Truth */
+            has_ground_truth: boolean;
+            /** Created At */
+            created_at: string;
+            /** Row Count */
+            row_count: number;
+            /** Warnings */
+            warnings: string[];
+        };
+        /**
+         * InferenceRunResponse
+         * @description Response from ``POST /api/inference/run``.
+         */
+        InferenceRunResponse: {
+            /** Inf Id */
+            inf_id: string;
+            /** Job Id */
+            job_id: string;
+        };
+        /**
+         * InferenceUploadResponse
+         * @description Response from ``POST /api/inference/upload``.
+         */
+        InferenceUploadResponse: {
+            /** Upload Path */
+            upload_path: string;
+            /** Filename */
+            filename: string;
+        };
         /** JobDetailResponse */
         JobDetailResponse: {
             /** Job Id */
@@ -1075,6 +1399,8 @@ export interface components {
             model_name?: string | null;
             /** Primary Score */
             primary_score?: number | null;
+            /** Parent Job Id */
+            parent_job_id?: string | null;
             /** Fit Result */
             fit_result?: {
                 [key: string]: unknown;
@@ -1121,6 +1447,8 @@ export interface components {
             model_name?: string | null;
             /** Primary Score */
             primary_score?: number | null;
+            /** Parent Job Id */
+            parent_job_id?: string | null;
         } & {
             [key: string]: unknown;
         };
@@ -1128,6 +1456,20 @@ export interface components {
         PlotResponseModel: {
             /** Plotly Json */
             plotly_json: string;
+        };
+        /**
+         * PredictionsResponse
+         * @description Paginated predictions table returned by ``/predictions``.
+         */
+        PredictionsResponse: {
+            /** Columns */
+            columns: string[];
+            /** Data */
+            data: {
+                [key: string]: unknown;
+            }[];
+            /** Total Rows */
+            total_rows: number;
         };
         /** PreviewResponseModel */
         PreviewResponseModel: {
@@ -1141,6 +1483,29 @@ export interface components {
             total_rows: number;
             /** Total Cols */
             total_cols: number;
+        };
+        /**
+         * ResumeRequest
+         * @description Body of ``POST /api/jobs/{id}/resume``.
+         */
+        ResumeRequest: {
+            /** N Trials */
+            n_trials?: number | null;
+        };
+        /**
+         * RetuneRequest
+         * @description Body of ``POST /api/jobs/{id}/retune``.
+         *
+         *     Uses ``extra='forbid'`` so unknown fields are rejected rather than
+         *     silently dropped (CLAUDE.md Python security rule, H-0062 review).
+         */
+        RetuneRequest: {
+            /** N Trials */
+            n_trials: number;
+            /** Expand Boundary */
+            expand_boundary?: boolean | null;
+            /** Boundary Threshold */
+            boundary_threshold?: number | null;
         };
         /** RunRequest */
         RunRequest: {
@@ -1808,7 +2173,9 @@ export interface operations {
     };
     delete_job_api_jobs__job_id__delete: {
         parameters: {
-            query?: never;
+            query?: {
+                cascade?: boolean;
+            };
             header?: never;
             path: {
                 job_id: string;
@@ -1824,7 +2191,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        [key: string]: string;
+                        [key: string]: unknown;
                     };
                 };
             };
@@ -2070,6 +2437,37 @@ export interface operations {
             };
         };
     };
+    get_job_learning_curve_metrics_endpoint_api_jobs__job_id__learning_curve_metrics_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_job_plot_endpoint_api_jobs__job_id__plot__plot_type__get: {
         parameters: {
             query?: {
@@ -2204,6 +2602,113 @@ export interface operations {
             };
         };
     };
+    retune_job_api_jobs__job_id__retune_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetuneRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resume_job_api_jobs__job_id__resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResumeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_job_lineage_api_jobs__job_id__lineage_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     inference_run_api_inference_run_post: {
         parameters: {
             query?: never;
@@ -2223,9 +2728,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["InferenceRunResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2258,9 +2761,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["InferenceUploadResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2291,9 +2792,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": components["schemas"]["InferenceRecordResponse"][];
                 };
             };
             /** @description Validation Error */
@@ -2326,9 +2825,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["InferenceRecordResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2363,9 +2860,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["PredictionsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2398,9 +2893,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["InferenceMetricsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2434,9 +2927,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["PlotResponseModel"];
                 };
             };
             /** @description Validation Error */
@@ -2463,13 +2954,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description Predictions CSV download (streaming). */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "text/csv": unknown;
                 };
             };
             /** @description Validation Error */
@@ -2503,9 +2994,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ComparisonStatsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2593,13 +3082,55 @@ export interface operations {
             };
         };
     };
-    serve_spa__full_path__get: {
+    liveness_api_health_get: {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                full_path: string;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
             };
+        };
+    };
+    readiness_api_health_ready_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    metrics_api_metrics_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
@@ -2611,15 +3142,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

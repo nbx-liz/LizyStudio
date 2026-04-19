@@ -70,3 +70,38 @@ jobs:
       - run: pnpm check
       - run: pnpm build
       - run: pnpm vitest run --coverage
+
+  # C-1 / INV-CI-1: committed schema.d.ts must match freshly-generated
+  # output. Prevents drift between backend response_model declarations
+  # and the TypeScript types that the frontend compiles against.
+  api-types-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+      - name: Enable corepack + pnpm
+        working-directory: frontend
+        run: |
+          corepack enable
+          corepack prepare --activate
+      - run: uv sync
+      - name: Install frontend deps
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - name: Dump backend OpenAPI schema
+        run: |
+          uv run python -c "import json; from lizystudio.server import create_app; print(json.dumps(create_app().openapi()))" > /tmp/openapi.json
+      - name: Regenerate TypeScript schema from dumped OpenAPI
+        working-directory: frontend
+        run: node_modules/.bin/openapi-typescript /tmp/openapi.json -o src/api/generated/schema.d.ts
+      - name: Fail if schema.d.ts drifted
+        run: |
+          if ! git diff --exit-code frontend/src/api/generated/schema.d.ts; then
+            echo "::error::Committed schema.d.ts is out of date. Run 'cd frontend && pnpm generate:api' and commit."
+            exit 1
+          fi
