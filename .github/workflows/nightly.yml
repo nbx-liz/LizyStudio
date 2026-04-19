@@ -26,7 +26,8 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy src/lizystudio/
-      - run: uv run pytest --cov=src/lizystudio --cov-report=term-missing --cov-fail-under=80 -q
+      # Nightly uses the same flaky-retry policy as CI (Issue #29).
+      - run: uv run pytest --cov=src/lizystudio --cov-report=term-missing --cov-fail-under=80 --reruns 2 --reruns-delay 1 -q
 
   plotly-cdn:
     name: Plotly CDN reachability & SRI freshness

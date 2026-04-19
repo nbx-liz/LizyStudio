@@ -2825,6 +2825,33 @@ H-0019 で以下のテストインフラを導入済み:
 
 カバレッジの維持目標は backend と揃え 80% を下限とする（`vitest.config.ts` で CI 強制）。
 
+### 8.3 Flaky テスト運用（Issue #29）
+
+CI の red を抑えつつ本物の regression を見逃さないため、以下のマーカー／仕組みを使う。
+
+#### マーカー
+
+| marker | 用途 | 定義場所 |
+|--------|------|----------|
+| `@pytest.mark.flaky` | 既知の不安定テスト（タイミング依存など）。`pytest-rerunfailures` が CI 時に rerun | `pyproject.toml` |
+| `@pytest.mark.quarantine` | 失敗頻度が高く一時隔離。default run 対象外、CI は non-blocking job で実行 | `pyproject.toml` |
+| `@pytest.mark.slow` | 実モデルを学習する高コストテスト | 既存 |
+
+Playwright 側はテストごとの marker 機構がないため、`playwright.config.ts` の `retries` 設定で一括制御する（CI 時のみ chromium=2, tablet/mobile=1）。
+
+#### 運用ルール
+
+1. **ローカルは retry なし** — `uv run pytest` / `pnpm test:e2e` は retry せず、flaky を見える化する。
+2. **CI の自動 rerun** — backend は `pytest --reruns 2 --reruns-delay 1`、frontend E2E は Playwright の `retries`。rerun で救われた場合も CI ログ / JUnit に警告が残る。
+3. **quarantine の追加** — `pytest.mark.quarantine` を付与するだけで default run から除外される。CI は `backend-quarantine` ジョブ（`continue-on-error: true`）で実行され、失敗しても PR を block しない。
+4. **quarantine からの復帰** — 連続 10 回 green の実績を confirm してから marker 削除、対応 PR に根拠を明記する。
+5. **追跡の義務** — `flaky` / `quarantine` を付けるときは同時に追跡 Issue を起票する。塩漬けを許容しない。
+
+#### 禁止事項
+
+- 真の regression を flaky 扱いして隠蔽しない。rerun で救われた失敗は必ず原因調査する。
+- Playwright の `retries` を test 単位で上書きして特定テストを無制限に retry しない。恒常的に失敗するテストは quarantine もしくは修正する。
+
 ---
 
 ## 9. ビルドと配布
