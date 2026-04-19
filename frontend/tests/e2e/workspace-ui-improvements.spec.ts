@@ -188,8 +188,6 @@ test.describe("Workspace UI Improvements", () => {
     // Timeout section
     await expect(page.getByText("Timeout")).toBeVisible();
 
-    // Direction select should NOT exist
-    const directionSelect = page.locator("text=minimize").first();
     // Direction auto-display only appears after metric selection, not as a standalone select
     await expect(
       page.getByRole("combobox").filter({ hasText: /minimize|maximize/ }),
