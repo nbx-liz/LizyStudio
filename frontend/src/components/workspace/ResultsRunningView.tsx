@@ -9,7 +9,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
-import { formatElapsed } from "@/lib/utils";
 import { FoldProgressList } from "./FoldProgressList";
 import { LiveTrialChart } from "./LiveTrialChart";
 
@@ -63,11 +62,9 @@ export function ResultsRunningView({
           {progress.message ?? `${progress.current} / ${progress.total}`}
         </p>
       )}
-      {progress?.elapsed != null && (
-        <p className="text-xs text-muted-foreground">
-          Elapsed: {formatElapsed(progress.elapsed)}
-        </p>
-      )}
+      {/* H-0069: `progress.elapsed` was a dead branch on a field the
+          backend never emits — removed together with the WsMessage
+          SSOT switch. */}
 
       {progress?.fold_results && progress.fold_results.length > 0 && (
         <FoldProgressList

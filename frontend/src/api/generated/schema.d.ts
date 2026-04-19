@@ -1576,6 +1576,123 @@ export interface components {
             /** Current Job Id */
             current_job_id?: string | null;
         };
+        /**
+         * WsCompleted
+         * @description Terminal success message — closes the WS connection client-side.
+         */
+        WsCompleted: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "completed";
+            /** Job Id */
+            job_id: string;
+            /**
+             * Message
+             * @default Completed.
+             */
+            message: string;
+        };
+        /**
+         * WsError
+         * @description Terminal failure message — closes the WS connection client-side.
+         */
+        WsError: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "error";
+            /** Job Id */
+            job_id: string;
+            /** Message */
+            message: string;
+            /**
+             * Code
+             * @default BACKEND_ERROR
+             */
+            code: string;
+        };
+        /**
+         * WsFoldResult
+         * @description One cross-validation fold result emitted inside ``WsProgress`` (H-0047).
+         *
+         *     Only ``fold`` (the 0-based index) is fixed.  Per-metric values flow
+         *     through as ``extra='allow'`` because the set of metric keys is
+         *     task-dependent: a regression run emits ``rmse`` / ``r2`` / ``mae``,
+         *     a binary classification run emits ``auc`` / ``logloss`` / ``accuracy``,
+         *     etc.  Hard-coding the shape would force every metric name into the
+         *     contract and couple the schema to a single backend.
+         */
+        WsFoldResult: {
+            /** Fold */
+            fold: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * WsPing
+         * @description 30-second keepalive ping (H-0058).
+         *
+         *     Carries no payload beyond the discriminator and the job id — clients
+         *     may ignore it.
+         */
+        WsPing: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "ping";
+            /** Job Id */
+            job_id: string;
+        };
+        /**
+         * WsProgress
+         * @description Live training / tuning progress (H-0047 fold_results, H-0055 trial_results).
+         */
+        WsProgress: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "progress";
+            /** Job Id */
+            job_id: string;
+            /** Current */
+            current: number;
+            /** Total */
+            total: number;
+            /** Message */
+            message: string;
+            /**
+             * Fold Results
+             * @default null
+             */
+            fold_results: components["schemas"]["WsFoldResult"][] | null;
+            /**
+             * Trial Results
+             * @default null
+             */
+            trial_results: components["schemas"]["WsTrialResult"][] | null;
+        };
+        /**
+         * WsTrialResult
+         * @description One Optuna trial result emitted inside ``WsProgress`` (H-0055).
+         */
+        WsTrialResult: {
+            /** Number */
+            number: number;
+            /** Score */
+            score: number | null;
+            /** State */
+            state: string;
+            /** Best Score */
+            best_score: number | null;
+        } & {
+            [key: string]: unknown;
+        };
+        WsMessage: components["schemas"]["WsProgress"] | components["schemas"]["WsCompleted"] | components["schemas"]["WsError"] | components["schemas"]["WsPing"];
     };
     responses: never;
     parameters: never;

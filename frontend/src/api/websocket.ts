@@ -70,8 +70,10 @@ export function connectJobProgress(
       if (retryCount >= MAX_RETRIES) {
         callbacks.onError?.({
           type: "error",
+          job_id: jobId,
           message: "WebSocket connection lost after maximum retries",
-        } as WsMessage & { type: "error" });
+          code: "WS_RECONNECT_FAILED",
+        });
       }
       return;
     }

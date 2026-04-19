@@ -175,41 +175,28 @@ export interface SplitSummaryRow {
 // Frontend-only types (WebSocket messages, UI helpers)
 // ---------------------------------------------------------------------------
 
-export type FoldResult = {
-  fold: number;
-  metric: string;
-  score: number;
-};
+// H-0069: FoldResult / TrialResult re-exported from the generated
+// schema so they stay in sync with the Pydantic SSOT in
+// ``src/lizystudio/ws/messages.py``.  Metric names vary by task
+// (rmse/r2 for regression, auc/logloss for classification) — the
+// backend declares only the invariant fields and ``extra='allow'``
+// keeps optional metric keys flowing through.
+export type FoldResult = components["schemas"]["WsFoldResult"];
+export type TrialResult = components["schemas"]["WsTrialResult"];
 
-export type TrialResult = {
-  number: number;
-  score: number | null;
-  state: string;
-  best_score: number | null;
-};
+// --- WebSocket messages (H-0069 SSOT) ---
+//
+// These mirror the Pydantic discriminated union in
+// ``src/lizystudio/ws/messages.py``. Types are generated from the
+// backend OpenAPI schema by ``openapi-typescript`` and re-exported
+// here so existing imports keep working.  Do NOT redeclare the shape
+// — edit ``ws/messages.py`` and run ``pnpm generate:api``.
 
-export type ProgressMessage = {
-  type: "progress";
-  current: number;
-  total: number;
-  message?: string;
-  elapsed?: number;
-  metrics?: Record<string, unknown>;
-  fold_results?: FoldResult[];
-  trial_results?: TrialResult[];
-};
-
-export type CompletedMessage = {
-  type: "completed";
-  job_id: string;
-};
-
-export type ErrorMessage = {
-  type: "error";
-  message: string;
-};
-
-export type WsMessage = ProgressMessage | CompletedMessage | ErrorMessage;
+export type ProgressMessage = components["schemas"]["WsProgress"];
+export type CompletedMessage = components["schemas"]["WsCompleted"];
+export type ErrorMessage = components["schemas"]["WsError"];
+export type PingMessage = components["schemas"]["WsPing"];
+export type WsMessage = components["schemas"]["WsMessage"];
 
 // --- MetricEntry (H-0034) ---
 

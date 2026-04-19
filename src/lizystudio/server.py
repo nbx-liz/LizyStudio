@@ -209,6 +209,13 @@ def create_app() -> FastAPI:
     ) -> None:
         await websocket_progress(ws, job_id, broadcaster)
 
+    # H-0069: expose the WebSocket message Pydantic union in OpenAPI so
+    # openapi-typescript generates a concrete `WsMessage` type for the
+    # frontend to import instead of hand-maintaining a duplicate.  The
+    # schema is injected into ``components.schemas`` without adding a
+    # real HTTP endpoint.
+    _install_ws_message_schema(application)
+
     # Serve built frontend (production)
     if STATIC_DIR.is_dir() and (STATIC_DIR / "index.html").exists():
         application.mount(
@@ -232,6 +239,70 @@ def create_app() -> FastAPI:
             return FileResponse(STATIC_DIR / "index.html")
 
     return application
+
+
+def _install_ws_message_schema(application: FastAPI) -> None:
+    """Inject ``WsMessage`` and its variants into ``components.schemas``.
+
+    The WebSocket handler is not a regular HTTP route, so FastAPI's
+    OpenAPI builder does not discover its Pydantic models on its own.
+    We override ``app.openapi`` so the generated document carries
+    ``WsMessage`` / ``WsProgress`` / ``WsCompleted`` / ``WsError`` /
+    ``WsPing`` schemas — ``openapi-typescript`` then emits a typed
+    union the frontend can import directly.
+    """
+    from fastapi.openapi.utils import get_openapi
+    from pydantic import TypeAdapter
+
+    from lizystudio.ws.messages import (
+        WsCompleted,
+        WsError,
+        WsMessage,
+        WsPing,
+        WsProgress,
+    )
+
+    # Clear any schema that FastAPI may have already cached before this
+    # hook was installed — otherwise the first call returns the
+    # pre-injection version and locks it in for the life of the app.
+    application.openapi_schema = None
+
+    def _custom_openapi() -> dict[str, Any]:
+        if application.openapi_schema:
+            return application.openapi_schema
+        schema = get_openapi(
+            title=application.title,
+            version=application.version,
+            openapi_version=application.openapi_version,
+            description=application.description,
+            routes=application.routes,
+        )
+        components = schema.setdefault("components", {})
+        schemas = components.setdefault("schemas", {})
+        ws_schema = TypeAdapter(WsMessage).json_schema(
+            ref_template="#/components/schemas/{model}",
+        )
+        # TypeAdapter emits `$defs` for the referenced variants; lift
+        # them into `components.schemas` so openapi-typescript resolves
+        # the refs correctly.
+        for name, body in ws_schema.pop("$defs", {}).items():
+            schemas[name] = body
+        # Also register the union itself as a named schema so
+        # consumers can `import { WsMessage } from schema`.
+        schemas["WsMessage"] = ws_schema
+        # Deterministic ordering — keeps the generated schema.d.ts
+        # stable across dumps so the api-types-drift CI job does not
+        # flap on dict ordering.
+        for model in (WsProgress, WsCompleted, WsError, WsPing):
+            name = model.__name__
+            if name not in schemas:
+                schemas[name] = model.model_json_schema(
+                    ref_template="#/components/schemas/{model}",
+                )
+        application.openapi_schema = schema
+        return schema
+
+    application.openapi = _custom_openapi  # type: ignore[method-assign]
 
 
 # Module-level app for uvicorn (used by CLI: uvicorn lizystudio.server:app)
