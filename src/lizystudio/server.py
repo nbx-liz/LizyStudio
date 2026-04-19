@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request, Response, WebSocket
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -26,6 +26,7 @@ from lizystudio.api import (
     metrics_api,
     workspace,
 )
+from lizystudio.api.deps import get_broadcaster
 from lizystudio.api.errors import (
     StudioError,
     studio_error_handler,
@@ -201,8 +202,11 @@ def create_app() -> FastAPI:
 
     # WebSocket route for job progress (BLUEPRINT §5.5)
     @application.websocket("/ws/jobs/{job_id}/progress")
-    async def ws_job_progress(ws: WebSocket, job_id: str) -> None:
-        broadcaster: ProgressBroadcaster = application.state.broadcaster
+    async def ws_job_progress(
+        ws: WebSocket,
+        job_id: str,
+        broadcaster: ProgressBroadcaster = Depends(get_broadcaster),
+    ) -> None:
         await websocket_progress(ws, job_id, broadcaster)
 
     # Serve built frontend (production)
