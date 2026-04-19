@@ -17,8 +17,12 @@ function makeProgress(
 ): ProgressMessage {
   return {
     type: "progress",
+    job_id: "job-1",
     current: 0,
     total: 0,
+    message: "",
+    fold_results: null,
+    trial_results: null,
     ...overrides,
   };
 }

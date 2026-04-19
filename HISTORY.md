@@ -1783,4 +1783,33 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (e) `from lizystudio.services.training import CancelledError` と `from lizystudio.backends.exceptions import CancelledError` が同一クラス（`is` 比較 True）。
   - (f) `uv run pytest -m "not slow"` と `pnpm test` が green、coverage ≥ 80% 維持。
   - (g) API smoke (`/workspace/fit` / `/workspace/tune` / `/jobs/{id}/retune`) が PR マージ前と同じレスポンスを返す。
+- **Decision:** 2026-04-19 採択（PR #192）。
+
+### H-0069: WebSocket 進捗メッセージ schema を Pydantic discriminated union で SSOT 化（Phase 2 coupling refactor）
+- **Status:** proposed
+- **Scope:** API | Frontend | Backend
+- **Related:** BLUEPRINT.md §5.5（WebSocket progress protocol）、docs/coupling-analysis.md C-3
+- **Context:** 現状、WS 進捗メッセージの schema は 3 経路に分散している: `ws/progress.py` の `send_progress` / `send_completed` / `send_error`（親→ブラウザ送信）、`services/subprocess_runner.py` の `_forward_progress` + `_FileBroadcaster.send_*`（子→親 JSONL ファイル経由）、`frontend/src/api/types.ts:191-212`（ブラウザ側の `WsMessage` 手書き定義）。監査の結果、手書き TS 側は `ProgressMessage` で `job_id` が欠落、`CompletedMessage` で `message` が欠落、`ErrorMessage` で `job_id` / `code` が欠落と、backend 送信実体と drift している。加えて backend 送出の `ping` が TS union に無く `try/catch` で黙殺されている。C-2 が確立した `response_model` + schema.d.ts パイプラインを WS 面にも拡張する。
+- **Proposal:**
+  1. `src/lizystudio/ws/messages.py` を新設し、`WsProgress` / `WsCompleted` / `WsError` / `WsPing` を `extra="forbid"` の Pydantic モデルとして定義する。`WsMessage` は `Annotated[Union[...], Field(discriminator="type")]` で discriminated union 化。`model_config = ConfigDict(extra="forbid")` とし、Optional field は `None` デフォルトで **かつ** `model_dump(exclude_none=True)` を使って wire に `null` を載せないことで bit-identical を維持。
+  2. `ws/progress.py::ProgressBroadcaster.send_*` の内部 dict 組み立てを Pydantic モデル構築に置換し、`websocket.send_text(model.model_dump_json(exclude_none=True))` で送信。broadcaster のキュー要素は dict のまま（既存 back-pressure 実装と互換）、`send()` に渡す前に `model.model_dump(exclude_none=True)` で dict 化する。
+  3. `frontend/src/api/schema.d.ts` に Python 側の `WsMessage` を露出させるため、`api/models.py` もしくは新規 `api/ws_models.py` で「documentation-only」な stub を追加する（OpenAPI `components.schemas` に登録され、openapi-typescript で TS 型に反映される）。HTTP endpoint は増やさない。
+  4. `frontend/src/api/types.ts:191-212` の手書き `WsMessage`/`ProgressMessage`/`CompletedMessage`/`ErrorMessage` を削除し、生成された schema.d.ts から型を re-export。`ping` variant も union に含める。
+  5. **経路 B（子→親 JSONL）は本 PR のスコープ外**。`_forward_progress` / `_FileBroadcaster` の既存 dict ベース処理は維持（JSONL はプロセス内部通信で一時ファイル、child process 側で `job_id` を持たない設計が残っているため、経路 A/C と wire 差異がある）。これを統一する場合、child 側に `job_id` を渡す別 refactor が必要になり scope が肥大化するため、別 PR で扱う。
+- **Impact:** `src/lizystudio/ws/messages.py`（新規）、`ws/progress.py`、`frontend/src/api/types.ts`、`frontend/src/api/generated/schema.d.ts`、`frontend/src/api/websocket.ts` 等の WS 利用箇所、必要に応じて `api/models.py`（stub エンドポイント用）。backend → browser の wire format は bit-identical（golden JSON fixture で保証）、HTTP API は変更なし、pickle / 保存形式も変更なし。
+- **Compatibility:**
+  - Wire format: bit-identical（optional field は `exclude_none=True` で null を載せない）。既存ブラウザクライアントは無修正で動作。
+  - 手書き `WsMessage` 型削除は TS 側 public API 変更だが、frontend モノレポ内でのみ使用されており外部配布なし。
+  - `ping` variant が TS union に加わることで、既存の switch-case が網羅チェックに引っかかる可能性がある。該当箇所は `case 'ping': break` を追加する。
+- **Alternatives:**
+  - (a) TS を手書き維持、JSON Schema を docstring で共有 → 却下。drift を検知できない。
+  - (b) 経路 B も同じ union で扱うため child に job_id を渡す → 却下。scope 肥大化。別 PR に分離。
+  - (c) `response_model` のある dummy HTTP endpoint で schema 露出 → 採用（本 proposal 案 3）。openapi-typescript の自然な出力ルートを使う。
+- **Acceptance Criteria:**
+  - (a) `grep -rn "type.*progress\|type.*completed\|type.*error" frontend/src/api/types.ts` で手書き `WsMessage` 定義が 0 件（生成型からの re-export のみ）。
+  - (b) `frontend/src/api/generated/schema.d.ts` に `WsMessage` / `WsProgress` / `WsCompleted` / `WsError` / `WsPing` 相当の型が出現する。
+  - (c) `pytest tests/test_ws_messages.py` で INV-WS-1..4 が green。
+  - (d) golden JSON fixture による bit-identical 検証が pass（既存 browser client が新 backend と無停止で通信）。
+  - (e) `pnpm build` + `pnpm vitest run` + `api-types-drift` CI job が green。
+  - (f) 経路 B の JSONL 送受信は wire format 未変更（regression なし）。
 - **Decision:** 未決定。

@@ -37,7 +37,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
-import { formatElapsed } from "@/lib/utils";
 import { CompletedContent } from "./CompletedContent";
 import { ConfigTreeView } from "./ConfigTreeView";
 import { DeleteDialog } from "./DeleteDialog";
@@ -496,19 +495,12 @@ function RunningView({
       {!isTune && (
         <p className="mb-1 text-sm">{progress?.message ?? "Fitting..."}</p>
       )}
-      {progress?.elapsed != null && (
-        <p className="text-xs text-muted-foreground">
-          Elapsed: {formatElapsed(progress.elapsed)}
-        </p>
-      )}
-      {isTune && progress?.metrics && (
-        <p className="mt-1 text-xs text-muted-foreground">
-          Best so far:{" "}
-          {Object.entries(progress.metrics)
-            .map(([k, v]) => `${k} ${Number(v).toFixed(4)}`)
-            .join(", ")}
-        </p>
-      )}
+      {/*
+        H-0069: the previous implementation dereferenced
+        `progress.elapsed` / `progress.metrics`, but the backend never
+        emits those fields on WsProgress.  The dead branches were
+        removed when the schema was unified to the Pydantic SSOT.
+      */}
     </div>
   );
 }

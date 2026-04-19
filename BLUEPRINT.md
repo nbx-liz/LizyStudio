@@ -2523,6 +2523,10 @@ Workspace の `workspace_result` は完了時に自動更新される。
 
 `ping` は 30 秒間隔の keepalive メッセージ（H-0058）。クライアントは受信しても無視してよい（WebSocket 接続維持のため）。
 
+**Schema SSOT (H-0069):** 上記 4 variant は `src/lizystudio/ws/messages.py` の Pydantic discriminated union として単一定義される。サーバ側送信は `WsMessage.model_dump_json(exclude_none=True)` を通り、フロントは生成 `schema.d.ts` から `WsMessage` 型を import する。optional フィールド (`fold_results` / `trial_results`) は値が存在するときだけ wire に現れ、`null` フィールドはシリアライズしない（既存 wire format と bit-identical）。
+
+進捗追跡の内部実装: 子プロセス → 親プロセスの JSONL 経路は `services/subprocess_runner.py` の独自 dict 形式を保持しており、親プロセスの `_forward_progress` が `WsMessage` への変換を担う。JSONL の wire は `job_id` を含まない（子プロセスは自 job を知らない前提）が、外部に露出しない内部通信のため SSOT 対象外。
+
 ### 5.6 Backend API
 
 | メソッド | パス | 説明 |

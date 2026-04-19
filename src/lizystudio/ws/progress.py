@@ -1,11 +1,15 @@
 """WebSocket progress broadcaster (BLUEPRINT §5.5).
 
 Stores progress state per job_id in memory. WebSocket clients connect
-to ``/ws/jobs/{job_id}/progress`` and receive JSON messages:
+to ``/ws/jobs/{job_id}/progress`` and receive JSON messages whose
+schema is defined by the Pydantic union in
+:mod:`lizystudio.ws.messages` (H-0069):
 
-- ``{"type": "progress", "job_id": ..., "current": N, "total": M, "message": ...}``
-- ``{"type": "completed", "job_id": ..., "message": ...}``
-- ``{"type": "error", "job_id": ..., "message": ..., "code": ...}``
+- ``progress``: ``{type, job_id, current, total, message,
+  fold_results?, trial_results?}``
+- ``completed``: ``{type, job_id, message}``
+- ``error``: ``{type, job_id, message, code}``
+- ``ping``: ``{type, job_id}`` (30-second keepalive, H-0058)
 """
 
 from __future__ import annotations
@@ -18,6 +22,8 @@ import threading
 from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
+
+from lizystudio.ws.messages import WsCompleted, WsError, WsPing, WsProgress
 
 _logger = logging.getLogger(__name__)
 
@@ -174,40 +180,38 @@ class ProgressBroadcaster:
         fold_results: list[dict[str, Any]] | None = None,
         trial_results: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Convenience: send a progress message (H-0047)."""
-        msg: dict[str, Any] = {
-            "type": "progress",
-            "job_id": job_id,
-            "current": current,
-            "total": total,
-            "message": message,
-        }
-        if fold_results is not None:
-            msg["fold_results"] = fold_results
-        if trial_results is not None:
-            msg["trial_results"] = trial_results
-        self.send(job_id, msg)
+        """Convenience: send a progress message (H-0047 / H-0069).
+
+        Callers still pass raw ``list[dict[str, Any]]`` for compatibility
+        with the LizyML tuning callbacks; Pydantic coerces the dicts
+        into :class:`WsFoldResult` / :class:`WsTrialResult` at
+        validation time and ``model_dump(exclude_none=True)`` yields a
+        wire payload identical to the pre-H-0069 hand-rolled dict.
+        """
+        model = WsProgress.model_validate(
+            {
+                "type": "progress",
+                "job_id": job_id,
+                "current": current,
+                "total": total,
+                "message": message,
+                "fold_results": fold_results,
+                "trial_results": trial_results,
+            }
+        )
+        self.send(job_id, model.model_dump(exclude_none=True))
 
     def send_completed(self, job_id: str, message: str = "Completed.") -> None:
-        """Convenience: send a completion message."""
-        self.send(
-            job_id,
-            {"type": "completed", "job_id": job_id, "message": message},
-        )
+        """Convenience: send a completion message (H-0069)."""
+        model = WsCompleted(type="completed", job_id=job_id, message=message)
+        self.send(job_id, model.model_dump(exclude_none=True))
 
     def send_error(
         self, job_id: str, message: str, code: str = "BACKEND_ERROR"
     ) -> None:
-        """Convenience: send an error message."""
-        self.send(
-            job_id,
-            {
-                "type": "error",
-                "job_id": job_id,
-                "message": message,
-                "code": code,
-            },
-        )
+        """Convenience: send an error message (H-0069)."""
+        model = WsError(type="error", job_id=job_id, message=message, code=code)
+        self.send(job_id, model.model_dump(exclude_none=True))
 
     def make_callback(self, job_id: str) -> Any:
         """Create a ProgressCallback for a specific job."""
@@ -256,11 +260,10 @@ async def websocket_progress(
             try:
                 msg = await asyncio.wait_for(queue.get(), timeout=30.0)
             except asyncio.TimeoutError:
-                # Send keepalive ping and continue the loop
+                # Send keepalive ping and continue the loop (H-0058 / H-0069)
                 with contextlib.suppress(Exception):
-                    await websocket.send_text(
-                        json.dumps({"type": "ping", "job_id": job_id})
-                    )
+                    ping = WsPing(type="ping", job_id=job_id)
+                    await websocket.send_text(ping.model_dump_json(exclude_none=True))
                 continue
             await websocket.send_text(json.dumps(msg))
             if msg.get("type") in ("completed", "error"):

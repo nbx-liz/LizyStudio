@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fastapi import Request
+from starlette.requests import HTTPConnection
 
 from lizystudio.services.jobs import get_job_store
 from lizystudio.services.workspace import get_workspace
@@ -34,18 +34,27 @@ __all__ = [
 ]
 
 
-def get_broadcaster(request: Request) -> ProgressBroadcaster:
+# ``HTTPConnection`` is the common base class of Starlette's ``Request``
+# (HTTP) and ``WebSocket``; using it as the annotation lets a single
+# factory satisfy both ``Depends(...)`` resolutions — FastAPI injects
+# the live ``Request`` on HTTP routes and the live ``WebSocket`` on
+# ``@app.websocket`` handlers, and both expose ``.app.state``.
+
+
+def get_broadcaster(connection: HTTPConnection) -> ProgressBroadcaster:
     """Return the process-wide :class:`ProgressBroadcaster`.
 
     Populated by the application lifespan in :func:`lizystudio.server.create_app`.
+    Works for both HTTP and WebSocket handlers because both pass an
+    :class:`HTTPConnection` subclass.
     """
-    return request.app.state.broadcaster  # type: ignore[no-any-return]
+    return connection.app.state.broadcaster  # type: ignore[no-any-return]
 
 
-def get_backend(request: Request) -> BackendAdapter:
+def get_backend(connection: HTTPConnection) -> BackendAdapter:
     """Return the active :class:`BackendAdapter` bound to the workspace.
 
     Convenience factory so endpoints that only need the adapter do not
     have to depend on the whole :class:`WorkspaceState`.
     """
-    return request.app.state.workspace.backend  # type: ignore[no-any-return]
+    return connection.app.state.workspace.backend  # type: ignore[no-any-return]

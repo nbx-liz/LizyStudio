@@ -1052,14 +1052,14 @@ describe("JobDetailPanel - RunningView tune progress", () => {
     const { connectJobProgress } = await import("@/api/websocket");
 
     vi.mocked(connectJobProgress).mockImplementation((_jobId, handlers) => {
-      // Emit a progress message immediately
       handlers.onProgress?.({
         type: "progress",
+        job_id: "test-job-1",
         current: 3,
         total: 10,
         message: "Running trial 3",
-        elapsed: 5.5,
-        metrics: { f1: 0.87 },
+        fold_results: null,
+        trial_results: null,
       });
       return () => {};
     });
@@ -1083,41 +1083,10 @@ describe("JobDetailPanel - RunningView tune progress", () => {
     expect(await screen.findByText("Running")).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByText("Trial 3 / 10")).toBeInTheDocument();
-      expect(screen.getByText(/Best so far:/)).toBeInTheDocument();
-      expect(screen.getByText(/f1 0\.8700/)).toBeInTheDocument();
     });
-  });
-
-  it("shows elapsed time when progress includes elapsed", async () => {
-    const { connectJobProgress } = await import("@/api/websocket");
-
-    vi.mocked(connectJobProgress).mockImplementation((_jobId, handlers) => {
-      handlers.onProgress?.({
-        type: "progress",
-        current: 1,
-        total: 5,
-        message: "Step 1",
-        elapsed: 12.345,
-        metrics: undefined,
-      });
-      return () => {};
-    });
-
-    const runningJob = makeJob({ status: "running", completed_at: null });
-    mockFetchJob.mockResolvedValue(runningJob);
-
-    renderWithProviders(
-      <JobDetailPanel
-        jobId="test-job-1"
-        jobNumber={1}
-        onJobDeleted={vi.fn()}
-        onJobChanged={vi.fn()}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText(/Elapsed:/)).toBeInTheDocument();
-    });
+    // H-0069: "Best so far:" / "f1 0.8700" branches were dead code
+    // (backend never emits `metrics` on WsProgress).  Dropped with
+    // the WebSocket SSOT switch.
   });
 
   it("shows custom progress message for running fit job when progress arrives", async () => {
@@ -1126,11 +1095,12 @@ describe("JobDetailPanel - RunningView tune progress", () => {
     vi.mocked(connectJobProgress).mockImplementation((_jobId, handlers) => {
       handlers.onProgress?.({
         type: "progress",
+        job_id: "test-job-1",
         current: 0,
         total: 0,
         message: "Preprocessing data...",
-        elapsed: undefined,
-        metrics: undefined,
+        fold_results: null,
+        trial_results: null,
       });
       return () => {};
     });
