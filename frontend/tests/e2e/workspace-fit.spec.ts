@@ -1,5 +1,9 @@
 import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
+import {
+  isMobileProject,
+  openWorkspaceSectionIfMobile,
+} from "./helpers/mobile";
 import { dismissOnboarding } from "./helpers/onboarding";
 
 const API = "http://localhost:8501/api";
@@ -183,7 +187,16 @@ test.describe("Workspace Fit Flow", () => {
 
   test("UI: Workspace page loads with 3-panel layout and Fit tab", async ({
     page,
-  }) => {
+  }, testInfo) => {
+    // Issue #178: the 3-panel ResizablePanelGroup does not exist on
+    // mobile — the Workspace renders a bottom-tab navigation instead.
+    // Mobile-equivalent coverage lives in the `workspace-ui-improvements`
+    // suite where each panel is verified individually.
+    test.skip(
+      isMobileProject(testInfo),
+      "3-panel layout is desktop/tablet only (Issue #178)",
+    );
+
     await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
@@ -213,10 +226,11 @@ test.describe("Workspace Fit Flow", () => {
 
   test("UI: Fit tab is active by default and shows config form", async ({
     page,
-  }) => {
+  }, testInfo) => {
     await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
+    await openWorkspaceSectionIfMobile(page, testInfo, "model");
 
     // Fit tab should be selected/active by default
     const fitTab = page.getByRole("tab", { name: "Fit" });

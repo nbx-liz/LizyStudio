@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
+import { isMobileProject } from "./helpers/mobile";
 import { dismissOnboarding } from "./helpers/onboarding";
 
 const API = "http://localhost:8501/api";
@@ -75,7 +76,15 @@ test.describe("Workspace core flow", () => {
 
   test("UI: 3-panel layout renders with Data/Model/Results", async ({
     page,
-  }) => {
+  }, testInfo) => {
+    // Issue #178: mobile uses a bottom-tab layout; panels are never
+    // visible simultaneously. Mobile coverage for each panel lives in
+    // workspace-ui-improvements.spec.ts.
+    test.skip(
+      isMobileProject(testInfo),
+      "3-panel layout is desktop/tablet only (Issue #178)",
+    );
+
     await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");

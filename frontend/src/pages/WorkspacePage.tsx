@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { BarChart3, Database, SlidersHorizontal } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -15,12 +16,23 @@ import {
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DataPanel } from "@/components/workspace/DataPanel";
 import { ModelPanel } from "@/components/workspace/ModelPanel";
 import { ResultsPanel } from "@/components/workspace/ResultsPanel";
 import { useBackgroundNotification } from "@/hooks/useBackgroundNotification";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
+
+// Issue #178: swap the Workspace to a bottom-tab layout when the
+// viewport is narrower than Tailwind's `md` breakpoint. The three
+// ResizablePanels collapse to unusable widths at 375 px; a one-panel-
+// at-a-time tab view is the only layout that remains usable on a
+// phone-sized viewport without redesigning each panel individually.
+const MOBILE_QUERY = "(max-width: 767px)";
+
+type MobileTab = "data" | "model" | "results";
 
 export function WorkspacePage() {
   const queryClient = useQueryClient();
@@ -42,6 +54,9 @@ export function WorkspacePage() {
   );
   const [running, setRunning] = useState(false);
   const [modelTab, setModelTab] = useState<"fit" | "tune">("fit");
+  const [mobileTab, setMobileTab] = useState<MobileTab>("data");
+
+  const isMobile = useMediaQuery(MOBILE_QUERY);
 
   // Re-hydrate when the URL param changes (e.g. the user clicks
   // "Open in Workspace" on a SECOND job from the Jobs page, which
@@ -142,6 +157,10 @@ export function WorkspacePage() {
     // the workspace selection so the user sees its progress.
     setCurrentJobId(childJobId);
     setRunning(true);
+    // Issue #178: on mobile, the Results panel is on a separate tab —
+    // move focus to it when a child job starts so the user sees the
+    // progress view immediately instead of staying on Data/Model.
+    setMobileTab("results");
   }, []);
 
   const shortcuts = useMemo(
@@ -152,6 +171,87 @@ export function WorkspacePage() {
     [handleFit, handleTune],
   );
   useKeyboardShortcuts(shortcuts);
+
+  if (isMobile) {
+    return (
+      <Tabs
+        value={mobileTab}
+        onValueChange={(v) => setMobileTab(v as MobileTab)}
+        className="flex h-full flex-col gap-0"
+      >
+        <TabsContent
+          value="data"
+          className="flex-1 overflow-auto focus-visible:outline-none"
+        >
+          <DataPanel
+            onDataChanged={handleDataChanged}
+            onTaskChanged={handleTaskChanged}
+            uiSchema={uiSchema}
+          />
+        </TabsContent>
+        <TabsContent
+          value="model"
+          className="flex-1 overflow-auto focus-visible:outline-none"
+        >
+          <ModelPanel
+            hasData={hasData}
+            task={task}
+            onFit={handleFit}
+            onTune={handleTune}
+            running={running}
+            activeTab={modelTab}
+            onActiveTabChange={setModelTab}
+          />
+        </TabsContent>
+        <TabsContent
+          value="results"
+          className="flex-1 overflow-auto focus-visible:outline-none"
+        >
+          <ResultsPanel
+            jobId={currentJobId}
+            hasData={hasData}
+            hasConfig={hasData && config != null}
+            currentConfig={config ?? undefined}
+            onApplyToFit={handleApplyToFit}
+            onJobDone={handleJobDone}
+            onJobStarted={handleJobStarted}
+          />
+        </TabsContent>
+        <TabsList
+          aria-label="Workspace sections"
+          className="h-14 w-full shrink-0 justify-around rounded-none border-t border-border bg-background p-0"
+        >
+          <TabsTrigger
+            value="data"
+            className="flex h-full flex-1 flex-col gap-0.5 rounded-none text-xs"
+          >
+            <Database className="size-4" />
+            Data
+          </TabsTrigger>
+          <TabsTrigger
+            value="model"
+            className="flex h-full flex-1 flex-col gap-0.5 rounded-none text-xs"
+          >
+            <SlidersHorizontal className="size-4" />
+            Model
+          </TabsTrigger>
+          <TabsTrigger
+            value="results"
+            className="relative flex h-full flex-1 flex-col gap-0.5 rounded-none text-xs"
+          >
+            <BarChart3 className="size-4" />
+            Results
+            {running && mobileTab !== "results" && (
+              <span
+                aria-hidden="true"
+                className="absolute top-1 right-3 size-2 animate-pulse rounded-full bg-primary"
+              />
+            )}
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+    );
+  }
 
   return (
     <ResizablePanelGroup

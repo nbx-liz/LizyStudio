@@ -1,8 +1,17 @@
 import { expect, test } from "@playwright/test";
+import { isMobileProject } from "./helpers/mobile";
 import { dismissOnboarding } from "./helpers/onboarding";
 
 test.describe("Workspace layout", () => {
-  test.beforeEach(async ({ page }) => {
+  test.beforeEach(async ({ page }, testInfo) => {
+    // Issue #178: the 3-panel ResizablePanelGroup is desktop/tablet
+    // only. Mobile uses a bottom-tab navigation and the assertions
+    // below (3 simultaneously-visible panels, ResizablePanel slot)
+    // never hold there.
+    test.skip(
+      isMobileProject(testInfo),
+      "3-panel layout is desktop/tablet only (Issue #178)",
+    );
     await dismissOnboarding(page);
   });
 

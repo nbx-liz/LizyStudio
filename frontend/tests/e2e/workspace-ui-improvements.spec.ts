@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
+import { openWorkspaceSectionIfMobile } from "./helpers/mobile";
 import { dismissOnboarding } from "./helpers/onboarding";
 
 const API = "http://localhost:8501/api";
@@ -123,10 +124,14 @@ test.describe("Workspace UI Improvements", () => {
     await expect(page).toHaveScreenshot("data-panel-segments.png");
   });
 
-  test("UI: Model Panel — no Auto button visible", async ({ page }) => {
+  test("UI: Model Panel — no Auto button visible", async ({
+    page,
+  }, testInfo) => {
     await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
+
+    await openWorkspaceSectionIfMobile(page, testInfo, "model");
 
     // Fit tab should be active by default
     await expect(page.getByRole("tab", { name: "Fit" })).toBeVisible();
@@ -146,17 +151,11 @@ test.describe("Workspace UI Improvements", () => {
   test("UI: Tune tab shows metric chips instead of direction select", async ({
     page,
   }, testInfo) => {
-    // Issue #169: on chromium-mobile the 3-panel Workspace layout
-    // clips the Tune settings label to hidden. Deferred to a
-    // dedicated mobile-layout issue; skip here so the test stays
-    // green on desktop + tablet profiles.
-    if (testInfo.project.name === "chromium-mobile") {
-      test.skip(true, "Issue #169: mobile Workspace layout overhaul pending");
-      return;
-    }
     await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
+
+    await openWorkspaceSectionIfMobile(page, testInfo, "model");
 
     // Switch to Tune tab
     await page.getByRole("tab", { name: "Tune" }).click();
@@ -196,10 +195,14 @@ test.describe("Workspace UI Improvements", () => {
     await expect(page).toHaveScreenshot("tune-tab.png");
   });
 
-  test("UI: Search Space shows segment buttons for Mode", async ({ page }) => {
+  test("UI: Search Space shows segment buttons for Mode", async ({
+    page,
+  }, testInfo) => {
     await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
+
+    await openWorkspaceSectionIfMobile(page, testInfo, "model");
 
     // Switch to Tune tab
     await page.getByRole("tab", { name: "Tune" }).click();

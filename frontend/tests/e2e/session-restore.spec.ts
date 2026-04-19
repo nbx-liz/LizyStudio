@@ -17,6 +17,7 @@ import {
   setupAndFit,
   waitForJobDone,
 } from "./helpers/api";
+import { openWorkspaceSectionIfMobile } from "./helpers/mobile";
 import { dismissOnboarding } from "./helpers/onboarding";
 
 // Per-spec random suffix avoids /tmp filename collisions across
@@ -54,7 +55,7 @@ test.describe("Session Restore", () => {
   test("UI: reload with ?job_id= restores ResultsPanel onto completed job", async ({
     page,
     request,
-  }) => {
+  }, testInfo) => {
     test.setTimeout(120_000);
 
     // Set up a completed job purely via the API, then drop the user
@@ -68,6 +69,7 @@ test.describe("Session Restore", () => {
     await dismissOnboarding(page);
     await page.goto(`/?job_id=${encodeURIComponent(jobId)}`);
     await page.waitForLoadState("networkidle");
+    await openWorkspaceSectionIfMobile(page, testInfo, "results");
 
     // The Completed badge is rendered by ResultsCompletedView only
     // after the page successfully hydrates currentJobId AND fetches
@@ -81,7 +83,7 @@ test.describe("Session Restore", () => {
   test("UI: reload without ?job_id= leaves Workspace empty", async ({
     page,
     request,
-  }) => {
+  }, testInfo) => {
     // Boundary: even when a current_job_id exists server-side, the
     // Workspace page intentionally does NOT auto-hydrate it without a
     // URL param (see WorkspacePage.tsx Issue #101 comment block).
@@ -98,6 +100,7 @@ test.describe("Session Restore", () => {
     await dismissOnboarding(page);
     await page.goto("/");
     await page.waitForLoadState("networkidle");
+    await openWorkspaceSectionIfMobile(page, testInfo, "results");
 
     await expect(
       page.getByText("Results will appear here after running a job."),
