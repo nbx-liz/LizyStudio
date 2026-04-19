@@ -160,3 +160,106 @@ class PlotResponseModel(BaseModel):
 class BackendInfoResponse(BaseModel):
     name: str
     version: str
+
+
+# --- Inference (C-2) ---
+
+
+class InferenceRunResponse(BaseModel):
+    """Response from ``POST /api/inference/run``."""
+
+    inf_id: str
+    job_id: str
+
+
+class InferenceUploadResponse(BaseModel):
+    """Response from ``POST /api/inference/upload``."""
+
+    upload_path: str
+    filename: str
+
+
+class InferenceDataRefResponse(BaseModel):
+    """DataRef embedded inside :class:`InferenceRecordResponse`.
+
+    Uses ``extra='allow'`` so fields like ``mtime`` that the backend
+    may record on uploads still round-trip without validation errors.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    source_type: Literal["path", "upload"]
+    path: str
+    filename: str
+    fingerprint: str
+    shape: list[int]
+
+
+class InferenceRecordResponse(BaseModel):
+    """Persisted inference record (history entry / GET by id)."""
+
+    inf_id: str
+    job_id: str
+    data_ref: InferenceDataRefResponse
+    has_ground_truth: bool
+    created_at: str
+    row_count: int
+    warnings: list[str]
+
+
+class PredictionsResponse(BaseModel):
+    """Paginated predictions table returned by ``/predictions``."""
+
+    columns: list[str]
+    data: list[dict[str, Any]]
+    total_rows: int
+
+
+class InferenceMetricsResponse(BaseModel):
+    """Inference metrics — regression vs. classification share one shape.
+
+    The exact metric set is backend- and task-dependent. The known keys
+    emitted by :func:`lizystudio.services.inference.evaluate_predictions`
+    are declared here so the generated TypeScript type exposes concrete
+    fields, while ``extra='allow'`` keeps forward-compatibility when a
+    backend adds a new metric (e.g. ``f1`` for multiclass).  All fields
+    are optional because no single task emits every one of them.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    # Regression
+    mae: float | None = None
+    rmse: float | None = None
+    # Classification (binary / multiclass)
+    accuracy: float | None = None
+    auc: float | None = None
+    logloss: float | None = None
+
+
+class ComparisonGroupStats(BaseModel):
+    """Summary statistics for one inference run in a comparison.
+
+    Optional keys (``median`` for regression, ``positive_pct`` for
+    binary classification) appear only when the task warrants them —
+    ``extra='allow'`` lets them flow through without validation errors.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    mean: float
+    std: float
+    min: float
+    max: float
+    count: int
+
+
+class ComparisonStatsResponse(BaseModel):
+    """Response from ``GET /api/inference/{inf_id}/comparison/{other_inf_id}``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    current: ComparisonGroupStats
+    other: ComparisonGroupStats
+    current_proba: ComparisonGroupStats | None = None
+    other_proba: ComparisonGroupStats | None = None
