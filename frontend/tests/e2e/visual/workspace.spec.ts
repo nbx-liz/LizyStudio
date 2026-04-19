@@ -15,31 +15,6 @@ function createTestCsv(rows = 100): string {
   return csvPath;
 }
 
-async function setupAndFit(
-  request: import("@playwright/test").APIRequestContext,
-  csvPath: string,
-): Promise<string> {
-  const loadRes = await request.post(`${API}/workspace/data/path`, {
-    data: { path: csvPath },
-  });
-  expect(loadRes.status()).toBe(200);
-
-  const defaultsRes = await request.get(
-    `${API}/workspace/config/defaults?task=binary&target=target`,
-  );
-  expect(defaultsRes.status()).toBe(200);
-  const config = await defaultsRes.json();
-
-  const putRes = await request.put(`${API}/workspace/config`, {
-    data: config,
-  });
-  expect(putRes.status()).toBe(200);
-
-  const fitRes = await request.post(`${API}/workspace/fit`);
-  expect(fitRes.status()).toBe(200);
-  return (await fitRes.json()).job_id as string;
-}
-
 async function waitForJobDone(
   request: import("@playwright/test").APIRequestContext,
   jobId: string,

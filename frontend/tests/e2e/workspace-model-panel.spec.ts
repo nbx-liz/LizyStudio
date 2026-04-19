@@ -84,7 +84,7 @@ test.describe("ModelPanel interactions", () => {
     await expect(exportButton).toBeVisible();
 
     // Intercept the window.open call triggered by handleExport
-    const [popup] = await Promise.all([
+    await Promise.all([
       page.waitForEvent("popup", { timeout: 5000 }).catch(() => null),
       exportButton.click(),
     ]);
@@ -172,8 +172,7 @@ test.describe("ModelPanel interactions", () => {
     const inputVisible = await numberInput.isVisible().catch(() => false);
 
     if (inputVisible) {
-      // Get current value, change it, then verify undo enables
-      const currentValue = await numberInput.inputValue();
+      // Change the value, then verify undo enables
       await numberInput.fill("42");
       await numberInput.press("Tab"); // Trigger blur/change event
 
