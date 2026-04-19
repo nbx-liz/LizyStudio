@@ -19,6 +19,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel  # noqa: F401
 
 import lizystudio.security as security
+from lizystudio.api.deps import get_broadcaster
 from lizystudio.api.errors import (
     ConfigImportError,
     FileInvalidError,
@@ -502,21 +503,14 @@ def config_download(
     )
 
 
-# --- Helpers ---
-
-
-def _get_broadcaster(request: Request) -> ProgressBroadcaster:
-    return request.app.state.broadcaster  # type: ignore[no-any-return]
-
-
 # --- Fit / Tune endpoints (BLUEPRINT §5.2 Fit/Tune) ---
 
 
 @router.post("/fit", response_model=JobStartResponse)
 def workspace_fit(
-    request: Request,
     ws: WorkspaceState = Depends(get_workspace),
     job_store: JobStore = Depends(get_job_store),
+    broadcaster: ProgressBroadcaster = Depends(get_broadcaster),
 ) -> dict[str, Any]:
     """Create a fit job (thread managed by Service layer)."""
     if not ws.config:
@@ -542,7 +536,7 @@ def workspace_fit(
         job_id = start_fit_async(
             ws=ws,
             job_store=job_store,
-            broadcaster=_get_broadcaster(request),
+            broadcaster=broadcaster,
             config=ws.config,
             dataframe=ws.dataframe,
             job=job,
@@ -570,9 +564,9 @@ def workspace_fit(
 
 @router.post("/tune", response_model=JobStartResponse)
 def workspace_tune(
-    request: Request,
     ws: WorkspaceState = Depends(get_workspace),
     job_store: JobStore = Depends(get_job_store),
+    broadcaster: ProgressBroadcaster = Depends(get_broadcaster),
 ) -> dict[str, Any]:
     """Create a tune job (thread managed by Service layer)."""
     if not ws.config:
@@ -615,7 +609,7 @@ def workspace_tune(
         job_id = start_tune_async(
             ws=ws,
             job_store=job_store,
-            broadcaster=_get_broadcaster(request),
+            broadcaster=broadcaster,
             config=ws.config,
             dataframe=ws.dataframe,
             job=job,

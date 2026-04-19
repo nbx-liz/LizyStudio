@@ -11,9 +11,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import Depends, Request
+from fastapi import Depends
 from pydantic import BaseModel, ConfigDict
 
+from lizystudio.api.deps import get_broadcaster
 from lizystudio.api.errors import (
     JobNotCompletedError,
     JobNotFoundError,
@@ -26,6 +27,7 @@ from lizystudio.api.errors import (
 from lizystudio.api.jobs import _get_job_or_404, router
 from lizystudio.services.jobs import Job, JobStore, get_job_store
 from lizystudio.services.workspace import WorkspaceState, get_workspace
+from lizystudio.ws.progress import ProgressBroadcaster
 
 # Hard upper bound on Re-tune / Resume n_trials. Mirrors lizyml's
 # _MAX_RE_TUNE_TRIALS_PER_ROUND so a Re-tune child cannot smuggle
@@ -156,18 +158,13 @@ def _claim_retune_slot(parent_job_id: str, job_store: JobStore) -> str:
     return placeholder
 
 
-def _get_broadcaster(request: Request) -> Any:
-    """Pull the ProgressBroadcaster off the app state (H-0062)."""
-    return request.app.state.broadcaster
-
-
 @router.post("/{job_id}/retune")
 def retune_job(
     job_id: str,
     body: RetuneRequest,
-    request: Request,
     job_store: JobStore = Depends(get_job_store),
     ws: WorkspaceState = Depends(get_workspace),
+    broadcaster: ProgressBroadcaster = Depends(get_broadcaster),
 ) -> dict[str, str]:
     """Start a Re-tune child job from a completed parent Tune (H-0062)."""
     from lizystudio.services.training import start_retune_async
@@ -212,7 +209,7 @@ def retune_job(
         start_retune_async(
             ws=ws,
             job_store=job_store,
-            broadcaster=_get_broadcaster(request),
+            broadcaster=broadcaster,
             parent_job=parent,
             child_job=child,
             n_trials=body.n_trials,
@@ -231,9 +228,9 @@ def retune_job(
 def resume_job(
     job_id: str,
     body: ResumeRequest,
-    request: Request,
     job_store: JobStore = Depends(get_job_store),
     ws: WorkspaceState = Depends(get_workspace),
+    broadcaster: ProgressBroadcaster = Depends(get_broadcaster),
 ) -> dict[str, str]:
     """Resume a failed Tune Job from its last saved checkpoint (H-0062)."""
     from lizystudio.services.training import start_retune_async
@@ -272,7 +269,7 @@ def resume_job(
         start_retune_async(
             ws=ws,
             job_store=job_store,
-            broadcaster=_get_broadcaster(request),
+            broadcaster=broadcaster,
             parent_job=parent,
             child_job=child,
             n_trials=n_trials,

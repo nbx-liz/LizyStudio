@@ -82,6 +82,7 @@ select = ["E", "F", "I", "W", "UP", "B", "SIM"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/lizystudio/api/*.py" = ["B008"]  # Depends() in defaults is standard FastAPI
+"src/lizystudio/server.py" = ["B008"]  # WebSocket handler uses Depends() (A-8)
 "src/lizystudio/_version.py" = ["UP006", "UP007", "UP035", "I001"]  # auto-generated
 
 [tool.mypy]
