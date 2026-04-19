@@ -217,12 +217,15 @@ class TestThreadJoinOnNewJob:
         sample_df: pd.DataFrame,
     ) -> None:
         """If a previous thread is stuck, starting a new job should raise an error."""
-        import lizystudio.services.training as training_mod
+        import lizystudio.services._training_core as core_mod
         from lizystudio.services.training import PreviousJobStillRunningError
 
-        # Use a very short timeout for testing
-        original_timeout = training_mod._JOIN_TIMEOUT
-        training_mod._JOIN_TIMEOUT = 0.1
+        # Use a very short timeout for testing. The constant now lives in
+        # _training_core (A-3 extraction); training.py re-exports the
+        # name for backwards compatibility but `_join_previous_thread`
+        # reads it from the core module.
+        original_timeout = core_mod._JOIN_TIMEOUT
+        core_mod._JOIN_TIMEOUT = 0.1
 
         stuck_event = threading.Event()
 
@@ -231,7 +234,7 @@ class TestThreadJoinOnNewJob:
 
         stuck_thread = threading.Thread(target=stuck_target, daemon=True)
         stuck_thread.start()
-        ws._job_thread = stuck_thread
+        ws.register_job_thread(stuck_thread)
 
         try:
             job = job_store.create(
@@ -250,7 +253,7 @@ class TestThreadJoinOnNewJob:
                     job=job,
                 )
         finally:
-            training_mod._JOIN_TIMEOUT = original_timeout
+            core_mod._JOIN_TIMEOUT = original_timeout
             stuck_event.set()
 
     def test_thread_count_stable_after_multiple_jobs(

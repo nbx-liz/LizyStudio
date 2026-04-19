@@ -3,24 +3,38 @@
 Provides both synchronous `run_fit`/`run_tune` and async launcher helpers
 `start_fit_async`/`start_tune_async` that handle thread creation and
 workspace state updates (Phase 29 — Router must NOT own threads).
+
+Shared lifecycle primitives (``_run_job_core``, ``_run_subprocess_job``,
+progress callbacks, pickle preflight, etc.) live in
+:mod:`lizystudio.services._training_core` as of the A-3 extraction.
+Historical names are re-exported from this module for backwards
+compatibility with callers such as the lizyml adapter's
+``CancelledError`` lookup.
 """
 
 from __future__ import annotations
 
 import copy
-import io
 import logging
 import threading
-import time
-import traceback
-from collections.abc import Callable
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from lizystudio.backends.base import BackendAdapter, ProgressCallback
 from lizystudio.backends.types import FitSummary, TuningSummary
-from lizystudio.metrics import record_job_terminal
+from lizystudio.services._training_core import (  # noqa: F401
+    _JOIN_TIMEOUT,
+    CancelledError,
+    PreviousJobStillRunningError,
+    _emit_terminal_metric,
+    _join_previous_thread,
+    _make_cancel_aware_cb,
+    _prepare_autofit_config,
+    _run_job_core,
+    _run_pickle_preflight,
+    _run_subprocess_job,
+    _save_tuning_plot,
+    _subprocess_duration_seconds,
+)
 from lizystudio.services.jobs import Job, JobStore
 
 if TYPE_CHECKING:
@@ -28,174 +42,6 @@ if TYPE_CHECKING:
     from lizystudio.ws.progress import ProgressBroadcaster
 
 _logger = logging.getLogger(__name__)
-
-
-class CancelledError(Exception):
-    """Raised when a job's cancellation flag is detected."""
-
-
-def _make_cancel_aware_cb(
-    job_id: str,
-    job_store: JobStore,
-    broadcaster: ProgressBroadcaster | None,
-) -> ProgressCallback:
-    """Create a progress callback that checks for cancellation (H-0011)."""
-
-    def callback(
-        *,
-        current: int,
-        total: int,
-        message: str,
-        **extra: Any,
-    ) -> None:
-        if job_store.is_cancel_requested(job_id):
-            raise CancelledError
-        if broadcaster is not None:
-            broadcaster.send_progress(
-                job_id,
-                current=current,
-                total=total,
-                message=message,
-                fold_results=extra.get("fold_results"),
-                trial_results=extra.get("trial_results"),
-            )
-
-    return callback
-
-
-def _subprocess_duration_seconds(job: Job) -> float:
-    """Compute wall-clock duration from a subprocess-owned job.
-
-    H-0066: the subprocess child stamps both ``created_at`` and
-    ``completed_at`` in ISO-8601. The parent cannot share the thread-
-    mode ``time.monotonic()`` baseline, so this helper reconstructs
-    the elapsed seconds from the persisted timestamps.
-
-    Returns 0.0 when either timestamp is missing / unparseable — safer
-    than propagating an exception through the finally-block.
-    """
-    if job.completed_at is None:
-        return 0.0
-    try:
-        created = datetime.fromisoformat(job.created_at)
-        completed = datetime.fromisoformat(job.completed_at)
-    except ValueError:
-        return 0.0
-    return max(0.0, (completed - created).total_seconds())
-
-
-def _emit_terminal_metric(job: Job, duration: float = 0.0) -> None:
-    """Bump `lizystudio_jobs_total` and observe duration (H-0065, H-0066).
-
-    Centralises the per-literal dispatch that mypy requires for
-    Literal narrowing. Two call sites share this helper:
-    ``_run_job_core``'s finally block (thread mode) and
-    ``_run_subprocess_job``'s finally block (subprocess mode).
-    The ``claim_active`` early-fail path passes a hardcoded literal
-    and calls ``record_job_terminal`` directly.
-
-    *duration* is the wall-clock seconds between ``claim_active``
-    success and terminal state; 0.0 for paths that failed before
-    training started.
-    """
-    if job.status == "completed":
-        record_job_terminal(job.job_type, "completed", duration=duration)
-    elif job.status == "failed":
-        record_job_terminal(job.job_type, "failed", duration=duration)
-    elif job.status == "cancelled":
-        record_job_terminal(job.job_type, "cancelled", duration=duration)
-
-
-def _run_job_core(
-    *,
-    job: Job,
-    job_store: JobStore,
-    broadcaster: ProgressBroadcaster | None,
-    execute_fn: Callable[
-        [ProgressCallback],
-        tuple[FitSummary, TuningSummary | None, str],
-    ],
-) -> Job:
-    """Shared execution wrapper for fit/tune jobs.
-
-    Handles status transitions, log capture, error handling, and persistence.
-    """
-    if not job_store.claim_active(job.job_id):
-        job.status = "failed"
-        job.error = "Another job is already running"
-        job.completed_at = datetime.now(timezone.utc).isoformat()
-        job_store.update(job)
-        if broadcaster is not None:
-            broadcaster.send_error(
-                job.job_id, "Another job is already running", code="JOB_CONFLICT"
-            )
-        record_job_terminal(job.job_type, "failed")
-        return job
-
-    job.status = "running"
-    job_store.update(job)
-
-    # H-0066: capture wall-clock start for the jobs_duration_seconds
-    # histogram. `time.monotonic()` is guaranteed monotonic by the API
-    # contract, so a system clock adjustment during a long tune
-    # cannot corrupt the sample.
-    start_time = time.monotonic()
-
-    cb = _make_cancel_aware_cb(job.job_id, job_store, broadcaster)
-
-    # Capture execution logs with a scoped logger (not root)
-    log_buffer = io.StringIO()
-    handler = logging.StreamHandler(log_buffer)
-    handler.setLevel(logging.DEBUG)
-    job_logger = logging.getLogger(f"lizystudio.training.{job.job_id}")
-    job_logger.addHandler(handler)
-    job_logger.setLevel(logging.DEBUG)
-
-    try:
-        fit_result, tune_result, model_dir = execute_fn(cb)
-        job.status = "completed"
-        job.fit_result = fit_result
-        job.tune_result = tune_result
-        job.model_path = model_dir
-        job.completed_at = datetime.now(timezone.utc).isoformat()
-        job_store.update(job)
-        if broadcaster is not None:
-            broadcaster.send_completed(job.job_id)
-    except (CancelledError, KeyboardInterrupt):
-        job.status = "cancelled"
-        job.completed_at = datetime.now(timezone.utc).isoformat()
-        job_store.update(job)
-        if broadcaster is not None:
-            broadcaster.send_error(job.job_id, "Job cancelled", code="JOB_CANCELLED")
-    except Exception as exc:
-        job.status = "failed"
-        # Full traceback stored to disk; sanitized message sent to clients
-        job.error = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
-        job.completed_at = datetime.now(timezone.utc).isoformat()
-        job_store.update(job)
-        if broadcaster is not None:
-            safe_msg = f"{type(exc).__name__}: {exc}"
-            broadcaster.send_error(job.job_id, safe_msg)
-    finally:
-        job_store.release_active(job.job_id)
-        job_store.clear_cancel(job.job_id)
-        elapsed = time.monotonic() - start_time
-        _emit_terminal_metric(job, duration=elapsed)  # H-0065 / H-0066
-        job_logger.removeHandler(handler)
-        handler.close()
-        # Persist captured logs. An OSError here must not propagate out of
-        # the finally block — doing so would short-circuit the job runner
-        # thread and leave ``ws._job_thread`` pointing at a zombie.
-        try:
-            log_path = job_store.jobs_dir / job.job_id / "execution.log"
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            log_path.write_text(log_buffer.getvalue(), encoding="utf-8")
-        except OSError:
-            _logger.warning(
-                "Failed to persist execution log for job %s", job.job_id, exc_info=True
-            )
-
-    return job
 
 
 def run_fit(
@@ -223,47 +69,6 @@ def run_fit(
         broadcaster=broadcaster,
         execute_fn=execute,
     )
-
-
-def _save_tuning_plot(
-    backend: BackendAdapter,
-    model: Any,
-    job_dir: Path,
-) -> None:
-    """Persist the tuning plot JSON so it survives model export (H-0002 B).
-
-    The exported model (fit with best_params) loses Optuna study data,
-    so we capture the plot from the original tune model.
-    """
-    try:
-        plot_data = backend.plot(model, "tuning")
-        path = job_dir / "tuning_plot.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(plot_data.plotly_json, encoding="utf-8")
-    except Exception:  # noqa: BLE001
-        _logger.warning(
-            "Failed to save tuning plot for %s", job_dir.name, exc_info=True
-        )
-
-
-def _prepare_autofit_config(
-    config: dict[str, Any], best_params: dict[str, Any]
-) -> dict[str, Any]:
-    """Build a fit-ready config from the original config + best_params.
-
-    Uses the original config as base (same as Apply to Fit) and merges
-    best_params into model.params.  The tuning section is stripped since
-    it is not needed for a plain fit.
-    """
-
-    result = copy.deepcopy(config)
-    model = dict(result.get("model", {}))
-    existing_params = dict(model.get("params", {}))
-    model["params"] = {**existing_params, **best_params}
-    result["model"] = model
-    # Remove tuning section — not needed for fit
-    result.pop("tuning", None)
-    return result
 
 
 def _extract_re_tune(config: dict[str, Any]) -> dict[str, Any] | None:
@@ -378,25 +183,6 @@ def _prepare_tune_config(config: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _run_pickle_preflight(job_dir: Path) -> None:
-    """Run the H-0062 pre-flight check before tune launches.
-
-    Translates the adapter-level :class:`PicklePreflightError` into a
-    Studio-domain :class:`PicklePreflightFailedError` so the API layer
-    can return the standard JSON envelope with ``PICKLE_PREFLIGHT_FAILED``.
-    """
-    from lizystudio.api.errors import PicklePreflightFailedError
-    from lizystudio.backends.lizyml import (
-        PicklePreflightError,
-        preflight_pickle_check,
-    )
-
-    try:
-        preflight_pickle_check(job_dir)
-    except PicklePreflightError as exc:
-        raise PicklePreflightFailedError(str(exc)) from exc
-
-
 def run_tune(
     *,
     job: Job,
@@ -446,121 +232,6 @@ def run_tune(
 
 # --- Async launchers (Phase 29: thread ownership in Service, not Router) ---
 
-_JOIN_TIMEOUT = 30  # seconds — generous to allow subprocess cleanup
-
-
-class PreviousJobStillRunningError(Exception):
-    """Raised when a previous job thread is still alive after join timeout."""
-
-
-def _join_previous_thread(ws: WorkspaceState) -> None:
-    """Join the previous job thread if it exists (H-0040).
-
-    Prevents thread/OpenMP thread-pool accumulation by ensuring the prior
-    worker is cleaned up before spawning a new one.
-
-    Raises PreviousJobStillRunningError if the thread does not finish
-    within _JOIN_TIMEOUT seconds (prevents concurrent tune execution).
-    """
-    with ws._lock:
-        prev = ws._job_thread
-    if prev is not None and prev.is_alive():
-        prev.join(timeout=_JOIN_TIMEOUT)
-        if prev.is_alive():
-            raise PreviousJobStillRunningError(
-                f"Previous job thread did not finish within {_JOIN_TIMEOUT}s"
-            )
-
-
-def _run_subprocess_job(
-    ws: WorkspaceState,
-    job: Job,
-    job_store: JobStore,
-    broadcaster: ProgressBroadcaster | None,
-    *,
-    mode: str | None = None,
-    parent_job_id: str | None = None,
-    retune_n_trials: int | None = None,
-    retune_expand_boundary: bool | None = None,
-    retune_boundary_threshold: float | None = None,
-    on_data_missing: Callable[[Job], None] | None = None,
-) -> Job:
-    """Run a job via subprocess and update workspace state.
-
-    Shared by fit, tune, and retune subprocess paths. Optional keyword
-    arguments carry retune-specific inputs so they can be forwarded to
-    the child process without duplicating the orchestration logic.
-
-    *on_data_missing* is called instead of the default inline failure
-    handling when ``ws.data_ref.path`` is absent; retune uses this to
-    route through ``_mark_retune_child_failed`` which also releases
-    the parent lock.
-    """
-    from lizystudio.services.subprocess_runner import run_job_in_subprocess
-    from lizystudio.services.workspace import get_backend_name
-
-    # H-0065: set to True when the caller's on_data_missing callback
-    # handles the terminal-state bookkeeping (including metric
-    # emission) so the finally-block below does not double-emit.
-    terminal_already_recorded = False
-    try:
-        if ws.data_ref is None or not ws.data_ref.path:
-            if on_data_missing is not None:
-                on_data_missing(job)
-                terminal_already_recorded = True
-            else:
-                job.status = "failed"
-                job.error = "No data loaded — cannot run subprocess job"
-                job.completed_at = datetime.now(timezone.utc).isoformat()
-                job_store.update(job)
-                if broadcaster is not None:
-                    broadcaster.send_error(job.job_id, job.error)
-                with ws._lock:
-                    ws.current_job_id = job.job_id
-                record_job_terminal(job.job_type, "failed")
-                terminal_already_recorded = True
-            return job
-        data_path = ws.data_ref.path
-        extra_kwargs: dict[str, Any] = {}
-        if mode is not None:
-            extra_kwargs["mode"] = mode
-        if parent_job_id is not None:
-            extra_kwargs["parent_job_id"] = parent_job_id
-        if retune_n_trials is not None:
-            extra_kwargs["retune_n_trials"] = retune_n_trials
-        if retune_expand_boundary is not None:
-            extra_kwargs["retune_expand_boundary"] = retune_expand_boundary
-        if retune_boundary_threshold is not None:
-            extra_kwargs["retune_boundary_threshold"] = retune_boundary_threshold
-        finished = run_job_in_subprocess(
-            job=job,
-            job_store=job_store,
-            broadcaster=broadcaster,
-            backend_name=get_backend_name(ws),
-            data_path=data_path,
-            **extra_kwargs,
-        )
-        with ws._lock:
-            ws.workspace_fit_result = finished.fit_result
-            ws.workspace_tune_result = finished.tune_result
-            ws.current_job_id = finished.job_id
-        return finished
-    finally:
-        job_store.release_active(job.job_id)
-        # H-0065: subprocess path writes the terminal status on disk
-        # from the child process; re-read it here so the parent emits
-        # exactly one counter increment per job in either mode. Skip
-        # when the early-return paths above already emitted one.
-        if not terminal_already_recorded:
-            latest = job_store.get(job.job_id)
-            if latest is not None:
-                # H-0066: duration = completed_at - created_at. Fall
-                # back to 0.0 when either timestamp is missing (e.g.
-                # crash before completion was stamped); the counter
-                # still increments so totals stay correct.
-                duration = _subprocess_duration_seconds(latest)
-                _emit_terminal_metric(latest, duration=duration)
-
 
 def start_fit_async(
     *,
@@ -590,15 +261,15 @@ def start_fit_async(
                 dataframe=dataframe,
                 broadcaster=broadcaster,
             )
-            with ws._lock:
-                ws.workspace_fit_result = finished.fit_result
-                ws.workspace_tune_result = None
-                ws.current_job_id = finished.job_id
+            ws.record_completion(
+                fit_result=finished.fit_result,
+                tune_result=None,
+                job_id=finished.job_id,
+            )
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
-    with ws._lock:
-        ws._job_thread = t
+    ws.register_job_thread(t)
     return job.job_id
 
 
@@ -630,15 +301,15 @@ def start_tune_async(
                 dataframe=dataframe,
                 broadcaster=broadcaster,
             )
-            with ws._lock:
-                ws.workspace_fit_result = finished.fit_result
-                ws.workspace_tune_result = finished.tune_result
-                ws.current_job_id = finished.job_id
+            ws.record_completion(
+                fit_result=finished.fit_result,
+                tune_result=finished.tune_result,
+                job_id=finished.job_id,
+            )
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
-    with ws._lock:
-        ws._job_thread = t
+    ws.register_job_thread(t)
     return job.job_id
 
 
@@ -650,7 +321,7 @@ def start_tune_async(
 # ``from lizystudio.services.training import start_retune_async, run_retune``
 # call sites continue to work without churn.
 
-from lizystudio.services.training_retune import (  # noqa: E402
+from lizystudio.services.training_retune import (  # noqa: E402, F401
     _copy_checkpoint_to_child,
     _mark_retune_child_failed,
     _run_retune_subprocess,
@@ -658,12 +329,15 @@ from lizystudio.services.training_retune import (  # noqa: E402
     start_retune_async,
 )
 
-__all__ = [  # noqa: F405 -- module re-exports
+# Public API surface: only symbols meant for external import.  The
+# private names (``_run_job_core``, ``_JOIN_TIMEOUT``, etc.) remain
+# reachable through this module for backwards compatibility with
+# pre-existing tests and the lizyml adapter, but are intentionally
+# omitted from ``__all__`` so ``from lizystudio.services.training
+# import *`` does not leak them.
+__all__ = [
     "CancelledError",
     "PreviousJobStillRunningError",
-    "_copy_checkpoint_to_child",
-    "_mark_retune_child_failed",
-    "_run_retune_subprocess",
     "run_fit",
     "run_retune",
     "run_tune",
