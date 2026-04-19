@@ -13,13 +13,21 @@ from typing import Any
 
 import cloudpickle
 
+from lizystudio.backends.exceptions import (
+    CheckpointIncompatibleError,
+    CheckpointPreflightError,
+)
+
 from .pickle_compat import (
     MODEL_META,
     MODEL_META_TMP,
     MODEL_PKL,
     MODEL_PKL_TMP,
     PICKLE_SCHEMA_VERSION,
+    PickleIncompatibleError,
+    PicklePreflightError,
     collect_pickle_versions,
+    preflight_pickle_check,
     verify_pickle_compatibility,
 )
 
@@ -28,6 +36,41 @@ logger = logging.getLogger(__name__)
 
 class CheckpointMixin:
     """Save and load model checkpoints."""
+
+    def preflight_checkpoint_dir(self, job_dir: Path) -> None:
+        """Fail fast before tune if *job_dir* cannot host a checkpoint (H-0068).
+
+        Raises :class:`CheckpointPreflightError` when the target dir is
+        not writable or cloudpickle cannot round-trip a sentinel.  The
+        service layer translates this to the API-layer envelope.
+        """
+
+        try:
+            preflight_pickle_check(Path(job_dir))
+        except PicklePreflightError as exc:
+            raise CheckpointPreflightError(str(exc)) from exc
+
+    def verify_checkpoint_compatibility(self, job_dir: Path) -> None:
+        """Validate ``job_dir/model_meta.json`` against the current runtime (H-0068).
+
+        Missing sidecars (legacy checkpoints pre-H-0062) are tolerated
+        as a no-op.  Corrupted sidecars and version mismatches both
+        surface as :class:`CheckpointIncompatibleError` so the API layer
+        can respond uniformly without importing from this package.
+        """
+        meta_path = Path(job_dir) / MODEL_META
+        if not meta_path.exists():
+            return
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CheckpointIncompatibleError(
+                f"Corrupted model_meta.json at {meta_path}: {exc}"
+            ) from exc
+        try:
+            verify_pickle_compatibility(meta)
+        except PickleIncompatibleError as exc:
+            raise CheckpointIncompatibleError(str(exc)) from exc
 
     def save_checkpoint(self, model: Any, path: Path) -> None:
         """Atomically persist *model* as ``path/model.pkl`` via temp+rename."""

@@ -147,6 +147,8 @@ class ColumnsResponse:
 
 #### 3.3.2 BackendAdapter Protocol
 
+Adapter 契約は capability 別に 5 つの `@runtime_checkable` Protocol に分割され、`BackendAdapter` はそれらを継承した alias として定義される (H-0068)。個別 Protocol を使うことで将来のバックエンド追加時に必要最小のメソッド集合から段階的に実装できる。既存の `adapter: BackendAdapter` 型注釈・`isinstance(x, BackendAdapter)` チェックは継承 alias により継続動作する。
+
 ```python
 # src/lizystudio/backends/base.py
 
@@ -159,8 +161,9 @@ class ProgressCallback(Protocol):
     ) -> None: ...
 
 
-class BackendAdapter(Protocol):
-    """ML バックエンドとのインターフェース。"""
+@runtime_checkable
+class BackendCore(Protocol):
+    """ML モデルの生成・学習・推論・永続化を担う最小契約。"""
 
     # --- Identification ---
     @property
@@ -168,13 +171,12 @@ class BackendAdapter(Protocol):
 
     # --- Config ---
     def get_config_schema(self) -> ConfigSchema: ...
-    def get_ui_schema(self) -> dict[str, Any]: ...  # UI メタデータ (H-0026, H-0055)
     def validate_config(self, config: dict[str, Any]) -> list[dict[str, Any]]: ...  # エラー一覧 (空=valid)
-    def get_default_config(self, task: str, target: str) -> dict[str, Any]: ...  # 完全なデフォルト Config (H-0025)
+    def get_default_config(self, task: str, target: str) -> dict[str, Any]: ...  # H-0025
     def load_config_from_file(self, content: bytes, filename: str) -> dict[str, Any]: ...
 
     # --- Model lifecycle ---
-    def create_model(self, config: dict[str, Any], dataframe: pd.DataFrame) -> Any: ...  # 内部モデルオブジェクト
+    def create_model(self, config: dict[str, Any], dataframe: pd.DataFrame) -> Any: ...
 
     def fit(
         self,
@@ -191,47 +193,94 @@ class BackendAdapter(Protocol):
         on_progress: ProgressCallback | None = None,
         re_tune: dict[str, Any] | None = None,       # H-0061 多ラウンド再チューニング
         checkpoint_dir: Any = None,                  # H-0062 試行ごとのチェックポイント
-        resume: bool = False,                        # H-0062 Phase B: 既存 study の再開
+        resume: bool = False,                        # H-0062 Phase B
     ) -> TuningSummary: ...
 
     def predict(
         self, model: Any, data: pd.DataFrame, *, return_shap: bool = False  # H-0012
     ) -> PredictionSummary: ...
 
-    # --- Evaluation ---
+    # --- Checkpoint persistence (H-0062) ---
+    def save_checkpoint(self, model: Any, path: Any) -> None: ...
+    def load_checkpoint(self, path: Any, *, allowed_root: Any | None = None) -> Any: ...
+    def verify_checkpoint_compatibility(self, job_dir: Any) -> None: ...  # H-0068
+        # pickle / sidecar 互換性を確認できないときは backends.exceptions.CheckpointIncompatibleError を raise
+
+    # --- Persistence ---
+    def export_model(self, model: Any, path: str) -> str: ...
+    def load_model(self, path: str) -> Any: ...
+    def model_info(self, model: Any) -> dict[str, Any]: ...
+
+
+@runtime_checkable
+class BackendEvaluator(Protocol):
+    """評価・解釈のための任意 capability。"""
+
     def evaluate_table(self, model: Any) -> list[dict[str, Any]]: ...
     def split_summary(self, model: Any) -> list[dict[str, Any]]: ...
     def importance(self, model: Any, kind: str = "split") -> dict[str, float]: ...
-    def importance_kinds(self, model: Any) -> list[str]: ...  # 利用可能な重要度の種類 (H-0055)
-    def learning_curve_metrics(self, model: Any) -> list[str]: ...  # H-0051 学習曲線のメトリック一覧
+    def importance_kinds(self, model: Any) -> list[str]: ...       # H-0055
+    def learning_curve_metrics(self, model: Any) -> list[str]: ...  # H-0051
     def confusion_matrix(self, model: Any, threshold: float = 0.5) -> dict[str, Any]: ...
+
+
+@runtime_checkable
+class BackendPlotter(Protocol):
+    """plotly 図の生成を担う任意 capability。"""
+
     def plot(self, model: Any, plot_type: str, **kwargs: Any) -> PlotData: ...
     def available_plots(self, model: Any) -> list[str]: ...
 
-    # --- Checkpoint persistence (H-0062) ---
-    def save_checkpoint(self, model: Any, path: Any) -> None: ...  # 原子的に pickle 書き込み
-    def load_checkpoint(self, path: Any, *, allowed_root: Any | None = None) -> Any: ...  # allowed_root で展開先を制限
 
-    # --- Persistence ---
-    def export_model(self, model: Any, path: str) -> str: ...  # 保存先パス
-    def export_code(self, model: Any, path: str) -> str: ...   # スタンドアロン Python コードへの書き出し
-    def load_model(self, path: str) -> Any: ...
-    def model_info(self, model: Any) -> dict[str, Any]: ...
+@runtime_checkable
+class BackendCodeExporter(Protocol):
+    """スタンドアロン Python コード書き出し capability。"""
+
+    def export_code(self, model: Any, path: str) -> str: ...
+
+
+@runtime_checkable
+class BackendUiSchemaProvider(Protocol):
+    """画面メタデータを提供する任意 capability。"""
+
+    def get_ui_schema(self) -> dict[str, Any]: ...  # H-0026 / H-0055
+
+
+@runtime_checkable
+class BackendAdapter(
+    BackendCore,
+    BackendEvaluator,
+    BackendPlotter,
+    BackendCodeExporter,
+    BackendUiSchemaProvider,
+    Protocol,
+):
+    """全 capability を備えた完全な ML バックエンド契約。
+    既存の `adapter: BackendAdapter` 受け型との互換維持のため継承 alias として残す。"""
 ```
+
+例外型は `src/lizystudio/backends/exceptions.py` に集約される (H-0068):
+
+- `CancelledError`: 長時間実行のキャンセル要求シグナル。`services.training` および `services._training_core` が identity 互換のまま re-export する。
+- `CheckpointIncompatibleError`: `verify_checkpoint_compatibility` が互換性違反を検出した際に raise。旧 `backends.lizyml.PickleIncompatibleError` を置き換え、API / service 層は `backends.lizyml` を直接 import しない。
 
 #### 3.3.3 Adapter 登録
 
 ```python
 # src/lizystudio/backends/registry.py
 
-# バックエンド名 → Adapter のマッピング
-# 初期状態では LizyML のみ。新バックエンドは Adapter 実装 + 登録で追加。
+# バックエンド名 → Adapter factory のマッピング (H-0068)
+# 型は `dict[str, Callable[[], BackendAdapter]]` で、新バックエンドは
+# `register_backend("name", factory)` を呼ぶだけで追加できる。
+# factory は lazy — 使用時に初めて `LizyMLAdapter()` が生成されるので
+# 未使用 backend の重い依存ライブラリはロードされない。
 ```
 
 起動時のバックエンド選択:
 - デフォルトは `lizyml`
 - CLI オプション `lizystudio --backend lizyml` で明示指定可能
 - 将来的に画面上でバックエンド切り替え UI を追加する余地を残す
+- サードパーティ backend は import 時に `register_backend(name, factory)` を呼ぶことで `get_adapter(name)` 経由でアクセス可能になる
 
 ### 3.4 状態管理
 

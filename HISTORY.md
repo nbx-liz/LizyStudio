@@ -1758,3 +1758,29 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (f) 既存の Workspace 側 retune 導線の Vitest / Playwright テストが全て pass する（regression なし）。
   - (g) BLUEPRINT §4.2.3 に Workspace 側の retune UI が記述される。
 - **Decision:** 2026-04-18 採択 (Issue #159)。
+
+### H-0068: BackendAdapter 契約のクリーンアップ（Phase 2 coupling refactor）
+- **Status:** proposed
+- **Scope:** Backend | Adapter
+- **Related:** BLUEPRINT.md §3.3（BackendAdapter Protocol）、docs/coupling-analysis.md A-1 / A-2 / A-5 / A-6
+- **Context:** docs/coupling-analysis.md の監査により、`BackendAdapter` Protocol が 22 メソッドの一枚岩になっていること、`api/retune.py` / `services/training.py` が `backends.lizyml` から `PickleIncompatibleError` / `verify_pickle_compatibility` を直接 import していること、`backends/lizyml/lifecycle_mixin.py` が `services.training.CancelledError` を逆依存で import していること、`backends/registry.py` の型が `type[LizyMLAdapter]` 固定で 2nd backend を型エラーなしに登録できないこと、の 4 点が特定された。2nd ML backend 追加のコストを下げる前提として、これらの coupling を解消する。
+- **Proposal:**
+  1. `backends/exceptions.py` を新設し、`CancelledError` と新規 `CheckpointIncompatibleError` の正典定義をここに置く。`services/training` および `services/_training_core` は identity 互換のため re-export のみ残す。
+  2. `BackendAdapter` Protocol を `BackendCore`（lifecycle: `info`/`get_config_schema`/`validate_config`/`create_model`/`fit`/`tune`/`predict`/`save_checkpoint`/`load_checkpoint`/`load_model`/`export_model`/`model_info`/`get_default_config`/`load_config_from_file`）/ `BackendEvaluator` / `BackendPlotter` / `BackendCodeExporter` / `BackendUiSchemaProvider` に分割する。既存の `BackendAdapter` は全 Protocol を継承した runtime_checkable alias として残し、現行の `adapter: BackendAdapter` 型注釈はすべて継続して動作する。
+  3. `BackendAdapter` に `verify_checkpoint_compatibility(job_dir: Path) -> None` を追加し、実装を `LizyMLAdapter.verify_checkpoint_compatibility` に置く。`api/retune.py` / `services/training.py` は `backend.verify_checkpoint_compatibility(...)` を呼び、`CheckpointIncompatibleError` を catch する。`from backends.lizyml import PickleIncompatibleError, verify_pickle_compatibility` は削除する。
+  4. `backends/registry.py` の `_ADAPTERS` を `dict[str, Callable[[], BackendAdapter]]` に緩和し、`register_backend(name, factory)` を公開する。既存 lizyml 登録は lazy factory `lambda: LizyMLAdapter()` に置き換える。
+- **Impact:** `src/lizystudio/backends/base.py`, `backends/types.py`, `backends/registry.py`, `backends/lizyml/adapter.py`, `backends/lizyml/lifecycle_mixin.py`, `api/retune.py`, `services/training.py`, `services/_training_core.py`, 新規 `backends/exceptions.py`. Wire format / HTTP API / pickle 形式は変更しない。
+- **Compatibility:** 非破壊的。HTTP レスポンス・WebSocket メッセージ・保存形式は変更なし。`BackendAdapter` は継承 alias として残り、既存の `adapter: BackendAdapter` 型注釈・`isinstance` チェックはすべて動作する。`CancelledError` は `services.training` 経由でも従来どおり import 可能（同一クラス）。
+- **Alternatives:**
+  - (a) Protocol を全廃して abstract base class に変更 → 却下。duck typing を失い、2nd backend がサードパーティ実装として提供しづらくなる。
+  - (b) capability discovery パターン（`adapter.evaluator()` が `BackendEvaluator | None` を返す）→ 却下。`hasattr` より冗長で、Phase 2 の目的（契約の整理）を超えた過剰設計。
+  - (c) registry を entry_points ベースの plugin discovery 化 → 却下。Phase 2 のスコープを超える。`register_backend()` の追加のみで将来拡張は可能。
+- **Acceptance Criteria:**
+  - (a) `grep -r "from lizystudio.backends.lizyml" src/lizystudio/api src/lizystudio/services` が 0 件。
+  - (b) `grep -r "from lizystudio.services.*training.*import CancelledError" src/lizystudio/backends` が 0 件。
+  - (c) `register_backend("fake", lambda: FakeAdapter())` + `get_adapter("fake")` の unit test が mypy strict でも pass する。
+  - (d) `isinstance(adapter, BackendEvaluator)` 等の runtime_checkable チェックが `LizyMLAdapter` で True を返す。
+  - (e) `from lizystudio.services.training import CancelledError` と `from lizystudio.backends.exceptions import CancelledError` が同一クラス（`is` 比較 True）。
+  - (f) `uv run pytest -m "not slow"` と `pnpm test` が green、coverage ≥ 80% 維持。
+  - (g) API smoke (`/workspace/fit` / `/workspace/tune` / `/jobs/{id}/retune`) が PR マージ前と同じレスポンスを返す。
+- **Decision:** 未決定。

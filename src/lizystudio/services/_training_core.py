@@ -42,8 +42,11 @@ _logger = logging.getLogger(__name__)
 _JOIN_TIMEOUT = 30  # seconds — generous to allow subprocess cleanup
 
 
-class CancelledError(Exception):
-    """Raised when a job's cancellation flag is detected."""
+# Re-exported from :mod:`lizystudio.backends.exceptions` (H-0068) so
+# the service and backend layers catch the exact same class.  Keeping
+# the name importable here preserves ``except CancelledError`` catches
+# scattered through training code and tests without an identity break.
+from lizystudio.backends.exceptions import CancelledError  # noqa: E402, F401
 
 
 class PreviousJobStillRunningError(Exception):
@@ -234,17 +237,20 @@ def _prepare_autofit_config(
     return result
 
 
-def _run_pickle_preflight(job_dir: Path) -> None:
-    """Run the H-0062 pre-flight check before tune launches."""
+def _run_pickle_preflight(backend: BackendAdapter, job_dir: Path) -> None:
+    """Run the H-0062 pre-flight check before tune launches (H-0068).
+
+    Delegates to the adapter's :meth:`preflight_checkpoint_dir` so this
+    service module never imports backend-specific symbols; translates
+    the common :class:`CheckpointPreflightError` into the HTTP-facing
+    :class:`PicklePreflightFailedError` envelope.
+    """
     from lizystudio.api.errors import PicklePreflightFailedError
-    from lizystudio.backends.lizyml import (
-        PicklePreflightError,
-        preflight_pickle_check,
-    )
+    from lizystudio.backends.exceptions import CheckpointPreflightError
 
     try:
-        preflight_pickle_check(job_dir)
-    except PicklePreflightError as exc:
+        backend.preflight_checkpoint_dir(job_dir)
+    except CheckpointPreflightError as exc:
         raise PicklePreflightFailedError(str(exc)) from exc
 
 
