@@ -83,6 +83,48 @@ class WorkspaceState:
         with self._lock:
             self.config = config
 
+    # --- Background job thread coordination (A-4) ---
+
+    def register_job_thread(self, thread: threading.Thread) -> None:
+        """Record *thread* as the currently-active background job thread.
+
+        Replaces any previously-registered handle under the workspace
+        lock so the reader side (:meth:`previous_job_thread`) never sees
+        a torn write when a new job is started while the previous one is
+        still winding down.
+        """
+        with self._lock:
+            self._job_thread = thread
+
+    def previous_job_thread(self) -> threading.Thread | None:
+        """Return the most recently registered background job thread."""
+        with self._lock:
+            return self._job_thread
+
+    def record_completion(
+        self,
+        *,
+        fit_result: FitSummary | None,
+        tune_result: TuningSummary | None,
+        job_id: str,
+    ) -> None:
+        """Atomically update the post-job workspace state.
+
+        Fit / tune / retune launchers write three related fields when a
+        job finishes: the fit summary, the tune summary, and the active
+        job id. Routing them through a single method guarantees readers
+        observe a consistent snapshot.
+        """
+        with self._lock:
+            self.workspace_fit_result = fit_result
+            self.workspace_tune_result = tune_result
+            self.current_job_id = job_id
+
+    def note_current_job(self, job_id: str) -> None:
+        """Update only the current job id (for early-failure paths)."""
+        with self._lock:
+            self.current_job_id = job_id
+
 
 def get_workspace(request: Request) -> WorkspaceState:
     """FastAPI dependency — retrieve workspace from app.state."""
