@@ -215,9 +215,13 @@ def create_app() -> FastAPI:
             "/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets"
         )
 
-        @application.get("/{full_path:path}")
+        @application.get("/{full_path:path}", include_in_schema=False)
         async def serve_spa(full_path: str) -> FileResponse:
-            """Serve the SPA — all non-API/WS routes return index.html."""
+            """Serve the SPA — all non-API/WS routes return index.html.
+
+            Excluded from OpenAPI so the schema is identical whether or
+            not the frontend build artefacts exist (C-1 drift gate).
+            """
             if full_path.startswith(("api/", "ws/")):
                 raise HTTPException(status_code=404, detail="Not found")
             from lizystudio.security import validate_static_path
