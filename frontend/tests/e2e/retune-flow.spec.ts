@@ -8,6 +8,7 @@
 
 import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
+import { openWorkspaceSectionIfMobile } from "./helpers/mobile";
 
 const API = "http://localhost:8501/api";
 
@@ -347,7 +348,7 @@ test.describe("Re-tune / Resume / Lineage flow (H-0062)", () => {
   test("UI: Re-tune from Workspace shows the Lineage panel and click-through navigates to the child", async ({
     page,
     request,
-  }) => {
+  }, testInfo) => {
     // B-4: drive a Re-tune via the actual UI and verify that
     //   1. the Lineage panel renders for the resulting parent/child pair
     //   2. clicking the child node in the lineage tree is wired through
@@ -367,6 +368,7 @@ test.describe("Re-tune / Resume / Lineage flow (H-0062)", () => {
     // auto-hydrate currentJobId from /workspace/status).
     await page.goto(`/?job_id=${parentId}`);
     await page.waitForLoadState("networkidle");
+    await openWorkspaceSectionIfMobile(page, testInfo, "results");
 
     // Re-tune button should be enabled because the parent has a
     // checkpoint. The accessible name comes from the button's
@@ -433,7 +435,7 @@ test.describe("Re-tune / Resume / Lineage flow (H-0062)", () => {
   test("UI: grandchild Re-tune button is enabled on a child job", async ({
     page,
     request,
-  }) => {
+  }, testInfo) => {
     // B-5: the Decision flip 2026-04-14 made grandchild retune allowed.
     // Verify the UI side does not disable the button on a child job —
     // i.e. RetuneActionButton has no parent_job_id-based disabledReason.
@@ -455,6 +457,7 @@ test.describe("Re-tune / Resume / Lineage flow (H-0062)", () => {
     // Workspace" — see the Lineage UI test above for the same pattern.
     await page.goto(`/?job_id=${childId}`);
     await page.waitForLoadState("networkidle");
+    await openWorkspaceSectionIfMobile(page, testInfo, "results");
 
     // The Re-tune button must be enabled (not disabled with a tooltip)
     // because the grandchild rule was lifted. The accessible name

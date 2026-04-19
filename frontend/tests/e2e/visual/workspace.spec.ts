@@ -1,5 +1,9 @@
 import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
+import {
+  isMobileProject,
+  openWorkspaceSectionIfMobile,
+} from "../helpers/mobile";
 import { dismissOnboarding } from "../helpers/onboarding";
 import { waitForPlotly, waitForStableUI } from "../helpers/visual";
 
@@ -40,7 +44,16 @@ test.describe("Workspace visual regression @visual", () => {
     await dismissOnboarding(page);
   });
 
-  test("initial 3-panel layout", async ({ page }) => {
+  test("initial 3-panel layout", async ({ page }, testInfo) => {
+    // Issue #178: mobile uses a bottom-tab layout; the 3 panels are
+    // never visible simultaneously so a "3-panel layout" golden is
+    // irrelevant there. Per-panel mobile goldens live in other tests
+    // in this suite.
+    test.skip(
+      isMobileProject(testInfo),
+      "3-panel layout is desktop/tablet only (Issue #178)",
+    );
+
     await page.goto("/");
     await waitForStableUI(page);
 
@@ -76,18 +89,10 @@ test.describe("Workspace visual regression @visual", () => {
   });
 
   test("tune tab with search space", async ({ page }, testInfo) => {
-    // Issue #169: on chromium-mobile the 3-panel Workspace layout
-    // collapses Model panel to ~75px and the Tune settings label is
-    // clipped to hidden. The UX is a wider problem than this test
-    // can cover; tracked as a separate issue for the mobile layout
-    // overhaul. Skip on mobile so visual snapshots for desktop /
-    // tablet keep passing.
-    if (testInfo.project.name === "chromium-mobile") {
-      test.skip(true, "Issue #169: mobile Workspace layout overhaul pending");
-      return;
-    }
     await page.goto("/");
     await waitForStableUI(page);
+
+    await openWorkspaceSectionIfMobile(page, testInfo, "model");
 
     await page.getByRole("tab", { name: "Tune" }).click();
     await page.waitForTimeout(500);

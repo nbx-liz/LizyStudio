@@ -373,4 +373,115 @@ describe("WorkspacePage", () => {
       expect(capturedModelPanelProps.running).toBe(true);
     });
   });
+
+  // -----------------------------------------------------------------
+  // Issue #178: mobile tabbed layout below the `md` breakpoint.
+  // The 3-panel ResizablePanelGroup is structurally unusable on a
+  // 375 px viewport; on mobile we swap to a sticky bottom-tab layout
+  // showing one panel at a time.
+  // -----------------------------------------------------------------
+  describe("mobile tabbed layout", () => {
+    function enableMobile() {
+      Object.defineProperty(window, "matchMedia", {
+        writable: true,
+        value: vi.fn().mockImplementation((query: string) => ({
+          matches: query === "(max-width: 767px)",
+          media: query,
+          onchange: null,
+          addListener: vi.fn(),
+          removeListener: vi.fn(),
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+          dispatchEvent: vi.fn(),
+        })),
+      });
+    }
+
+    it("renders a tablist with Data / Model / Results triggers", () => {
+      enableMobile();
+      renderWithProviders(<WorkspacePage />);
+      const tablist = screen.getByRole("tablist", {
+        name: /workspace sections/i,
+      });
+      expect(tablist).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: /data/i })).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: /model/i })).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: /results/i })).toBeInTheDocument();
+    });
+
+    it("only renders the active tab's panel content (Radix unmounts inactive)", () => {
+      enableMobile();
+      renderWithProviders(<WorkspacePage />);
+      // Data is selected by default — only its TabsContent is mounted.
+      expect(screen.getByTestId("data-panel")).toBeInTheDocument();
+      expect(screen.queryByTestId("model-panel")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("results-panel")).not.toBeInTheDocument();
+    });
+
+    it("mounts Model panel after switching to the Model tab", async () => {
+      const { userEvent } = await import("@testing-library/user-event");
+      enableMobile();
+      renderWithProviders(<WorkspacePage />);
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("tab", { name: /model/i }));
+      expect(screen.getByTestId("model-panel")).toBeInTheDocument();
+    });
+
+    it("switches to the Results tab automatically when a child job starts", async () => {
+      const { userEvent } = await import("@testing-library/user-event");
+      enableMobile();
+      renderWithProviders(<WorkspacePage />);
+      const user = userEvent.setup();
+
+      // Go to Results tab so onJobStarted prop gets captured.
+      await user.click(screen.getByRole("tab", { name: /results/i }));
+      expect(screen.getByRole("tab", { name: /results/i })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+
+      // Switch away, then fire onJobStarted — should jump back to Results.
+      await user.click(screen.getByRole("tab", { name: /data/i }));
+      expect(screen.getByRole("tab", { name: /data/i })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+
+      const onJobStarted = capturedResultsPanelProps.onJobStarted as (
+        id: string,
+      ) => void;
+      act(() => onJobStarted("job_child_1"));
+
+      expect(screen.getByRole("tab", { name: /results/i })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+    });
+
+    it("does NOT auto-switch tabs when onJobDone fires (toast-only policy)", async () => {
+      const { userEvent } = await import("@testing-library/user-event");
+      enableMobile();
+      renderWithProviders(<WorkspacePage />);
+      const user = userEvent.setup();
+
+      // Park on Model tab.
+      await user.click(screen.getByRole("tab", { name: /model/i }));
+      expect(screen.getByRole("tab", { name: /model/i })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+
+      // Briefly hop to Results to capture the onJobDone prop, then back.
+      await user.click(screen.getByRole("tab", { name: /results/i }));
+      const onJobDone = capturedResultsPanelProps.onJobDone as () => void;
+      await user.click(screen.getByRole("tab", { name: /model/i }));
+
+      act(() => onJobDone());
+
+      expect(screen.getByRole("tab", { name: /model/i })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+    });
+  });
 });
