@@ -75,7 +75,7 @@ def run_retune(
     parent_dir = job_store.jobs_dir / parent_job.job_id
     child_dir = job_store.jobs_dir / child_job.job_id
     _copy_checkpoint_to_child(parent_dir, child_dir)
-    _run_pickle_preflight(child_dir)
+    _run_pickle_preflight(backend, child_dir)
 
     def execute(
         cb: ProgressCallback,

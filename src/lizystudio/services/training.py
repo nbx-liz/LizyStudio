@@ -197,7 +197,7 @@ def run_tune(
     re_tune = _extract_re_tune(config)
     # H-0062: checkpoint directory for incremental trial persistence.
     checkpoint_dir = job_store.jobs_dir / job.job_id
-    _run_pickle_preflight(checkpoint_dir)
+    _run_pickle_preflight(backend, checkpoint_dir)
 
     def execute(cb: ProgressCallback) -> tuple[FitSummary, TuningSummary | None, str]:
         model = backend.create_model(tune_config, dataframe)
