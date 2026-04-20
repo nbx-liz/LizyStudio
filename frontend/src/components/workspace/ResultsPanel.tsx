@@ -1,9 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
 import { Activity } from "lucide-react";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
-import { fetchJobLog, fetchJobs } from "@/api/jobs";
-import { queryKeys } from "@/api/queryKeys";
+import { useJobLog, useJobsList } from "@/api/queries";
 import { ResumeActionButton } from "@/components/retune/ResumeActionButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -61,11 +59,7 @@ export function ResultsPanel({
     onWsError,
   });
 
-  const { data: allJobs } = useQuery({
-    queryKey: queryKeys.jobs(),
-    queryFn: () => fetchJobs(),
-    enabled: !!jobId,
-  });
+  const { data: allJobs } = useJobsList();
 
   // Compute #N
   const jobNumber =
@@ -247,11 +241,7 @@ function LogDialog({
   onOpenChange: (open: boolean) => void;
   jobId: string;
 }) {
-  const { data } = useQuery({
-    queryKey: queryKeys.jobLog(jobId),
-    queryFn: () => fetchJobLog(jobId),
-    enabled: open,
-  });
+  const { data } = useJobLog(jobId, { enabled: open });
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
