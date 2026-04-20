@@ -12,7 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useJobLifecycle } from "@/hooks/useJobLifecycle";
-import { remainingRetuneTrials } from "@/lib/job-config";
+import { getModelName, remainingRetuneTrials } from "@/lib/job-config";
 import { ResultsCompletedView } from "./ResultsCompletedView";
 import { ResultsRunningView } from "./ResultsRunningView";
 
@@ -67,9 +67,7 @@ export function ResultsPanel({
       ? allJobs.length - allJobs.findIndex((j) => j.job_id === job.job_id)
       : null;
 
-  const modelName = (job?.config?.model as Record<string, unknown>)?.name as
-    | string
-    | undefined;
+  const modelName = getModelName(job) || undefined;
 
   const handleCancel = useCallback(async () => {
     await cancel();

@@ -12,6 +12,7 @@ import { ResultsPredOnly } from "@/components/inference/ResultsPredOnly";
 import { ResultsWithGT } from "@/components/inference/ResultsWithGT";
 import { SetupPanel } from "@/components/inference/SetupPanel";
 import { useJobIdParam } from "@/hooks/useJobIdParam";
+import { getTargetColumn } from "@/lib/job-config";
 
 export function InferencePage() {
   const [selectedInfId, setSelectedInfId] = useState<string | null>(null);
@@ -115,11 +116,7 @@ export function InferencePage() {
   // Fetch job detail to get config.data.target for ground-truth detection
   const { data: jobDetail } = useJob(selectedJobId);
 
-  const targetCol = useMemo(() => {
-    if (!jobDetail?.config) return "";
-    const data = jobDetail.config.data as Record<string, unknown> | undefined;
-    return String(data?.target ?? "");
-  }, [jobDetail]);
+  const targetCol = useMemo(() => getTargetColumn(jobDetail), [jobDetail]);
 
   return (
     <div className="flex h-full">

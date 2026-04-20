@@ -32,6 +32,7 @@ import type {
   PlotResponse,
   SplitSummaryRow,
 } from "@/api/types";
+import { getEvaluationSection } from "@/lib/job-config";
 import { pivotMetrics } from "@/lib/metrics";
 
 export interface UseJobResultDataParams {
@@ -220,7 +221,7 @@ export function useJobResultData({
     : undefined;
   const hasFolds = fitResult != null && fitResult.fold_count > 1;
 
-  const evalConfig = (job.config?.evaluation as Record<string, unknown>) ?? {};
+  const evalConfig = getEvaluationSection(job);
   const annotateMetric = (name: string): string => {
     if (name === "precision_at_k") {
       const entries = Array.isArray(evalConfig.metrics)
