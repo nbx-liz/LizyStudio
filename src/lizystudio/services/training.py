@@ -59,7 +59,7 @@ def run_fit(
     def execute(cb: ProgressCallback) -> tuple[FitSummary, TuningSummary | None, str]:
         model = backend.create_model(config, dataframe)
         fit_result: FitSummary = backend.fit(model, params=params, on_progress=cb)
-        model_dir = str(job_store.jobs_dir / job.job_id / "model")
+        model_dir = str(job_store.path_for(job.job_id, "model"))
         backend.export_model(model, model_dir)
         return fit_result, None, model_dir
 
@@ -196,7 +196,7 @@ def run_tune(
     tune_config = _prepare_tune_config(config)
     re_tune = _extract_re_tune(config)
     # H-0062: checkpoint directory for incremental trial persistence.
-    checkpoint_dir = job_store.jobs_dir / job.job_id
+    checkpoint_dir = job_store.job_dir(job.job_id)
     _run_pickle_preflight(backend, checkpoint_dir)
 
     def execute(cb: ProgressCallback) -> tuple[FitSummary, TuningSummary | None, str]:
@@ -210,7 +210,7 @@ def run_tune(
 
         # Capture tuning plot from the tune model before creating model2.
         # The exported model2 (fit with best params) loses tuning history.
-        _save_tuning_plot(backend, model, job_store.jobs_dir / job.job_id)
+        _save_tuning_plot(backend, model, job_store.job_dir(job.job_id))
 
         # Build fit config from the ORIGINAL config (not tune_config) with
         # best_params merged into model.params.  This ensures the auto-fit
@@ -218,7 +218,7 @@ def run_tune(
         fit_config = _prepare_autofit_config(config, tune_result.best_params)
         model2 = backend.create_model(fit_config, dataframe)
         fit_result: FitSummary = backend.fit(model2, on_progress=cb)
-        model_dir = str(job_store.jobs_dir / job.job_id / "model")
+        model_dir = str(job_store.path_for(job.job_id, "model"))
         backend.export_model(model2, model_dir)
         return fit_result, tune_result, model_dir
 

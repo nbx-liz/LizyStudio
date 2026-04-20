@@ -22,7 +22,7 @@ from typing import Any
 
 from lizystudio.backends.base import BackendAdapter
 from lizystudio.backends.types import PlotData
-from lizystudio.services.jobs import Job
+from lizystudio.services.jobs import Job, artifact_path
 
 _MODEL_CACHE_MAX = 8
 
@@ -116,7 +116,7 @@ def _load_tuning_plot_from_file(job: Job) -> PlotData | None:
     jobs_dir = _get_jobs_dir(job)
     if jobs_dir is None:
         return None
-    path = jobs_dir / job.job_id / "tuning_plot.json"
+    path = artifact_path(jobs_dir, job.job_id, "tuning_plot")
     if not path.exists():
         return None
     return PlotData(plotly_json=path.read_text(encoding="utf-8"))

@@ -1897,3 +1897,32 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (c) `pnpm build` + `pnpm check` + vitest 1583 件 green。
   - (d) `api-types-drift` CI ジョブが pass（schema 再生成を同一 commit に含める）。
 - **Decision:** 2026-04-20 accepted — 提案通り実装。
+
+---
+
+### H-0073: `JobStore.path_for` による on-disk layout SSOT 化（Phase 3 coupling refactor A-10）
+- **Status:** accepted
+- **Scope:** Backend | Internal only（保存レイアウト・wire format・BackendAdapter Protocol すべて不変）
+- **Related:** docs/coupling-analysis.md A-10、BLUEPRINT.md §3.4.4
+- **Context:** `{jobs_dir}/{job_id}/<artifact>` の path 構築が `services/jobs.py` / `services/training.py` / `services/_training_core.py` / `services/training_retune.py` / `services/job_results.py` / `api/retune.py` の 14+ 箇所に独立に散らばっていた。`JobStore._job_dir` は private helper で外部から使えず、`meta.json` / `execution.log` / `model/` / `tuning_plot.json` の filename が呼び出し側で直書きされているため、ファイル名変更や新しい artifact の追加時に漏れなく追跡する方法がなかった。
+- **Proposal:**
+  1. `services/jobs.py` にモジュール定数 `ArtifactKind` (`Literal[...]`) と `ARTIFACT_FILENAMES: dict[ArtifactKind, str]` を導入。BLUEPRINT §3.4.4 の全 artifact（`meta` / `fit_result` / `tune_result` / `model` / `log` / `tuning_plot` / `cancel_flag`）をここに集約。
+  2. `JobStore` に public メソッド `job_dir(job_id)` / `path_for(job_id, kind)` を追加。どちらも path traversal guard 付きの `_job_dir` 経由で解決。
+  3. `JobStore` インスタンスを持たない caller（`services/job_results.py`）向けに、module-level helper `artifact_path(jobs_dir, job_id, kind)` を公開。`job.model_path` から `jobs_dir` を逆算する既存経路と互換。
+  4. 14+ 箇所の `jobs_dir / job_id / "..."` と `_job_dir(...)` 使用を `path_for(kind)` / `job_dir(job_id)` / `artifact_path(...)` に置換。
+  5. tmp file の construction（`.cancel-{pid}.tmp`）は一時ファイルであり artifact ではないため対象外。`inference.py` が使う `{jobs_dir}/{job_id}/inferences/...` も別レイヤ（`InferenceStore`）なので本 PR スコープ外。
+- **Impact:** `src/lizystudio/services/jobs.py`（+56 行: module constants + 2 methods + helper）、`src/lizystudio/services/training.py`（4 箇所置換）、`src/lizystudio/services/_training_core.py`（1 箇所置換）、`src/lizystudio/services/training_retune.py`（2 箇所置換）、`src/lizystudio/services/job_results.py`（1 箇所置換 + import 1 行）、`src/lizystudio/api/retune.py`（1 箇所置換）。
+- **Compatibility:**
+  - 保存 layout 変更なし。全置換は「構築経路のみ」の変更で、生成される `Path` は以前と bit-identical（同じ string 結果）。
+  - wire format / BackendAdapter Protocol 変更なし。
+  - 既存テスト 1146 件はすべて無修正で通過（contract test 追加分を除けば +1 件 = 1147 件）。
+- **Alternatives:**
+  - (a) `JobStore._job_dir` を public 化するだけで終える → 却下。filename の直書きが残ると SSOT にならない。
+  - (b) `pathlib.Path` サブクラスで `Job.meta_path` 等のプロパティを生やす → 却下。`Job` dataclass が `JobStore` を知るのは逆向き依存。
+  - (c) `Enum` を使って `ArtifactKind` を表現 → 却下。`Literal[...]` の方が mypy 上で caller 側が文字列リテラルを直接書けて簡潔。`dict[Literal[...], str]` は mypy で網羅性検証される。
+- **Acceptance Criteria:**
+  - (a) `grep -rn "jobs_dir.*/.*job" src/lizystudio/services` が `artifact_path` 実装本体と `_job_dir` 本体を除いて 0 件（inference.py 除く）。
+  - (b) backend pytest 1146+1 件 = 1147 件 green。
+  - (c) `uv run mypy src/lizystudio/` / `uv run ruff check .` / `uv run ruff format --check .` 全 clean。
+  - (d) `ARTIFACT_FILENAMES` を `JobStore.path_for` / module-level `artifact_path` の両経路から共有。
+- **Decision:** 2026-04-20 accepted — 提案通り実装。
