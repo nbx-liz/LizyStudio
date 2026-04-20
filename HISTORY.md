@@ -1868,3 +1868,32 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (c) `frontend/src/api/types.ts` 内に `JobSummary` / `JobDetail` / `FitResult` / `TuneResult` の手書き `interface` が残っていない（`components["schemas"]…` 再エクスポートのみ）。
   - (d) `api-types-drift` CI ジョブが pass する（schema 再生成が commit に含まれている）。
 - **Decision:** 2026-04-20 accepted — 提案通り実装。
+
+---
+
+### H-0072: `UiSchema` 契約の SSOT 化（Phase 3 coupling refactor C-5a）
+- **Status:** accepted
+- **Scope:** API | Frontend | Internal only（wire format は既存 response と互換）
+- **Related:** docs/coupling-analysis.md C-5、H-0026
+- **Context:** `GET /api/backends/ui-schema` は `response_model=` 未指定で `dict[str, Any]` passthrough だった。OpenAPI には `additionalProperties: true` しか載らず、frontend では `frontend/src/api/types.ts` に 22 行の手書き `UiSchema` / `ParameterHint` / `SearchSpaceCatalogEntry` interface を置いていた。backend の `build_ui_schema()` dict（`backends/lizyml_ui_schema.py`）と hand-written TS は独立定義のままで、どちらかが変わったとき drift を検知できない状態だった。
+- **Proposal:**
+  1. `api/models.py` に `UiSchemaResponse` / `UiSection` / `ParameterHintResponse` / `SearchSpaceRangeDefault` / `SearchSpaceCatalogEntryResponse` / `UiCapabilities` / `UiCapabilitiesTune` を新設。既存手書き TS interface と 1:1 で対応する shape にし、ネストの深い可変部分（`option_sets` の 2 階層 dict, `default` の scalar/list/dict 混在）は `dict[str, ...]` / `Any` のまま残す。
+  2. `api/backends.py:25` の `get_ui_schema` endpoint に `response_model=UiSchemaResponse` を付与。
+  3. `frontend/src/api/types.ts` の `UiSchema` / `ParameterHint` / `SearchSpaceCatalogEntry` を `components["schemas"]["…Response"]` 再エクスポートに置換（22 行 → 10 行）。
+  4. 生成 TS は optional field を `?: T | null` で表現するため、既存 consumer 側が `string | null | undefined` を `string | undefined` に渡す 11 箇所（ConfigForm / DynParam / SearchSpaceTable / TuneTab）を `?? undefined` で吸収。`FormRow.description` prop は `string | null` を受け入れるように prop 型を広げる。
+  5. Backend 側 contract test を 1 本追加。`UiSchemaResponse.model_validate(resp.json())` で strict shape をその場検証。
+- **Impact:** `src/lizystudio/api/models.py`（+100 行）、`src/lizystudio/api/backends.py`（+6 行: response_model + docstring）、`tests/test_ui_schema.py`（+20 行: contract test）、`frontend/src/api/types.ts`（-48 行 → +12 行）、`frontend/src/api/generated/schema.d.ts`（再生成: `UiSchemaResponse` 等 7 型が追加）、`FormRow.tsx` / `ConfigForm.tsx` / `SearchSpaceTable.tsx` / `TuneTab.tsx`（null→undefined narrow）。
+- **Compatibility:**
+  - wire format 変更なし。`backend.get_ui_schema()` の出力 dict をそのまま通す（Pydantic は validate するだけ、フィールド数は不変、`extra="allow"` で前方互換）。
+  - frontend consumer の prop 契約（`KeyValueEditor.additionalParams`, `CalibrationSection.calibrationMethods` など）は型拡張なしで、`?? undefined` で caller 側が受け渡し時に narrow。UX / 描画ロジック不変。
+  - 定数整理（`METRICS_BY_TASK` / `CV_STRATEGY_FIELDS` の退役）は C-5b として別 PR に分離。
+- **Alternatives:**
+  - (a) Pydantic 側で Optional field を必須 (default 値) に絞って `| None` を排除 → 却下。将来別 backend が `capabilities` や `calibration_methods` を返さない可能性があるので、Optional を維持する方が前方互換。
+  - (b) `response_model_exclude_none=True` で wire から null を消す → 部分的に有効だが、生成 TS は依然 `?: T | null` を出すため consumer 側の型不整合は解消しない。`?? undefined` の方が明示的。
+  - (c) frontend 側で `type UiSchemaStrict = { [K in keyof Gen]-?: NonNullable<Gen[K]> }` ヘルパを作る → 却下。ネスト型（`capabilities` 等）で再帰が必要になり複雑化する割に、影響箇所が 11 カ所なので個別対応の方がコスト低。
+- **Acceptance Criteria:**
+  - (a) backend pytest 1146+1 = 1147 件 green、`uv run mypy src/lizystudio/` / ruff clean。
+  - (b) `frontend/src/api/types.ts` 内に `UiSchema` / `ParameterHint` / `SearchSpaceCatalogEntry` の手書き `interface` が残っていない。
+  - (c) `pnpm build` + `pnpm check` + vitest 1583 件 green。
+  - (d) `api-types-drift` CI ジョブが pass（schema 再生成を同一 commit に含める）。
+- **Decision:** 2026-04-20 accepted — 提案通り実装。

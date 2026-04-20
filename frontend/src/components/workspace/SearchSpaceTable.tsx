@@ -81,8 +81,8 @@ export function SearchSpaceTable({
       modes: c.modes,
       paramType: c.paramType,
       group: c.group ?? "model_params",
-      defaultRange: c.default_range,
-      defaultChoices: c.default_choices,
+      defaultRange: c.default_range ?? undefined,
+      defaultChoices: c.default_choices ?? undefined,
     }));
   }, [catalog]);
 

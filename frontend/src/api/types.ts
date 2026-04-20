@@ -194,51 +194,15 @@ export function metricEntryName(entry: MetricEntry): string {
   return key;
 }
 
-// --- UI Schema (H-0026) ---
+// --- UI Schema (H-0026 / C-5) ---
+//
+// Re-exported from the generated schema. Backend Pydantic
+// (`api/models.py::UiSchemaResponse`) is the SSOT — the 3-way drift
+// between backend dict / OpenAPI / hand-written TS is eliminated.
+// `ParameterHint` / `SearchSpaceCatalogEntry` keep their legacy names
+// so existing consumers need not change their imports.
 
-export interface ParameterHint {
-  key: string;
-  label: string;
-  kind: string;
-  step?: number;
-  default?: unknown;
-  description?: string;
-}
-
-export interface SearchSpaceCatalogEntry {
-  key: string;
-  title: string;
-  paramType: string;
-  modes: string[];
-  group?: string;
-  default?: unknown;
-  /** Initial mode for the parameter: "fixed" (default), "range", or "choice". */
-  default_mode?: "fixed" | "range" | "choice";
-  /** Default range values when switching to range mode. */
-  default_range?: { low: number; high: number; log: boolean };
-  /** Default choices when switching to choice mode. */
-  default_choices?: (string | number)[];
-}
-
-export interface UiSchema {
-  sections: { key: string; title: string }[];
-  option_sets: Record<string, Record<string, string[]>>;
-  metric_direction?: Record<string, Record<string, string>>;
-  parameter_hints: ParameterHint[];
-  search_space_catalog: SearchSpaceCatalogEntry[];
-  step_map: Record<string, number>;
-  conditional_visibility: Record<string, Record<string, unknown>>;
-  defaults: Record<string, Record<string, unknown>>;
-  inner_valid_options: string[];
-  n_trials_presets?: number[];
-  capabilities?: {
-    cv_strategies: string[];
-    tune: { allow_empty_space: boolean };
-    cv_strategy_fields?: Record<string, string[]>;
-    cv_defaults?: Record<string, unknown>;
-    cv_default_strategy?: Record<string, string>;
-  };
-  calibration_methods?: string[];
-  additional_params?: string[];
-  special_search_space_fields?: Record<string, string>;
-}
+export type UiSchema = components["schemas"]["UiSchemaResponse"];
+export type ParameterHint = components["schemas"]["ParameterHintResponse"];
+export type SearchSpaceCatalogEntry =
+  components["schemas"]["SearchSpaceCatalogEntryResponse"];

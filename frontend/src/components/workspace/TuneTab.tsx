@@ -101,7 +101,7 @@ export function TuneTab({
 
   // metric_direction map for auto direction
   const metricDirection = useMemo(() => {
-    return uiSchema?.metric_direction;
+    return uiSchema?.metric_direction ?? undefined;
   }, [uiSchema]);
 
   // Objective options for task
@@ -165,7 +165,7 @@ export function TuneTab({
       <TuneSettings
         tuningParams={tuningParams}
         onChange={handleParamsChange}
-        nTrialsPresets={uiSchema?.n_trials_presets}
+        nTrialsPresets={uiSchema?.n_trials_presets ?? undefined}
       />
       <AccordionItem value="search-space" className="border-b">
         <AccordionTrigger className="py-1.5 text-sm font-medium hover:bg-muted/50">
@@ -182,11 +182,13 @@ export function TuneTab({
               task={task}
               objectiveOptions={objectiveOptions}
               metricOptions={modelMetricOptions}
-              additionalParams={uiSchema?.additional_params}
+              additionalParams={uiSchema?.additional_params ?? undefined}
               paramOptionSets={paramOptionSets}
               onModelParamChange={handleModelParamChange}
               conditionalVisibility={uiSchema?.conditional_visibility}
-              specialSearchSpaceFields={uiSchema?.special_search_space_fields}
+              specialSearchSpaceFields={
+                uiSchema?.special_search_space_fields ?? undefined
+              }
               columns={columns}
             />
           </div>

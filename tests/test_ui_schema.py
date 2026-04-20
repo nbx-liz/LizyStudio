@@ -848,3 +848,24 @@ class TestUiSchemaEndpoint:
         metric = resp.json()["option_sets"]["metric"]
         assert "binary" in metric
         assert "regression" in metric
+
+    def test_get_ui_schema_validates_against_response_model(
+        self, client: TestClient
+    ) -> None:
+        """``response_model=UiSchemaResponse`` (C-5) MUST accept the dict
+        produced by :func:`build_ui_schema` without raising
+        ``ResponseValidationError``.  Endpoint returning 200 already
+        proves this, but we also re-validate the body through the
+        Pydantic model to catch drift if the endpoint ever switches to
+        another backend whose ``get_ui_schema()`` shape differs.
+        """
+        from lizystudio.api.models import UiSchemaResponse
+
+        resp = client.get("/api/backends/ui-schema")
+        assert resp.status_code == 200
+        # Raises ValidationError if any field is missing / wrong type.
+        model = UiSchemaResponse.model_validate(resp.json())
+        assert model.capabilities is not None
+        assert len(model.capabilities.cv_strategies) == 8
+        assert len(model.search_space_catalog) > 0
+        assert len(model.parameter_hints) > 0

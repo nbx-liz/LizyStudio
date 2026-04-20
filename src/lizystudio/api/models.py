@@ -309,3 +309,103 @@ class ComparisonStatsResponse(BaseModel):
     other: ComparisonGroupStats
     current_proba: ComparisonGroupStats | None = None
     other_proba: ComparisonGroupStats | None = None
+
+
+# --- UI Schema (H-0026 / C-5) ---
+
+
+class UiSection(BaseModel):
+    """Top-level section in the config editor (Model / Training / ...)."""
+
+    key: str
+    title: str
+
+
+class ParameterHintResponse(BaseModel):
+    """Label/step/default metadata for a single config parameter.
+
+    ``default`` is backend-dependent — scalar, list, or task-keyed dict —
+    so it is typed as ``Any`` rather than narrowed.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    key: str
+    label: str
+    kind: str
+    step: float | None = None
+    default: Any | None = None
+    description: str | None = None
+
+
+class SearchSpaceRangeDefault(BaseModel):
+    """Default ``range`` mode values for a tunable parameter."""
+
+    low: float
+    high: float
+    log: bool
+
+
+class SearchSpaceCatalogEntryResponse(BaseModel):
+    """One entry in ``search_space_catalog`` — a tunable parameter.
+
+    ``default``/``default_choices`` are heterogeneous (boolean, number,
+    string) so they stay typed as ``Any``.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    key: str
+    title: str
+    paramType: str
+    modes: list[str]
+    group: str | None = None
+    default: Any | None = None
+    default_mode: Literal["fixed", "range", "choice"] | None = None
+    default_range: SearchSpaceRangeDefault | None = None
+    default_choices: list[Any] | None = None
+
+
+class UiCapabilitiesTune(BaseModel):
+    """Backend capability flags for the Tune tab."""
+
+    allow_empty_space: bool
+
+
+class UiCapabilities(BaseModel):
+    """Backend-declared capabilities consumed by the Workspace UI."""
+
+    model_config = ConfigDict(extra="allow")
+
+    cv_strategies: list[str]
+    tune: UiCapabilitiesTune
+    cv_strategy_fields: dict[str, list[str]] | None = None
+    cv_defaults: dict[str, Any] | None = None
+    cv_default_strategy: dict[str, str] | None = None
+
+
+class UiSchemaResponse(BaseModel):
+    """Response from ``GET /api/backends/ui-schema`` (H-0026).
+
+    Mirrors the dict produced by :func:`build_ui_schema` in
+    ``backends/lizyml_ui_schema.py``. Frontend re-exports this type via
+    the generated ``schema.d.ts`` so the 3-way drift between backend
+    dict / OpenAPI / ``frontend/src/api/types.ts`` is eliminated (C-5).
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    sections: list[UiSection]
+    option_sets: dict[str, dict[str, list[str]]]
+    metric_direction: dict[str, dict[str, str]] | None = None
+    parameter_hints: list[ParameterHintResponse]
+    search_space_catalog: list[SearchSpaceCatalogEntryResponse]
+    step_map: dict[str, float]
+    conditional_visibility: dict[str, dict[str, Any]]
+    defaults: dict[str, dict[str, Any]]
+    inner_valid_options: list[str]
+    n_trials_presets: list[int] | None = None
+    capabilities: UiCapabilities | None = None
+    calibration_methods: list[str] | None = None
+    additional_params: list[str] | None = None
+    special_search_space_fields: dict[str, str] | None = None

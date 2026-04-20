@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 
 from lizystudio.api.deps import get_backend
-from lizystudio.api.models import BackendInfoResponse
+from lizystudio.api.models import BackendInfoResponse, UiSchemaResponse
 from lizystudio.backends.base import BackendAdapter
 
 router = APIRouter()
@@ -22,9 +22,15 @@ def list_backends(
     return [{"name": info.name, "version": info.version}]
 
 
-@router.get("/ui-schema")
+@router.get("/ui-schema", response_model=UiSchemaResponse)
 def get_ui_schema(
     backend: BackendAdapter = Depends(get_backend),
 ) -> dict[str, Any]:
-    """Return UI metadata for the current backend (H-0026)."""
+    """Return UI metadata for the current backend (H-0026).
+
+    ``response_model=UiSchemaResponse`` (C-5) drives OpenAPI schema
+    generation so ``frontend/src/api/types.ts`` can re-export the
+    ``UiSchema`` type from ``schema.d.ts`` instead of declaring it by
+    hand.
+    """
     return backend.get_ui_schema()
