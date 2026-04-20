@@ -7,6 +7,7 @@ import {
   fetchInferenceShapPlot,
   type InferenceRecord,
 } from "@/api/inference";
+import { queryKeys } from "@/api/queryKeys";
 import {
   Accordion,
   AccordionContent,
@@ -57,7 +58,11 @@ export function ResultsPredOnly({
     : 0;
 
   const { data: comparison } = useQuery({
-    queryKey: ["inf-comparison", record.inf_id, compareInfId, record.job_id],
+    queryKey: queryKeys.infComparison(
+      record.inf_id,
+      compareInfId,
+      record.job_id,
+    ),
     queryFn: () =>
       fetchInferenceComparison(record.inf_id, compareInfId, record.job_id),
     enabled: !!compareInfId,
@@ -184,7 +189,7 @@ function PredDistributionPlot({
   jobId: string;
 }) {
   const { data, isLoading } = useQuery({
-    queryKey: ["inf-plot", infId, jobId, "prediction-distribution"],
+    queryKey: queryKeys.infPlot(infId, jobId, "prediction-distribution"),
     queryFn: () => fetchInferencePlot(infId, jobId, "prediction-distribution"),
     retry: false,
   });
@@ -209,7 +214,7 @@ function ShapAndWarningsAccordion({
   warnings: string[];
 }) {
   const { data: shapData, isLoading: shapLoading } = useQuery({
-    queryKey: ["inf-shap", infId, jobId],
+    queryKey: queryKeys.infShap(infId, jobId),
     queryFn: () => fetchInferenceShapPlot(infId, jobId),
     retry: false,
   });

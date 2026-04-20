@@ -11,6 +11,7 @@ import {
   fetchJobSplitSummary,
   type LineageNode,
 } from "@/api/jobs";
+import { queryKeys } from "@/api/queryKeys";
 import type { JobDetail, MetricEntry } from "@/api/types";
 import { JobLineageTree } from "@/components/retune/JobLineageTree";
 import { RetuneActionButton } from "@/components/retune/RetuneActionButton";
@@ -50,7 +51,7 @@ export function ResultsCompletedView({
   onApplyToFit,
 }: ResultsCompletedViewProps) {
   const { data: plots } = useQuery({
-    queryKey: ["job-plots", job.job_id],
+    queryKey: queryKeys.jobPlots(job.job_id),
     queryFn: () => fetchJobPlots(job.job_id),
   });
 
@@ -59,7 +60,7 @@ export function ResultsCompletedView({
     isLoading: isPlotLoading,
     isError: isPlotError,
   } = useQuery({
-    queryKey: ["job-plot", job.job_id, selectedPlot],
+    queryKey: queryKeys.jobPlot(job.job_id, selectedPlot),
     queryFn: () => fetchJobPlot(job.job_id, selectedPlot),
     enabled:
       !!selectedPlot &&
@@ -79,13 +80,13 @@ export function ResultsCompletedView({
     (plots?.includes("learning-curve") ?? false);
 
   const { data: lcAvailableMetrics, isError: isLcMetricsError } = useQuery({
-    queryKey: ["job-learning-curve-metrics", job.job_id],
+    queryKey: queryKeys.jobLearningCurveMetrics(job.job_id),
     queryFn: () => fetchJobLearningCurveMetrics(job.job_id),
     enabled: lcEnabled,
   });
 
   const { data: learningCurve, isError: isLcPlotError } = useQuery({
-    queryKey: ["job-plot", job.job_id, "learning-curve", lcMetric],
+    queryKey: queryKeys.jobPlotLearningCurve(job.job_id, lcMetric),
     queryFn: () =>
       fetchJobPlot(job.job_id, "learning-curve", {
         metrics: lcMetric ?? undefined,
@@ -125,7 +126,7 @@ export function ResultsCompletedView({
   const importanceEnabled = plots?.includes("importance") ?? false;
 
   const { data: importanceKinds } = useQuery({
-    queryKey: ["job-importance-kinds", job.job_id],
+    queryKey: queryKeys.jobImportanceKinds(job.job_id),
     queryFn: () => fetchJobImportanceKinds(job.job_id),
     enabled: importanceEnabled,
   });
@@ -142,14 +143,14 @@ export function ResultsCompletedView({
   }, [importanceKinds, importanceKind]);
 
   const { data: importance } = useQuery({
-    queryKey: ["job-importance", job.job_id, importanceKind],
+    queryKey: queryKeys.jobImportance(job.job_id, importanceKind),
     queryFn: () => fetchJobImportance(job.job_id, importanceKind),
     enabled: importanceEnabled,
   });
 
   const { data: importancePlot, isLoading: isImportancePlotLoading } = useQuery(
     {
-      queryKey: ["job-plot", job.job_id, "importance", importanceKind],
+      queryKey: queryKeys.jobPlotImportance(job.job_id, importanceKind),
       queryFn: () =>
         fetchJobPlot(job.job_id, "importance", { kind: importanceKind }),
       enabled: importanceEnabled,
@@ -157,12 +158,12 @@ export function ResultsCompletedView({
   );
 
   const { data: splitSummary } = useQuery({
-    queryKey: ["job-split-summary", job.job_id],
+    queryKey: queryKeys.jobSplitSummary(job.job_id),
     queryFn: () => fetchJobSplitSummary(job.job_id),
   });
 
   const { data: tuningPlot } = useQuery({
-    queryKey: ["job-plot", job.job_id, "tuning"],
+    queryKey: queryKeys.jobPlotTuning(job.job_id),
     queryFn: () => fetchJobPlot(job.job_id, "tuning"),
     enabled: job.job_type === "tune",
   });
@@ -170,7 +171,7 @@ export function ResultsCompletedView({
   // H-0062 acceptance #13: lineage tree wire-in. Only fetch for tune jobs;
   // silently swallow errors because lineage is auxiliary information.
   const { data: lineageData } = useQuery({
-    queryKey: ["job-lineage", job.job_id],
+    queryKey: queryKeys.jobLineage(job.job_id),
     queryFn: () => fetchJobLineage(job.job_id),
     enabled: job.job_type === "tune",
     retry: false,

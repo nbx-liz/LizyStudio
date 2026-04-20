@@ -7,6 +7,7 @@ import {
   fetchJobPlots,
   fetchJobSplitSummary,
 } from "@/api/jobs";
+import { queryKeys } from "@/api/queryKeys";
 import type { JobDetail, MetricEntry } from "@/api/types";
 import { MetricCards } from "@/components/shared/MetricCards";
 import {
@@ -36,7 +37,7 @@ export function CompletedContent({
   onSelectPlot,
 }: CompletedContentProps) {
   const { data: plots } = useQuery({
-    queryKey: ["job-plots", job.job_id],
+    queryKey: queryKeys.jobPlots(job.job_id),
     queryFn: () => fetchJobPlots(job.job_id),
   });
 
@@ -45,7 +46,7 @@ export function CompletedContent({
     isLoading: isPlotLoading,
     isError: isPlotError,
   } = useQuery({
-    queryKey: ["job-plot", job.job_id, selectedPlot],
+    queryKey: queryKeys.jobPlot(job.job_id, selectedPlot),
     queryFn: () => fetchJobPlot(job.job_id, selectedPlot),
     enabled:
       !!selectedPlot &&
@@ -59,7 +60,7 @@ export function CompletedContent({
   const lcInitialized = useRef(false);
 
   const { data: learningCurve, isError: isLcError } = useQuery({
-    queryKey: ["job-plot", job.job_id, "learning-curve", lcMetric],
+    queryKey: queryKeys.jobPlotLearningCurve(job.job_id, lcMetric),
     queryFn: () =>
       fetchJobPlot(job.job_id, "learning-curve", {
         metrics: lcMetric ?? undefined,
@@ -82,7 +83,7 @@ export function CompletedContent({
   const [importanceKind, setImportanceKind] = useState("split");
 
   const { data: importanceKinds } = useQuery({
-    queryKey: ["job-importance-kinds", job.job_id],
+    queryKey: queryKeys.jobImportanceKinds(job.job_id),
     queryFn: () => fetchJobImportanceKinds(job.job_id),
     enabled: importanceEnabled,
   });
@@ -99,14 +100,14 @@ export function CompletedContent({
   }, [importanceKinds, importanceKind]);
 
   const { data: importance } = useQuery({
-    queryKey: ["job-importance", job.job_id, importanceKind],
+    queryKey: queryKeys.jobImportance(job.job_id, importanceKind),
     queryFn: () => fetchJobImportance(job.job_id, importanceKind),
     enabled: importanceEnabled,
   });
 
   const { data: importancePlot, isLoading: isImportancePlotLoading } = useQuery(
     {
-      queryKey: ["job-plot", job.job_id, "importance", importanceKind],
+      queryKey: queryKeys.jobPlotImportance(job.job_id, importanceKind),
       queryFn: () =>
         fetchJobPlot(job.job_id, "importance", { kind: importanceKind }),
       enabled: importanceEnabled,
@@ -114,12 +115,12 @@ export function CompletedContent({
   );
 
   const { data: splitSummary } = useQuery({
-    queryKey: ["job-split-summary", job.job_id],
+    queryKey: queryKeys.jobSplitSummary(job.job_id),
     queryFn: () => fetchJobSplitSummary(job.job_id),
   });
 
   const { data: tuningPlot } = useQuery({
-    queryKey: ["job-plot", job.job_id, "tuning"],
+    queryKey: queryKeys.jobPlotTuning(job.job_id),
     queryFn: () => fetchJobPlot(job.job_id, "tuning"),
     enabled: job.job_type === "tune",
   });

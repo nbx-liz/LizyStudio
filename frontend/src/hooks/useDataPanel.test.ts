@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { queryKeys } from "@/api/queryKeys";
 import type { ColumnInfo, ColumnsResponse } from "@/api/types";
 
 const mocks = vi.hoisted(() => ({
@@ -284,7 +285,7 @@ describe("useDataPanel", () => {
     // The merged config must be present in the query cache so the
     // ModelPanel-side useQuery(['config']) consumer sees it without
     // waiting for a refetch.
-    const cached = queryClient.getQueryData(["config"]);
+    const cached = queryClient.getQueryData(queryKeys.config());
     expect(cached).toEqual(merged);
   });
 });

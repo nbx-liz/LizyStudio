@@ -9,6 +9,7 @@ import {
   runInference,
 } from "@/api/inference";
 import { fetchJob, fetchJobs } from "@/api/jobs";
+import { queryKeys } from "@/api/queryKeys";
 import { ResultsPredOnly } from "@/components/inference/ResultsPredOnly";
 import { ResultsWithGT } from "@/components/inference/ResultsWithGT";
 import { SetupPanel } from "@/components/inference/SetupPanel";
@@ -24,7 +25,7 @@ export function InferencePage() {
 
   // Fetch completed jobs
   const { data: allJobs = [] } = useQuery({
-    queryKey: ["jobs"],
+    queryKey: queryKeys.jobs(),
     queryFn: () => fetchJobs(),
   });
 
@@ -55,14 +56,14 @@ export function InferencePage() {
   // `refetchInterval` was pure wasted bandwidth. Rely on the mutation's
   // invalidation instead.
   const { data: history = [] } = useQuery({
-    queryKey: ["inf-history", selectedJobId],
+    queryKey: queryKeys.infHistory(selectedJobId),
     queryFn: () => fetchInferenceHistory(selectedJobId ?? undefined),
     enabled: selectedJobId != null,
   });
 
   // Fetch selected inference record
   const { data: selectedRecord } = useQuery({
-    queryKey: ["inf-record", selectedInfId, selectedJobId],
+    queryKey: queryKeys.infRecord(selectedInfId, selectedJobId),
     queryFn: () =>
       fetchInferenceRecord(selectedInfId ?? "", selectedJobId ?? ""),
     enabled: selectedInfId != null && selectedJobId != null,
@@ -87,7 +88,7 @@ export function InferencePage() {
     },
     onSuccess: (result) => {
       toast.success("Inference completed");
-      queryClient.invalidateQueries({ queryKey: ["inf-history"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.infHistoryAll() });
       setSelectedInfId(result.inf_id);
     },
     onError: (err) => {
@@ -139,7 +140,7 @@ export function InferencePage() {
 
   // Fetch job detail to get config.data.target for ground-truth detection
   const { data: jobDetail } = useQuery({
-    queryKey: ["job-detail", selectedJobId],
+    queryKey: queryKeys.jobDetail(selectedJobId),
     queryFn: () => fetchJob(selectedJobId ?? ""),
     enabled: selectedJobId != null,
   });

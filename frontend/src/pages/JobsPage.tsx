@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 import { fetchJobs } from "@/api/jobs";
+import { queryKeys } from "@/api/queryKeys";
 import { JobDetailPanel } from "@/components/jobs/JobDetail";
 import { JobList } from "@/components/jobs/JobList";
 
@@ -9,7 +10,7 @@ export function JobsPage() {
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
 
   const { data: jobs = [] } = useQuery({
-    queryKey: ["jobs"],
+    queryKey: queryKeys.jobs(),
     queryFn: () => fetchJobs(),
     refetchInterval: 5000,
   });
@@ -32,11 +33,11 @@ export function JobsPage() {
 
   const handleJobDeleted = useCallback(() => {
     setSelectedJobId(null);
-    queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    queryClient.invalidateQueries({ queryKey: queryKeys.jobs() });
   }, [queryClient]);
 
   const handleJobChanged = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    queryClient.invalidateQueries({ queryKey: queryKeys.jobs() });
   }, [queryClient]);
 
   return (

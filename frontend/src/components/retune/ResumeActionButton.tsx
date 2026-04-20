@@ -3,6 +3,7 @@ import { PlayCircle } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { type ResumeRequestBody, resumeJob } from "@/api/jobs";
+import { queryKeys } from "@/api/queryKeys";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -67,8 +68,8 @@ export function ResumeActionButton({
     mutationFn: (body: ResumeRequestBody) => resumeJob(jobId, body),
     onSuccess: (res) => {
       toast.success(`Resume started (${res.job_id})`);
-      queryClient.invalidateQueries({ queryKey: ["jobs"] });
-      queryClient.invalidateQueries({ queryKey: ["job", jobId] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.jobs() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.job(jobId) });
       setOpen(false);
       onStarted?.(res.job_id);
     },

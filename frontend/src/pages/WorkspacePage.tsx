@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { getErrorMessage } from "@/api/errors";
+import { queryKeys } from "@/api/queryKeys";
 import {
   fetchConfig,
   fetchUiSchema,
@@ -89,12 +90,12 @@ export function WorkspacePage() {
   const notify = useBackgroundNotification();
 
   const { data: uiSchema } = useQuery({
-    queryKey: ["ui-schema"],
+    queryKey: queryKeys.uiSchema(),
     queryFn: fetchUiSchema,
   });
 
   const { data: config } = useQuery({
-    queryKey: ["config"],
+    queryKey: queryKeys.config(),
     queryFn: fetchConfig,
     enabled: hasData,
     retry: false,
@@ -102,7 +103,7 @@ export function WorkspacePage() {
 
   const handleDataChanged = useCallback(() => {
     setHasData(true);
-    queryClient.invalidateQueries({ queryKey: ["config"] });
+    queryClient.invalidateQueries({ queryKey: queryKeys.config() });
   }, [queryClient]);
 
   const handleTaskChanged = useCallback((t: string | null) => {
@@ -135,7 +136,7 @@ export function WorkspacePage() {
     async (fullConfig: Record<string, unknown>) => {
       try {
         await updateConfig(fullConfig);
-        queryClient.invalidateQueries({ queryKey: ["config"] });
+        queryClient.invalidateQueries({ queryKey: queryKeys.config() });
         setModelTab("fit");
         toast.success("Best params applied to Fit tab. Click Fit to run.");
       } catch {

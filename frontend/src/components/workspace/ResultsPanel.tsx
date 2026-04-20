@@ -3,6 +3,7 @@ import { Activity } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { cancelJob, fetchJob, fetchJobLog, fetchJobs } from "@/api/jobs";
+import { queryKeys } from "@/api/queryKeys";
 import type { JobDetail, ProgressMessage } from "@/api/types";
 import { connectJobProgress } from "@/api/websocket";
 import { ResumeActionButton } from "@/components/retune/ResumeActionButton";
@@ -49,7 +50,7 @@ export function ResultsPanel({
   const [cancelConfirm, setCancelConfirm] = useState(false);
 
   const { data: job, refetch: refetchJob } = useQuery({
-    queryKey: ["job", jobId],
+    queryKey: queryKeys.job(jobId),
     queryFn: () => fetchJob(jobId as string),
     enabled: !!jobId,
     refetchInterval: (query) => {
@@ -60,7 +61,7 @@ export function ResultsPanel({
   });
 
   const { data: allJobs } = useQuery({
-    queryKey: ["jobs"],
+    queryKey: queryKeys.jobs(),
     queryFn: () => fetchJobs(),
     enabled: !!jobId,
   });
@@ -99,16 +100,16 @@ export function ResultsPanel({
       onCompleted: () => {
         setProgress(null);
         setFoldLog([]);
-        queryClient.invalidateQueries({ queryKey: ["job", jobId] });
-        queryClient.invalidateQueries({ queryKey: ["jobs"] });
+        queryClient.invalidateQueries({ queryKey: queryKeys.job(jobId) });
+        queryClient.invalidateQueries({ queryKey: queryKeys.jobs() });
         onJobDone?.();
       },
       onError: (msg) => {
         setProgress(null);
         setFoldLog([]);
         toast.error(msg.message);
-        queryClient.invalidateQueries({ queryKey: ["job", jobId] });
-        queryClient.invalidateQueries({ queryKey: ["jobs"] });
+        queryClient.invalidateQueries({ queryKey: queryKeys.job(jobId) });
+        queryClient.invalidateQueries({ queryKey: queryKeys.jobs() });
         onJobDone?.();
       },
     });
@@ -329,7 +330,7 @@ function LogDialog({
   jobId: string;
 }) {
   const { data } = useQuery({
-    queryKey: ["job-log", jobId],
+    queryKey: queryKeys.jobLog(jobId),
     queryFn: () => fetchJobLog(jobId),
     enabled: open,
   });

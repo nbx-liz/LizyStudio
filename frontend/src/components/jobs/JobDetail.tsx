@@ -17,6 +17,7 @@ import {
   fetchJobLog,
   type LineageNode,
 } from "@/api/jobs";
+import { queryKeys } from "@/api/queryKeys";
 import type { JobDetail as JobDetailType, ProgressMessage } from "@/api/types";
 import { connectJobProgress } from "@/api/websocket";
 import { JobLineageTree } from "@/components/retune/JobLineageTree";
@@ -73,7 +74,7 @@ export function JobDetailPanel({
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   const { data: job, refetch: refetchJob } = useQuery({
-    queryKey: ["job", jobId],
+    queryKey: queryKeys.job(jobId),
     queryFn: () => fetchJob(jobId),
     refetchInterval: (query) => {
       const data = query.state.data as JobDetailType | undefined;
@@ -85,7 +86,7 @@ export function JobDetailPanel({
   // auxiliary info — swallow errors silently. Only fetch for tune
   // jobs because only tune jobs can have a lineage.
   const { data: lineageData } = useQuery({
-    queryKey: ["job-lineage", jobId],
+    queryKey: queryKeys.jobLineage(jobId),
     queryFn: () => fetchJobLineage(jobId),
     enabled: job?.job_type === "tune",
     retry: false,
@@ -105,7 +106,7 @@ export function JobDetailPanel({
     (childJobId: string) => {
       // Invalidate the list so the new child shows up immediately in
       // the left panel, then switch selection to it.
-      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.jobs() });
       onJobSelect?.(childJobId);
     },
     [queryClient, onJobSelect],
@@ -124,7 +125,7 @@ export function JobDetailPanel({
       onCompleted: () => {
         setProgress(null);
         refetchJob();
-        queryClient.invalidateQueries({ queryKey: ["jobs"] });
+        queryClient.invalidateQueries({ queryKey: queryKeys.jobs() });
         onJobChanged();
       },
       onError: (msg) => {
@@ -160,7 +161,7 @@ export function JobDetailPanel({
       await cancelJob(jobId);
       toast.info("Job cancelled");
       refetchJob();
-      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.jobs() });
     } catch {
       toast.error("Failed to cancel job");
     }
@@ -527,7 +528,7 @@ function FailedView({
 
 function ExecutionLogContent({ jobId }: { jobId: string }) {
   const { data } = useQuery({
-    queryKey: ["job-log", jobId],
+    queryKey: queryKeys.jobLog(jobId),
     queryFn: () => fetchJobLog(jobId),
   });
 
@@ -548,7 +549,7 @@ function LogDialog({
   jobId: string;
 }) {
   const { data } = useQuery({
-    queryKey: ["job-log", jobId],
+    queryKey: queryKeys.jobLog(jobId),
     queryFn: () => fetchJobLog(jobId),
     enabled: open,
   });
