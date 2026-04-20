@@ -109,7 +109,7 @@ def _require_tune_job_with_checkpoint(
             "INVALID_PARAM",
             f"Job {parent.job_id} is not a tune job (type={parent.job_type})",
         )
-    parent_dir = job_store.jobs_dir / parent.job_id
+    parent_dir = job_store.job_dir(parent.job_id)
     checkpoint = parent_dir / "model.pkl"
     if not checkpoint.exists():
         raise StudioError(

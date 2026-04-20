@@ -194,7 +194,7 @@ def _run_job_core(
         # doing so would short-circuit the worker thread and leave a
         # zombie thread handle on the workspace.
         try:
-            log_path = job_store.jobs_dir / job.job_id / "execution.log"
+            log_path = job_store.path_for(job.job_id, "log")
             log_path.parent.mkdir(parents=True, exist_ok=True)
             log_path.write_text(log_buffer.getvalue(), encoding="utf-8")
         except OSError:

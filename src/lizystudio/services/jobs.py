@@ -33,6 +33,45 @@ _logger = logging.getLogger(__name__)
 CANCEL_FLAG_FILENAME = "CANCEL"
 
 
+# A-10: BLUEPRINT §3.4.4 on-disk layout for a single job. Centralising
+# this map is the core of the path-layout SSOT — every artifact filename
+# lives here, and every caller goes through ``JobStore.path_for`` (or
+# the module-level :func:`artifact_path` helper, used by call sites
+# that have a ``jobs_dir`` but no ``JobStore`` instance).
+ArtifactKind = Literal[
+    "meta",
+    "fit_result",
+    "tune_result",
+    "model",
+    "log",
+    "tuning_plot",
+    "cancel_flag",
+]
+
+ARTIFACT_FILENAMES: dict[ArtifactKind, str] = {
+    "meta": "meta.json",
+    "fit_result": "fit_result.json",
+    "tune_result": "tune_result.json",
+    "model": "model",  # directory (see load/save in adapters)
+    "log": "execution.log",
+    "tuning_plot": "tuning_plot.json",
+    "cancel_flag": CANCEL_FLAG_FILENAME,
+}
+
+
+def artifact_path(jobs_dir: Path, job_id: str, kind: ArtifactKind) -> Path:
+    """Resolve ``{jobs_dir}/{job_id}/<artifact>`` without a ``JobStore``.
+
+    ``JobStore.path_for`` is the preferred entry point (it also applies
+    path-traversal guards). This helper exists for call sites — e.g.
+    :mod:`lizystudio.services.job_results` — that hold a ``Job`` and can
+    derive ``jobs_dir`` from ``Job.model_path`` but do not own the
+    ``JobStore`` instance. Callers are responsible for validating
+    ``job_id`` when it is user-controlled.
+    """
+    return jobs_dir / job_id / ARTIFACT_FILENAMES[kind]
+
+
 @dataclass
 class Job:
     """Persistent job metadata."""
@@ -86,6 +125,27 @@ class JobStore:
         validate_path_within(candidate, self.jobs_dir)
         return candidate
 
+    # --- Path resolution (A-10) ---
+
+    def job_dir(self, job_id: str) -> Path:
+        """Public job directory resolver with traversal guard.
+
+        Callers outside :class:`JobStore` should prefer :meth:`path_for`
+        for named artifacts and reserve :meth:`job_dir` for cases that
+        need the directory itself (e.g. checkpoint base dir for
+        subprocess runners).
+        """
+        return self._job_dir(job_id)
+
+    def path_for(self, job_id: str, kind: ArtifactKind) -> Path:
+        """Resolve the on-disk path of a named job artifact.
+
+        Backed by the module-level :data:`ARTIFACT_FILENAMES` map so the
+        layout stays a single source of truth. The returned path is
+        already guarded against traversal via :meth:`_job_dir`.
+        """
+        return self._job_dir(job_id) / ARTIFACT_FILENAMES[kind]
+
     # --- CRUD ---
 
     def create(
@@ -118,8 +178,7 @@ class JobStore:
 
     def get(self, job_id: str) -> Job | None:
         """Load a job by ID. Returns ``None`` if not found."""
-        meta_path = self._job_dir(job_id) / "meta.json"
-        if not meta_path.exists():
+        if not self.path_for(job_id, "meta").exists():
             return None
         return self._load_job(job_id)
 
@@ -168,12 +227,12 @@ class JobStore:
         self._save_meta(job)
         if job.fit_result is not None:
             self._write_json(
-                self.jobs_dir / job.job_id / "fit_result.json",
+                self.path_for(job.job_id, "fit_result"),
                 asdict(job.fit_result),
             )
         if job.tune_result is not None:
             self._write_json(
-                self.jobs_dir / job.job_id / "tune_result.json",
+                self.path_for(job.job_id, "tune_result"),
                 asdict(job.tune_result),
             )
 
@@ -185,7 +244,7 @@ class JobStore:
         removed (existing children become orphaned).  An empty list is
         returned when the job does not exist.
         """
-        if not self._job_dir(job_id).exists():
+        if not self.job_dir(job_id).exists():
             return []
 
         removed: builtins.list[str] = []
@@ -202,7 +261,7 @@ class JobStore:
             removed.append(job_id)
 
         for jid in removed:
-            target = self._job_dir(jid)
+            target = self.job_dir(jid)
             if target.exists():
                 # ignore_errors: a concurrent request_cancel (#152) can
                 # briefly stage a tempfile inside the victim tree, and
@@ -215,7 +274,7 @@ class JobStore:
             # here to avoid a top-level cycle with ``job_results``.
             from lizystudio.services.job_results import clear_model_cache_for
 
-            clear_model_cache_for(str(self._job_dir(jid) / "model"))
+            clear_model_cache_for(str(self.path_for(jid, "model")))
         return removed
 
     # --- H-0062 lineage helpers ---
@@ -442,10 +501,10 @@ class JobStore:
     def _cancel_flag_path(self, job_id: str) -> Path:
         """Resolve the cancel flag path with the traversal guard.
 
-        Reuses ``_job_dir``'s path validation so a malformed job_id
-        cannot escape the jobs_dir root.
+        Thin wrapper over :meth:`path_for` so a malformed job_id cannot
+        escape the jobs_dir root.
         """
-        return self._job_dir(job_id) / CANCEL_FLAG_FILENAME
+        return self.path_for(job_id, "cancel_flag")
 
     # --- Active job tracking (concurrency control) ---
 
@@ -587,7 +646,7 @@ class JobStore:
 
     def get_log(self, job_id: str) -> str:
         """Read execution log for a job. Returns empty string if not found."""
-        log_path = self._job_dir(job_id) / "execution.log"
+        log_path = self.path_for(job_id, "log")
         if not log_path.exists():
             return ""
         return log_path.read_text(encoding="utf-8")
@@ -595,7 +654,7 @@ class JobStore:
     # --- Internal helpers ---
 
     def _save_meta(self, job: Job) -> None:
-        job_dir = self._job_dir(job.job_id)
+        job_dir = self.job_dir(job.job_id)
         job_dir.mkdir(parents=True, exist_ok=True)
         meta = {
             "job_id": job.job_id,
@@ -610,20 +669,19 @@ class JobStore:
             "error": job.error,
             "parent_job_id": job.parent_job_id,
         }
-        self._write_json(job_dir / "meta.json", meta)
+        self._write_json(self.path_for(job.job_id, "meta"), meta)
 
     def _load_job(self, job_id: str) -> Job:
-        job_dir = self._job_dir(job_id)
-        meta = self._read_json(job_dir / "meta.json")
+        meta = self._read_json(self.path_for(job_id, "meta"))
 
         fit_result = None
-        fit_path = job_dir / "fit_result.json"
+        fit_path = self.path_for(job_id, "fit_result")
         if fit_path.exists():
             d = self._read_json(fit_path)
             fit_result = FitSummary(**d)
 
         tune_result = None
-        tune_path = job_dir / "tune_result.json"
+        tune_path = self.path_for(job_id, "tune_result")
         if tune_path.exists():
             d = self._read_json(tune_path)
             tune_result = TuningSummary(**d)

@@ -72,8 +72,8 @@ def run_retune(
     continued for the requested n_trials. Subsequent trials are saved
     back to the child's own checkpoint via the standard bridge callback.
     """
-    parent_dir = job_store.jobs_dir / parent_job.job_id
-    child_dir = job_store.jobs_dir / child_job.job_id
+    parent_dir = job_store.job_dir(parent_job.job_id)
+    child_dir = job_store.job_dir(child_job.job_id)
     _copy_checkpoint_to_child(parent_dir, child_dir)
     _run_pickle_preflight(backend, child_dir)
 
