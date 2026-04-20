@@ -155,9 +155,8 @@ def test_jobs_duration_uses_ml_workload_buckets(client: TestClient) -> None:
     Note: prometheus_client only emits `_bucket` lines after the first
     observation — prime the histogram with one sample before reading.
     """
-    from lizystudio.metrics import record_job_terminal
-
-    record_job_terminal("fit", "completed", duration=0.5)
+    metrics = client.app.state.metrics  # type: ignore[attr-defined]
+    metrics.record_job_terminal("fit", "completed", duration=0.5)
 
     body = client.get("/api/metrics").text
     # A handful of bucket edges we promised in BLUEPRINT §5.9.
@@ -173,11 +172,11 @@ def test_record_job_terminal_accepts_duration(client: TestClient) -> None:
     The helper is the single entry point used across the training
     service; adding a duration arg keeps the call sites uniform.
     """
-    from lizystudio.metrics import record_job_terminal
+    metrics = client.app.state.metrics  # type: ignore[attr-defined]
 
     # Should not raise; duration is optional.
-    record_job_terminal("fit", "completed", duration=1.23)
-    record_job_terminal("tune", "failed")  # backward-compat: no duration
+    metrics.record_job_terminal("fit", "completed", duration=1.23)
+    metrics.record_job_terminal("tune", "failed")  # backward-compat: no duration
 
 
 def test_active_jobs_gauge_starts_at_zero(client: TestClient) -> None:

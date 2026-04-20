@@ -30,7 +30,6 @@ from typing import TYPE_CHECKING, Any
 
 from lizystudio.backends.base import BackendAdapter, ProgressCallback
 from lizystudio.backends.types import FitSummary, TuningSummary
-from lizystudio.metrics import record_job_terminal
 from lizystudio.services.jobs import Job, JobStore
 
 if TYPE_CHECKING:
@@ -103,18 +102,19 @@ def _subprocess_duration_seconds(job: Job) -> float:
     return max(0.0, (completed - created).total_seconds())
 
 
-def _emit_terminal_metric(job: Job, duration: float = 0.0) -> None:
+def _emit_terminal_metric(job_store: JobStore, job: Job, duration: float = 0.0) -> None:
     """Bump ``lizystudio_jobs_total`` and observe duration (H-0065, H-0066).
 
-    Centralises the per-literal dispatch that mypy requires for Literal
-    narrowing.
+    A-9: delegates to the bound :class:`~lizystudio.metrics.MetricsRegistry`
+    via ``job_store.record_job_terminal``. Centralises the per-literal
+    dispatch that mypy requires for Literal narrowing.
     """
     if job.status == "completed":
-        record_job_terminal(job.job_type, "completed", duration=duration)
+        job_store.record_job_terminal(job.job_type, "completed", duration=duration)
     elif job.status == "failed":
-        record_job_terminal(job.job_type, "failed", duration=duration)
+        job_store.record_job_terminal(job.job_type, "failed", duration=duration)
     elif job.status == "cancelled":
-        record_job_terminal(job.job_type, "cancelled", duration=duration)
+        job_store.record_job_terminal(job.job_type, "cancelled", duration=duration)
 
 
 def _run_job_core(
@@ -141,7 +141,7 @@ def _run_job_core(
             broadcaster.send_error(
                 job.job_id, "Another job is already running", code="JOB_CONFLICT"
             )
-        record_job_terminal(job.job_type, "failed")
+        job_store.record_job_terminal(job.job_type, "failed")
         return job
 
     job.status = "running"
@@ -187,7 +187,7 @@ def _run_job_core(
         job_store.release_active(job.job_id)
         job_store.clear_cancel(job.job_id)
         elapsed = time.monotonic() - start_time
-        _emit_terminal_metric(job, duration=elapsed)  # H-0065 / H-0066
+        _emit_terminal_metric(job_store, job, duration=elapsed)  # H-0065 / H-0066
         job_logger.removeHandler(handler)
         handler.close()
         # Persist captured logs. OSError here must not propagate —
@@ -314,7 +314,7 @@ def _run_subprocess_job(
                 if broadcaster is not None:
                     broadcaster.send_error(job.job_id, job.error)
                 ws.note_current_job(job.job_id)
-                record_job_terminal(job.job_type, "failed")
+                job_store.record_job_terminal(job.job_type, "failed")
                 terminal_already_recorded = True
             return job
         data_path = ws.data_ref.path
@@ -352,7 +352,7 @@ def _run_subprocess_job(
             latest = job_store.get(job.job_id)
             if latest is not None:
                 duration = _subprocess_duration_seconds(latest)
-                _emit_terminal_metric(latest, duration=duration)
+                _emit_terminal_metric(job_store, latest, duration=duration)
 
 
 __all__ = [

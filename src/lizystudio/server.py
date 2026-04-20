@@ -33,7 +33,7 @@ from lizystudio.api.errors import (
     validation_error_handler,
 )
 from lizystudio.backends.registry import get_adapter
-from lizystudio.metrics import REQUEST_DURATION, REQUESTS_TOTAL
+from lizystudio.metrics import MetricsRegistry
 from lizystudio.services.jobs import JobStore
 from lizystudio.services.workspace import WorkspaceState
 from lizystudio.ws.progress import ProgressBroadcaster, websocket_progress
@@ -92,15 +92,23 @@ def create_app() -> FastAPI:
     backend_name = os.environ.get("LIZYSTUDIO_BACKEND", "lizyml")
     jobs_dir = Path(os.environ.get("LIZYSTUDIO_JOBS_DIR", ".lizystudio/jobs"))
 
+    # A-9: per-app Prometheus registry. Instantiated before ``lifespan``
+    # so both the metrics_middleware closure below and the JobStore can
+    # bind to the same registry. Each ``create_app()`` invocation builds
+    # a fresh :class:`CollectorRegistry`, so two apps can coexist in
+    # the same process (e.g. pytest).
+    metrics = MetricsRegistry()
+
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         adapter = get_adapter(backend_name)
         # Eagerly import the ML backend to avoid import-lock deadlocks
         # when concurrent API requests trigger lazy imports in threads.
         _warmup_adapter(adapter)
+        application.state.metrics = metrics
         application.state.workspace = WorkspaceState(backend=adapter)
-        application.state.job_store = JobStore(jobs_dir)
-        broadcaster = ProgressBroadcaster()
+        application.state.job_store = JobStore(jobs_dir, metrics=metrics)
+        broadcaster = ProgressBroadcaster(metrics=metrics)
         broadcaster.set_loop(asyncio.get_running_loop())
         application.state.broadcaster = broadcaster
         yield
@@ -157,12 +165,12 @@ def create_app() -> FastAPI:
         route = request.scope.get("route")
         label_path = getattr(route, "path", None) or "unmatched"
 
-        REQUESTS_TOTAL.labels(
+        metrics.requests_total.labels(
             method=request.method,
             path=label_path,
             status=str(response.status_code),
         ).inc()
-        REQUEST_DURATION.labels(
+        metrics.request_duration.labels(
             method=request.method,
             path=label_path,
         ).observe(elapsed)

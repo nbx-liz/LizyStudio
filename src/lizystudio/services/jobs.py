@@ -12,14 +12,16 @@ import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 from fastapi import Request
 
 from lizystudio.backends.types import DataRef, FitSummary, TuningSummary
-from lizystudio.metrics import ACTIVE_JOBS
 from lizystudio.security import validate_path_within  # noqa: E402
+
+if TYPE_CHECKING:
+    from lizystudio.metrics import JobType, MetricsRegistry, TerminalStatus
 
 _logger = logging.getLogger(__name__)
 
@@ -104,13 +106,25 @@ class JobStore:
         {jobs_dir}/{job_id}/model/
     """
 
-    def __init__(self, jobs_dir: Path) -> None:
+    def __init__(
+        self,
+        jobs_dir: Path,
+        metrics: MetricsRegistry | None = None,
+    ) -> None:
         self.jobs_dir = jobs_dir
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         self._cancel_requested: set[str] = set()
         self._cancel_lock = threading.Lock()
         self._active_job_id: str | None = None
         self._active_lock = threading.Lock()
+        # A-9: the active-slot gauge lives on the per-app MetricsRegistry.
+        # ``metrics`` is None in the subprocess child path
+        # (:func:`subprocess_runner._run_job_in_subprocess`) where the
+        # child's Prometheus state is isolated from the parent and
+        # scrape output comes from the parent's registry only — bumping
+        # a disconnected gauge inside the child would be a no-op, so we
+        # simply skip it.
+        self._metrics = metrics
         # H-0062: per-parent exclusive lock for Re-tune / Resume children.
         # Maps parent_job_id -> child_job_id currently holding the slot.
         # In-memory only; cleared naturally on process restart because
@@ -118,6 +132,29 @@ class JobStore:
         # already marked failed at restart time.
         self._parent_locks: dict[str, str] = {}
         self._parent_lock_mutex = threading.Lock()
+
+    def _set_active_gauge(self, value: float) -> None:
+        """Update the active-jobs gauge on the bound MetricsRegistry."""
+        if self._metrics is not None:
+            self._metrics.active_jobs.set(value)
+
+    def record_job_terminal(
+        self,
+        job_type: JobType,
+        status: TerminalStatus,
+        duration: float = 0.0,
+    ) -> None:
+        """Forward a terminal transition to the bound :class:`MetricsRegistry`.
+
+        A-9: the training service layer already threads a ``JobStore``
+        through every call path, so re-using it as the metrics entry
+        point avoids duplicating the plumbing. A ``None`` registry is
+        a no-op (used by the subprocess child where Prometheus output
+        is never scraped).
+        """
+        if self._metrics is None:
+            return
+        self._metrics.record_job_terminal(job_type, status, duration=duration)
 
     def _job_dir(self, job_id: str) -> Path:
         """Resolve job directory with traversal guard."""
@@ -564,7 +601,7 @@ class JobStore:
                 parent_job_id=parent_job_id,
             )
             self._active_job_id = job.job_id
-            ACTIVE_JOBS.set(1)
+            self._set_active_gauge(1)
             return job
 
     def _is_slot_holder_stale_locked(self) -> bool:
@@ -594,10 +631,10 @@ class JobStore:
         with self._active_lock:
             if self._active_job_id is None:
                 self._active_job_id = job_id
-                ACTIVE_JOBS.set(1)
+                self._set_active_gauge(1)
                 return True
             # H-0065: the `self._active_job_id == job_id` re-claim
-            # branch intentionally skips `ACTIVE_JOBS.set(1)` — the
+            # branch intentionally skips the gauge update — the
             # gauge was already set to 1 by the original
             # `create_and_claim_active` or `claim_active` call that
             # acquired the slot, and bumping it again would be a
@@ -609,7 +646,7 @@ class JobStore:
         with self._active_lock:
             if self._active_job_id == job_id:
                 self._active_job_id = None
-                ACTIVE_JOBS.set(0)
+                self._set_active_gauge(0)
 
     def force_release_active_if(self, expected_job_id: str) -> bool:
         """Atomically release the slot iff it is still held by *expected_job_id*.
@@ -629,7 +666,7 @@ class JobStore:
         with self._active_lock:
             if self._active_job_id == expected_job_id:
                 self._active_job_id = None
-                ACTIVE_JOBS.set(0)
+                self._set_active_gauge(0)
                 return True
             return False
 

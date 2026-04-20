@@ -19,11 +19,14 @@ import contextlib
 import json
 import logging
 import threading
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 
 from lizystudio.ws.messages import WsCompleted, WsError, WsPing, WsProgress
+
+if TYPE_CHECKING:
+    from lizystudio.metrics import MetricsRegistry
 
 _logger = logging.getLogger(__name__)
 
@@ -58,10 +61,16 @@ class ProgressBroadcaster:
       full queue the oldest non-terminal item is evicted to make room.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, metrics: MetricsRegistry | None = None) -> None:
         self._queues: dict[str, list[asyncio.Queue[dict[str, Any]]]] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
         self._lock = threading.Lock()
+        # A-9: the progress-dropped counter lives on the per-app
+        # :class:`MetricsRegistry`. ``metrics`` is ``None`` when the
+        # broadcaster is stood up outside the normal app lifespan (e.g.
+        # legacy tests) — the drop accounting silently no-ops in that
+        # case instead of bumping a disconnected global.
+        self._metrics = metrics
 
     def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Store the event loop reference for thread-safe enqueuing."""
@@ -98,8 +107,8 @@ class ProgressBroadcaster:
         for q in qs:
             self._loop.call_soon_threadsafe(self._enqueue, q, message, is_terminal)
 
-    @staticmethod
     def _enqueue(
+        self,
         q: asyncio.Queue[dict[str, Any]],
         message: dict[str, Any],
         is_terminal: bool,
@@ -107,9 +116,9 @@ class ProgressBroadcaster:
         """Best-effort enqueue with the Issue #151 overflow policy.
 
         Runs on the event loop thread via ``call_soon_threadsafe`` so
-        ``asyncio.Queue`` operations are safe. Importing the metrics
-        counter lazily keeps the import graph free of a cycle between
-        ``ws.progress`` and ``metrics`` (metrics is a leaf module).
+        ``asyncio.Queue`` operations are safe. Needs ``self`` so it can
+        reach the per-app ``MetricsRegistry`` (A-9) when the drop
+        policy has to bump ``progress_dropped_total``.
         """
         try:
             q.put_nowait(message)
@@ -132,7 +141,7 @@ class ProgressBroadcaster:
                     preserved_terminals.append(head)
                     continue
                 # Found a non-terminal to evict.
-                _record_drop()
+                self._record_drop()
                 evicted_nonterminal = True
                 break
             # Put the preserved terminals back first (FIFO order
@@ -168,7 +177,12 @@ class ProgressBroadcaster:
                     )
             return
         # Non-terminal on a full queue: drop silently, record metric.
-        _record_drop()
+        self._record_drop()
+
+    def _record_drop(self) -> None:
+        """Increment ``progress_dropped_total`` on the bound registry."""
+        if self._metrics is not None:
+            self._metrics.progress_dropped_total.inc()
 
     def send_progress(
         self,
@@ -220,19 +234,6 @@ class ProgressBroadcaster:
             self.send_progress(job_id, current=current, total=total, message=message)
 
         return callback
-
-
-def _record_drop() -> None:
-    """Increment the progress-dropped counter without a hard import.
-
-    Kept module-private and lazy so importing ``ws.progress`` does not
-    force metrics into the import graph during test collection.
-    """
-    try:
-        from lizystudio.metrics import PROGRESS_DROPPED_TOTAL
-    except ImportError:  # pragma: no cover — metrics is optional
-        return
-    PROGRESS_DROPPED_TOTAL.inc()
 
 
 _DEFAULT_WS_ORIGINS: frozenset[str] = frozenset(
