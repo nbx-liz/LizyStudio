@@ -11,12 +11,14 @@ import {
 } from "@/api/workspace";
 import {
   type BlockedGroupKFoldState,
-  type CvState,
   INITIAL_BLOCKED_STATE,
+} from "@/components/workspace/BlockedGroupKFoldEditor";
+import { getDefaultCvStrategy } from "@/components/workspace/constants";
+import {
+  type CvState,
   INITIAL_CV_STATE,
   resetCvState,
-} from "@/components/workspace/CvSection";
-import { getDefaultCvStrategy } from "@/components/workspace/constants";
+} from "@/components/workspace/cv-state";
 import { useColumnOverrides } from "./useColumnOverrides";
 import { useConfigSync } from "./useConfigSync";
 import { useDataLoad } from "./useDataLoad";

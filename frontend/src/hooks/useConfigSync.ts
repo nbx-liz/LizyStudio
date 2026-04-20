@@ -5,13 +5,13 @@ import {
   fetchConfigDefaults,
   updateConfig,
 } from "@/api/workspace";
+import type { BlockedGroupKFoldState } from "@/components/workspace/BlockedGroupKFoldEditor";
 import {
   applyCvDataFields,
-  type BlockedGroupKFoldState,
   buildSplitConfig,
   type CvState,
   recommendedInnerValid,
-} from "@/components/workspace/CvSection";
+} from "@/components/workspace/cv-state";
 import type { ColumnOverride, TaskType } from "./useDataPanel.types";
 import { buildSyncKey, extractOverrideArrays } from "./useDataPanel.types";
 
