@@ -82,3 +82,68 @@ jobs:
       - run: pnpm check
       - run: pnpm build
       - run: pnpm vitest run --coverage
+
+  # Visual regression + a11y scans run on Nightly only — they are
+  # state- and environment-sensitive (jobs_dir seeding, axe-core rule
+  # drift), so gating PRs on them would red-up work that has nothing
+  # to do with styling/a11y. ``continue-on-error`` keeps the run
+  # informational for now; flip it off once the screenshots and a11y
+  # backlog are clean.
+  e2e-visual-a11y:
+    name: E2E visual + a11y (Nightly, non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: develop
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+      - name: Enable corepack and activate pnpm from packageManager field
+        run: |
+          corepack enable
+          corepack prepare --activate
+          pnpm --version
+      - name: Install backend deps
+        working-directory: .
+        run: uv sync
+      - run: pnpm install --frozen-lockfile
+      - name: Get Playwright version
+        id: pw-version
+        run: |
+          VERSION=$(node -e "console.log(require('@playwright/test/package.json').version)")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Run visual + a11y E2E
+        env:
+          CI: "true"
+          LIZYSTUDIO_FILES_ROOT: /tmp
+          LIZYSTUDIO_JOBS_DIR: /tmp/e2e_jobs
+        run: |
+          rm -rf /tmp/e2e_jobs
+          pnpm exec playwright test \
+            --project=chromium \
+            --grep="@visual|@a11y"
+      - name: Upload Playwright traces/screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-visual-a11y
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          retention-days: 14
+          if-no-files-found: ignore

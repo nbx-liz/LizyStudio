@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { deleteAllJobs } from "../helpers/api";
 import { dismissOnboarding } from "../helpers/onboarding";
 import { waitForStableUI } from "../helpers/visual";
 
@@ -8,6 +9,14 @@ import { waitForStableUI } from "../helpers/visual";
  * Covers dark/light mode across all pages, responsive viewports,
  * and form state visual verification.
  */
+
+// Nightly reuses /tmp/e2e_jobs across runs, so Jobs-page screenshots
+// capture every stale job an earlier session left behind. Wipe the
+// jobs_dir once per file so ``jobs-dark`` / ``jobs-light`` /
+// ``jobs-empty-state`` reflect a clean slate (matching the golden).
+test.beforeAll(async ({ request }) => {
+  await deleteAllJobs(request);
+});
 
 // --- Theme toggle helpers ---
 

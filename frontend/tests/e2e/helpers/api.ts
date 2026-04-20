@@ -86,6 +86,34 @@ export async function setupAndFit(
 }
 
 /**
+ * Delete every job persisted on the current server.
+ *
+ * Visual-regression specs rely on this in ``beforeAll`` because the
+ * Nightly ``jobs_dir`` is reused across runs; carrying jobs over from
+ * an earlier session changes the Jobs-list screenshot and produces
+ * spurious diffs that have nothing to do with the PR under test. The
+ * helper tolerates the case where the list API itself is unavailable
+ * (first-ever startup, permission issue) so a test suite can still
+ * proceed and surface the underlying error on its own terms.
+ */
+export async function deleteAllJobs(
+  request: import("@playwright/test").APIRequestContext,
+): Promise<void> {
+  const res = await request.get(`${API}/jobs/`);
+  if (res.status() !== 200) return;
+  const body = (await res.json()) as Array<{ job_id: string }>;
+  for (const job of body) {
+    // Cascade deletes the full H-0062 lineage subtree so deleting a
+    // parent also removes its Re-tune / Resume children in one call.
+    // Errors are swallowed — a concurrent delete race or a transient
+    // backend glitch should not abort the cleanup loop.
+    await request
+      .delete(`${API}/jobs/${job.job_id}?cascade=true`)
+      .catch(() => {});
+  }
+}
+
+/**
  * Poll until job reaches terminal status.
  */
 export async function waitForJobDone(
