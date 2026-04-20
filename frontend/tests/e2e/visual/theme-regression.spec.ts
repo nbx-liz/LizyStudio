@@ -37,7 +37,7 @@ async function navigateAndWait(
 
 // --- Dark/Light mode screenshots ---
 
-test.describe("Theme: Dark mode", () => {
+test.describe("Theme: Dark mode @visual", () => {
   test.beforeEach(async ({ page }) => {
     await dismissOnboarding(page);
   });
@@ -61,7 +61,7 @@ test.describe("Theme: Dark mode", () => {
   });
 });
 
-test.describe("Theme: Light mode", () => {
+test.describe("Theme: Light mode @visual", () => {
   test.beforeEach(async ({ page }) => {
     await dismissOnboarding(page);
   });
@@ -87,7 +87,7 @@ test.describe("Theme: Light mode", () => {
 
 // --- Theme toggle interaction ---
 
-test.describe("Theme: Toggle interaction", () => {
+test.describe("Theme: Toggle interaction @visual", () => {
   test.beforeEach(async ({ page }) => {
     await dismissOnboarding(page);
   });
@@ -116,7 +116,7 @@ test.describe("Theme: Toggle interaction", () => {
 
 // --- Form states ---
 
-test.describe("Form states visual", () => {
+test.describe("Form states visual @visual", () => {
   test.beforeEach(async ({ page }) => {
     await dismissOnboarding(page);
   });

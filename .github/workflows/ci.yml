@@ -71,6 +71,70 @@ jobs:
       - run: pnpm build
       - run: pnpm vitest run --coverage
 
+  # Post-Refactor E2E Gate (CLAUDE.md common/development-workflow.md §3.5).
+  # Runs the functional Playwright suite on every PR so structural
+  # refactors cannot silently break integration-level flows. Visual
+  # regression (@visual) and accessibility scans (@a11y) are EXCLUDED
+  # here — they are state-sensitive and live on Nightly so they do not
+  # block feature PRs on environment noise.
+  e2e-chromium:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+      - name: Enable corepack and activate pnpm from packageManager field
+        run: |
+          corepack enable
+          corepack prepare --activate
+          pnpm --version
+      - name: Install backend deps
+        working-directory: .
+        run: uv sync
+      - run: pnpm install --frozen-lockfile
+      # Cache the downloaded browser binaries across runs keyed on the
+      # pnpm lockfile (Playwright version is pinned via @playwright/test
+      # in package.json → frozen-lockfile guarantees reproducibility).
+      - name: Get Playwright version
+        id: pw-version
+        run: |
+          VERSION=$(node -e "console.log(require('@playwright/test/package.json').version)")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Run functional E2E (chromium, excluding @visual / @a11y)
+        env:
+          CI: "true"
+          LIZYSTUDIO_FILES_ROOT: /tmp
+          LIZYSTUDIO_JOBS_DIR: /tmp/e2e_jobs
+        run: |
+          rm -rf /tmp/e2e_jobs
+          pnpm exec playwright test \
+            --project=chromium \
+            --grep-invert="@visual|@a11y"
+      - name: Upload Playwright traces/screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-chromium
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
   # C-1 / INV-CI-1: committed schema.d.ts must match freshly-generated
   # output. Prevents drift between backend response_model declarations
   # and the TypeScript types that the frontend compiles against.
