@@ -1,9 +1,7 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { PlayCircle } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-import { type ResumeRequestBody, resumeJob } from "@/api/jobs";
-import { queryKeys } from "@/api/queryKeys";
+import { useResumeJob } from "@/api/queries";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -55,7 +53,6 @@ export function ResumeActionButton({
 }: ResumeActionButtonProps) {
   const [open, setOpen] = useState(false);
   const [nTrials, setNTrials] = useState<string>(String(remainingTrials));
-  const queryClient = useQueryClient();
 
   const disabled = !hasCheckpoint || disabledReason != null;
   const tooltip =
@@ -64,19 +61,23 @@ export function ResumeActionButton({
       ? undefined
       : "This failed job has no saved checkpoint to resume from");
 
-  const mutation = useMutation({
-    mutationFn: (body: ResumeRequestBody) => resumeJob(jobId, body),
-    onSuccess: (res) => {
-      toast.success(`Resume started (${res.job_id})`);
-      queryClient.invalidateQueries({ queryKey: queryKeys.jobs() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.job(jobId) });
-      setOpen(false);
-      onStarted?.(res.job_id);
-    },
-    onError: (err: Error) => {
-      toast.error(`Resume failed: ${err.message}`);
-    },
-  });
+  const mutation = useResumeJob();
+  const handleStart = () => {
+    const body = { n_trials: parsed };
+    mutation.mutate(
+      { jobId, body },
+      {
+        onSuccess: (res) => {
+          toast.success(`Resume started (${res.job_id})`);
+          setOpen(false);
+          onStarted?.(res.job_id);
+        },
+        onError: (err: Error) => {
+          toast.error(`Resume failed: ${err.message}`);
+        },
+      },
+    );
+  };
 
   const parsed = Number.parseInt(nTrials, 10);
   const invalid = Number.isNaN(parsed) || parsed < 1 || parsed > MAX_TRIALS;
@@ -126,7 +127,7 @@ export function ResumeActionButton({
           </Button>
           <Button
             disabled={invalid || mutation.isPending}
-            onClick={() => mutation.mutate({ n_trials: parsed })}
+            onClick={handleStart}
           >
             {mutation.isPending ? "Starting..." : "Start Resume"}
           </Button>

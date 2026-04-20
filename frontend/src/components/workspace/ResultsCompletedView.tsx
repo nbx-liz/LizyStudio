@@ -1,8 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
 import { Download } from "lucide-react";
 import { useEffect } from "react";
-import { fetchJobLineage, type LineageNode } from "@/api/jobs";
-import { queryKeys } from "@/api/queryKeys";
+import type { LineageNode } from "@/api/jobs";
+import { useJobLineage } from "@/api/queries";
 import type { JobDetail } from "@/api/types";
 import { JobLineageTree } from "@/components/retune/JobLineageTree";
 import { RetuneActionButton } from "@/components/retune/RetuneActionButton";
@@ -40,11 +39,8 @@ export function ResultsCompletedView({
 
   // H-0062 acceptance #13: lineage tree wire-in. Only fetch for tune jobs;
   // silently swallow errors because lineage is auxiliary information.
-  const { data: lineageData } = useQuery({
-    queryKey: queryKeys.jobLineage(job.job_id),
-    queryFn: () => fetchJobLineage(job.job_id),
+  const { data: lineageData } = useJobLineage(job.job_id, {
     enabled: job.job_type === "tune",
-    retry: false,
   });
   const lineageRoot: LineageNode | null = lineageData?.tree ?? null;
   const showLineage =

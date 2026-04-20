@@ -1,4 +1,3 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
   Download,
@@ -10,8 +9,8 @@ import {
 import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { fetchJobLineage, fetchJobLog, type LineageNode } from "@/api/jobs";
-import { queryKeys } from "@/api/queryKeys";
+import type { LineageNode } from "@/api/jobs";
+import { useJobLineage, useJobLog, useJobsInvalidator } from "@/api/queries";
 import type { JobDetail as JobDetailType, ProgressMessage } from "@/api/types";
 import { JobLineageTree } from "@/components/retune/JobLineageTree";
 import { ResumeActionButton } from "@/components/retune/ResumeActionButton";
@@ -60,7 +59,7 @@ export function JobDetailPanel({
   onJobSelect,
 }: JobDetailProps) {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
+  const invalidateJobs = useJobsInvalidator();
   const [selectedPlot, setSelectedPlot] = useState<string>("");
   const [logOpen, setLogOpen] = useState(false);
   const [cancelConfirm, setCancelConfirm] = useState(false);
@@ -84,11 +83,8 @@ export function JobDetailPanel({
   // H-0067: Re-tune / Resume / Lineage in the Jobs page. Lineage is
   // auxiliary info — swallow errors silently. Only fetch for tune
   // jobs because only tune jobs can have a lineage.
-  const { data: lineageData } = useQuery({
-    queryKey: queryKeys.jobLineage(jobId),
-    queryFn: () => fetchJobLineage(jobId),
+  const { data: lineageData } = useJobLineage(jobId, {
     enabled: job?.job_type === "tune",
-    retry: false,
   });
   const lineageRoot: LineageNode | null = lineageData?.tree ?? null;
   const showLineage =
@@ -105,10 +101,10 @@ export function JobDetailPanel({
     (childJobId: string) => {
       // Invalidate the list so the new child shows up immediately in
       // the left panel, then switch selection to it.
-      queryClient.invalidateQueries({ queryKey: queryKeys.jobs() });
+      invalidateJobs();
       onJobSelect?.(childJobId);
     },
-    [queryClient, onJobSelect],
+    [invalidateJobs, onJobSelect],
   );
 
   const modelName = (job?.config?.model as Record<string, unknown>)?.name as
@@ -479,10 +475,7 @@ function FailedView({
 }
 
 function ExecutionLogContent({ jobId }: { jobId: string }) {
-  const { data } = useQuery({
-    queryKey: queryKeys.jobLog(jobId),
-    queryFn: () => fetchJobLog(jobId),
-  });
+  const { data } = useJobLog(jobId, { enabled: true });
 
   return (
     <pre className="max-h-64 overflow-auto rounded bg-muted p-3 text-xs font-mono">
@@ -500,11 +493,7 @@ function LogDialog({
   onOpenChange: (open: boolean) => void;
   jobId: string;
 }) {
-  const { data } = useQuery({
-    queryKey: queryKeys.jobLog(jobId),
-    queryFn: () => fetchJobLog(jobId),
-    enabled: open,
-  });
+  const { data } = useJobLog(jobId, { enabled: open });
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

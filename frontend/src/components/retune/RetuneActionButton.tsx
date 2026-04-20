@@ -1,9 +1,7 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Repeat } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-import { type RetuneRequestBody, retuneJob } from "@/api/jobs";
-import { queryKeys } from "@/api/queryKeys";
+import { useRetuneJob } from "@/api/queries";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -58,7 +56,6 @@ export function RetuneActionButton({
 }: RetuneActionButtonProps) {
   const [open, setOpen] = useState(false);
   const [nTrials, setNTrials] = useState<string>(String(defaultNTrials));
-  const queryClient = useQueryClient();
 
   const disabled = !hasCheckpoint || disabledReason != null;
   const tooltip =
@@ -67,22 +64,26 @@ export function RetuneActionButton({
       ? undefined
       : "This job has no saved checkpoint and cannot be re-tuned");
 
-  const mutation = useMutation({
-    mutationFn: (body: RetuneRequestBody) => retuneJob(jobId, body),
-    onSuccess: (res) => {
-      toast.success(`Re-tune started (${res.job_id})`);
-      queryClient.invalidateQueries({ queryKey: queryKeys.jobs() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.job(jobId) });
-      setOpen(false);
-      // Switch the workspace selection to the child so the user sees
-      // progress immediately. Without this the UI keeps showing the
-      // completed parent and the re-tune appears to do nothing.
-      onStarted?.(res.job_id);
-    },
-    onError: (err: Error) => {
-      toast.error(`Re-tune failed: ${err.message}`);
-    },
-  });
+  const mutation = useRetuneJob();
+  const handleStart = () => {
+    const body = { n_trials: parsed };
+    mutation.mutate(
+      { jobId, body },
+      {
+        onSuccess: (res) => {
+          toast.success(`Re-tune started (${res.job_id})`);
+          setOpen(false);
+          // Switch the workspace selection to the child so the user sees
+          // progress immediately. Without this the UI keeps showing the
+          // completed parent and the re-tune appears to do nothing.
+          onStarted?.(res.job_id);
+        },
+        onError: (err: Error) => {
+          toast.error(`Re-tune failed: ${err.message}`);
+        },
+      },
+    );
+  };
 
   const parsed = Number.parseInt(nTrials, 10);
   const invalid = Number.isNaN(parsed) || parsed < 1 || parsed > MAX_TRIALS;
@@ -131,7 +132,7 @@ export function RetuneActionButton({
           </Button>
           <Button
             disabled={invalid || mutation.isPending}
-            onClick={() => mutation.mutate({ n_trials: parsed })}
+            onClick={handleStart}
           >
             {mutation.isPending ? "Starting..." : "Start Re-tune"}
           </Button>
