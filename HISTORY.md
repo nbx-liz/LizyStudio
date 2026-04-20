@@ -1953,3 +1953,37 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (c) `MetricsChips` が `metricsByTask` undefined で `null` を返すテスト green。
   - (d) `pnpm test` / `pnpm check` / `pnpm tsc --noEmit` / `pnpm build` すべて clean、`uv run pytest` も変化なし。
 - **Decision:** 2026-04-20 accepted — 提案通り実装。C-5b Part 2（`CV_STRATEGY_FIELDS` retirement）は別 issue として起票予定。
+
+### H-0075: Prometheus メトリクスの per-app `MetricsRegistry` 化（Phase 3 coupling refactor A-9）
+- **Status:** accepted
+- **Scope:** Backend | Internal only（wire format / scrape 出力 / BackendAdapter Protocol すべて不変）
+- **Related:** docs/coupling-analysis.md A-9、H-0065（メトリクス初版）、H-0066（jobs_duration histogram）
+- **Context:** `src/lizystudio/metrics.py` の `Counter` / `Histogram` / `Gauge` は prometheus_client の default `REGISTRY` に module-level で登録されていた。このため pytest で 2 つの `FastAPI` app を同プロセスで作ると 2 度目の `create_app()` が `Duplicated timeseries in CollectorRegistry` で失敗する。また `ACTIVE_JOBS.set(0)` が process-wide state であり、テスト間で active-job gauge が leak していた。multi-backend ML 対応を見据えて、app ごとに独立したメトリクスバンドルを持ちたい。
+- **Proposal:**
+  1. `metrics.py` を書き換え、`MetricsRegistry` dataclass に全 6 instrument（`requests_total` / `request_duration` / `jobs_total` / `active_jobs` / `jobs_duration` / `progress_dropped_total`）をインスタンスフィールドとして束ねる。各 instrument は自前の `CollectorRegistry` に登録される。`record_job_terminal(job_type, status, duration)` はメソッド化。
+  2. `server.py` (`create_app`) で `metrics = MetricsRegistry()` を 1 度だけ構築し、`app.state.metrics` に bind。`JobStore(jobs_dir, metrics=metrics)` と `ProgressBroadcaster(metrics=metrics)` にも注入。middleware は closure 経由で同じ `metrics` を参照。
+  3. `api/deps.py` に `get_metrics(connection: HTTPConnection) -> MetricsRegistry` factory を追加。
+  4. `api/metrics_api.py` は `Depends(get_metrics)` で受け取り `generate_latest(registry.registry)` を返す。
+  5. `JobStore.record_job_terminal(job_type, status, duration)` は bound registry へのデリゲーション。`metrics=None` (subprocess child 経路) の場合は no-op。gauge 更新も `_set_active_gauge(value)` helper 経由。
+  6. `_training_core.py` / `training_retune.py` / `api/workspace.py` の 8+ 箇所の `record_job_terminal(...)` 呼び出しを `job_store.record_job_terminal(...)` に置換。
+  7. `ws/progress.py`: `ProgressBroadcaster(metrics=None)` + `self._record_drop()` メソッド化、`_enqueue` は `self` を使うため `@staticmethod` を外す。module-level lazy `_record_drop` helper 削除。
+  8. `tests/test_metrics_registry.py` を新規追加。A-9 の acceptance core（2 app が同プロセスで共存、それぞれ独立した registry を持つ）を 5 test で validate。
+  9. 既存テスト（`tests/test_metrics_api.py`、`tests/regression/test_reg_0151_*`、`tests/regression/test_reg_0154_*`）を `client.app.state.metrics` 経由に書き換え。
+- **Impact:** `src/lizystudio/metrics.py`（module-level globals → dataclass、-30 / +90 行）、`src/lizystudio/server.py`（+6）、`src/lizystudio/api/deps.py`（+15）、`src/lizystudio/api/metrics_api.py`（Depends 化 +7）、`src/lizystudio/services/jobs.py`（+40: `metrics` 引数・`_set_active_gauge` helper・`record_job_terminal` delegation）、`src/lizystudio/services/_training_core.py`（+5 置換）、`src/lizystudio/services/training_retune.py`（+2 置換）、`src/lizystudio/api/workspace.py`（import 削除・4 箇所置換）、`src/lizystudio/ws/progress.py`（`metrics` 引数・`_record_drop` メソッド化・`@staticmethod` 削除）、テスト 4 ファイル更新 + 1 新規。
+- **Compatibility:**
+  - Prometheus scrape 出力（メトリクス名・labels・buckets）は bit-identical。
+  - wire format / BackendAdapter Protocol / storage layout 変更なし。
+  - **破壊的変更**: `from lizystudio.metrics import record_job_terminal` / `JOBS_TOTAL` / `ACTIVE_JOBS` / `PROGRESS_DROPPED_TOTAL` の module-level export は削除。これらを直接 import する外部統合（監視プラグイン等）は破綻するが、LizyStudio は内部パッケージで外部公開していないため shim は提供しない。
+  - Subprocess child (`subprocess_runner.py` の `JobStore(jobs_dir)`) は `metrics=None` を受け取り、`record_job_terminal` / `_set_active_gauge` が no-op になる。子プロセスの Prometheus 出力は親がスクレイプしないため機能的に同等。親プロセスは subprocess 終了後に `_emit_terminal_metric(job_store, job, duration)` で正しい registry に counter を bump する。
+- **Alternatives:**
+  - (a) Module-level globals を維持し conftest で `REGISTRY._names_to_collectors.clear()` する → 却下。prometheus_client の private attribute に依存する fragile な approach で、library の minor version 変更で壊れる。
+  - (b) `record_job_terminal(metrics, ...)` を caller から全関数に引数で threading する → 却下。`JobStore` に delegation させる方が caller 改修量が少なく、既存の DI (`Depends(get_job_store)`) と揃う。
+  - (c) Deprecation shim (`metrics.__getattr__` で module-level 名を現 app の state から引く) を残す → 却下。global singleton を暗黙的に復活させ A-9 の目的を半減させる。
+- **Acceptance Criteria:**
+  - (a) `tests/test_metrics_registry.py::test_two_apps_can_coexist_in_the_same_process` が green（2 app 同時起動で counter 独立）。
+  - (b) Prometheus scrape 出力に 6 instrument すべての `# TYPE` / `# HELP` ヘッダが含まれる（`test_metrics_api.py::test_metrics_contains_all_declared_series`）。
+  - (c) `active_jobs` が fresh app で 0 を返す（`test_active_jobs_gauge_starts_at_zero`）。
+  - (d) Issue #151 の overflow drop counter が自前 `MetricsRegistry` で increment する（`test_reg_0151_progress_queue_bounded`）。
+  - (e) Issue #154 の slot-claim failure で failed counter が 1 増える（`test_reg_0154_failed_metric_on_slot_claim`）。
+  - (f) `uv run pytest` / `uv run mypy src/lizystudio/` / `uv run ruff check .` / `uv run ruff format --check .` 全 clean、pytest 1152 green。
+- **Decision:** 2026-04-20 accepted — 提案通り実装。`record_job_terminal` の module-level export 廃止は破壊的変更だが、内部パッケージのため shim なしで移行。

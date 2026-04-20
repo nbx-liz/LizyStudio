@@ -213,16 +213,24 @@ def test_two_terminals_on_full_queue_both_survive_or_first_wins() -> None:
 
 
 def test_dropped_counter_increments_on_overflow() -> None:
-    """Observability: PROGRESS_DROPPED_TOTAL increments on overflow."""
-    from lizystudio.metrics import PROGRESS_DROPPED_TOTAL
+    """Observability: ``progress_dropped_total`` increments on overflow.
 
-    broadcaster = ProgressBroadcaster()
+    A-9: the counter lives on a per-app :class:`MetricsRegistry`
+    injected into the broadcaster at construction time. Using a fresh
+    registry here isolates the drop accounting from whatever
+    counts the main ``client`` fixture's app may also be emitting in
+    the same pytest session.
+    """
+    from lizystudio.metrics import MetricsRegistry
+
+    metrics = MetricsRegistry()
+    broadcaster = ProgressBroadcaster(metrics=metrics)
 
     async def scenario() -> None:
         broadcaster.set_loop(asyncio.get_event_loop())
         q = broadcaster.subscribe("job_counter")
         try:
-            before = PROGRESS_DROPPED_TOTAL._value.get()  # type: ignore[attr-defined]
+            before = metrics.progress_dropped_total._value.get()  # type: ignore[attr-defined]
 
             overflow = MAX_QUEUE_SIZE
             total = MAX_QUEUE_SIZE + overflow
@@ -232,7 +240,7 @@ def test_dropped_counter_increments_on_overflow() -> None:
                 )
                 await asyncio.sleep(0)
 
-            after = PROGRESS_DROPPED_TOTAL._value.get()  # type: ignore[attr-defined]
+            after = metrics.progress_dropped_total._value.get()  # type: ignore[attr-defined]
             assert after - before >= overflow, (
                 f"expected at least {overflow} drops, got delta={after - before}"
             )

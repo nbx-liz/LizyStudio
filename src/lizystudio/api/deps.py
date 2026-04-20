@@ -23,6 +23,7 @@ from lizystudio.services.workspace import get_workspace
 
 if TYPE_CHECKING:
     from lizystudio.backends.base import BackendAdapter
+    from lizystudio.metrics import MetricsRegistry
     from lizystudio.ws.progress import ProgressBroadcaster
 
 
@@ -30,6 +31,7 @@ __all__ = [
     "get_backend",
     "get_broadcaster",
     "get_job_store",
+    "get_metrics",
     "get_workspace",
 ]
 
@@ -58,3 +60,14 @@ def get_backend(connection: HTTPConnection) -> BackendAdapter:
     have to depend on the whole :class:`WorkspaceState`.
     """
     return connection.app.state.workspace.backend  # type: ignore[no-any-return]
+
+
+def get_metrics(connection: HTTPConnection) -> MetricsRegistry:
+    """Return the per-app :class:`MetricsRegistry` (A-9).
+
+    Populated by :func:`lizystudio.server.create_app` before the
+    application starts serving requests. Routers that need to observe
+    or bump a metric should ``Depends(get_metrics)`` rather than
+    importing module-level globals.
+    """
+    return connection.app.state.metrics  # type: ignore[no-any-return]

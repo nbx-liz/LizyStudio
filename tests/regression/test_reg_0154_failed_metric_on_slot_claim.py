@@ -20,11 +20,14 @@ from fastapi.testclient import TestClient
 pytestmark = pytest.mark.integration
 
 
-def _jobs_total(labels: dict[str, str]) -> float:
-    """Read the current value of JOBS_TOTAL for the given label set."""
-    from lizystudio.metrics import JOBS_TOTAL
+def _jobs_total(client: TestClient, labels: dict[str, str]) -> float:
+    """Read the current ``jobs_total`` value for the given label set.
 
-    return JOBS_TOTAL.labels(**labels)._value.get()  # type: ignore[attr-defined]
+    A-9: the counter now lives on the per-app :class:`MetricsRegistry`
+    bound to ``app.state.metrics``.
+    """
+    metrics = client.app.state.metrics  # type: ignore[attr-defined]
+    return metrics.jobs_total.labels(**labels)._value.get()  # type: ignore[attr-defined]
 
 
 def _seed_workspace(client: TestClient, tmp_path: Path) -> None:
@@ -64,10 +67,10 @@ def test_fit_previous_job_running_emits_failed_metric(
 
     monkeypatch.setattr(ws_mod, "start_fit_async", _raise_previous)
 
-    before = _jobs_total({"job_type": "fit", "status": "failed"})
+    before = _jobs_total(client, {"job_type": "fit", "status": "failed"})
     response = client.post("/api/workspace/fit")
     assert response.status_code == 409, response.text
-    after = _jobs_total({"job_type": "fit", "status": "failed"})
+    after = _jobs_total(client, {"job_type": "fit", "status": "failed"})
     assert after - before == 1, (
         f"expected 1 failed-metric emission, got delta={after - before}"
     )
@@ -87,10 +90,10 @@ def test_tune_previous_job_running_emits_failed_metric(
 
     monkeypatch.setattr(ws_mod, "start_tune_async", _raise_previous)
 
-    before = _jobs_total({"job_type": "tune", "status": "failed"})
+    before = _jobs_total(client, {"job_type": "tune", "status": "failed"})
     response = client.post("/api/workspace/tune")
     assert response.status_code == 409, response.text
-    after = _jobs_total({"job_type": "tune", "status": "failed"})
+    after = _jobs_total(client, {"job_type": "tune", "status": "failed"})
     assert after - before == 1
 
 
@@ -114,10 +117,10 @@ def test_fit_generic_thread_start_failure_emits_failed_metric(
 
     monkeypatch.setattr(ws_mod, "start_fit_async", _raise_runtime)
 
-    before = _jobs_total({"job_type": "fit", "status": "failed"})
+    before = _jobs_total(client, {"job_type": "fit", "status": "failed"})
     with pytest.raises(RuntimeError, match="thread start failed"):
         client.post("/api/workspace/fit")
-    after = _jobs_total({"job_type": "fit", "status": "failed"})
+    after = _jobs_total(client, {"job_type": "fit", "status": "failed"})
     assert after - before == 1
 
 
@@ -134,8 +137,8 @@ def test_tune_generic_thread_start_failure_emits_failed_metric(
 
     monkeypatch.setattr(ws_mod, "start_tune_async", _raise_runtime)
 
-    before = _jobs_total({"job_type": "tune", "status": "failed"})
+    before = _jobs_total(client, {"job_type": "tune", "status": "failed"})
     with pytest.raises(RuntimeError, match="thread start failed"):
         client.post("/api/workspace/tune")
-    after = _jobs_total({"job_type": "tune", "status": "failed"})
+    after = _jobs_total(client, {"job_type": "tune", "status": "failed"})
     assert after - before == 1
