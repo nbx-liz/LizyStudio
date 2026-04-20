@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 
 const STORAGE_KEY = "lizystudio-config-presets";
 
-interface ConfigPreset {
+export interface ConfigPreset {
   name: string;
   config: Record<string, unknown>;
   createdAt: string;
