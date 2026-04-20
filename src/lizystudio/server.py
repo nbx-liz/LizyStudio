@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket
+from fastapi import Depends, FastAPI, Request, Response, WebSocket
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -216,7 +216,18 @@ def create_app() -> FastAPI:
     # real HTTP endpoint.
     _install_ws_message_schema(application)
 
-    # Serve built frontend (production)
+    # Serve built frontend (production).
+    # C-12: surface misconfigured deployments at startup instead of
+    # silently 404-ing every SPA request — an ops person now sees a
+    # single warning line at boot if the pnpm build artefacts are
+    # missing / mounted at the wrong path.
+    if not STATIC_DIR.is_dir() or not (STATIC_DIR / "index.html").exists():
+        logger.warning(
+            "Static assets directory missing or empty at %s — "
+            "SPA requests will 404. Run `pnpm build` or point "
+            "STATIC_DIR at the frontend dist/.",
+            STATIC_DIR,
+        )
     if STATIC_DIR.is_dir() and (STATIC_DIR / "index.html").exists():
         application.mount(
             "/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets"
@@ -230,7 +241,10 @@ def create_app() -> FastAPI:
             not the frontend build artefacts exist (C-1 drift gate).
             """
             if full_path.startswith(("api/", "ws/")):
-                raise HTTPException(status_code=404, detail="Not found")
+                # C-8: use the StudioError envelope so the frontend's
+                # ``isStudioError`` path handles this uniformly instead
+                # of falling back to "API error 404".
+                raise StudioError("NOT_FOUND", f"Route not found: /{full_path}", 404)
             from lizystudio.security import validate_static_path
 
             safe = validate_static_path(STATIC_DIR / full_path, STATIC_DIR)

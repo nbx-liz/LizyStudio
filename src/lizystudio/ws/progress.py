@@ -235,12 +235,31 @@ def _record_drop() -> None:
     PROGRESS_DROPPED_TOTAL.inc()
 
 
-_ALLOWED_WS_ORIGINS: set[str] = {
-    "http://localhost:5173",
-    "http://localhost:8501",
-    "http://127.0.0.1:5173",
-    "http://127.0.0.1:8501",
-}
+_DEFAULT_WS_ORIGINS: frozenset[str] = frozenset(
+    {
+        "http://localhost:5173",
+        "http://localhost:8501",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:8501",
+    }
+)
+
+
+def get_allowed_ws_origins() -> set[str]:
+    """Return the allowlist of origins accepted on the progress WebSocket.
+
+    Reads ``LIZYSTUDIO_WS_ALLOWED_ORIGINS`` (comma-separated) at call
+    time so remote deployments don't need to patch the source. Blank
+    entries are filtered — the Origin check treats an empty string as
+    "no Origin header", so a stray "" in the allowlist would accept
+    unauthenticated cross-origin WebSockets (C-10 fix).
+    """
+    import os
+
+    raw = os.environ.get("LIZYSTUDIO_WS_ALLOWED_ORIGINS")
+    if not raw:
+        return set(_DEFAULT_WS_ORIGINS)
+    return {entry.strip() for entry in raw.split(",") if entry.strip()}
 
 
 async def websocket_progress(
@@ -250,7 +269,7 @@ async def websocket_progress(
 ) -> None:
     """WebSocket handler for ``/ws/jobs/{job_id}/progress``."""
     origin = websocket.headers.get("origin", "")
-    if origin and origin not in _ALLOWED_WS_ORIGINS:
+    if origin and origin not in get_allowed_ws_origins():
         await websocket.close(code=1008)
         return
     await websocket.accept()
