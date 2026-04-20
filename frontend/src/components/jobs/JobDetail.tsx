@@ -31,7 +31,11 @@ import {
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { useJobLifecycle } from "@/hooks/useJobLifecycle";
-import { defaultRetuneTrials, remainingRetuneTrials } from "@/lib/job-config";
+import {
+  defaultRetuneTrials,
+  getModelName,
+  remainingRetuneTrials,
+} from "@/lib/job-config";
 import { CompletedContent } from "./CompletedContent";
 import { ConfigTreeView } from "./ConfigTreeView";
 import { DeleteDialog } from "./DeleteDialog";
@@ -107,9 +111,7 @@ export function JobDetailPanel({
     [invalidateJobs, onJobSelect],
   );
 
-  const modelName = (job?.config?.model as Record<string, unknown>)?.name as
-    | string
-    | undefined;
+  const modelName = getModelName(job) || undefined;
 
   const handleCancel = useCallback(async () => {
     await cancel();

@@ -16,6 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { getModelParams, getModelSection } from "@/lib/job-config";
 import { formatNum } from "@/lib/utils";
 import { PlotlyChart } from "./PlotlyChart";
 
@@ -32,15 +33,19 @@ function buildFitConfig(
   job: JobDetail,
   bestParams: Record<string, unknown>,
 ): Record<string, unknown> {
-  const { tuning: _stripped, ...baseWithoutTuning } =
-    (job.config as Record<string, unknown>) ?? {};
-  const baseModel = (baseWithoutTuning.model as Record<string, unknown>) ?? {};
+  // ``job.config`` is typed as ``Record<string, unknown> | null | undefined``
+  // on the OpenAPI schema. Spreading it (with an empty-object fallback)
+  // keeps the outer shape intact while we pull the model subsection
+  // through the typed accessors.
+  const { tuning: _stripped, ...baseWithoutTuning } = job.config ?? {};
+  const baseModel = getModelSection(job);
+  const baseParams = getModelParams(job);
   return {
     ...baseWithoutTuning,
     model: {
       ...baseModel,
       params: {
-        ...((baseModel.params as Record<string, unknown>) ?? {}),
+        ...baseParams,
         ...bestParams,
       },
     },
