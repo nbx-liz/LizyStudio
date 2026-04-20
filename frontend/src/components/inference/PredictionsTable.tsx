@@ -5,6 +5,7 @@ import {
   fetchInferencePredictions,
   getInferenceDownloadUrl,
 } from "@/api/inference";
+import { queryKeys } from "@/api/queryKeys";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -26,7 +27,7 @@ export function PredictionsTable({ infId, jobId }: PredictionsTableProps) {
   const [page, setPage] = useState(0);
 
   const { data } = useQuery({
-    queryKey: ["inf-predictions", infId, jobId, page],
+    queryKey: queryKeys.infPredictions(infId, jobId, page),
     queryFn: () =>
       fetchInferencePredictions(infId, jobId, PAGE_SIZE, page * PAGE_SIZE),
   });

@@ -7,6 +7,7 @@ import {
   type InferenceRecord,
 } from "@/api/inference";
 import { fetchJobPlots } from "@/api/jobs";
+import { queryKeys } from "@/api/queryKeys";
 import {
   Accordion,
   AccordionContent,
@@ -40,17 +41,17 @@ export function ResultsWithGT({
   const [selectedPlot, setSelectedPlot] = useState("");
 
   const { data: metrics } = useQuery({
-    queryKey: ["inf-metrics", record.inf_id, record.job_id],
+    queryKey: queryKeys.infMetrics(record.inf_id, record.job_id),
     queryFn: () => fetchInferenceMetrics(record.inf_id, record.job_id),
   });
 
   const { data: plots } = useQuery({
-    queryKey: ["job-plots", record.job_id],
+    queryKey: queryKeys.jobPlots(record.job_id),
     queryFn: () => fetchJobPlots(record.job_id),
   });
 
   const { data: plotData } = useQuery({
-    queryKey: ["inf-plot", record.inf_id, record.job_id, selectedPlot],
+    queryKey: queryKeys.infPlot(record.inf_id, record.job_id, selectedPlot),
     queryFn: () =>
       fetchInferencePlot(record.inf_id, record.job_id, selectedPlot),
     enabled: !!selectedPlot,
@@ -177,7 +178,7 @@ function PredDistributionPlot({
   jobId: string;
 }) {
   const { data, isLoading } = useQuery({
-    queryKey: ["inf-plot", infId, jobId, "prediction-distribution"],
+    queryKey: queryKeys.infPlot(infId, jobId, "prediction-distribution"),
     queryFn: () => fetchInferencePlot(infId, jobId, "prediction-distribution"),
   });
 
@@ -193,7 +194,7 @@ function PredDistributionPlot({
 /** SHAP summary accordion item — renders only when SHAP data is available. */
 function ShapAccordionItem({ infId, jobId }: { infId: string; jobId: string }) {
   const { data, isLoading } = useQuery({
-    queryKey: ["inf-shap", infId, jobId],
+    queryKey: queryKeys.infShap(infId, jobId),
     queryFn: () => fetchInferenceShapPlot(infId, jobId),
     retry: false,
   });

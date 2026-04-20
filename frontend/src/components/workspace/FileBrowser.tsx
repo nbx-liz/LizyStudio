@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, File, Folder, FolderUp } from "lucide-react";
 import { useState } from "react";
 import { fetchDirectory } from "@/api/files";
+import { queryKeys } from "@/api/queryKeys";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -22,7 +23,7 @@ export function FileBrowser({ onSelect, trigger }: FileBrowserProps) {
   const [currentPath, setCurrentPath] = useState<string | undefined>(undefined);
 
   const { data: listing } = useQuery({
-    queryKey: ["files", currentPath ?? "~"],
+    queryKey: queryKeys.files(currentPath ?? "~"),
     queryFn: () => fetchDirectory(currentPath),
     enabled: open,
   });

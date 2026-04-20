@@ -1,5 +1,6 @@
 import { cleanup, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { queryKeys } from "@/api/queryKeys";
 import { makeJob, renderWithQuery } from "@/test/helpers";
 
 const mockFetchJob = vi.fn();
@@ -342,7 +343,7 @@ describe("ResultsPanel", () => {
 
     // Manually invalidate to trigger refetch with completed state
     act(() => {
-      queryClient.invalidateQueries({ queryKey: ["job", "test-job-1"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.job("test-job-1") });
     });
 
     await waitFor(() => expect(onJobDone).toHaveBeenCalled(), {

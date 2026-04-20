@@ -12,6 +12,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { getErrorMessage } from "@/api/errors";
+import { queryKeys } from "@/api/queryKeys";
 import type { ConfigError } from "@/api/types";
 import {
   fetchBackends,
@@ -78,18 +79,18 @@ export function ModelPanel({
   const { presets, save: savePreset, load: loadPreset } = useConfigPresets();
 
   const { data: schema } = useQuery({
-    queryKey: ["config-schema"],
+    queryKey: queryKeys.configSchema(),
     queryFn: fetchConfigSchema,
     staleTime: Number.POSITIVE_INFINITY,
   });
 
   const { data: config } = useQuery({
-    queryKey: ["config"],
+    queryKey: queryKeys.config(),
     queryFn: fetchConfig,
   });
 
   const { data: backends } = useQuery({
-    queryKey: ["backends"],
+    queryKey: queryKeys.backends(),
     queryFn: fetchBackends,
     staleTime: Number.POSITIVE_INFINITY,
   });
@@ -97,13 +98,13 @@ export function ModelPanel({
   const backend = backends?.[0];
 
   const { data: uiSchema } = useQuery({
-    queryKey: ["ui-schema"],
+    queryKey: queryKeys.uiSchema(),
     queryFn: fetchUiSchema,
     staleTime: Number.POSITIVE_INFINITY,
   });
 
   const { data: columnsData } = useQuery({
-    queryKey: ["columns"],
+    queryKey: queryKeys.columns(),
     queryFn: () => fetchColumns(),
     enabled: hasData,
   });
@@ -122,15 +123,15 @@ export function ModelPanel({
   const handleConfigChange = useCallback(
     async (newConfig: Record<string, unknown>) => {
       if (running) return;
-      const cached = queryClient.getQueryData<Record<string, unknown>>([
-        "config",
-      ]);
+      const cached = queryClient.getQueryData<Record<string, unknown>>(
+        queryKeys.config(),
+      );
       if (cached && equal(cached, newConfig)) {
         return;
       }
       try {
         await updateConfig(newConfig);
-        queryClient.setQueryData(["config"], newConfig);
+        queryClient.setQueryData(queryKeys.config(), newConfig);
         history.push(newConfig);
       } catch {
         toast.error("Failed to update config");
@@ -160,7 +161,7 @@ export function ModelPanel({
     try {
       const result = await uploadConfig(file);
       setErrors(result.errors);
-      queryClient.invalidateQueries({ queryKey: ["config"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.config() });
       toast.success("Config imported");
     } catch (err) {
       toast.error(`Import failed: ${getErrorMessage(err)}`);
@@ -177,7 +178,7 @@ export function ModelPanel({
     if (!prev) return;
     try {
       await updateConfig(prev);
-      queryClient.setQueryData(["config"], prev);
+      queryClient.setQueryData(queryKeys.config(), prev);
       toast.info("Config undone");
     } catch {
       toast.error("Undo failed");
@@ -189,7 +190,7 @@ export function ModelPanel({
     if (!next) return;
     try {
       await updateConfig(next);
-      queryClient.setQueryData(["config"], next);
+      queryClient.setQueryData(queryKeys.config(), next);
       toast.info("Config redone");
     } catch {
       toast.error("Redo failed");

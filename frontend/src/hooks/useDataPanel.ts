@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import { getErrorMessage } from "@/api/errors";
+import { queryKeys } from "@/api/queryKeys";
 import type { ColumnInfo, UiSchema } from "@/api/types";
 import {
   fetchColumns,
@@ -127,7 +128,7 @@ export function useDataPanel({
             overrides: newOverrides,
           });
           await updateConfig(merged);
-          queryClient.setQueryData(["config"], merged);
+          queryClient.setQueryData(queryKeys.config(), merged);
           configSync.preseedSyncKey(
             buildSyncKey(value, detectedTask, newOverrides, nextCv, blocked),
           );
