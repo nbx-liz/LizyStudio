@@ -17,7 +17,6 @@ from uuid import uuid4
 
 from fastapi import Request
 
-from lizystudio.backends.base import BackendAdapter
 from lizystudio.backends.types import DataRef, FitSummary, TuningSummary
 from lizystudio.metrics import ACTIVE_JOBS
 from lizystudio.security import validate_path_within  # noqa: E402
@@ -212,6 +211,11 @@ class JobStore:
                 # deleted anyway; swallow the transient error instead
                 # of propagating it out of delete().
                 shutil.rmtree(target, ignore_errors=True)
+            # Drop any cached deserialized model for this job. Imported
+            # here to avoid a top-level cycle with ``job_results``.
+            from lizystudio.services.job_results import clear_model_cache_for
+
+            clear_model_cache_for(str(self._job_dir(jid) / "model"))
         return removed
 
     # --- H-0062 lineage helpers ---
@@ -658,94 +662,39 @@ def get_job_store(request: Request) -> JobStore:
     return request.app.state.job_store  # type: ignore[no-any-return]
 
 
-# --- Service-layer helpers for job results (Phase 20) ---
+# --- Back-compat re-exports (A-7: dispatch helpers moved to job_results) ---
+# External callers historically import these from services.jobs. The logic
+# now lives in services/job_results.py alongside the model LRU cache.
+from lizystudio.services.job_results import (  # noqa: E402
+    _get_jobs_dir,
+    _load_tuning_plot_from_file,
+    clear_model_cache,
+    clear_model_cache_for,
+    get_available_plots,
+    get_importance,
+    get_importance_kinds,
+    get_job_plot,
+    get_learning_curve_metrics,
+    get_metrics_table,
+    get_split_summary,
+    load_job_model,
+)
 
-
-def load_job_model(job: Job, backend: BackendAdapter) -> Any:
-    """Load a trained model from a completed job."""
-    if job.model_path is None:
-        msg = f"Job {job.job_id} has no saved model"
-        raise ValueError(msg)
-    return backend.load_model(job.model_path)
-
-
-def get_metrics_table(job: Job, backend: BackendAdapter) -> list[dict[str, Any]]:
-    """Get the metrics evaluation table for a completed job."""
-    model = load_job_model(job, backend)
-    return backend.evaluate_table(model)
-
-
-def get_split_summary(job: Job, backend: BackendAdapter) -> list[dict[str, Any]]:
-    """Get fold/split summary for a completed job."""
-    model = load_job_model(job, backend)
-    return backend.split_summary(model)
-
-
-def get_importance(
-    job: Job, backend: BackendAdapter, kind: str = "split"
-) -> dict[str, float]:
-    """Get feature importance for a completed job."""
-    model = load_job_model(job, backend)
-    return backend.importance(model, kind=kind)
-
-
-def get_importance_kinds(job: Job, backend: BackendAdapter) -> list[str]:
-    """Get the list of valid importance kind identifiers for a completed job."""
-    model = load_job_model(job, backend)
-    return backend.importance_kinds(model)
-
-
-def get_learning_curve_metrics(job: Job, backend: BackendAdapter) -> list[str]:
-    """Get the list of metric names available in the learning curve history."""
-    model = load_job_model(job, backend)
-    return backend.learning_curve_metrics(model)
-
-
-def _get_jobs_dir(job: Job) -> Path | None:
-    """Derive the jobs directory from a job's model_path."""
-    if job.model_path:
-        return Path(job.model_path).parent.parent
-    return None
-
-
-def _load_tuning_plot_from_file(job: Job) -> Any:
-    """Load a saved tuning plot JSON from disk (fallback for exported models)."""
-    from lizystudio.backends.types import PlotData
-
-    jobs_dir = _get_jobs_dir(job)
-    if jobs_dir is None:
-        return None
-    path = jobs_dir / job.job_id / "tuning_plot.json"
-    if not path.exists():
-        return None
-    return PlotData(plotly_json=path.read_text(encoding="utf-8"))
-
-
-def get_job_plot(
-    job: Job, backend: BackendAdapter, plot_type: str, **kwargs: Any
-) -> Any:
-    """Get a plot for a completed job. Returns PlotData."""
-    model = load_job_model(job, backend)
-    # For tuning plots, the exported model may lack Optuna study data.
-    # Fall back to the saved file captured at tune time.
-    if plot_type == "tuning":
-        try:
-            return backend.plot(model, plot_type, **kwargs)
-        except Exception:  # noqa: BLE001
-            saved = _load_tuning_plot_from_file(job)
-            if saved is not None:
-                return saved
-            raise
-    return backend.plot(model, plot_type, **kwargs)
-
-
-def get_available_plots(job: Job, backend: BackendAdapter) -> list[str]:
-    """Get list of available plot types for a completed job."""
-    model = load_job_model(job, backend)
-    plots = list(backend.available_plots(model))
-    # If tuning plot file exists but model doesn't have tuning data, add it
-    if "tuning" not in plots and job.job_type == "tune":
-        saved = _load_tuning_plot_from_file(job)
-        if saved is not None:
-            plots.append("tuning")
-    return plots
+__all__ = [
+    "CANCEL_FLAG_FILENAME",
+    "Job",
+    "JobStore",
+    "_get_jobs_dir",
+    "_load_tuning_plot_from_file",
+    "clear_model_cache",
+    "clear_model_cache_for",
+    "get_available_plots",
+    "get_importance",
+    "get_importance_kinds",
+    "get_job_plot",
+    "get_job_store",
+    "get_learning_curve_metrics",
+    "get_metrics_table",
+    "get_split_summary",
+    "load_job_model",
+]
