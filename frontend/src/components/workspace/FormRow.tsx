@@ -2,7 +2,10 @@ import { cloneElement, isValidElement, type ReactNode, useId } from "react";
 
 interface FormRowProps {
   label: string;
-  description?: string;
+  // Nullable: generated API types (`ParameterHintResponse.description`)
+  // emit `string | null | undefined` — accept all three shapes to avoid
+  // forcing every caller to narrow.
+  description?: string | null;
   children: ReactNode;
 }
 

@@ -434,7 +434,9 @@ export function ConfigForm({
                       </p>
                       <KeyValueEditor
                         params={modelParams}
-                        additionalParams={uiSchema?.additional_params}
+                        additionalParams={
+                          uiSchema?.additional_params ?? undefined
+                        }
                         stepMap={uiSchema?.step_map}
                         onChange={(newParams) => {
                           const updated = setNestedValue(
@@ -566,7 +568,7 @@ export function ConfigForm({
           <CalibrationSection
             calibration={calibration}
             calibrationDefaults={uiSchema?.defaults?.calibration}
-            calibrationMethods={uiSchema?.calibration_methods}
+            calibrationMethods={uiSchema?.calibration_methods ?? undefined}
             onChange={(cal) => {
               const updated = { ...config, calibration: cal };
               onChange(updated);

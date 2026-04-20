@@ -983,6 +983,11 @@ export interface paths {
         /**
          * Get Ui Schema
          * @description Return UI metadata for the current backend (H-0026).
+         *
+         *     ``response_model=UiSchemaResponse`` (C-5) drives OpenAPI schema
+         *     generation so ``frontend/src/api/types.ts`` can re-export the
+         *     ``UiSchema`` type from ``schema.d.ts`` instead of declaring it by
+         *     hand.
          */
         get: operations["get_ui_schema_api_backends_ui_schema_get"];
         put?: never;
@@ -1485,6 +1490,29 @@ export interface components {
             /** Parent Job Id */
             parent_job_id?: string | null;
         };
+        /**
+         * ParameterHintResponse
+         * @description Label/step/default metadata for a single config parameter.
+         *
+         *     ``default`` is backend-dependent — scalar, list, or task-keyed dict —
+         *     so it is typed as ``Any`` rather than narrowed.
+         */
+        ParameterHintResponse: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Kind */
+            kind: string;
+            /** Step */
+            step?: number | null;
+            /** Default */
+            default?: unknown | null;
+            /** Description */
+            description?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
         /** PlotResponseModel */
         PlotResponseModel: {
             /** Plotly Json */
@@ -1556,6 +1584,46 @@ export interface components {
              */
             evaluate: boolean;
         };
+        /**
+         * SearchSpaceCatalogEntryResponse
+         * @description One entry in ``search_space_catalog`` — a tunable parameter.
+         *
+         *     ``default``/``default_choices`` are heterogeneous (boolean, number,
+         *     string) so they stay typed as ``Any``.
+         */
+        SearchSpaceCatalogEntryResponse: {
+            /** Key */
+            key: string;
+            /** Title */
+            title: string;
+            /** Paramtype */
+            paramType: string;
+            /** Modes */
+            modes: string[];
+            /** Group */
+            group?: string | null;
+            /** Default */
+            default?: unknown | null;
+            /** Default Mode */
+            default_mode?: ("fixed" | "range" | "choice") | null;
+            default_range?: components["schemas"]["SearchSpaceRangeDefault"] | null;
+            /** Default Choices */
+            default_choices?: unknown[] | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * SearchSpaceRangeDefault
+         * @description Default ``range`` mode values for a tunable parameter.
+         */
+        SearchSpaceRangeDefault: {
+            /** Low */
+            low: number;
+            /** High */
+            high: number;
+            /** Log */
+            log: boolean;
+        };
         /** SplitPreviewResponseModel */
         SplitPreviewResponseModel: {
             /** Strategy */
@@ -1607,6 +1675,107 @@ export interface components {
             } | null;
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * UiCapabilities
+         * @description Backend-declared capabilities consumed by the Workspace UI.
+         */
+        UiCapabilities: {
+            /** Cv Strategies */
+            cv_strategies: string[];
+            tune: components["schemas"]["UiCapabilitiesTune"];
+            /** Cv Strategy Fields */
+            cv_strategy_fields?: {
+                [key: string]: string[];
+            } | null;
+            /** Cv Defaults */
+            cv_defaults?: {
+                [key: string]: unknown;
+            } | null;
+            /** Cv Default Strategy */
+            cv_default_strategy?: {
+                [key: string]: string;
+            } | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * UiCapabilitiesTune
+         * @description Backend capability flags for the Tune tab.
+         */
+        UiCapabilitiesTune: {
+            /** Allow Empty Space */
+            allow_empty_space: boolean;
+        };
+        /**
+         * UiSchemaResponse
+         * @description Response from ``GET /api/backends/ui-schema`` (H-0026).
+         *
+         *     Mirrors the dict produced by :func:`build_ui_schema` in
+         *     ``backends/lizyml_ui_schema.py``. Frontend re-exports this type via
+         *     the generated ``schema.d.ts`` so the 3-way drift between backend
+         *     dict / OpenAPI / ``frontend/src/api/types.ts`` is eliminated (C-5).
+         */
+        UiSchemaResponse: {
+            /** Sections */
+            sections: components["schemas"]["UiSection"][];
+            /** Option Sets */
+            option_sets: {
+                [key: string]: {
+                    [key: string]: string[];
+                };
+            };
+            /** Metric Direction */
+            metric_direction?: {
+                [key: string]: {
+                    [key: string]: string;
+                };
+            } | null;
+            /** Parameter Hints */
+            parameter_hints: components["schemas"]["ParameterHintResponse"][];
+            /** Search Space Catalog */
+            search_space_catalog: components["schemas"]["SearchSpaceCatalogEntryResponse"][];
+            /** Step Map */
+            step_map: {
+                [key: string]: number;
+            };
+            /** Conditional Visibility */
+            conditional_visibility: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
+            };
+            /** Defaults */
+            defaults: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
+            };
+            /** Inner Valid Options */
+            inner_valid_options: string[];
+            /** N Trials Presets */
+            n_trials_presets?: number[] | null;
+            capabilities?: components["schemas"]["UiCapabilities"] | null;
+            /** Calibration Methods */
+            calibration_methods?: string[] | null;
+            /** Additional Params */
+            additional_params?: string[] | null;
+            /** Special Search Space Fields */
+            special_search_space_fields?: {
+                [key: string]: string;
+            } | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * UiSection
+         * @description Top-level section in the config editor (Model / Training / ...).
+         */
+        UiSection: {
+            /** Key */
+            key: string;
+            /** Title */
+            title: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -3226,9 +3395,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["UiSchemaResponse"];
                 };
             };
         };
