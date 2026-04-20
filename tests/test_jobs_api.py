@@ -118,6 +118,60 @@ def test_get_job_with_tune_result(client: TestClient, sample_data_ref: DataRef) 
     assert body["fit_result"]["metrics"]["auc"] == 0.98
 
 
+# --- Contract: JobSummary / JobDetail schema (C-4) ---
+
+
+def test_job_summary_schema_contract(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    """JobSummaryResponse (C-4) MUST expose every documented field on
+    every row — optional fields are required with ``null`` defaults so
+    generated TS types stay in lockstep with the hand-written
+    ``frontend/src/api/types.ts``.
+    """
+    _create_completed_job(client, sample_data_ref)
+    jobs = client.get("/api/jobs/").json()
+    assert len(jobs) == 1
+    row = jobs[0]
+    expected_keys = {
+        "job_id",
+        "status",
+        "backend_name",
+        "job_type",
+        "created_at",
+        "completed_at",
+        "error",
+        "model_name",
+        "primary_score",
+        "parent_job_id",
+    }
+    assert expected_keys.issubset(row.keys()), (
+        f"missing keys: {expected_keys - row.keys()}"
+    )
+    # No `& {[key: string]: unknown}` escape hatch — schema must be strict.
+    assert row["model_name"] == ""  # empty config -> empty model_name
+    assert row["parent_job_id"] is None
+
+
+def test_job_detail_schema_contract(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    """JobDetailResponse (C-4): fit_result / tune_result must expose
+    the structured fields declared on the Pydantic sub-models — not a
+    loose ``Record<string, unknown>``.
+    """
+    job_id = _create_completed_job(client, sample_data_ref)
+    body = client.get(f"/api/jobs/{job_id}").json()
+
+    assert body["config"] == {"task": "binary", "target": "y"}
+    assert body["tune_result"] is None
+    fit = body["fit_result"]
+    assert fit is not None
+    assert set(fit.keys()) >= {"metrics", "fold_count", "params"}
+    assert fit["fold_count"] == 5
+    assert fit["params"] == [{"n_estimators": 100}]
+
+
 # --- Config ---
 
 

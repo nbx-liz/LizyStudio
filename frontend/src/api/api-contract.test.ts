@@ -30,8 +30,12 @@ import type {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-function assertDefined(value: unknown, label: string) {
+function assertDefined<T>(
+  value: T,
+  label: string,
+): asserts value is NonNullable<T> {
   expect(value, `${label} should be defined`).toBeDefined();
+  expect(value, `${label} should not be null`).not.toBeNull();
 }
 
 // ---------------------------------------------------------------------------
@@ -260,13 +264,6 @@ describe("JobDetail", () => {
       backend_name: "lizyml",
       model_name: "lgbm",
       config: {},
-      data_ref: {
-        source_type: "path",
-        path: "/test",
-        filename: "test.csv",
-        fingerprint: "abc",
-        shape: [100, 10],
-      },
       created_at: "2026-01-01T00:00:00Z",
       completed_at: "2026-01-01T00:05:00Z",
       error: null,
@@ -274,15 +271,14 @@ describe("JobDetail", () => {
       fit_result: {
         metrics: { auc: 0.92, logloss: 0.3 },
         fold_count: 5,
-        params: [{ parameter: "learning_rate", value: 0.1 }],
+        params: [{ learning_rate: 0.1 }],
       },
       tune_result: null,
-      model_path: "/models/job-detail-1.pkl",
       parent_job_id: null,
     };
     assertDefined(detail.fit_result, "fit_result");
     expect(detail.tune_result).toBeNull();
-    assertDefined(detail.model_path, "model_path");
+    expect(detail.fit_result.fold_count).toBe(5);
   });
 });
 
@@ -294,10 +290,9 @@ describe("FitResult", () => {
     const result: FitResult = {
       metrics: { auc: 0.95, logloss: 0.2 },
       fold_count: 5,
-      params: [
-        { parameter: "learning_rate", value: 0.1 },
-        { parameter: "num_leaves", value: 31 },
-      ],
+      // Backend emits free-form param rows (list[dict[str, Any]]);
+      // callers narrow per-row shape at the usage site.
+      params: [{ learning_rate: 0.1 }, { num_leaves: 31 }],
     };
     expect(result.fold_count).toBe(5);
     expect(result.params).toHaveLength(2);

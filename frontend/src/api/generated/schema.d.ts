@@ -1271,6 +1271,28 @@ export interface components {
             /** Extension */
             extension: string | null;
         };
+        /**
+         * FitResultResponse
+         * @description Training result summary (mirror of :class:`FitSummary`).
+         *
+         *     ``metrics`` is a backend-dependent nested mapping (e.g. LizyML emits
+         *     ``{"raw": {"oof": {...}}, "formatted": [...]}``). ``extra='allow'``
+         *     keeps forward-compatibility for additional backend-specific keys.
+         */
+        FitResultResponse: {
+            /** Metrics */
+            metrics: {
+                [key: string]: unknown;
+            };
+            /** Fold Count */
+            fold_count: number;
+            /** Params */
+            params: {
+                [key: string]: unknown;
+            }[];
+        } & {
+            [key: string]: unknown;
+        };
         /** FoldInfoResponse */
         FoldInfoResponse: {
             /** Fold */
@@ -1373,7 +1395,14 @@ export interface components {
             /** Filename */
             filename: string;
         };
-        /** JobDetailResponse */
+        /**
+         * JobDetailResponse
+         * @description Full job payload returned by ``GET /api/jobs/{job_id}``.
+         *
+         *     ``fit_result`` / ``tune_result`` use concrete Pydantic models so the
+         *     generated TS types declare ``metrics``, ``fold_count``, ``best_params``
+         *     etc. instead of :code:`Record<string, unknown>`.
+         */
         JobDetailResponse: {
             /** Job Id */
             job_id: string;
@@ -1395,33 +1424,36 @@ export interface components {
             completed_at?: string | null;
             /** Error */
             error?: string | null;
-            /** Model Name */
-            model_name?: string | null;
+            /**
+             * Model Name
+             * @default
+             */
+            model_name: string;
             /** Primary Score */
             primary_score?: number | null;
             /** Parent Job Id */
             parent_job_id?: string | null;
-            /** Fit Result */
-            fit_result?: {
-                [key: string]: unknown;
-            } | null;
-            /** Tune Result */
-            tune_result?: {
-                [key: string]: unknown;
-            } | null;
             /** Config */
             config?: {
                 [key: string]: unknown;
             } | null;
-        } & {
-            [key: string]: unknown;
+            fit_result?: components["schemas"]["FitResultResponse"] | null;
+            tune_result?: components["schemas"]["TuneResultResponse"] | null;
         };
         /** JobStartResponse */
         JobStartResponse: {
             /** Job Id */
             job_id: string;
         };
-        /** JobSummaryResponse */
+        /**
+         * JobSummaryResponse
+         * @description Metadata row returned by ``GET /api/jobs``.
+         *
+         *     All optional fields are declared ``X | None = None`` (required with a
+         *     null default) so generated TypeScript types expose them as
+         *     ``key: T | null`` rather than ``key?: T | null``, matching the actual
+         *     response shape — :func:`_job_summary` always populates every key.
+         */
         JobSummaryResponse: {
             /** Job Id */
             job_id: string;
@@ -1443,14 +1475,15 @@ export interface components {
             completed_at?: string | null;
             /** Error */
             error?: string | null;
-            /** Model Name */
-            model_name?: string | null;
+            /**
+             * Model Name
+             * @default
+             */
+            model_name: string;
             /** Primary Score */
             primary_score?: number | null;
             /** Parent Job Id */
             parent_job_id?: string | null;
-        } & {
-            [key: string]: unknown;
         };
         /** PlotResponseModel */
         PlotResponseModel: {
@@ -1541,6 +1574,39 @@ export interface components {
             filename: string;
             /** Shape */
             shape: number[];
+        };
+        /**
+         * TuneResultResponse
+         * @description Hyperparameter tuning summary (mirror of :class:`TuningSummary`).
+         *
+         *     The multi-round re-tune path (H-0061) populates ``rounds`` and
+         *     ``boundary_report``; legacy single-round tuning leaves them ``None``.
+         */
+        TuneResultResponse: {
+            /** Best Params */
+            best_params: {
+                [key: string]: unknown;
+            };
+            /** Best Score */
+            best_score: number;
+            /** Trials */
+            trials: {
+                [key: string]: unknown;
+            }[];
+            /** Metric Name */
+            metric_name: string;
+            /** Direction */
+            direction: string;
+            /** Rounds */
+            rounds?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Boundary Report */
+            boundary_report?: {
+                [key: string]: unknown;
+            } | null;
+        } & {
+            [key: string]: unknown;
         };
         /** ValidationError */
         ValidationError: {
