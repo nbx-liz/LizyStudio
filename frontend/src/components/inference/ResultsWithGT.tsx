@@ -1,13 +1,11 @@
-import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import type { InferenceRecord } from "@/api/inference";
 import {
-  fetchInferenceMetrics,
-  fetchInferencePlot,
-  fetchInferenceShapPlot,
-  type InferenceRecord,
-} from "@/api/inference";
-import { fetchJobPlots } from "@/api/jobs";
-import { queryKeys } from "@/api/queryKeys";
+  useInferenceMetrics,
+  useInferencePlot,
+  useInferenceShap,
+  useJobPlots,
+} from "@/api/queries";
 import {
   Accordion,
   AccordionContent,
@@ -40,22 +38,14 @@ export function ResultsWithGT({
 }: ResultsWithGTProps) {
   const [selectedPlot, setSelectedPlot] = useState("");
 
-  const { data: metrics } = useQuery({
-    queryKey: queryKeys.infMetrics(record.inf_id, record.job_id),
-    queryFn: () => fetchInferenceMetrics(record.inf_id, record.job_id),
-  });
-
-  const { data: plots } = useQuery({
-    queryKey: queryKeys.jobPlots(record.job_id),
-    queryFn: () => fetchJobPlots(record.job_id),
-  });
-
-  const { data: plotData } = useQuery({
-    queryKey: queryKeys.infPlot(record.inf_id, record.job_id, selectedPlot),
-    queryFn: () =>
-      fetchInferencePlot(record.inf_id, record.job_id, selectedPlot),
-    enabled: !!selectedPlot,
-  });
+  const { data: metrics } = useInferenceMetrics(record.inf_id, record.job_id);
+  const { data: plots } = useJobPlots(record.job_id);
+  const { data: plotData } = useInferencePlot(
+    record.inf_id,
+    record.job_id,
+    selectedPlot,
+    { enabled: !!selectedPlot },
+  );
 
   // Auto-select first plot
   useEffect(() => {
@@ -177,10 +167,11 @@ function PredDistributionPlot({
   infId: string;
   jobId: string;
 }) {
-  const { data, isLoading } = useQuery({
-    queryKey: queryKeys.infPlot(infId, jobId, "prediction-distribution"),
-    queryFn: () => fetchInferencePlot(infId, jobId, "prediction-distribution"),
-  });
+  const { data, isLoading } = useInferencePlot(
+    infId,
+    jobId,
+    "prediction-distribution",
+  );
 
   if (isLoading) {
     return (
@@ -193,11 +184,7 @@ function PredDistributionPlot({
 
 /** SHAP summary accordion item — renders only when SHAP data is available. */
 function ShapAccordionItem({ infId, jobId }: { infId: string; jobId: string }) {
-  const { data, isLoading } = useQuery({
-    queryKey: queryKeys.infShap(infId, jobId),
-    queryFn: () => fetchInferenceShapPlot(infId, jobId),
-    retry: false,
-  });
+  const { data, isLoading } = useInferenceShap(infId, jobId, { retry: false });
 
   if (!data && !isLoading) return null;
 

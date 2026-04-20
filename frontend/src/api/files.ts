@@ -7,7 +7,7 @@ interface FileEntry {
   extension: string | null;
 }
 
-interface DirectoryListing {
+export interface DirectoryListing {
   path: string;
   parent: string | null;
   entries: FileEntry[];

@@ -9,23 +9,21 @@
  * trio without prop drilling.
  */
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import equal from "fast-deep-equal";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { getErrorMessage } from "@/api/errors";
+import {
+  useBackends,
+  useColumns,
+  useConfig,
+  useConfigSchema,
+  useUiSchema,
+} from "@/api/queries";
 import { queryKeys } from "@/api/queryKeys";
 import type { ConfigError } from "@/api/types";
-import {
-  fetchBackends,
-  fetchColumns,
-  fetchConfig,
-  fetchConfigSchema,
-  fetchUiSchema,
-  updateConfig,
-  uploadConfig,
-  validateConfig,
-} from "@/api/workspace";
+import { updateConfig, uploadConfig, validateConfig } from "@/api/workspace";
 import { useConfigHistory } from "@/hooks/useConfigHistory";
 import { useConfigPresets } from "@/hooks/useConfigPresets";
 
@@ -50,35 +48,12 @@ export function useModelPanelData({
   // --------------------------------------------------------------------
   // Data
   // --------------------------------------------------------------------
-  const { data: schema } = useQuery({
-    queryKey: queryKeys.configSchema(),
-    queryFn: fetchConfigSchema,
-    staleTime: Number.POSITIVE_INFINITY,
-  });
-
-  const { data: config } = useQuery({
-    queryKey: queryKeys.config(),
-    queryFn: fetchConfig,
-  });
-
-  const { data: backends } = useQuery({
-    queryKey: queryKeys.backends(),
-    queryFn: fetchBackends,
-    staleTime: Number.POSITIVE_INFINITY,
-  });
+  const { data: schema } = useConfigSchema();
+  const { data: config } = useConfig();
+  const { data: backends } = useBackends();
   const backend = backends?.[0];
-
-  const { data: uiSchema } = useQuery({
-    queryKey: queryKeys.uiSchema(),
-    queryFn: fetchUiSchema,
-    staleTime: Number.POSITIVE_INFINITY,
-  });
-
-  const { data: columnsData } = useQuery({
-    queryKey: queryKeys.columns(),
-    queryFn: () => fetchColumns(),
-    enabled: hasData,
-  });
+  const { data: uiSchema } = useUiSchema();
+  const { data: columnsData } = useColumns({ enabled: hasData });
 
   const nonExcludedColumns = useMemo(() => {
     if (!columnsData?.columns) return [];

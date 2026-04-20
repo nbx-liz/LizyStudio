@@ -1,13 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
+import type { ComparisonStats, InferenceRecord } from "@/api/inference";
 import {
-  type ComparisonStats,
-  fetchInferenceComparison,
-  fetchInferencePlot,
-  fetchInferenceShapPlot,
-  type InferenceRecord,
-} from "@/api/inference";
-import { queryKeys } from "@/api/queryKeys";
+  useInferenceComparison,
+  useInferencePlot,
+  useInferenceShap,
+} from "@/api/queries";
 import {
   Accordion,
   AccordionContent,
@@ -57,16 +54,11 @@ export function ResultsPredOnly({
       })()
     : 0;
 
-  const { data: comparison } = useQuery({
-    queryKey: queryKeys.infComparison(
-      record.inf_id,
-      compareInfId,
-      record.job_id,
-    ),
-    queryFn: () =>
-      fetchInferenceComparison(record.inf_id, compareInfId, record.job_id),
-    enabled: !!compareInfId,
-  });
+  const { data: comparison } = useInferenceComparison(
+    record.inf_id,
+    compareInfId || null,
+    record.job_id,
+  );
 
   return (
     <div className="flex h-full flex-col overflow-auto p-6">
@@ -188,11 +180,12 @@ function PredDistributionPlot({
   infId: string;
   jobId: string;
 }) {
-  const { data, isLoading } = useQuery({
-    queryKey: queryKeys.infPlot(infId, jobId, "prediction-distribution"),
-    queryFn: () => fetchInferencePlot(infId, jobId, "prediction-distribution"),
-    retry: false,
-  });
+  const { data, isLoading } = useInferencePlot(
+    infId,
+    jobId,
+    "prediction-distribution",
+    { retry: false },
+  );
 
   if (isLoading) {
     return (
@@ -213,11 +206,11 @@ function ShapAndWarningsAccordion({
   jobId: string;
   warnings: string[];
 }) {
-  const { data: shapData, isLoading: shapLoading } = useQuery({
-    queryKey: queryKeys.infShap(infId, jobId),
-    queryFn: () => fetchInferenceShapPlot(infId, jobId),
-    retry: false,
-  });
+  const { data: shapData, isLoading: shapLoading } = useInferenceShap(
+    infId,
+    jobId,
+    { retry: false },
+  );
 
   const hasShap = shapData != null || shapLoading;
   const hasWarnings = warnings.length > 0;
