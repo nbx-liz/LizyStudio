@@ -3,7 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { queryKeys } from "@/api/queryKeys";
-import type { ColumnInfo, ColumnsResponse } from "@/api/types";
+import type { ColumnInfo, ColumnsResponse, UiSchema } from "@/api/types";
 
 const mocks = vi.hoisted(() => ({
   loadDataFromPath: vi.fn(),
@@ -287,6 +287,87 @@ describe("useDataPanel", () => {
     // waiting for a refetch.
     const cached = queryClient.getQueryData(queryKeys.config());
     expect(cached).toEqual(merged);
+  });
+
+  // --- C-5b: uiSchema.capabilities.cv_default_strategy overrides hard-coded fallback ---
+
+  it("handleTargetChange uses uiSchema.capabilities.cv_default_strategy when provided", async () => {
+    mocks.fetchColumns.mockResolvedValue(COLS_OK);
+    mocks.fetchConfigDefaults.mockResolvedValue({
+      config_version: 1,
+      task: "binary",
+      data: { path: null, target: null },
+      features: { categorical: [], exclude: [] },
+      split: { method: "kfold", n_splits: 5 },
+      model: { name: "lgbm", params: {} },
+    });
+
+    const uiSchema = {
+      capabilities: {
+        cv_default_strategy: { binary: "group_kfold" },
+        cv_strategies: ["kfold", "stratified_kfold", "group_kfold"],
+        tune: { allow_empty_space: true },
+      },
+    } as unknown as UiSchema;
+
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(
+      () => useDataPanel({ onDataChanged: vi.fn(), uiSchema }),
+      { wrapper },
+    );
+
+    await act(async () => {
+      await result.current.handleTargetChange("a");
+    });
+
+    expect(result.current.cv.strategy).toBe("group_kfold");
+  });
+
+  it("handleTargetChange falls back to hard-coded default when uiSchema is absent", async () => {
+    mocks.fetchColumns.mockResolvedValue(COLS_OK);
+    mocks.fetchConfigDefaults.mockResolvedValue({
+      config_version: 1,
+      task: "binary",
+      data: { path: null, target: null },
+      features: { categorical: [], exclude: [] },
+      split: { method: "kfold", n_splits: 5 },
+      model: { name: "lgbm", params: {} },
+    });
+
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(
+      () => useDataPanel({ onDataChanged: vi.fn() }),
+      { wrapper },
+    );
+
+    await act(async () => {
+      await result.current.handleTargetChange("a");
+    });
+
+    // Binary task → stratified_kfold (hard-coded fallback).
+    expect(result.current.cv.strategy).toBe("stratified_kfold");
+  });
+
+  it("handleTaskChange uses uiSchema.capabilities.cv_default_strategy when provided", () => {
+    const uiSchema = {
+      capabilities: {
+        cv_default_strategy: { regression: "time_series" },
+        cv_strategies: ["kfold", "time_series"],
+        tune: { allow_empty_space: true },
+      },
+    } as unknown as UiSchema;
+
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(
+      () => useDataPanel({ onDataChanged: vi.fn(), uiSchema }),
+      { wrapper },
+    );
+
+    act(() => {
+      result.current.handleTaskChange("regression");
+    });
+
+    expect(result.current.cv.strategy).toBe("time_series");
   });
 });
 

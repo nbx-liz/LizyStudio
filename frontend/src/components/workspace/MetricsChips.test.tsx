@@ -3,6 +3,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MetricEntry } from "@/api/types";
 import { MetricsChips } from "./MetricsChips";
 
+const BINARY_METRICS = {
+  binary: ["auc", "logloss", "accuracy", "f1", "precision", "recall"],
+};
+const REGRESSION_METRICS = {
+  regression: ["rmse", "mae", "r2", "mse"],
+};
+const ALL_METRICS = { ...BINARY_METRICS, ...REGRESSION_METRICS };
+
 describe("MetricsChips", () => {
   afterEach(() => {
     cleanup();
@@ -14,6 +22,7 @@ describe("MetricsChips", () => {
         task="binary"
         selectedMetrics={["auc"]}
         onChange={vi.fn()}
+        metricsByTask={BINARY_METRICS}
       />,
     );
     expect(screen.getByText("auc")).toBeInTheDocument();
@@ -30,6 +39,7 @@ describe("MetricsChips", () => {
         task="regression"
         selectedMetrics={["rmse"]}
         onChange={vi.fn()}
+        metricsByTask={REGRESSION_METRICS}
       />,
     );
     expect(screen.getByText("rmse")).toBeInTheDocument();
@@ -44,6 +54,7 @@ describe("MetricsChips", () => {
         task="binary"
         selectedMetrics={["auc"]}
         onChange={vi.fn()}
+        metricsByTask={BINARY_METRICS}
       />,
     );
     const aucBtn = screen.getByRole("button", { name: "auc" });
@@ -59,6 +70,7 @@ describe("MetricsChips", () => {
         task="binary"
         selectedMetrics={["auc"]}
         onChange={vi.fn()}
+        metricsByTask={BINARY_METRICS}
       />,
     );
     expect(screen.getByRole("button", { name: "auc" })).toHaveAttribute(
@@ -78,6 +90,7 @@ describe("MetricsChips", () => {
         task="binary"
         selectedMetrics={["auc", "logloss"]}
         onChange={onChange}
+        metricsByTask={BINARY_METRICS}
       />,
     );
     fireEvent.click(screen.getByText("auc").closest("button") as Element);
@@ -91,6 +104,7 @@ describe("MetricsChips", () => {
         task="binary"
         selectedMetrics={["auc"]}
         onChange={onChange}
+        metricsByTask={BINARY_METRICS}
       />,
     );
     fireEvent.click(screen.getByText("auc").closest("button") as Element);
@@ -104,6 +118,7 @@ describe("MetricsChips", () => {
         task="binary"
         selectedMetrics={["auc"]}
         onChange={onChange}
+        metricsByTask={BINARY_METRICS}
       />,
     );
     fireEvent.click(screen.getByText("logloss").closest("button") as Element);
@@ -117,6 +132,7 @@ describe("MetricsChips", () => {
         task="binary"
         selectedMetrics={["auc"]}
         onChange={onChange}
+        metricsByTask={ALL_METRICS}
       />,
     );
     rerender(
@@ -124,6 +140,7 @@ describe("MetricsChips", () => {
         task="regression"
         selectedMetrics={["auc"]}
         onChange={onChange}
+        metricsByTask={ALL_METRICS}
       />,
     );
     // Should be called with all regression defaults
@@ -136,7 +153,15 @@ describe("MetricsChips", () => {
         task="unknown_task"
         selectedMetrics={[]}
         onChange={vi.fn()}
+        metricsByTask={BINARY_METRICS}
       />,
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("renders nothing when metricsByTask is undefined (uiSchema not yet loaded)", () => {
+    const { container } = render(
+      <MetricsChips task="binary" selectedMetrics={[]} onChange={vi.fn()} />,
     );
     expect(container.firstChild).toBeNull();
   });

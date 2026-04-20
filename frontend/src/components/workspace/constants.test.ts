@@ -8,7 +8,6 @@ import {
   CV_STRATEGY_FIELDS,
   CV_STRATEGY_LABELS,
   getDefaultCvStrategy,
-  METRICS_BY_TASK,
   N_TRIALS_PRESETS,
   TIMEOUT_PRESETS,
 } from "./constants";
@@ -35,28 +34,6 @@ describe("TIMEOUT_PRESETS", () => {
     for (const p of TIMEOUT_PRESETS.slice(1)) {
       expect(typeof p.value).toBe("number");
       expect(p.value).toBeGreaterThan(0);
-    }
-  });
-});
-
-describe("METRICS_BY_TASK", () => {
-  it("has entries for binary, multiclass, regression", () => {
-    expect(METRICS_BY_TASK).toHaveProperty("binary");
-    expect(METRICS_BY_TASK).toHaveProperty("multiclass");
-    expect(METRICS_BY_TASK).toHaveProperty("regression");
-  });
-
-  it("each task has available array with at least one metric", () => {
-    for (const [, info] of Object.entries(METRICS_BY_TASK)) {
-      expect(info.available.length).toBeGreaterThan(0);
-    }
-  });
-
-  it("uses lowercase metric names", () => {
-    for (const [, info] of Object.entries(METRICS_BY_TASK)) {
-      for (const m of info.available) {
-        expect(m).toBe(m.toLowerCase());
-      }
     }
   });
 });

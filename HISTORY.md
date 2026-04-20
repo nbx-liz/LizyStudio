@@ -1926,3 +1926,30 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (c) `uv run mypy src/lizystudio/` / `uv run ruff check .` / `uv run ruff format --check .` 全 clean。
   - (d) `ARTIFACT_FILENAMES` を `JobStore.path_for` / module-level `artifact_path` の両経路から共有。
 - **Decision:** 2026-04-20 accepted — 提案通り実装。
+
+### H-0074: `METRICS_BY_TASK` fallback 退役と `cv_default_strategy` の UiSchema 化（Phase 3 coupling refactor C-5b Part 1）
+- **Status:** accepted
+- **Scope:** Frontend | Internal only（wire format / BackendAdapter Protocol 不変、ユーザー体験は uiSchema ロード前の一瞬のみ変化）
+- **Related:** docs/coupling-analysis.md C-5b、H-0026（UiSchema 契約）、H-0072（C-5a）
+- **Context:** `frontend/src/components/workspace/constants.ts` に残る 3 種の "fallback" 定数（`METRICS_BY_TASK` / `CV_STRATEGY_FIELDS` / `getDefaultCvStrategy`）のうち、`METRICS_BY_TASK` は `MetricsChips` が `metricsByTask` prop（= `uiSchema.option_sets.metric`）を常に受け取る現状では uiSchema ロード前の一瞬しか使われておらず、また `getDefaultCvStrategy` は task → default CV strategy の map でバックエンド (`UiCapabilities.cv_default_strategy`) に SSOT が既に存在する。`CV_STRATEGY_FIELDS` は backend の `UiCapabilities.cv_strategy_fields` と**フィールド名が乖離**しており（UI internal name `folds`/`train_size_max` vs wire-format `n_splits`/`max_train_size`、`blocked_group_kfold` の fields は完全に別体系）、単純置換は破綻するため本 PR 対象外。
+- **Proposal:**
+  1. `MetricsChips.tsx` から `METRICS_BY_TASK` import と fallback ブロックを削除。`metricsByTask` が未指定の場合は `available=[]` になり、既存の早期 `return null` に到達する。
+  2. `constants.ts` から `METRICS_BY_TASK` エクスポートを削除。`constants.test.ts` から `METRICS_BY_TASK` テストブロックを削除。
+  3. `useDataPanel` に `uiSchema?: UiSchema` を受け取る既存 props を活性化し、`resolveDefaultCvStrategy(task)` helper で `uiSchema.capabilities?.cv_default_strategy?.[task] ?? getDefaultCvStrategy(task)` の順に引く。`handleTargetChange` / `handleTaskChange` 両方から使用。
+  4. `getDefaultCvStrategy` は**残置**。uiSchema がまだ来ていない最初の render で `INITIAL_CV_STATE` から task 変更を受けた際の fallback としてまだ必要。
+  5. `CV_STRATEGY_FIELDS` / `CV_STRATEGY_LABELS` は**残置**。前者は `cv-state.ts` の `buildSplitConfig` / `applyCvDataFields` が UI internal field name で依存しており、backend の `cv_strategy_fields` とフィールド名を揃える別 PR (C-5b Part 2) が必要。後者は表示名マップで backend に同等物が存在しない。
+- **Impact:** `frontend/src/components/workspace/MetricsChips.tsx`（import 1 行削除、`useMemo` 9 行 → 4 行に縮約）、`frontend/src/components/workspace/constants.ts`（header コメント更新 + `METRICS_BY_TASK` 削除、-23 行）、`frontend/src/components/workspace/constants.test.ts`（`METRICS_BY_TASK` test block 削除 -21 行）、`frontend/src/components/workspace/MetricsChips.test.tsx`（fallback 依存テスト 8 件に `metricsByTask` prop 明示、新規テスト 1 件追加）、`frontend/src/hooks/useDataPanel.ts`（`resolveDefaultCvStrategy` helper 導入 +7 行、既存 `_uiSchema` prop 活性化、2 箇所の `getDefaultCvStrategy` 呼び出しを置換）、`frontend/src/hooks/useDataPanel.test.ts`（新規テスト 3 件）。
+- **Compatibility:**
+  - Backend 側変更なし。`UiCapabilities.cv_default_strategy` は既に H-0026 時点で公開済みで schema 変更なし。
+  - `MetricsChips` が uiSchema ロード前に何も描画しない期間は従来 `METRICS_BY_TASK` fallback で 6 chip を見せていた一瞬が消える。実運用では `UiSchemaQuery` は `ConfigForm` mount と同時に走り、差は数 100ms 未満で視認困難。
+  - wire format / BackendAdapter Protocol / storage layout / ユーザー設定ファイル変更なし。
+- **Alternatives:**
+  - (a) Phase 3 の `CV_STRATEGY_FIELDS` 退役も同 PR で実施 → 却下。UI internal name `folds` と wire name `n_splits` を揃えるために `cv-state.ts` の全面改修と `UiCapabilities.cv_strategy_fields` のフィールド名再設計が必要。2-3 日規模で C-5b Part 2 として別 PR 化。
+  - (b) `METRICS_BY_TASK` を残して "loading 時の spinner 代わり" として維持 → 却下。実態として MetricsChips は初期状態で empty chips でも UX 問題がなく（Evaluation accordion が閉じている場合が多い）、SSOT 化の方が価値が高い。
+  - (c) `getDefaultCvStrategy` も削除し `INITIAL_CV_STATE.strategy` を UiSchema 後に同期 → 却下。`INITIAL_CV_STATE` は module-level const で uiSchema に依存できない。hook 側で fallback するのが最小変更。
+- **Acceptance Criteria:**
+  - (a) `grep -rn 'METRICS_BY_TASK' frontend/src` が 0 件。
+  - (b) `useDataPanel` が `uiSchema.capabilities.cv_default_strategy.{task}` を優先するテスト + 不在時は `stratified_kfold`/`kfold` に fallback するテストが両方 green。
+  - (c) `MetricsChips` が `metricsByTask` undefined で `null` を返すテスト green。
+  - (d) `pnpm test` / `pnpm check` / `pnpm tsc --noEmit` / `pnpm build` すべて clean、`uv run pytest` も変化なし。
+- **Decision:** 2026-04-20 accepted — 提案通り実装。C-5b Part 2（`CV_STRATEGY_FIELDS` retirement）は別 issue として起票予定。

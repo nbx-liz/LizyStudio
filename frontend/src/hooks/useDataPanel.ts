@@ -44,9 +44,16 @@ interface UseDataPanelParams {
 export function useDataPanel({
   onDataChanged,
   onTaskChanged,
-  uiSchema: _uiSchema,
+  uiSchema,
 }: UseDataPanelParams) {
   const queryClient = useQueryClient();
+
+  const resolveDefaultCvStrategy = useCallback(
+    (taskName: string): string =>
+      uiSchema?.capabilities?.cv_default_strategy?.[taskName] ??
+      getDefaultCvStrategy(taskName),
+    [uiSchema],
+  );
 
   const [target, setTarget] = useState<string | null>(null);
   const [task, setTask] = useState<TaskType | null>(null);
@@ -106,7 +113,7 @@ export function useDataPanel({
           detectedTask = t;
           setTask(t);
           onTaskChanged?.(t);
-          detectedStrategy = getDefaultCvStrategy(t);
+          detectedStrategy = resolveDefaultCvStrategy(t);
           nextCv = resetCvState(detectedStrategy);
           setCv(nextCv);
         }
@@ -159,17 +166,21 @@ export function useDataPanel({
       onDataChanged,
       onTaskChanged,
       queryClient,
+      resolveDefaultCvStrategy,
       columnOverrides.setOverrides,
       configSync.setSyncSuppressed,
       configSync.preseedSyncKey,
     ],
   );
 
-  const handleTaskChange = (newTask: TaskType) => {
-    setTask(newTask);
-    onTaskChanged?.(newTask);
-    setCv(resetCvState(getDefaultCvStrategy(newTask)));
-  };
+  const handleTaskChange = useCallback(
+    (newTask: TaskType) => {
+      setTask(newTask);
+      onTaskChanged?.(newTask);
+      setCv(resetCvState(resolveDefaultCvStrategy(newTask)));
+    },
+    [onTaskChanged, resolveDefaultCvStrategy],
+  );
 
   return {
     sourceType: dataLoad.sourceType,
