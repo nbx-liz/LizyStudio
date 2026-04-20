@@ -60,13 +60,6 @@ function makeFitJob(overrides?: Partial<JobDetail>): JobDetail {
     backend_name: "lizyml",
     model_name: "lgb",
     config: {},
-    data_ref: {
-      source_type: "path",
-      path: "/data/train.csv",
-      filename: "train.csv",
-      fingerprint: "abc",
-      shape: [100, 5],
-    },
     created_at: "2025-01-01T00:00:00Z",
     completed_at: "2025-01-01T00:01:00Z",
     error: null,
@@ -80,13 +73,9 @@ function makeFitJob(overrides?: Partial<JobDetail>): JobDetail {
         },
       },
       fold_count: 5,
-      params: [
-        { parameter: "n_estimators", value: 100 },
-        { parameter: "learning_rate", value: 0.1 },
-      ],
+      params: [{ n_estimators: 100 }, { learning_rate: 0.1 }],
     },
     tune_result: null,
-    model_path: "/models/j1",
     parent_job_id: null,
     ...overrides,
   };

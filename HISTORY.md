@@ -1840,4 +1840,31 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (c) `services/jobs.py` の行数が 700 行以下、`services/job_results.py` の行数が 150 行以下。
   - (d) `load_job_model` の同一 `(backend_name, model_path)` 連続呼び出しで `backend.load_model` が 1 回のみ走る（LRU ヒット）。
   - (e) `JobStore.delete()` 後に同 path のキャッシュエントリが drop されている（regression: stale model hit 防止）。
-- **Decision:** 未決定。
+- **Decision:** 2026-04-20 accepted — PR #194 で実装、1136+19=1144 件 pytest green、`services/jobs.py` 695 行 / `services/job_results.py` 143 行で受け入れ基準 (a)〜(e) を全て充足。
+
+---
+
+### H-0071: `JobSummary` / `JobDetail` 契約の SSOT 化（Phase 3 coupling refactor C-4）
+- **Status:** accepted
+- **Scope:** API | Frontend | Internal only（wire format は既存 response と互換）
+- **Related:** docs/coupling-analysis.md C-4
+- **Context:** `frontend/src/api/types.ts` の `JobSummary` / `JobDetail` / `FitResult` / `TuneResult` は手書きで、backend Pydantic (`api/models.py`) と生成 TypeScript (`schema.d.ts`) の 3 経路で独立に宣言されていた。さらに `JobSummaryResponse` / `JobDetailResponse` は `ConfigDict(extra='allow')` だったため生成 schema に `& { [key: string]: unknown }` のエスケープが付き、drift 検出が甘かった。副次的に `JobDetail.data_ref` / `JobDetail.model_path` は手書き型にのみ存在する dead field（実際の API レスポンスに含まれない、フロントエンドでも参照箇所なし）だった。
+- **Proposal:**
+  1. `api/models.py` に `FitResultResponse` / `TuneResultResponse` を新設し、`JobDetailResponse.fit_result` / `tune_result` を `dict[str, Any] | None` からこの concrete model に差し替える。`metrics` / `fold_count` / `best_params` 等のキーが生成 TS 型で見えるようになる。
+  2. `JobSummaryResponse` / `JobDetailResponse` から `ConfigDict(extra='allow')` を削除し、`model_name` を `str | None = None` から `str = ""` に引き締める（`_job_summary` で既に常に空文字を埋めている実態に合わせる）。
+  3. `frontend/src/api/types.ts` で `JobSummary` / `JobDetail` / `FitResult` / `TuneResult` を `components["schemas"]["…Response"]` 再エクスポートに置換。手書き `data_ref` / `model_path` / `FitResultParam[]` 形式の `params` を削除。
+  4. Backend 側 contract test を 2 本追加し、`JobSummaryResponse` / `JobDetailResponse` の strict shape（未宣言フィールド・extra escape なし）を assert する。
+- **Impact:** `src/lizystudio/api/models.py`（+50 行）、`tests/test_jobs_api.py`（+50 行: 2 本の contract test）、`frontend/src/api/types.ts`（-48 行）、`frontend/src/api/generated/schema.d.ts`（再生成: `& {[key: string]: unknown}` エスケープ削除 + `FitResultResponse` / `TuneResultResponse` 追加）、5 本の test ファイルから dead `data_ref` / `model_path` リテラルを削除。
+- **Compatibility:**
+  - wire format 変更なし（`_job_summary` / `get_job` の JSON 出力は以前と同一。`model_name` は以前も `""` で埋められていた）。
+  - Pydantic Response model から `extra='allow'` を外したが、余計なフィールドを返す箇所は存在しない（`response_model` 側でフィルタされるだけ）。
+  - 手書き型削除は frontend の consumer コードに一切変更不要（field アクセスの名前は全て維持）。`data_ref` / `model_path` を読むコードは元々なかった。
+- **Alternatives:**
+  - (a) `NonNullable<components["schemas"]["JobSummaryResponse"]>` ヘルパで `?` 記法を剥がす（メモリ内推奨）→ 却下。`extra='allow'` を剥がす root cause fix を選んだほうが永続的で、`model_name?: string | null` を `string = ""` に締められる。
+  - (b) `JobDetail` に `data_ref` / `model_path` を正式に追加（backend 側にも response field を足す）→ 却下。フロントエンドで参照箇所が存在せず、追加する業務価値がない。将来必要になった時点で改めて提案する。
+- **Acceptance Criteria:**
+  - (a) backend pytest 1144+ 件 + 新規 contract 2 件が green。
+  - (b) `pnpm generate:api` / `pnpm build` / `pnpm check` / vitest 1500+ 件 green。
+  - (c) `frontend/src/api/types.ts` 内に `JobSummary` / `JobDetail` / `FitResult` / `TuneResult` の手書き `interface` が残っていない（`components["schemas"]…` 再エクスポートのみ）。
+  - (d) `api-types-drift` CI ジョブが pass する（schema 再生成が commit に含まれている）。
+- **Decision:** 2026-04-20 accepted — 提案通り実装。

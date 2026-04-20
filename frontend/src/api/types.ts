@@ -8,16 +8,14 @@
  *    names so consumers keep importing from `@/api/types`.
  *
  * 2. **Hand-written** — types where:
- *    - The generated schema marks fields as optional (`?`) but the frontend
- *      expects them as required with `null` (e.g. `JobSummary.error`).
  *    - The generated schema lacks the type entirely (endpoint has no
  *      `response_model`, or it's a frontend-only / WebSocket type).
  *    - The shape differs (e.g. `shape: [number, number]` vs `number[]`).
  *
  * Backend Pydantic models now use `Literal[...]` annotations for enum-like
- * fields. `ColumnInfo` and `ColumnsResponse` are re-exported from the
- * generated schema. `JobSummary` remains hand-written due to optional vs
- * required field differences.
+ * fields and `JobSummaryResponse` / `JobDetailResponse` / `FitResultResponse`
+ * / `TuneResultResponse` have been strengthened so this file re-exports them
+ * directly (C-4, docs/coupling-analysis.md).
  */
 
 import type { components } from "./generated/schema";
@@ -98,52 +96,28 @@ export interface ConfigError {
   message: string;
 }
 
-// --- Job types — hand-written because generated schema marks optional fields
-// with `?` (e.g. `error?: string | null`) while frontend expects them as
-// required with `null` default. Literal unions now match the generated schema. ---
+// --- Job types — re-exported from the generated schema (C-4).
+//
+// Backend Pydantic models (``api/models.py``) are the SSOT:
+// - JobSummaryResponse / JobDetailResponse no longer use ``extra='allow'``
+//   so the generated shape is strict.
+// - FitResult / TuneResult have concrete Pydantic sub-models so consumers
+//   see ``metrics`` / ``fold_count`` / ``best_params`` etc. instead of
+//   ``Record<string, unknown>``.
+//
+// ``H-0062 parent_job_id`` is always present in the API response so callers
+// rely on ``job.parent_job_id === null`` (not ``undefined``). The Pydantic
+// field is ``str | None = None`` which generates ``?: string | null``; we
+// treat an absent key as a backend bug rather than a valid state.
 
-export interface JobSummary {
-  job_id: string;
-  job_type: "fit" | "tune";
-  status: "pending" | "running" | "completed" | "failed" | "cancelled";
-  backend_name: string;
-  model_name: string;
-  created_at: string;
-  completed_at: string | null;
-  error: string | null;
-  primary_score: number | null;
-  // H-0062: lineage link — null for standalone / root jobs, set to the
-  // parent job id for Re-tune and Resume children. Always present in
-  // the API response so callers can rely on === null rather than
-  // checking for the key's existence.
-  parent_job_id: string | null;
-}
-
-export interface JobDetail extends JobSummary {
-  config: Record<string, unknown>;
-  data_ref: DataRef;
-  fit_result: FitResult | null;
-  tune_result: TuneResult | null;
-  model_path: string | null;
-}
+export type JobSummary = components["schemas"]["JobSummaryResponse"];
+export type JobDetail = components["schemas"]["JobDetailResponse"];
+export type FitResult = components["schemas"]["FitResultResponse"];
+export type TuneResult = components["schemas"]["TuneResultResponse"];
 
 export interface FitResultParam {
   parameter: string;
   value: unknown;
-}
-
-export interface FitResult {
-  metrics: Record<string, unknown>;
-  fold_count: number;
-  params: FitResultParam[];
-}
-
-export interface TuneResult {
-  best_params: Record<string, unknown>;
-  best_score: number;
-  trials: Record<string, unknown>[];
-  metric_name: string;
-  direction: string;
 }
 
 // --- Types absent from the generated schema ---

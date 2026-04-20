@@ -128,8 +128,47 @@ class JobStartResponse(BaseModel):
     job_id: str
 
 
-class JobSummaryResponse(BaseModel):
+class FitResultResponse(BaseModel):
+    """Training result summary (mirror of :class:`FitSummary`).
+
+    ``metrics`` is a backend-dependent nested mapping (e.g. LizyML emits
+    ``{"raw": {"oof": {...}}, "formatted": [...]}``). ``extra='allow'``
+    keeps forward-compatibility for additional backend-specific keys.
+    """
+
     model_config = ConfigDict(extra="allow")
+
+    metrics: dict[str, Any]
+    fold_count: int
+    params: list[dict[str, Any]]
+
+
+class TuneResultResponse(BaseModel):
+    """Hyperparameter tuning summary (mirror of :class:`TuningSummary`).
+
+    The multi-round re-tune path (H-0061) populates ``rounds`` and
+    ``boundary_report``; legacy single-round tuning leaves them ``None``.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    best_params: dict[str, Any]
+    best_score: float
+    trials: list[dict[str, Any]]
+    metric_name: str
+    direction: str
+    rounds: list[dict[str, Any]] | None = None
+    boundary_report: dict[str, Any] | None = None
+
+
+class JobSummaryResponse(BaseModel):
+    """Metadata row returned by ``GET /api/jobs``.
+
+    All optional fields are declared ``X | None = None`` (required with a
+    null default) so generated TypeScript types expose them as
+    ``key: T | null`` rather than ``key?: T | null``, matching the actual
+    response shape — :func:`_job_summary` always populates every key.
+    """
 
     job_id: str
     status: Literal["pending", "running", "completed", "failed", "cancelled"]
@@ -138,16 +177,23 @@ class JobSummaryResponse(BaseModel):
     created_at: str
     completed_at: str | None = None
     error: str | None = None
-    model_name: str | None = None
+    model_name: str = ""
     primary_score: float | None = None
     # H-0062 lineage: null for root jobs, set for Re-tune / Resume children.
     parent_job_id: str | None = None
 
 
 class JobDetailResponse(JobSummaryResponse):
-    fit_result: dict[str, Any] | None = None
-    tune_result: dict[str, Any] | None = None
+    """Full job payload returned by ``GET /api/jobs/{job_id}``.
+
+    ``fit_result`` / ``tune_result`` use concrete Pydantic models so the
+    generated TS types declare ``metrics``, ``fold_count``, ``best_params``
+    etc. instead of :code:`Record<string, unknown>`.
+    """
+
     config: dict[str, Any] | None = None
+    fit_result: FitResultResponse | None = None
+    tune_result: TuneResultResponse | None = None
 
 
 class PlotResponseModel(BaseModel):
