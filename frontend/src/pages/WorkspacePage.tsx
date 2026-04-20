@@ -1,7 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { BarChart3, Database, SlidersHorizontal } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { getErrorMessage } from "@/api/errors";
 import { useConfig, useUiSchema } from "@/api/queries";
@@ -18,6 +17,7 @@ import { ModelPanel } from "@/components/workspace/ModelPanel";
 import { ResultsPanel } from "@/components/workspace/ResultsPanel";
 import { useBackgroundNotification } from "@/hooks/useBackgroundNotification";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
+import { useJobIdParam } from "@/hooks/useJobIdParam";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 
@@ -34,52 +34,29 @@ export function WorkspacePage() {
   const queryClient = useQueryClient();
   const [hasData, setHasData] = useState(false);
   const [task, setTask] = useState<string | null>(null);
-  // Issue #101: hydrate currentJobId from the `?job_id=<id>` query
-  // param so the Jobs page (or any external link) can navigate the
-  // user directly into the Workspace with a specific completed job
-  // selected. The query-param name matches the convention already
-  // established by InferencePage so links stay consistent across
-  // the two destinations.
-  const [searchParams] = useSearchParams();
-  // `searchParams.get("job_id")` returns `""` (not `null`) for an
-  // explicitly empty `?job_id=` value; normalize with `|| null` so the
-  // Results panel sees a clean null and does not try to render an
-  // empty-string job id.
-  const [currentJobId, setCurrentJobId] = useState<string | null>(
-    () => searchParams.get("job_id") || null,
-  );
   const [running, setRunning] = useState(false);
   const [modelTab, setModelTab] = useState<"fit" | "tune">("fit");
   const [mobileTab, setMobileTab] = useState<MobileTab>("data");
 
   const isMobile = useMediaQuery(MOBILE_QUERY);
 
-  // Re-hydrate when the URL param changes (e.g. the user clicks
-  // "Open in Workspace" on a SECOND job from the Jobs page, which
-  // only updates the search params without remounting this page).
-  // The `useState` initializer fires once on mount; without this
-  // effect the second navigation would silently keep the first job
-  // selected. Mirrors InferencePage's HIGH-4 fix. Suppressed while
-  // a fit / tune is actively running so a URL change does not clobber
-  // a freshly-started job id set from inside handleFit / handleTune.
+  // Issue #101: hydrate currentJobId from the `?job_id=<id>` query
+  // param so the Jobs page (or any external link) can navigate the
+  // user directly into the Workspace with a specific completed job
+  // selected. The query-param name matches the convention already
+  // established by InferencePage so links stay consistent across
+  // the two destinations. `useJobIdParam` (B-8) owns URL→state sync;
+  // we pass `suppress: running` so a URL change does not clobber a
+  // freshly-started job id set from handleFit / handleTune.
   //
   // Note on stale URL: after the user starts a fresh fit / tune via
   // the Workspace UI, we intentionally do NOT rewrite `?job_id=` in
   // the URL bar. If the user reloads the page in the middle of a new
-  // run, the URL still points at the previously-hydrated job and
-  // they will land back on that historical view. This matches the
-  // pre-Issue #101 behavior (reload = back to an empty Workspace)
-  // closely enough that we decided not to couple browser history to
-  // every in-run job_id change. A future improvement could call
-  // `setSearchParams({ job_id: newId })` inside handleFit / handleTune
-  // if user feedback asks for it.
-  useEffect(() => {
-    if (running) return;
-    const jobIdParam = searchParams.get("job_id");
-    if (jobIdParam) {
-      setCurrentJobId(jobIdParam);
-    }
-  }, [searchParams, running]);
+  // run, the URL still points at the previously-hydrated job — this
+  // matches the pre-Issue #101 behavior and we accept it consciously.
+  const { jobId: currentJobId, setJobId: setCurrentJobId } = useJobIdParam({
+    suppress: running,
+  });
 
   useDocumentTitle(running ? "Running..." : null);
   const notify = useBackgroundNotification();
@@ -105,7 +82,7 @@ export function WorkspacePage() {
       toast.error(`Fit failed: ${getErrorMessage(err)}`);
       setRunning(false);
     }
-  }, []);
+  }, [setCurrentJobId]);
 
   const handleTune = useCallback(async () => {
     setRunning(true);
@@ -116,7 +93,7 @@ export function WorkspacePage() {
       toast.error(`Tune failed: ${getErrorMessage(err)}`);
       setRunning(false);
     }
-  }, []);
+  }, [setCurrentJobId]);
 
   const handleApplyToFit = useCallback(
     async (fullConfig: Record<string, unknown>) => {
@@ -139,16 +116,19 @@ export function WorkspacePage() {
     notify("LizyStudio", "Job completed");
   }, [notify]);
 
-  const handleJobStarted = useCallback((childJobId: string) => {
-    // H-0062: Re-tune / Resume created a new child job — switch
-    // the workspace selection so the user sees its progress.
-    setCurrentJobId(childJobId);
-    setRunning(true);
-    // Issue #178: on mobile, the Results panel is on a separate tab —
-    // move focus to it when a child job starts so the user sees the
-    // progress view immediately instead of staying on Data/Model.
-    setMobileTab("results");
-  }, []);
+  const handleJobStarted = useCallback(
+    (childJobId: string) => {
+      // H-0062: Re-tune / Resume created a new child job — switch
+      // the workspace selection so the user sees its progress.
+      setCurrentJobId(childJobId);
+      setRunning(true);
+      // Issue #178: on mobile, the Results panel is on a separate tab —
+      // move focus to it when a child job starts so the user sees the
+      // progress view immediately instead of staying on Data/Model.
+      setMobileTab("results");
+    },
+    [setCurrentJobId],
+  );
 
   const shortcuts = useMemo(
     () => [

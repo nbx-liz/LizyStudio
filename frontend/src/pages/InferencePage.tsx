@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { getErrorMessage } from "@/api/errors";
 import {
@@ -12,13 +11,9 @@ import {
 import { ResultsPredOnly } from "@/components/inference/ResultsPredOnly";
 import { ResultsWithGT } from "@/components/inference/ResultsWithGT";
 import { SetupPanel } from "@/components/inference/SetupPanel";
+import { useJobIdParam } from "@/hooks/useJobIdParam";
 
 export function InferencePage() {
-  const [searchParams, setSearchParams] = useSearchParams();
-
-  const [selectedJobId, setSelectedJobId] = useState<string | null>(() =>
-    searchParams.get("job_id"),
-  );
   const [selectedInfId, setSelectedInfId] = useState<string | null>(null);
 
   // Fetch completed jobs
@@ -29,19 +24,18 @@ export function InferencePage() {
     [allJobs],
   );
 
-  // Auto-select job from URL param.
-  //
-  // HIGH-4: read the current value of the `job_id` query param on each
-  // run instead of closing over `initialJobId` from first render. That
-  // older pattern missed subsequent URL updates because the constant
-  // was never recomputed, so navigating to a different job via the URL
-  // bar silently kept the first-loaded selection.
-  useEffect(() => {
-    const jobIdParam = searchParams.get("job_id");
-    if (jobIdParam && completedJobs.some((j) => j.job_id === jobIdParam)) {
-      setSelectedJobId(jobIdParam);
-    }
-  }, [searchParams, completedJobs]);
+  // HIGH-4 (pre-B-8 context): URL→state sync must re-run when
+  // ``completedJobs`` changes so that a deep-link to ``?job_id=xyz``
+  // is honoured the moment ``xyz`` appears in the completed list.
+  // ``useJobIdParam`` re-evaluates the filter whenever its identity
+  // changes, so we memoize the filter against ``completedJobs``.
+  const filterByCompleted = useCallback(
+    (id: string) => completedJobs.some((j) => j.job_id === id),
+    [completedJobs],
+  );
+  const { jobId: selectedJobId, setJobId: setSelectedJobId } = useJobIdParam({
+    filter: filterByCompleted,
+  });
 
   // Fetch inference history for selected job.
   //
@@ -86,11 +80,10 @@ export function InferencePage() {
 
   const handleSelectJob = useCallback(
     (jobId: string) => {
-      setSelectedJobId(jobId);
+      setSelectedJobId(jobId, { writeUrl: true });
       setSelectedInfId(null);
-      setSearchParams({ job_id: jobId });
     },
-    [setSearchParams],
+    [setSelectedJobId],
   );
 
   const handleSelectInf = useCallback((infId: string) => {
