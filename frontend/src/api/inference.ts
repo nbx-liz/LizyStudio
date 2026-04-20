@@ -18,7 +18,7 @@ export interface InferenceRecord {
   warnings: string[];
 }
 
-interface PredictionsResponse {
+export interface PredictionsResponse {
   columns: string[];
   data: Record<string, unknown>[];
   total_rows: number;

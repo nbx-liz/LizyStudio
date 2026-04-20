@@ -1,17 +1,12 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { BarChart3, Database, SlidersHorizontal } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { getErrorMessage } from "@/api/errors";
+import { useConfig, useUiSchema } from "@/api/queries";
 import { queryKeys } from "@/api/queryKeys";
-import {
-  fetchConfig,
-  fetchUiSchema,
-  runFit,
-  runTune,
-  updateConfig,
-} from "@/api/workspace";
+import { runFit, runTune, updateConfig } from "@/api/workspace";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -89,17 +84,8 @@ export function WorkspacePage() {
   useDocumentTitle(running ? "Running..." : null);
   const notify = useBackgroundNotification();
 
-  const { data: uiSchema } = useQuery({
-    queryKey: queryKeys.uiSchema(),
-    queryFn: fetchUiSchema,
-  });
-
-  const { data: config } = useQuery({
-    queryKey: queryKeys.config(),
-    queryFn: fetchConfig,
-    enabled: hasData,
-    retry: false,
-  });
+  const { data: uiSchema } = useUiSchema();
+  const { data: config } = useConfig({ enabled: hasData, retry: false });
 
   const handleDataChanged = useCallback(() => {
     setHasData(true);

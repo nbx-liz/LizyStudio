@@ -1,12 +1,14 @@
-import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { getErrorMessage } from "@/api/errors";
-import { fetchInferenceHistory, fetchInferenceRecord } from "@/api/inference";
-import { fetchJob } from "@/api/jobs";
-import { useJobsList, useRunInference } from "@/api/queries";
-import { queryKeys } from "@/api/queryKeys";
+import {
+  useInferenceHistory,
+  useInferenceRecord,
+  useJob,
+  useJobsList,
+  useRunInference,
+} from "@/api/queries";
 import { ResultsPredOnly } from "@/components/inference/ResultsPredOnly";
 import { ResultsWithGT } from "@/components/inference/ResultsWithGT";
 import { SetupPanel } from "@/components/inference/SetupPanel";
@@ -48,19 +50,13 @@ export function InferencePage() {
   // that can produce new records on its own, so the previous five-second
   // `refetchInterval` was pure wasted bandwidth. Rely on the mutation's
   // invalidation instead.
-  const { data: history = [] } = useQuery({
-    queryKey: queryKeys.infHistory(selectedJobId),
-    queryFn: () => fetchInferenceHistory(selectedJobId ?? undefined),
-    enabled: selectedJobId != null,
-  });
+  const { data: history = [] } = useInferenceHistory(selectedJobId);
 
   // Fetch selected inference record
-  const { data: selectedRecord } = useQuery({
-    queryKey: queryKeys.infRecord(selectedInfId, selectedJobId),
-    queryFn: () =>
-      fetchInferenceRecord(selectedInfId ?? "", selectedJobId ?? ""),
-    enabled: selectedInfId != null && selectedJobId != null,
-  });
+  const { data: selectedRecord } = useInferenceRecord(
+    selectedInfId,
+    selectedJobId,
+  );
 
   // Run inference mutation
   const mutation = useRunInference();
@@ -124,11 +120,7 @@ export function InferencePage() {
   }, [selectedJobId, completedJobs]);
 
   // Fetch job detail to get config.data.target for ground-truth detection
-  const { data: jobDetail } = useQuery({
-    queryKey: queryKeys.jobDetail(selectedJobId),
-    queryFn: () => fetchJob(selectedJobId ?? ""),
-    enabled: selectedJobId != null,
-  });
+  const { data: jobDetail } = useJob(selectedJobId);
 
   const targetCol = useMemo(() => {
     if (!jobDetail?.config) return "";

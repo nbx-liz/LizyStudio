@@ -1,11 +1,7 @@
-import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Download } from "lucide-react";
 import { useState } from "react";
-import {
-  fetchInferencePredictions,
-  getInferenceDownloadUrl,
-} from "@/api/inference";
-import { queryKeys } from "@/api/queryKeys";
+import { getInferenceDownloadUrl } from "@/api/inference";
+import { useInferencePredictions } from "@/api/queries";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -26,11 +22,7 @@ interface PredictionsTableProps {
 export function PredictionsTable({ infId, jobId }: PredictionsTableProps) {
   const [page, setPage] = useState(0);
 
-  const { data } = useQuery({
-    queryKey: queryKeys.infPredictions(infId, jobId, page),
-    queryFn: () =>
-      fetchInferencePredictions(infId, jobId, PAGE_SIZE, page * PAGE_SIZE),
-  });
+  const { data } = useInferencePredictions(infId, jobId, page);
 
   if (!data) return null;
 
