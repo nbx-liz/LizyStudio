@@ -7,19 +7,12 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import {
-  cancelJob,
-  fetchJob,
-  fetchJobLineage,
-  fetchJobLog,
-  type LineageNode,
-} from "@/api/jobs";
+import { fetchJobLineage, fetchJobLog, type LineageNode } from "@/api/jobs";
 import { queryKeys } from "@/api/queryKeys";
 import type { JobDetail as JobDetailType, ProgressMessage } from "@/api/types";
-import { connectJobProgress } from "@/api/websocket";
 import { JobLineageTree } from "@/components/retune/JobLineageTree";
 import { ResumeActionButton } from "@/components/retune/ResumeActionButton";
 import { RetuneActionButton } from "@/components/retune/RetuneActionButton";
@@ -38,6 +31,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
+import { useJobLifecycle } from "@/hooks/useJobLifecycle";
+import { defaultRetuneTrials, remainingRetuneTrials } from "@/lib/job-config";
 import { CompletedContent } from "./CompletedContent";
 import { ConfigTreeView } from "./ConfigTreeView";
 import { DeleteDialog } from "./DeleteDialog";
@@ -66,20 +61,24 @@ export function JobDetailPanel({
 }: JobDetailProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [progress, setProgress] = useState<ProgressMessage | null>(null);
   const [selectedPlot, setSelectedPlot] = useState<string>("");
   const [logOpen, setLogOpen] = useState(false);
   const [cancelConfirm, setCancelConfirm] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
-  const { data: job, refetch: refetchJob } = useQuery({
-    queryKey: queryKeys.job(jobId),
-    queryFn: () => fetchJob(jobId),
-    refetchInterval: (query) => {
-      const data = query.state.data as JobDetailType | undefined;
-      return data?.status === "running" ? 2000 : false;
-    },
+  const onTerminal = useCallback(() => {
+    onJobChanged();
+  }, [onJobChanged]);
+
+  const onWsError = useCallback((message: string) => {
+    toast.error(message);
+  }, []);
+
+  const { job, progress, cancel } = useJobLifecycle({
+    jobId,
+    onTerminal,
+    onWsError,
   });
 
   // H-0067: Re-tune / Resume / Lineage in the Jobs page. Lineage is
@@ -116,57 +115,10 @@ export function JobDetailPanel({
     | string
     | undefined;
 
-  // WebSocket progress
-  useEffect(() => {
-    if (!jobId || job?.status !== "running") return;
-
-    const disconnect = connectJobProgress(jobId, {
-      onProgress: (msg) => setProgress(msg),
-      onCompleted: () => {
-        setProgress(null);
-        refetchJob();
-        queryClient.invalidateQueries({ queryKey: queryKeys.jobs() });
-        onJobChanged();
-      },
-      onError: (msg) => {
-        setProgress(null);
-        toast.error(msg.message);
-        refetchJob();
-        onJobChanged();
-      },
-    });
-
-    return () => disconnect();
-  }, [jobId, job?.status, refetchJob, queryClient, onJobChanged]);
-
-  // Polling fallback
-  const prevStatusRef = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    const prev = prevStatusRef.current;
-    prevStatusRef.current = job?.status;
-    if (
-      prev === "running" &&
-      job?.status &&
-      job.status !== "running" &&
-      job.status !== "pending" &&
-      progress !== null
-    ) {
-      setProgress(null);
-      onJobChanged();
-    }
-  }, [job?.status, onJobChanged, progress]);
-
   const handleCancel = useCallback(async () => {
-    try {
-      await cancelJob(jobId);
-      toast.info("Job cancelled");
-      refetchJob();
-      queryClient.invalidateQueries({ queryKey: queryKeys.jobs() });
-    } catch {
-      toast.error("Failed to cancel job");
-    }
+    await cancel();
     setCancelConfirm(false);
-  }, [jobId, refetchJob, queryClient]);
+  }, [cancel]);
 
   const handleRefit = useCallback(() => {
     // Navigate to workspace with job config
@@ -315,7 +267,7 @@ export function JobDetailPanel({
         {isCompleted && job.job_type === "tune" && (
           <RetuneActionButton
             jobId={job.job_id}
-            defaultNTrials={_defaultRetuneTrials(job)}
+            defaultNTrials={defaultRetuneTrials(job)}
             onStarted={handleRetuneStarted}
           />
         )}
@@ -324,7 +276,7 @@ export function JobDetailPanel({
         {isFailed && job.job_type === "tune" && (
           <ResumeActionButton
             jobId={job.job_id}
-            remainingTrials={_computeRemainingTrials(job)}
+            remainingTrials={remainingRetuneTrials(job)}
             disabledReason={
               job.parent_job_id
                 ? "Resume of a re-tune child is not supported. Start from the original parent job."
@@ -568,27 +520,6 @@ function LogDialog({
   );
 }
 
-// ---------------------------------------------------------------------------
-// H-0067: default-trials helpers shared with the Workspace side
-// (ResultsCompletedView._defaultRetuneTrials and
-// ResultsPanel._computeRemainingTrials). Kept local here to avoid a
-// component-to-component util dependency; a future refactor can lift
-// these into `components/retune/trial-defaults.ts` once the call
-// surface stabilises.
-// ---------------------------------------------------------------------------
-
-function _defaultRetuneTrials(job: JobDetailType): number {
-  const config = job.config as Record<string, unknown> | undefined;
-  const tuning = config?.tuning as Record<string, unknown> | undefined;
-  const optuna = tuning?.optuna as Record<string, unknown> | undefined;
-  const params = optuna?.params as Record<string, unknown> | undefined;
-  const raw = params?.n_trials;
-  if (typeof raw === "number" && raw > 0) {
-    return raw;
-  }
-  return 50;
-}
-
 /**
  * Count lineage nodes strictly under *rootJobId* (the clicked job).
  * The lineage tree may be rooted at an ancestor (H-0062: lineage is
@@ -616,22 +547,4 @@ function _findNode(tree: LineageNode, jobId: string): LineageNode | null {
     if (hit) return hit;
   }
   return null;
-}
-
-function _computeRemainingTrials(job: JobDetailType): number {
-  const config = job.config as Record<string, unknown> | undefined;
-  const tuning = config?.tuning as Record<string, unknown> | undefined;
-  const optuna = tuning?.optuna as Record<string, unknown> | undefined;
-  const params = optuna?.params as Record<string, unknown> | undefined;
-  const originalRaw = params?.n_trials;
-  const original =
-    typeof originalRaw === "number" && originalRaw > 0 ? originalRaw : 50;
-  const tuneResult = job.tune_result as
-    | { trials?: unknown[] | null }
-    | null
-    | undefined;
-  const completed = Array.isArray(tuneResult?.trials)
-    ? (tuneResult?.trials?.length ?? 0)
-    : 0;
-  return Math.max(1, original - completed);
 }

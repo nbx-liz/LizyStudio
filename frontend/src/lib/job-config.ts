@@ -28,3 +28,22 @@ function _pokeOptunaParam(job: JobDetail, key: string): unknown {
   const params = optuna?.params as Record<string, unknown> | undefined;
   return params?.[key];
 }
+
+/**
+ * Pick the Resume dialog's pre-filled ``n_trials`` for a FAILED tune
+ * job. Equals ``defaultRetuneTrials`` minus the number of completed
+ * trials already on disk, with a floor of 1. Used by ResultsPanel
+ * (Workspace) and JobDetail (Jobs page) — historically they each had
+ * a private ``_computeRemainingTrials`` helper that drifted.
+ */
+export function remainingRetuneTrials(job: JobDetail): number {
+  const original = defaultRetuneTrials(job);
+  const tuneResult = job.tune_result as
+    | { trials?: unknown[] | null }
+    | null
+    | undefined;
+  const completed = Array.isArray(tuneResult?.trials)
+    ? (tuneResult?.trials?.length ?? 0)
+    : 0;
+  return Math.max(1, original - completed);
+}
