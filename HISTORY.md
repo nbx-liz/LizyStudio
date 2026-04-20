@@ -1813,3 +1813,31 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (e) `pnpm build` + `pnpm vitest run` + `api-types-drift` CI job が green。
   - (f) 経路 B の JSONL 送受信は wire format 未変更（regression なし）。
 - **Decision:** 未決定。
+
+### H-0070: `services/jobs.py` God Module 分割と model LRU キャッシュ（Phase 3 coupling refactor）
+- **Status:** proposed
+- **Scope:** Backend | Internal only（公開 API / wire format / 保存形式 変更なし）
+- **Related:** docs/coupling-analysis.md A-7
+- **Context:** `services/jobs.py` は 751 行の God Module で、disk CRUD（persistence）と `BackendAdapter` ディスパッチ（evaluate/plot/importance 等の結果変換）を同居させていた。結果変換関数は `Job + BackendAdapter → 結果データ` という責務で、persistence とは明確に層が異なる。さらに各関数が毎回 `backend.load_model(job.model_path)` を呼ぶため、同じ完了ジョブに対して `get_metrics_table` / `get_split_summary` / `get_importance_kinds` / `get_job_plot` … と複数エンドポイントが連続で叩かれると、その都度 disk read + deserialize が走る無駄が発生していた。
+- **Proposal:**
+  1. `src/lizystudio/services/job_results.py` を新設し、`load_job_model` / `get_metrics_table` / `get_split_summary` / `get_importance` / `get_importance_kinds` / `get_learning_curve_metrics` / `get_job_plot` / `get_available_plots` と private helper `_get_jobs_dir` / `_load_tuning_plot_from_file` を移動する。
+  2. `load_job_model` に process-local LRU キャッシュ（`OrderedDict` + `threading.Lock`, `maxsize=8`）を追加。キーは `(backend_name, model_path)`。ロード本体も critical section 内で実行し、並列キャッシュミスで二重 load + ABA レースが起きないようにする。
+  3. `clear_model_cache()` / `clear_model_cache_for(path)` を公開し、テスト fixture および将来の invalidation hook から利用可能にする。
+  4. `JobStore.delete()` で削除対象の model キャッシュエントリを `clear_model_cache_for` で drop。rmtree 後の stale entry が次回 lookup を汚染しない。
+  5. `services/jobs.py` 末尾で `from .job_results import …` による back-compat re-export を用意。既存の `from lizystudio.services.jobs import load_job_model` 系 import 全箇所（20+ テスト、複数 api/ modules）を書き換えない。
+- **Impact:** `src/lizystudio/services/job_results.py`（新規, 143 行）、`src/lizystudio/services/jobs.py`（751 → 695 行）、`tests/test_job_results.py`（新規, 19 テスト）。公開 API / wire format / 保存形式 / BackendAdapter Protocol は変更なし。
+- **Compatibility:**
+  - import 互換: 既存の `from services.jobs import …` は re-export で継続動作。
+  - wire format 変更なし。
+  - キャッシュは process-local なため、multi-worker 配備でも workers 間の整合性に影響なし。
+- **Alternatives:**
+  - (a) `functools.lru_cache` を直接使う → 却下。インスタンス引数 (`Job` / `BackendAdapter`) 非ハッシャブルに対応できず、invalidation API も公開できない。
+  - (b) per-key Event によるローディング中の並列待機（stampede 回避）→ 却下。キャッシュサイズ 8 / 小規模 deployment なら単一 lock の方が単純で十分。必要なら後続 PR で拡張。
+  - (c) キャッシュ無しで分割のみ実施 → 却下。Results 画面の同時 4+ fetch が都度 disk read を引き起こすという実ボトルネックを放置するのは本質回避。
+- **Acceptance Criteria:**
+  - (a) 既存テスト 1136 件 + 新規 19 件 = 1138+ 件（jobs テストの置換分を考慮）が green。
+  - (b) `uv run mypy src/lizystudio/` / `uv run ruff check .` / `uv run ruff format --check .` 全 clean。
+  - (c) `services/jobs.py` の行数が 700 行以下、`services/job_results.py` の行数が 150 行以下。
+  - (d) `load_job_model` の同一 `(backend_name, model_path)` 連続呼び出しで `backend.load_model` が 1 回のみ走る（LRU ヒット）。
+  - (e) `JobStore.delete()` 後に同 path のキャッシュエントリが drop されている（regression: stale model hit 防止）。
+- **Decision:** 未決定。
