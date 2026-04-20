@@ -80,7 +80,8 @@
     {
       "includes": [
         "src/pages/WorkspacePage.tsx",
-        "src/components/workspace/ModelPanel.tsx"
+        "src/components/workspace/ModelPanel.tsx",
+        "src/components/workspace/ConfigEditorBody.tsx"
       ],
       "linter": {
         "rules": {
