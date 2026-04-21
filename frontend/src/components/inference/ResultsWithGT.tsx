@@ -146,7 +146,7 @@ export function ResultsWithGT({
           <AccordionItem value="warnings">
             <AccordionTrigger>Warnings</AccordionTrigger>
             <AccordionContent>
-              <ul className="list-disc pl-4 text-sm text-orange-600">
+              <ul className="list-disc pl-4 text-sm text-degraded-fg">
                 {record.warnings.map((w, i) => (
                   <li key={`warn-${i}`}>{w}</li>
                 ))}

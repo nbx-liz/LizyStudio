@@ -39,15 +39,15 @@ function getStatusIcon(status: string): { icon: string; className: string } {
     case "completed":
       return {
         icon: "\u2713",
-        className: "text-green-600 dark:text-green-400",
+        className: "text-success-fg",
       };
     case "running":
       return {
         icon: "\u25CF",
-        className: "text-blue-500 dark:text-blue-400 animate-pulse",
+        className: "text-info-fg animate-pulse",
       };
     case "failed":
-      return { icon: "\u2717", className: "text-red-500 dark:text-red-400" };
+      return { icon: "\u2717", className: "text-danger-fg" };
     case "cancelled":
       return { icon: "\u2717", className: "text-muted-foreground" };
     default:

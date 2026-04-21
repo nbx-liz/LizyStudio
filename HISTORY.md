@@ -2048,3 +2048,35 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (d) `getEffectiveCvStrategy` が `cv-state.ts` に export され両 hook から共有。
   - (e) `pnpm test` / `pnpm check` / `pnpm tsc --noEmit` / `pnpm build` 全 clean、1620 vitest pass。
 - **Decision:** 2026-04-21 accepted — 提案通り実装。reviewer MEDIUM（duplication 抽出、rAF leak 対策）修正済み。
+
+### H-0078: semantic status token の導入と raw Tailwind color class 退役（Phase 3 coupling refactor B-9, Part 1）
+- **Status:** accepted
+- **Scope:** Frontend | Internal only（wire format / BackendAdapter Protocol / storage layout 不変、visual regression は Nightly で自動検知）
+- **Related:** docs/coupling-analysis.md B-9、Issue #90（`--lzs-accent` WCAG 調整）、Issue #168（`bg-green-700` WCAG AA 要件）
+- **Context:** `components/ui/design-tokens.css` は `--lzs-accent` 等の UI control token + `lzs-*` class を提供していたが、status 系（success / warning / danger / info / degraded）の semantic token は未定義。各 consumer が `bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200` / `text-red-700 dark:text-red-400` 等の raw Tailwind palette class を直書きしており、dark mode 切り替えと WCAG コントラスト調整が 18 ファイルに散らばって drift していた。
+- **Proposal:**
+  1. `design-tokens.css` に 5 状態の semantic token を追加（success / warning / danger / info / degraded）。各状態は `bg / fg / border` triplet、加えて `success` のみ `solid-bg / solid-fg`（Jobs "completed" badge の濃緑 + 白テキスト用、#168 の WCAG AA 要件に合致する hsl 値）。dark mode は `.dark` scope で同時定義。値は既存 Tailwind palette 相当を HSL 近似し、WCAG AA コントラスト（4.5:1）を両テーマで維持。
+  2. `tailwind.config.ts` の `theme.extend.colors` に `success` / `warning` / `danger` / `info` / `degraded` を追加。`DEFAULT` / `fg` / `border` の命名で `bg-success` / `text-success-fg` / `border-success-border` が使用可能に。
+  3. 12 consumer ファイルの raw color class を semantic class に一括置換:
+     - `jobs/`: JobList.tsx（status icon color）, JobDetail.tsx（Delete button + Completed badge）, DeleteDialog.tsx（cascade warning box）
+     - `workspace/`: ResultsCompletedView.tsx, ResultsRunningView.tsx, ResultsPanel.tsx（Queued badge）, ConfigEditorBody.tsx（running info bar）, ConfigDiffBadge.tsx, TuneTrialsSection.tsx（best trial row）, FoldProgressList.tsx
+     - `retune/`: ConvergenceSignalPanel.tsx, JobLineageTree.tsx, RoundHistoryTable.tsx, SearchSpaceEvolutionPanel.tsx
+     - `inference/`: ScoreTable.tsx, SetupPanel.tsx, ResultsPredOnly.tsx, ResultsWithGT.tsx
+  4. ScoreTable.test.tsx / RoundHistoryTable.test.tsx の className assertion を新 semantic class 名に更新。
+  5. **Out of scope (palette-as-identity)**: `DistributionBar.tsx`（15 色 series palette）, `FoldPreview.tsx`（train/test 区別用 blue/orange 2 色 palette）, `SearchSpaceEvolutionPanel.tsx:190`（cutoff bar marker）は意味的な「状態」ではなく series 区別のための palette なので据え置き。
+- **Impact:** `frontend/src/components/ui/design-tokens.css`（+40 行：semantic token triplet × 5 状態 × 2 テーマ）、`frontend/tailwind.config.ts`（+35 行：`theme.extend.colors` 拡張）、18 consumer files（各 1〜3 箇所 raw → semantic 置換、净 -40 行程度）、2 test files（class name assertion 更新）。
+- **Compatibility:**
+  - Visual はほぼ pixel-identical（HSL 近似が Tailwind palette の ±2 L% 内、意図的に #168 等の WCAG 調整は `--lzs-success-solid-bg` で保全）。Nightly visual regression が検知可能。
+  - wire format / BackendAdapter Protocol / storage layout / ユーザー設定ファイル変更なし。
+  - Consumer の TSX は public API / props / state 変更なし — className string のみ差し替え。
+- **Alternatives:**
+  - (a) Biome lint rule で raw color class を ban → 却下。Biome は Tailwind-specific plugin を持たない。代わりに Part 2（別 PR）で `scripts/check-raw-colors.sh` + CI integration を計画。
+  - (b) `DistributionBar` palette も semantic 化 → 却下。15 色 series は意味的な状態ではなく区別用の identity palette で、semantic token の責務外。
+  - (c) Tailwind v4 の `@theme` 構文で CSS-native 化 → 却下。現在 v3.4.19、アップグレードは別 PR。
+  - (d) HSL 近似ではなく正確な Tailwind 色値をそのまま CSS var に書く → 却下。現 HSL 定義と一貫させるため近似で統一。
+- **Acceptance Criteria:**
+  - (a) `grep -rn '(bg|text|border)-(blue|green|red|yellow|amber|rose|emerald|orange)-[0-9]{2,3}' frontend/src/components` が palette scope-out 4 ファイル（DistributionBar, FoldPreview, SearchSpaceEvolutionPanel の cutoff bar, design-tokens.css の history comment）以外 0 件。
+  - (b) 全 vitest pass（1620 件、既存 14 + 新規 3 も含む）。
+  - (c) `pnpm check` / `pnpm tsc --noEmit` / `pnpm build` 全 clean。
+  - (d) WCAG AA コントラスト（#168 の `bg-success-solid` + 白テキスト 4.5:1）が semantic token で維持。
+- **Decision:** 2026-04-21 accepted — Part 1（token 整備 + 18 ファイル書き換え）のみ本 PR で実施。Part 2（raw color ban の CI/lint ガード）は別 PR で実装予定。

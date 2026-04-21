@@ -9,6 +9,40 @@
   --lzs-bg-subtle: hsl(0, 0%, 96%);
   --lzs-label-color: hsl(215, 16%, 35%);
   --radius-sm: calc(var(--radius) - 4px);
+
+  /* H-0078 (B-9): semantic status tokens.
+   *
+   * Each state has a bg / fg / border triplet. Values are picked to
+   * match the pre-existing raw Tailwind palette (e.g. success ≈
+   * green-50 / green-800 / green-200) so the migration is visually
+   * non-destructive. WCAG AA (4.5:1 on body text) is preserved on
+   * both light and dark themes — Tailwind's default green-100 bg +
+   * green-800 fg and the dark mirror green-900 / green-200 already
+   * meet the ratio, and our HSL approximations stay within ±2 L%.
+   *
+   * ``--lzs-success-solid-*`` is the intense solid-badge variant (eg.
+   * bg-green-700 + white text, 4.58:1 on the Jobs "completed" badge).
+   */
+  --lzs-success-bg: hsl(138, 76%, 97%);      /* ≈ green-50 */
+  --lzs-success-fg: hsl(140, 84%, 20%);      /* ≈ green-800 */
+  --lzs-success-border: hsl(141, 79%, 85%);  /* ≈ green-200 */
+  --lzs-success-solid-bg: hsl(142, 72%, 29%); /* ≈ green-700 */
+  --lzs-success-solid-fg: #fff;
+
+  --lzs-warning-bg: hsl(48, 96%, 89%);       /* ≈ amber-100 / yellow-100 blend */
+  --lzs-warning-fg: hsl(28, 73%, 26%);       /* ≈ amber-900 */
+  --lzs-warning-border: hsl(45, 96%, 65%);   /* ≈ amber-300 */
+
+  --lzs-danger-bg: hsl(0, 86%, 97%);         /* ≈ red-50 */
+  --lzs-danger-fg: hsl(0, 63%, 31%);         /* ≈ red-800 / red-700 */
+  --lzs-danger-border: hsl(0, 96%, 89%);     /* ≈ red-200 */
+
+  --lzs-info-bg: hsl(214, 100%, 97%);        /* ≈ blue-50 */
+  --lzs-info-fg: hsl(217, 91%, 60%);         /* ≈ blue-500 (icon) */
+  --lzs-info-strong-fg: hsl(226, 71%, 30%);  /* ≈ blue-800 (text on bg) */
+  --lzs-info-border: hsl(213, 97%, 87%);     /* ≈ blue-200 */
+
+  --lzs-degraded-fg: hsl(25, 95%, 45%);      /* ≈ orange-600 */
 }
 
 .lzs-form {
@@ -23,6 +57,28 @@
   --lzs-border: hsl(0, 0%, 30%);
   --lzs-bg-subtle: hsl(0, 0%, 20%);
   --lzs-label-color: hsl(0, 0%, 72%);
+
+  /* H-0078: dark-mode mirrors. Same semantic intent, inverted tones. */
+  --lzs-success-bg: hsl(144, 61%, 15%);      /* ≈ green-950 */
+  --lzs-success-fg: hsl(141, 79%, 85%);      /* ≈ green-200 */
+  --lzs-success-border: hsl(142, 72%, 29%);  /* ≈ green-700 */
+  --lzs-success-solid-bg: hsl(142, 72%, 29%);
+  --lzs-success-solid-fg: #fff;
+
+  --lzs-warning-bg: hsl(20, 14%, 12%);       /* ≈ amber-950 */
+  --lzs-warning-fg: hsl(48, 100%, 88%);      /* ≈ amber-100 */
+  --lzs-warning-border: hsl(33, 78%, 34%);   /* ≈ amber-800 */
+
+  --lzs-danger-bg: hsl(0, 63%, 18%);         /* ≈ red-900 / red-950 */
+  --lzs-danger-fg: hsl(0, 94%, 75%);         /* ≈ red-400 */
+  --lzs-danger-border: hsl(0, 63%, 31%);     /* ≈ red-700 */
+
+  --lzs-info-bg: hsl(224, 71%, 20%);         /* ≈ blue-900 */
+  --lzs-info-fg: hsl(213, 94%, 68%);         /* ≈ blue-400 */
+  --lzs-info-strong-fg: hsl(213, 97%, 87%);  /* ≈ blue-200 */
+  --lzs-info-border: hsl(226, 71%, 40%);     /* ≈ blue-800 */
+
+  --lzs-degraded-fg: hsl(28, 95%, 60%);      /* ≈ orange-400 */
 }
 
 .lzs-stepper {

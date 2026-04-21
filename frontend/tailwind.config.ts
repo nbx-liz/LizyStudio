@@ -56,6 +56,44 @@ const config: Config = {
           "4": "hsl(var(--chart-4))",
           "5": "hsl(var(--chart-5))",
         },
+        // H-0078 (B-9): semantic status colors. Each token maps onto
+        // its ``--lzs-*-bg`` / ``-fg`` / ``-border`` CSS custom
+        // property so dark-mode inversion is handled in one place
+        // (design-tokens.css) rather than by every consumer writing
+        // ``bg-green-100 dark:bg-green-900``.
+        //
+        // Usage:
+        //   bg-success       → ``background-color: var(--lzs-success-bg)``
+        //   text-success     → ``color: var(--lzs-success-fg)``
+        //   border-success   → ``border-color: var(--lzs-success-border)``
+        //   bg-success-solid / text-success-solid-fg — intense badge.
+        //   text-degraded    → ``color: var(--lzs-degraded-fg)`` (text only)
+        success: {
+          DEFAULT: "var(--lzs-success-bg)",
+          fg: "var(--lzs-success-fg)",
+          border: "var(--lzs-success-border)",
+          solid: "var(--lzs-success-solid-bg)",
+          "solid-fg": "var(--lzs-success-solid-fg)",
+        },
+        warning: {
+          DEFAULT: "var(--lzs-warning-bg)",
+          fg: "var(--lzs-warning-fg)",
+          border: "var(--lzs-warning-border)",
+        },
+        danger: {
+          DEFAULT: "var(--lzs-danger-bg)",
+          fg: "var(--lzs-danger-fg)",
+          border: "var(--lzs-danger-border)",
+        },
+        info: {
+          DEFAULT: "var(--lzs-info-bg)",
+          fg: "var(--lzs-info-fg)",
+          "strong-fg": "var(--lzs-info-strong-fg)",
+          border: "var(--lzs-info-border)",
+        },
+        degraded: {
+          fg: "var(--lzs-degraded-fg)",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",

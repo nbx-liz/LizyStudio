@@ -51,11 +51,11 @@ export function ConfigEditorBody({
     >
       {running && (
         <output
-          className="mb-4 flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 p-3 dark:border-blue-800 dark:bg-blue-950"
+          className="mb-4 flex items-center gap-2 rounded-md border border-info-border bg-info p-3"
           data-testid="running-info-bar"
         >
-          <Info className="h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" />
-          <p className="text-xs text-blue-800 dark:text-blue-200">
+          <Info className="h-4 w-4 shrink-0 text-info-fg" />
+          <p className="text-xs text-info-strong-fg">
             A job is currently running. Configuration is locked until the job
             completes.
           </p>

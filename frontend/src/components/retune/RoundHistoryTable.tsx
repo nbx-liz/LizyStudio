@@ -23,10 +23,10 @@ function formatDelta(
   const sign = delta > 0 ? "+" : "";
   const text = `${sign}${delta.toFixed(4)}`;
   if (delta > 0) {
-    return { text, className: "text-emerald-600 dark:text-emerald-400" };
+    return { text, className: "text-success-fg" };
   }
   if (delta < 0) {
-    return { text, className: "text-rose-600 dark:text-rose-400" };
+    return { text, className: "text-danger-fg" };
   }
   return { text, className: "text-muted-foreground" };
 }

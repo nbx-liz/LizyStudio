@@ -54,9 +54,9 @@ export function FoldProgressList({
             className="flex items-center gap-2 font-mono text-xs"
           >
             {result ? (
-              <Check className="h-3 w-3 text-green-500" />
+              <Check className="h-3 w-3 text-success-fg" />
             ) : isRunning ? (
-              <Loader2 className="h-3 w-3 animate-spin text-blue-500" />
+              <Loader2 className="h-3 w-3 animate-spin text-info-fg" />
             ) : (
               <Minus className="h-3 w-3 text-muted-foreground" />
             )}
