@@ -1,7 +1,7 @@
 import { HttpResponse, http } from "msw";
 import { describe, expect, it } from "vitest";
 import { server } from "../test/mocks/server";
-import { ApiError, apiFetch } from "./client";
+import { ApiError, apiClient, apiFetch } from "./client";
 
 describe("apiFetch", () => {
   it("makes a GET request and parses JSON response", async () => {
@@ -107,5 +107,92 @@ describe("apiFetch", () => {
         error: { code: "INVALID", message: "bad input" },
       });
     }
+  });
+});
+
+// C-6 Phase 1: ``apiClient`` is an openapi-fetch-based client that shares
+// the ApiError throwing contract with ``apiFetch``. During the migration
+// (Phase 1-4) both clients coexist so consumers can be moved file-by-file.
+// Phase 5 retires ``apiFetch`` and this suite collapses into the
+// openapi-fetch-only set.
+describe("apiClient (openapi-fetch)", () => {
+  it("makes a typed GET request and returns parsed data", async () => {
+    server.use(
+      http.get("/api/files", () =>
+        HttpResponse.json({
+          path: "/",
+          parent: null,
+          entries: [],
+        }),
+      ),
+    );
+
+    const { data, error } = await apiClient.GET("/api/files", {});
+    expect(error).toBeUndefined();
+    expect(data).toEqual({ path: "/", parent: null, entries: [] });
+  });
+
+  it("throws ApiError on non-ok response via error middleware", async () => {
+    server.use(
+      http.get("/api/files", () =>
+        HttpResponse.json({ detail: "Bad request" }, { status: 400 }),
+      ),
+    );
+
+    await expect(apiClient.GET("/api/files", {})).rejects.toThrow(
+      "API error 400",
+    );
+  });
+
+  it("throws ApiError with status and body on server error", async () => {
+    server.use(
+      http.get("/api/files", () =>
+        HttpResponse.json(
+          { error: { code: "SERVER", message: "boom" } },
+          { status: 500 },
+        ),
+      ),
+    );
+
+    try {
+      await apiClient.GET("/api/files", {});
+      expect.fail("Should have thrown");
+    } catch (err: unknown) {
+      expect(err).toBeInstanceOf(ApiError);
+      const apiErr = err as ApiError;
+      expect(apiErr.status).toBe(500);
+      expect(apiErr.body).toEqual({
+        error: { code: "SERVER", message: "boom" },
+      });
+    }
+  });
+
+  it("forwards query params from params.query", async () => {
+    let captured: string | null = null;
+    server.use(
+      http.get("/api/files", ({ request }) => {
+        captured = new URL(request.url).searchParams.get("path");
+        return HttpResponse.json({ path: "/", parent: null, entries: [] });
+      }),
+    );
+
+    await apiClient.GET("/api/files", {
+      params: { query: { path: "/data/my dir" } },
+    });
+    expect(captured).toBe("/data/my dir");
+  });
+
+  it("propagates AbortSignal to fetch (pre-aborted signal rejects immediately)", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    server.use(
+      http.get("/api/files", () =>
+        HttpResponse.json({ path: "/", parent: null, entries: [] }),
+      ),
+    );
+
+    await expect(
+      apiClient.GET("/api/files", { signal: controller.signal }),
+    ).rejects.toThrow();
   });
 });
