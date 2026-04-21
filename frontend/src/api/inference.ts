@@ -1,28 +1,16 @@
-import { apiFetch } from "./client";
+import { apiClient } from "./client";
+import type { components } from "./generated/schema";
 
 // --- Types ---
+// SSOT: generated schema is the source of truth for these two.
+// ``ComparisonStats`` stays hand-written because the backend schema uses a
+// structured ``ComparisonGroupStats`` ({mean, std, min, max, count}) while
+// consumers currently iterate ``Object.keys(current)`` expecting a
+// ``Record<string, number>``. Bridging that is a separate refactor outside
+// C-6 Phase 2 scope.
 
-export interface InferenceRecord {
-  inf_id: string;
-  job_id: string;
-  data_ref: {
-    source_type: string;
-    path: string;
-    filename: string;
-    fingerprint: string;
-    shape: [number, number];
-  };
-  has_ground_truth: boolean;
-  created_at: string;
-  row_count: number;
-  warnings: string[];
-}
-
-export interface PredictionsResponse {
-  columns: string[];
-  data: Record<string, unknown>[];
-  total_rows: number;
-}
+export type InferenceRecord = components["schemas"]["InferenceRecordResponse"];
+export type PredictionsResponse = components["schemas"]["PredictionsResponse"];
 
 export interface ComparisonStats {
   current: Record<string, number>;
@@ -33,80 +21,128 @@ export interface ComparisonStats {
 
 // --- Run ---
 
-export function runInference(params: {
+export async function runInference(params: {
   job_id: string;
   data: { source_type: string; path: string };
   return_shap: boolean;
   evaluate: boolean;
 }): Promise<{ inf_id: string; job_id: string }> {
-  return apiFetch("/inference/run", {
-    method: "POST",
-    body: JSON.stringify(params),
+  const { data } = await apiClient.POST("/api/inference/run", {
+    body: params as components["schemas"]["RunRequest"],
   });
+  if (!data) {
+    throw new Error("apiClient returned no data for /api/inference/run");
+  }
+  return data;
 }
 
-export function uploadInferenceData(
+export async function uploadInferenceData(
   file: File,
 ): Promise<{ upload_path: string; filename: string }> {
   const formData = new FormData();
   formData.append("file", file);
-  return apiFetch("/inference/upload", {
-    method: "POST",
-    body: formData,
-    headers: {},
+  // openapi-fetch would JSON.stringify the body by default; override to
+  // pass FormData through unchanged so the browser sets the correct
+  // multipart/form-data boundary on the Content-Type header. The
+  // generated body type uses ``file: string`` (multipart schemas serialise
+  // to string in OpenAPI), so we double-cast via ``unknown`` to satisfy
+  // both openapi-fetch's input type and the BodyInit return contract.
+  const { data } = await apiClient.POST("/api/inference/upload", {
+    body: formData as unknown as components["schemas"]["Body_inference_upload_api_inference_upload_post"],
+    bodySerializer: (body) => body as unknown as BodyInit,
   });
+  if (!data) {
+    throw new Error("apiClient returned no data for /api/inference/upload");
+  }
+  return data;
 }
 
 // --- Query ---
 
-export function fetchInferenceHistory(
+export async function fetchInferenceHistory(
   jobId?: string,
 ): Promise<InferenceRecord[]> {
-  const params = jobId ? `?job_id=${encodeURIComponent(jobId)}` : "";
-  return apiFetch(`/inference/history${params}`);
+  const { data } = await apiClient.GET("/api/inference/history", {
+    params: { query: jobId ? { job_id: jobId } : {} },
+  });
+  if (!data) {
+    throw new Error("apiClient returned no data for /api/inference/history");
+  }
+  return data;
 }
 
-export function fetchInferenceRecord(
+export async function fetchInferenceRecord(
   infId: string,
   jobId: string,
 ): Promise<InferenceRecord> {
-  const eid = encodeURIComponent(infId);
-  return apiFetch(`/inference/${eid}?job_id=${encodeURIComponent(jobId)}`);
+  const { data } = await apiClient.GET("/api/inference/{inf_id}", {
+    params: { path: { inf_id: infId }, query: { job_id: jobId } },
+  });
+  if (!data) {
+    throw new Error("apiClient returned no data for /api/inference/{inf_id}");
+  }
+  return data;
 }
 
-export function fetchInferencePredictions(
+export async function fetchInferencePredictions(
   infId: string,
   jobId: string,
   rows = 50,
   offset = 0,
 ): Promise<PredictionsResponse> {
-  const eid = encodeURIComponent(infId);
-  return apiFetch(
-    `/inference/${eid}/predictions?job_id=${encodeURIComponent(jobId)}&rows=${rows}&offset=${offset}`,
-  );
+  const { data } = await apiClient.GET("/api/inference/{inf_id}/predictions", {
+    params: {
+      path: { inf_id: infId },
+      query: { job_id: jobId, rows, offset },
+    },
+  });
+  if (!data) {
+    throw new Error(
+      "apiClient returned no data for /api/inference/{inf_id}/predictions",
+    );
+  }
+  return data;
 }
 
-export function fetchInferenceMetrics(
+export async function fetchInferenceMetrics(
   infId: string,
   jobId: string,
 ): Promise<Record<string, unknown>> {
-  const eid = encodeURIComponent(infId);
-  return apiFetch(
-    `/inference/${eid}/metrics?job_id=${encodeURIComponent(jobId)}`,
-  );
+  const { data } = await apiClient.GET("/api/inference/{inf_id}/metrics", {
+    params: { path: { inf_id: infId }, query: { job_id: jobId } },
+  });
+  if (!data) {
+    throw new Error(
+      "apiClient returned no data for /api/inference/{inf_id}/metrics",
+    );
+  }
+  return data;
 }
 
-export function fetchInferencePlot(
+export async function fetchInferencePlot(
   infId: string,
   jobId: string,
   plotType: string,
 ): Promise<{ plotly_json: string }> {
-  const eid = encodeURIComponent(infId);
-  return apiFetch(
-    `/inference/${eid}/plot/${encodeURIComponent(plotType)}?job_id=${encodeURIComponent(jobId)}`,
+  const { data } = await apiClient.GET(
+    "/api/inference/{inf_id}/plot/{plot_type}",
+    {
+      params: {
+        path: { inf_id: infId, plot_type: plotType },
+        query: { job_id: jobId },
+      },
+    },
   );
+  if (!data) {
+    throw new Error(
+      "apiClient returned no data for /api/inference/{inf_id}/plot/{plot_type}",
+    );
+  }
+  return data as { plotly_json: string };
 }
 
+// Pure URL builder, not routed through apiClient. The anchor ``href`` is
+// what the UI actually consumes — there is no response body to type.
 export function getInferenceDownloadUrl(infId: string, jobId: string): string {
   const eid = encodeURIComponent(infId);
   return `/api/inference/${eid}/download?job_id=${encodeURIComponent(jobId)}`;
@@ -116,18 +152,27 @@ export function fetchInferenceShapPlot(
   infId: string,
   jobId: string,
 ): Promise<{ plotly_json: string }> {
-  const eid = encodeURIComponent(infId);
-  return apiFetch(
-    `/inference/${eid}/plot/shap-summary?job_id=${encodeURIComponent(jobId)}`,
-  );
+  return fetchInferencePlot(infId, jobId, "shap-summary");
 }
 
-export function fetchInferenceComparison(
+export async function fetchInferenceComparison(
   infId: string,
   otherInfId: string,
   jobId: string,
 ): Promise<ComparisonStats> {
-  return apiFetch(
-    `/inference/${infId}/comparison/${encodeURIComponent(otherInfId)}?job_id=${encodeURIComponent(jobId)}`,
+  const { data } = await apiClient.GET(
+    "/api/inference/{inf_id}/comparison/{other_inf_id}",
+    {
+      params: {
+        path: { inf_id: infId, other_inf_id: otherInfId },
+        query: { job_id: jobId },
+      },
+    },
   );
+  if (!data) {
+    throw new Error(
+      "apiClient returned no data for /api/inference/{inf_id}/comparison/{other_inf_id}",
+    );
+  }
+  return data as unknown as ComparisonStats;
 }
