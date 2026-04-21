@@ -5,7 +5,6 @@
 import { describe, expect, it } from "vitest";
 import {
   CALIBRATION_DEFAULTS,
-  CV_STRATEGY_FIELDS,
   CV_STRATEGY_LABELS,
   getDefaultCvStrategy,
   N_TRIALS_PRESETS,
@@ -63,56 +62,6 @@ describe("CV_STRATEGY_LABELS", () => {
       expect(typeof CV_STRATEGY_LABELS[key]).toBe("string");
       expect(CV_STRATEGY_LABELS[key].length).toBeGreaterThan(0);
     }
-  });
-});
-
-describe("CV_STRATEGY_FIELDS", () => {
-  it("maps conditional fields per strategy", () => {
-    expect(CV_STRATEGY_FIELDS.kfold).toEqual([
-      "folds",
-      "random_state",
-      "shuffle",
-    ]);
-    expect(CV_STRATEGY_FIELDS.stratified_kfold).toEqual([
-      "folds",
-      "random_state",
-    ]);
-    expect(CV_STRATEGY_FIELDS.group_kfold).toEqual(["folds", "group_col"]);
-    expect(CV_STRATEGY_FIELDS.stratified_group_kfold).toEqual([
-      "folds",
-      "random_state",
-      "group_col",
-    ]);
-    expect(CV_STRATEGY_FIELDS.time_series).toEqual([
-      "folds",
-      "time_col",
-      "gap",
-      "train_size_max",
-      "test_size_max",
-    ]);
-    expect(CV_STRATEGY_FIELDS.purged_time_series).toEqual([
-      "folds",
-      "time_col",
-      "purge_gap",
-      "embargo",
-      "train_size_max",
-      "test_size_max",
-    ]);
-    expect(CV_STRATEGY_FIELDS.group_time_series).toEqual([
-      "folds",
-      "time_col",
-      "group_col",
-      "gap",
-      "train_size_max",
-      "test_size_max",
-    ]);
-    expect(CV_STRATEGY_FIELDS.blocked_group_kfold).toEqual([
-      "folds",
-      "time_col",
-      "group_col",
-      "min_train_rows",
-      "min_valid_rows",
-    ]);
   });
 });
 

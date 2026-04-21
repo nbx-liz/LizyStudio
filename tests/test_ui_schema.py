@@ -560,6 +560,77 @@ class TestLizyMLAdapterUiSchema:
             assert strategy in fields, f"cv_strategy_fields missing: {strategy}"
             assert isinstance(fields[strategy], list)
 
+    def test_capabilities_cv_strategy_fields_ui_semantics(self) -> None:
+        """H-0076 (C-5b Part 2): ``cv_strategy_fields`` is the SSOT for UI
+        conditional-field rendering. Every strategy enumerates **all**
+        UI-visible inputs — generic (``n_splits``, ``random_state``,
+        ``shuffle``) plus strategy-specific (``time_col``, ``group_col``,
+        ``gap``, ``purge_gap``, ``embargo``, ``train_size_max``,
+        ``test_size_max``, ``min_train_rows``, ``min_valid_rows``).
+
+        Wire-format keys (``max_train_size`` etc.) must NOT leak into
+        this list — the frontend renders UI using these names and writes
+        the same names into ``split`` / ``data``, so they need to match
+        the LizyConfig schema field names (which use ``train_size_max``).
+        """
+        schema = LizyMLAdapter().get_ui_schema()
+        fields = schema["capabilities"]["cv_strategy_fields"]
+
+        # Expected fields per strategy — SSOT for the frontend UI map.
+        expected = {
+            "kfold": ["n_splits", "random_state", "shuffle"],
+            "stratified_kfold": ["n_splits", "random_state", "shuffle"],
+            "group_kfold": ["n_splits", "group_col"],
+            "stratified_group_kfold": [
+                "n_splits",
+                "random_state",
+                "group_col",
+            ],
+            "time_series": [
+                "n_splits",
+                "time_col",
+                "gap",
+                "train_size_max",
+                "test_size_max",
+            ],
+            "purged_time_series": [
+                "n_splits",
+                "time_col",
+                "purge_gap",
+                "embargo",
+                "train_size_max",
+                "test_size_max",
+            ],
+            "group_time_series": [
+                "n_splits",
+                "time_col",
+                "group_col",
+                "gap",
+                "train_size_max",
+                "test_size_max",
+            ],
+            "blocked_group_kfold": [
+                "n_splits",
+                "time_col",
+                "group_col",
+                "min_train_rows",
+                "min_valid_rows",
+            ],
+        }
+        for strategy, expected_fields in expected.items():
+            assert fields[strategy] == expected_fields, (
+                f"cv_strategy_fields[{strategy}] mismatch: "
+                f"got {fields[strategy]}, want {expected_fields}"
+            )
+
+        # Wire-format keys must not appear in cv_strategy_fields.
+        for strategy, strategy_fields in fields.items():
+            for wire_key in ("max_train_size", "max_test_size", "folds"):
+                assert wire_key not in strategy_fields, (
+                    f"cv_strategy_fields[{strategy}] should use UI/LizyConfig "
+                    f"names, not wire-format key {wire_key!r}"
+                )
+
     def test_capabilities_cv_defaults(self) -> None:
         """capabilities must include cv_defaults with n_splits."""
         schema = LizyMLAdapter().get_ui_schema()

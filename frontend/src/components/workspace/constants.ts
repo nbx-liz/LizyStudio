@@ -1,6 +1,5 @@
 /**
- * Pure UI presets and conditional-field maps that are not (yet) driven by
- * the backend UiSchema response.
+ * Pure UI presets that are not driven by the backend UiSchema response.
  *
  * @see H-0026 in HISTORY.md for the UiSchema contract.
  *
@@ -9,6 +8,9 @@
  *  - METRICS_BY_TASK removed in H-0074 (UiSchema option_sets.metric is the
  *    sole source of task-to-metric mapping; MetricsChips renders empty
  *    until UiSchema loads).
+ *  - CV_STRATEGY_FIELDS removed in H-0076 (UiSchema
+ *    capabilities.cv_strategy_fields is the sole source; cv-state.ts and
+ *    CvSection.tsx receive the field list via prop / argument).
  */
 
 /** Default calibration config when toggled ON. */
@@ -37,38 +39,6 @@ export const CV_STRATEGY_LABELS: Record<string, string> = {
   purged_time_series: "PurgedTimeSeries",
   group_time_series: "GroupTimeSeries",
   blocked_group_kfold: "BlockedGroup",
-};
-
-/** Conditional fields shown per CV strategy */
-export const CV_STRATEGY_FIELDS: Record<string, readonly string[]> = {
-  kfold: ["folds", "random_state", "shuffle"],
-  stratified_kfold: ["folds", "random_state"],
-  group_kfold: ["folds", "group_col"],
-  stratified_group_kfold: ["folds", "random_state", "group_col"],
-  time_series: ["folds", "time_col", "gap", "train_size_max", "test_size_max"],
-  purged_time_series: [
-    "folds",
-    "time_col",
-    "purge_gap",
-    "embargo",
-    "train_size_max",
-    "test_size_max",
-  ],
-  group_time_series: [
-    "folds",
-    "time_col",
-    "group_col",
-    "gap",
-    "train_size_max",
-    "test_size_max",
-  ],
-  blocked_group_kfold: [
-    "folds",
-    "time_col",
-    "group_col",
-    "min_train_rows",
-    "min_valid_rows",
-  ],
 };
 
 /** Default CV strategy per task type. */

@@ -1987,3 +1987,35 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (e) Issue #154 の slot-claim failure で failed counter が 1 増える（`test_reg_0154_failed_metric_on_slot_claim`）。
   - (f) `uv run pytest` / `uv run mypy src/lizystudio/` / `uv run ruff check .` / `uv run ruff format --check .` 全 clean、pytest 1152 green。
 - **Decision:** 2026-04-20 accepted — 提案通り実装。`record_job_terminal` の module-level export 廃止は破壊的変更だが、内部パッケージのため shim なしで移行。
+
+### H-0076: `CV_STRATEGY_FIELDS` 退役と `capabilities.cv_strategy_fields` の SSOT 化（Phase 3 coupling refactor C-5b Part 2）
+- **Status:** accepted
+- **Scope:** Backend | Frontend | Internal only（LizyConfig wire format 不変、BackendAdapter Protocol 不変、既存 `/api/backends/ui-schema` レスポンス shape 不変）
+- **Related:** docs/coupling-analysis.md C-5b、H-0026（UiSchema 契約）、H-0072（C-5a）、H-0074（C-5b Part 1）
+- **Context:** Part 1 までに `METRICS_BY_TASK` と `getDefaultCvStrategy` は SSOT 化されたが、`frontend/src/components/workspace/constants.ts::CV_STRATEGY_FIELDS` は残っていた。この map は UI の CV-section conditional-field rendering と `cv-state.ts::buildSplitConfig` / `applyCvDataFields` の wire-format 生成を両方支配しており、backend の `UiCapabilities.cv_strategy_fields` と **フィールド名が乖離** していた（`folds` vs `n_splits`、`train_size_max` vs `max_train_size`、`blocked_group_kfold` は完全に別体系）。さらに **内容自体も乖離**（FE の `stratified_kfold` に `shuffle` がない、FE の `time_series` に `time_col` がある等）していたため、単純置換では SSOT 化できず Part 1 の対象外となっていた。
+- **Proposal:**
+  1. Backend `lizyml_ui_schema.py::cv_strategy_fields` を「UI 表示判定 + wire field 一覧」の両用途をカバーする SSOT に書き換える。フィールド名は **LizyConfig schema 名**（`n_splits`, `train_size_max`, `time_col`, `group_col`, `min_train_rows`, `min_valid_rows`）で統一。`blocked_group_kfold` の UI 用フィールドを追加（`n_splits`, `time_col`, `group_col`, `min_train_rows`, `min_valid_rows` — wire の `blocks_col`/`groups_col`/`mode`/`train_window` は UI が別編集 UI 経由で個別生成するため含まない）。
+  2. 順序調整（`kfold: n_splits, random_state, shuffle` 等）を UI 上下表示順と一致させる。順序の意味は UI presentation のみで consumer は set 扱い（backend にコメント追加）。
+  3. `tests/test_ui_schema.py` に新規テスト `test_capabilities_cv_strategy_fields_ui_semantics` を追加し、全 8 strategy の期待 fields を locking。wire-format キー（`max_train_size`, `max_test_size`, `folds`）が map に漏れないことも assert。
+  4. Frontend `cv-state.ts`: `buildSplitConfig(cv, blocked?, fields?)` と `applyCvDataFields(data, cv, fields?)` の third arg として fields を受け取る。`fields` が未指定のときは module-level `FALLBACK_CV_STRATEGY_FIELDS`（backend SSOT のミラー）から strategy で引く。未知 strategy は `["n_splits"]` に fall through。
+  5. `CvSection.tsx` は `uiSchema.capabilities?.cv_strategy_fields?.[strategy]` を優先読み、無ければ `FALLBACK_CV_STRATEGY_FIELDS` を使う。`has("folds")` → `has("n_splits")` にフィールド名を揃える。`FALLBACK_CV_STRATEGY_FIELDS` は `cv-state.ts` から re-export された単一ソースを使用（重複を避ける）。
+  6. `useConfigSync` が `uiSchema` prop を受け取り、`cv_strategy_fields[strategy]` を `buildSplitConfig` / `applyCvDataFields` に threading。`useEffect` の dedup key に fields suffix を付与し、UiSchema ロード後の初回 sync を発火させる。`preseedSyncKey` も同じ suffix を内部で付ける。
+  7. `frontend/src/components/workspace/constants.ts` から `CV_STRATEGY_FIELDS` export 削除。`constants.test.ts` の該当テストブロック削除。
+- **Impact:** `src/lizystudio/backends/lizyml_ui_schema.py`（`cv_strategy_fields` rewrite + 順序ドキュメント、+12 / -18 行）、`tests/test_ui_schema.py`（+77、全 strategy lock-in テスト）、`frontend/src/components/workspace/constants.ts`（-23、`CV_STRATEGY_FIELDS` 削除）、`frontend/src/components/workspace/constants.test.ts`（-48、該当テスト削除）、`frontend/src/components/workspace/cv-state.ts`（+58 / -14：`FALLBACK_CV_STRATEGY_FIELDS` export + `resolveFields` helper + `buildSplitConfig`/`applyCvDataFields` に fields 引数）、`frontend/src/components/workspace/CvSection.tsx`（+8 / -3：uiSchema 優先読み + `FALLBACK_CV_STRATEGY_FIELDS` import、`has("folds")`→`has("n_splits")`）、`frontend/src/components/workspace/cv-section.test.ts`（+58 / -8：local SSOT fixture + fields arg test cases）、`frontend/src/hooks/useConfigSync.ts`（+25 / -3：`uiSchema` prop + fields threading + key suffix）。
+- **Compatibility:**
+  - `/api/backends/ui-schema` レスポンス shape 不変（`capabilities.cv_strategy_fields` は既存 field でその content のみ拡張）。OpenAPI 型変更なし。
+  - LizyConfig schema（wire format）変更なし。`split.n_splits` / `split.train_size_max` / `data.time_col` / `data.group_col` 等は従来通り。
+  - FE の UI state（`cv.folds`, `cv.trainSizeMax` など）は変更なし — UI internal name と wire name の mapping は `buildSplitConfig` 内に閉じる。
+  - 既存のユーザー config file（JSON/YAML）は touch しない。
+- **Alternatives:**
+  - (a) Backend の `cv_strategy_fields` を UI 用 / wire 用に 2 つ分ける → 却下。2 つの契約を同期する deuplication コストが大きい。1 map で両用途をカバーする方が clean。
+  - (b) FE の UI internal name（`folds`）を LizyConfig 名（`n_splits`）に全面 rename → 却下。既存の `CvState.folds`, `resetCvState`, etc. が全面変更となりスコープ肥大。UI 内部と wire format の命名は分離したままが自然。
+  - (c) fallback map を削除して uiSchema ロード前の render を blocker 化 → 却下。初回 render の a11y / CLS を悪化させる。fallback が backend SSOT とミラーされる限り問題なし（lock-in test で drift 検知）。
+  - (d) `cv-state.ts` / `CvSection.tsx` でそれぞれ独立に fallback 定義 → 却下。`cv-state.ts` から export して単一 source に統一。
+- **Acceptance Criteria:**
+  - (a) `grep -rn 'CV_STRATEGY_FIELDS' frontend/src` が local test fixture と `cv-state.ts::FALLBACK_CV_STRATEGY_FIELDS` 以外に残らない。
+  - (b) `tests/test_ui_schema.py::test_capabilities_cv_strategy_fields_ui_semantics` が全 8 strategy を green で lock-in。
+  - (c) `CvSection` が `uiSchema.capabilities.cv_strategy_fields` を受け取って conditional field render。uiSchema 未ロード時は `FALLBACK_CV_STRATEGY_FIELDS` 使用。
+  - (d) `useConfigSync` が UiSchema ロード後に初回 sync を発火させる（key suffix 経由）。
+  - (e) `pnpm test` / `pnpm check` / `pnpm tsc --noEmit` / `pnpm build` / `uv run pytest` / `uv run mypy src/lizystudio/` / `uv run ruff check .` 全 clean。
+- **Decision:** 2026-04-21 accepted — 提案通り実装。C-5b 完結（Part 1 = METRICS_BY_TASK + cv_default_strategy、Part 2 = CV_STRATEGY_FIELDS SSOT 化）。

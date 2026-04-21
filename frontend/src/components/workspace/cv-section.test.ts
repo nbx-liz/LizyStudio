@@ -12,7 +12,47 @@ import {
   recommendedInnerValid,
   resetCvState,
 } from "./CvSection";
-import { CV_STRATEGY_FIELDS } from "./constants";
+
+// C-5b Part 2 (H-0076): `cv_strategy_fields` comes from the backend
+// UiSchema at runtime. The map below mirrors what
+// `lizyml_ui_schema.py` emits and is used to drive every test that
+// previously imported `CV_STRATEGY_FIELDS` from `./constants`.
+const CV_STRATEGY_FIELDS: Record<string, readonly string[]> = {
+  kfold: ["n_splits", "random_state", "shuffle"],
+  stratified_kfold: ["n_splits", "random_state", "shuffle"],
+  group_kfold: ["n_splits", "group_col"],
+  stratified_group_kfold: ["n_splits", "random_state", "group_col"],
+  time_series: [
+    "n_splits",
+    "time_col",
+    "gap",
+    "train_size_max",
+    "test_size_max",
+  ],
+  purged_time_series: [
+    "n_splits",
+    "time_col",
+    "purge_gap",
+    "embargo",
+    "train_size_max",
+    "test_size_max",
+  ],
+  group_time_series: [
+    "n_splits",
+    "time_col",
+    "group_col",
+    "gap",
+    "train_size_max",
+    "test_size_max",
+  ],
+  blocked_group_kfold: [
+    "n_splits",
+    "time_col",
+    "group_col",
+    "min_train_rows",
+    "min_valid_rows",
+  ],
+};
 
 // ---------------------------------------------------------------------------
 // resetCvState
@@ -128,7 +168,7 @@ describe("buildSplitConfig", () => {
       });
     });
 
-    it("stratified_kfold includes folds and random_state but not shuffle", () => {
+    it("stratified_kfold includes folds, random_state and shuffle when fields allow all three", () => {
       const cv: CvState = {
         ...INITIAL_CV_STATE,
         strategy: "stratified_kfold",
@@ -136,12 +176,31 @@ describe("buildSplitConfig", () => {
         randomState: 0,
         shuffle: true,
       };
-      const result = buildSplitConfig(cv);
+      const result = buildSplitConfig(
+        cv,
+        undefined,
+        CV_STRATEGY_FIELDS.stratified_kfold,
+      );
       expect(result).toEqual({
         method: "stratified_kfold",
         n_splits: 3,
         random_state: 0,
+        shuffle: true,
       });
+    });
+
+    it("drops shuffle when fields map excludes it (SSOT-driven)", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "stratified_kfold",
+        folds: 3,
+        randomState: 0,
+        shuffle: true,
+      };
+      // A hypothetical backend that chooses to hide shuffle for this
+      // strategy — buildSplitConfig must honour the fields contract.
+      const fields = ["n_splits", "random_state"];
+      const result = buildSplitConfig(cv, undefined, fields);
       expect(result).not.toHaveProperty("shuffle");
     });
   });
@@ -394,6 +453,66 @@ describe("buildSplitConfig", () => {
     const result = buildSplitConfig(cv);
     expect(result).not.toHaveProperty("random_state");
   });
+
+  describe("fields parameter (H-0076 SSOT)", () => {
+    it("without fields falls back to full conditional-field set", () => {
+      // Before H-0076 buildSplitConfig had no fields param. The
+      // fallback path must keep emitting every conditional field that
+      // the CvState supplies — used while ``uiSchema`` has not loaded
+      // yet or for integration paths that bypass the store.
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "kfold",
+        folds: 5,
+        randomState: 42,
+        shuffle: true,
+      };
+      const result = buildSplitConfig(cv);
+      expect(result).toMatchObject({
+        method: "kfold",
+        n_splits: 5,
+        random_state: 42,
+        shuffle: true,
+      });
+    });
+
+    it("with fields honours SSOT allow-list", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "time_series",
+        folds: 4,
+        timeCol: "date",
+        gap: 2,
+        trainSizeMax: 500,
+        testSizeMax: 100,
+      };
+      const fields = CV_STRATEGY_FIELDS.time_series;
+      const result = buildSplitConfig(cv, undefined, fields);
+      expect(result).toEqual({
+        method: "time_series",
+        n_splits: 4,
+        gap: 2,
+        train_size_max: 500,
+        test_size_max: 100,
+      });
+    });
+
+    it("skips fields that SSOT does not list even if CvState provides values", () => {
+      // SSOT says only n_splits; embargo value is discarded.
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "purged_time_series",
+        folds: 3,
+        embargo: 99,
+      };
+      const result = buildSplitConfig(cv, undefined, ["n_splits"]);
+      expect(result).toEqual({
+        method: "purged_time_series",
+        n_splits: 3,
+      });
+      expect(result).not.toHaveProperty("embargo");
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -484,7 +603,10 @@ describe("applyCvDataFields", () => {
     expect(result.group_col).toBe("user_id");
   });
 
-  it("handles unknown strategy without injecting fields", () => {
+  it("handles unknown strategy without injecting fields (fallback map)", () => {
+    // Fallback mode (fields undefined) + unknown strategy → resolveFields
+    // returns ["n_splits"] so neither group_col nor time_col is
+    // injected. This matches the legacy behaviour for safety.
     const data = { path: "/data.csv" };
     const cv: CvState = {
       ...INITIAL_CV_STATE,
@@ -493,9 +615,21 @@ describe("applyCvDataFields", () => {
       timeCol: "t",
     };
     const result = applyCvDataFields(data, cv);
-    // Unknown strategy has no fields defined, so nothing injected
     expect(result).not.toHaveProperty("group_col");
     expect(result).not.toHaveProperty("time_col");
+  });
+
+  it("with fields honours SSOT allow-list for data injection", () => {
+    const data = { path: "/data.csv" };
+    const cv: CvState = {
+      ...INITIAL_CV_STATE,
+      strategy: "time_series",
+      timeCol: "date",
+      groupCol: "should_be_ignored",
+    };
+    const result = applyCvDataFields(data, cv, CV_STRATEGY_FIELDS.time_series);
+    expect(result.time_col).toBe("date");
+    expect(result).not.toHaveProperty("group_col");
   });
 
   it("injects blocks_col and groups_col for blocked_group_kfold (not time_col/group_col)", () => {

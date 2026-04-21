@@ -94,6 +94,7 @@ export function useDataPanel({
     overrides: columnOverrides.overrides,
     cv,
     blocked,
+    uiSchema,
     onDataChanged,
   });
 

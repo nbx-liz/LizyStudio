@@ -1,6 +1,68 @@
 import type { BlockedGroupKFoldState } from "./BlockedGroupKFoldEditor";
 import { INITIAL_BLOCKED_STATE } from "./BlockedGroupKFoldEditor";
-import { CV_STRATEGY_FIELDS } from "./constants";
+
+/**
+ * C-5b Part 2 (H-0076): conditional-field allow-list per strategy. This
+ * mirrors `UiSchema.capabilities.cv_strategy_fields` emitted by
+ * `lizyml_ui_schema.py` and serves as the fallback when ``fields`` is
+ * not explicitly passed (e.g. pre-load or tests that want the legacy
+ * behaviour). Keep this in sync with the backend SSOT — the shape is
+ * asserted by `tests/test_ui_schema.py::test_capabilities_cv_strategy_fields_ui_semantics`.
+ */
+export const FALLBACK_CV_STRATEGY_FIELDS: Record<string, readonly string[]> = {
+  kfold: ["n_splits", "random_state", "shuffle"],
+  stratified_kfold: ["n_splits", "random_state", "shuffle"],
+  group_kfold: ["n_splits", "group_col"],
+  stratified_group_kfold: ["n_splits", "random_state", "group_col"],
+  time_series: [
+    "n_splits",
+    "time_col",
+    "gap",
+    "train_size_max",
+    "test_size_max",
+  ],
+  purged_time_series: [
+    "n_splits",
+    "time_col",
+    "purge_gap",
+    "embargo",
+    "train_size_max",
+    "test_size_max",
+  ],
+  group_time_series: [
+    "n_splits",
+    "time_col",
+    "group_col",
+    "gap",
+    "train_size_max",
+    "test_size_max",
+  ],
+  blocked_group_kfold: [
+    "n_splits",
+    "time_col",
+    "group_col",
+    "min_train_rows",
+    "min_valid_rows",
+  ],
+};
+
+/**
+ * Resolve the conditional-field allow-list. Explicit ``fields`` wins;
+ * otherwise fall back to the strategy-indexed map above. Unknown
+ * strategies fall through to ``["n_splits"]`` so Folds is always
+ * included but ``group_col`` / ``time_col`` are NOT injected. If a
+ * new backend introduces a new strategy name, add it to both
+ * :data:`FALLBACK_CV_STRATEGY_FIELDS` and the backend-side
+ * ``capabilities.cv_strategy_fields`` simultaneously (see
+ * `lizyml_ui_schema.py`).
+ */
+function resolveFields(
+  strategy: string,
+  explicit: readonly string[] | undefined,
+): readonly string[] {
+  if (explicit !== undefined) return explicit;
+  return FALLBACK_CV_STRATEGY_FIELDS[strategy] ?? ["n_splits"];
+}
 
 /** Default values for CV fields, reset when strategy changes. */
 export const CV_FIELD_DEFAULTS = {
@@ -92,41 +154,48 @@ export function recommendedInnerValid(strategy: string): string {
   }
 }
 
-/** Build a split config object containing only strategy-relevant fields. */
+/** Build a split config object containing only strategy-relevant fields.
+ *
+ * ``fields`` is the `UiSchema.capabilities.cv_strategy_fields[strategy]`
+ * allow-list (wire-format names). When omitted (uiSchema not yet
+ * loaded) this falls back to emitting every conditional field for which
+ * ``cv`` has a value — the legacy pre-H-0076 behaviour.
+ */
 export function buildSplitConfig(
   cv: CvState,
   blocked?: BlockedGroupKFoldState,
+  fields?: readonly string[],
 ): Record<string, unknown> {
-  const fields = CV_STRATEGY_FIELDS[cv.strategy] ?? ["folds"];
+  const active = resolveFields(cv.strategy, fields);
   const split: Record<string, unknown> = {
     method: cv.strategy,
     n_splits: cv.folds,
   };
-  if (fields.includes("random_state") && cv.randomState !== undefined) {
+  if (active.includes("random_state") && cv.randomState !== undefined) {
     split.random_state = cv.randomState;
   }
-  if (fields.includes("shuffle")) {
+  if (active.includes("shuffle")) {
     split.shuffle = cv.shuffle;
   }
-  if (fields.includes("gap") && cv.gap !== undefined) {
+  if (active.includes("gap") && cv.gap !== undefined) {
     split.gap = cv.gap;
   }
-  if (fields.includes("purge_gap") && cv.purgeGap !== undefined) {
+  if (active.includes("purge_gap") && cv.purgeGap !== undefined) {
     split.purge_gap = cv.purgeGap;
   }
-  if (fields.includes("embargo") && cv.embargo !== undefined) {
+  if (active.includes("embargo") && cv.embargo !== undefined) {
     split.embargo = cv.embargo;
   }
-  if (fields.includes("train_size_max") && cv.trainSizeMax !== undefined) {
+  if (active.includes("train_size_max") && cv.trainSizeMax !== undefined) {
     split.train_size_max = cv.trainSizeMax;
   }
-  if (fields.includes("test_size_max") && cv.testSizeMax !== undefined) {
+  if (active.includes("test_size_max") && cv.testSizeMax !== undefined) {
     split.test_size_max = cv.testSizeMax;
   }
-  if (fields.includes("min_train_rows") && cv.minTrainRows !== undefined) {
+  if (active.includes("min_train_rows") && cv.minTrainRows !== undefined) {
     split.min_train_rows = cv.minTrainRows;
   }
-  if (fields.includes("min_valid_rows") && cv.minValidRows !== undefined) {
+  if (active.includes("min_valid_rows") && cv.minValidRows !== undefined) {
     split.min_valid_rows = cv.minValidRows;
   }
   // blocked_group_kfold-specific fields from the dedicated editor state
@@ -144,12 +213,17 @@ export function buildSplitConfig(
   return split;
 }
 
-/** Extract group_col / time_col into data config when strategy requires them. */
+/** Extract group_col / time_col into data config when strategy requires them.
+ *
+ * ``fields`` behaves the same as in {@link buildSplitConfig}. When
+ * omitted we fall back to injecting whatever ``cv`` supplies.
+ */
 export function applyCvDataFields(
   data: Record<string, unknown>,
   cv: CvState,
+  fields?: readonly string[],
 ): Record<string, unknown> {
-  const fields = CV_STRATEGY_FIELDS[cv.strategy] ?? [];
+  const active = resolveFields(cv.strategy, fields);
   const result = { ...data };
   // blocked_group_kfold uses blocks_col/groups_col instead of time_col/group_col
   if (cv.strategy === "blocked_group_kfold") {
@@ -161,10 +235,10 @@ export function applyCvDataFields(
     }
     return result;
   }
-  if (fields.includes("group_col") && cv.groupCol) {
+  if (active.includes("group_col") && cv.groupCol) {
     result.group_col = cv.groupCol;
   }
-  if (fields.includes("time_col") && cv.timeCol) {
+  if (active.includes("time_col") && cv.timeCol) {
     result.time_col = cv.timeCol;
   }
   return result;
