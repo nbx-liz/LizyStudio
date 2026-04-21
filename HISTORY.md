@@ -2019,3 +2019,32 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (d) `useConfigSync` が UiSchema ロード後に初回 sync を発火させる（key suffix 経由）。
   - (e) `pnpm test` / `pnpm check` / `pnpm tsc --noEmit` / `pnpm build` / `uv run pytest` / `uv run mypy src/lizystudio/` / `uv run ruff check .` 全 clean。
 - **Decision:** 2026-04-21 accepted — 提案通り実装。C-5b 完結（Part 1 = METRICS_BY_TASK + cv_default_strategy、Part 2 = CV_STRATEGY_FIELDS SSOT 化）。
+
+### H-0077: `useDataPanel` のオーケストレーション化と `useTargetSelection` 抽出（Phase 3 coupling refactor B-5）
+- **Status:** accepted
+- **Scope:** Frontend | Internal only（外部 API `useDataPanel({...})` の戻り値 shape 不変、wire format / BackendAdapter Protocol 不変）
+- **Related:** docs/coupling-analysis.md B-5、H-0074（Part 1 で `resolveDefaultCvStrategy` 初導入）、H-0076（Part 2 で `buildSplitConfig` の fields SSOT 化）
+- **Context:** `useDataPanel.ts` が 217 行・26 戻り値のハブ hook として肥大化し、`handleTargetChange` 単独で 60 行超（fetch columns + task 検出 + merged config 生成 + updateConfig PUT + queryClient cache seed + preseedSyncKey + Radix focus ワークアラウンド rAF blur まで全部）。B-5 の方針は「orchestration のみに削り、target 変更時ロジックは `useTargetSelection` mutation hook に分離」。
+- **Proposal:**
+  1. `frontend/src/hooks/useTargetSelection.ts` を新規作成し、`handleTargetChange` の実装をそのまま移植。依存は全て props 経由で受け取る（`task`, `cv`, `blocked`, `dataPath`, `uiSchema`, 5 setters, 2 configSync callbacks, `onDataChanged`, `onTaskChanged`）。
+  2. `useDataPanel.ts` は state cells の宣言 + 兄弟 hooks の wiring + 軽量な `handleTaskChange` のみに残す。`useTargetSelection` を呼んで `{ handleTargetChange }` を受け取り、戻り値 map に含める（shape 完全互換）。
+  3. `resolveDefaultCvStrategy` の duplication（`useTargetSelection` と `useDataPanel::handleTaskChange` で同一 3 行）を `cv-state.ts::getEffectiveCvStrategy(task, uiSchema)` として抽出・export、両 hook から import。
+  4. 新規 `useTargetSelection.test.ts` を追加（3 test: suppress-flag bookends / error path toast / uiSchema precedence）。既存 `useDataPanel.test.ts` は touch なしで 14 test 継続 pass → 戻り値 shape 保全の回帰ガード。
+  5. `requestAnimationFrame` による blur が test harness に leak しないよう `beforeEach` で `vi.stubGlobal("requestAnimationFrame", ...)` + `afterEach` で `vi.unstubAllGlobals()`。
+  6. Vitest `vi.fn()` の generic type が TS 5.x build で narrow signature と不整合を起こすため、test-local な `Fn<[Args]>` helper を定義してビルド互換性を確保。
+- **Impact:** `frontend/src/hooks/useDataPanel.ts`（217→143 行、-74）、`frontend/src/hooks/useTargetSelection.ts`（+156 行、新規）、`frontend/src/hooks/useTargetSelection.test.ts`（+189 行、新規）、`frontend/src/components/workspace/cv-state.ts`（`getEffectiveCvStrategy` export +15 行）。
+- **Compatibility:**
+  - `useDataPanel` 戻り値 shape bit-identical。consumer（`DataPanel.tsx`）無変更。
+  - `handleTargetChange` の挙動・エラーパス・state mutation 順序は同一。既存 `useDataPanel.test.ts` 14 件 touch なしで pass。
+  - wire format / BackendAdapter Protocol / storage layout / ユーザー設定ファイル無変更。
+- **Alternatives:**
+  - (a) `setState` + `callbacks` の facade サブオブジェクト化 → 却下。14 params の explicit list は DI として自己文書的で、facade 化は over-engineering。
+  - (b) `handleTargetChange` を `useMutation` に置き換える → 却下。state-sync 順序（setSyncSuppressed(true) → setTarget → fetch → setColumns → ...）を TanStack Query の mutation lifecycle に落とし込むと読みづらくなる。useCallback のままで十分。
+  - (c) `resolveDefaultCvStrategy` を各 hook に残す duplication 許容 → 却下。3 行 × 2 箇所は抽出する価値ありと reviewer 指摘で確認。
+- **Acceptance Criteria:**
+  - (a) `useDataPanel.ts` が 150 行未満（143 行達成）。
+  - (b) `useDataPanel.test.ts` 14 件 touch なしで継続 green（external contract 保全）。
+  - (c) `useTargetSelection.test.ts` 3 件 green、`suppress bookends` / `error toast` / `uiSchema precedence` を individual に検証可能に。
+  - (d) `getEffectiveCvStrategy` が `cv-state.ts` に export され両 hook から共有。
+  - (e) `pnpm test` / `pnpm check` / `pnpm tsc --noEmit` / `pnpm build` 全 clean、1620 vitest pass。
+- **Decision:** 2026-04-21 accepted — 提案通り実装。reviewer MEDIUM（duplication 抽出、rAF leak 対策）修正済み。

@@ -1,21 +1,12 @@
-import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
-import { toast } from "sonner";
-import { getErrorMessage } from "@/api/errors";
-import { queryKeys } from "@/api/queryKeys";
 import type { ColumnInfo, UiSchema } from "@/api/types";
-import {
-  fetchColumns,
-  fetchConfigDefaults,
-  updateConfig,
-} from "@/api/workspace";
 import {
   type BlockedGroupKFoldState,
   INITIAL_BLOCKED_STATE,
 } from "@/components/workspace/BlockedGroupKFoldEditor";
-import { getDefaultCvStrategy } from "@/components/workspace/constants";
 import {
   type CvState,
+  getEffectiveCvStrategy,
   INITIAL_CV_STATE,
   resetCvState,
 } from "@/components/workspace/cv-state";
@@ -25,12 +16,12 @@ import { useDataLoad } from "./useDataLoad";
 import {
   buildMergedConfig,
   buildOverridesFromColumns,
-  buildSyncKey,
   type ColumnOverride,
   type SourceType,
   TASK_OPTIONS,
   type TaskType,
 } from "./useDataPanel.types";
+import { useTargetSelection } from "./useTargetSelection";
 
 export type { ColumnOverride, SourceType, TaskType };
 export { buildMergedConfig, buildOverridesFromColumns, TASK_OPTIONS };
@@ -46,15 +37,6 @@ export function useDataPanel({
   onTaskChanged,
   uiSchema,
 }: UseDataPanelParams) {
-  const queryClient = useQueryClient();
-
-  const resolveDefaultCvStrategy = useCallback(
-    (taskName: string): string =>
-      uiSchema?.capabilities?.cv_default_strategy?.[taskName] ??
-      getDefaultCvStrategy(taskName),
-    [uiSchema],
-  );
-
   const [target, setTarget] = useState<string | null>(null);
   const [task, setTask] = useState<TaskType | null>(null);
   const [allColumnNames, setAllColumnNames] = useState<string[]>([]);
@@ -98,89 +80,30 @@ export function useDataPanel({
     onDataChanged,
   });
 
-  const handleTargetChange = useCallback(
-    async (value: string) => {
-      configSync.setSyncSuppressed(true);
-      setTarget(value);
-      try {
-        const cols = await fetchColumns(value);
-        setColumns(cols.columns);
-
-        let detectedTask: TaskType | null = task;
-        let detectedStrategy = cv.strategy;
-        let nextCv = cv;
-        if (cols.suggested_task) {
-          const t = cols.suggested_task as TaskType;
-          detectedTask = t;
-          setTask(t);
-          onTaskChanged?.(t);
-          detectedStrategy = resolveDefaultCvStrategy(t);
-          nextCv = resetCvState(detectedStrategy);
-          setCv(nextCv);
-        }
-
-        const newOverrides = buildOverridesFromColumns(cols.columns);
-        columnOverrides.setOverrides(newOverrides);
-
-        if (detectedTask) {
-          const defaults = await fetchConfigDefaults(detectedTask, value);
-          const merged = buildMergedConfig({
-            defaults,
-            task: detectedTask,
-            strategy: detectedStrategy,
-            // Use nextCv.folds (post-reset) so the merged split config
-            // matches the cv state the sync effect will observe next;
-            // otherwise the pre-reset cv.folds could leak into the PUT
-            // while preseedSyncKey uses nextCv.
-            folds: nextCv.folds,
-            dataPath: dataLoad.dataPath,
-            target: value,
-            overrides: newOverrides,
-          });
-          await updateConfig(merged);
-          queryClient.setQueryData(queryKeys.config(), merged);
-          configSync.preseedSyncKey(
-            buildSyncKey(value, detectedTask, newOverrides, nextCv, blocked),
-          );
-          onDataChanged();
-        }
-      } catch (err) {
-        toast.error(`Column detection failed: ${getErrorMessage(err)}`);
-      } finally {
-        configSync.setSyncSuppressed(false);
-        // Radix Select returns focus to the trigger on close via
-        // `onCloseAutoFocus`, which runs AFTER our finally block. Defer
-        // the blur to the next animation frame so it fires after Radix
-        // has restored focus, otherwise `:focus-visible` matches and the
-        // 3px focus ring combined with the 1px border reads as a doubled
-        // outline. Keyboard users regain the ring on subsequent Tab.
-        requestAnimationFrame(() => {
-          (document.activeElement as HTMLElement | null)?.blur();
-        });
-      }
-    },
-    [
-      task,
-      cv,
-      dataLoad.dataPath,
-      blocked,
-      onDataChanged,
-      onTaskChanged,
-      queryClient,
-      resolveDefaultCvStrategy,
-      columnOverrides.setOverrides,
-      configSync.setSyncSuppressed,
-      configSync.preseedSyncKey,
-    ],
-  );
+  const { handleTargetChange } = useTargetSelection({
+    task,
+    cv,
+    blocked,
+    dataPath: dataLoad.dataPath,
+    uiSchema,
+    setTarget,
+    setTask,
+    setCv,
+    setColumns,
+    setOverrides: columnOverrides.setOverrides,
+    setSyncSuppressed: configSync.setSyncSuppressed,
+    preseedSyncKey: configSync.preseedSyncKey,
+    onDataChanged,
+    onTaskChanged,
+  });
 
   const handleTaskChange = useCallback(
     (newTask: TaskType) => {
       setTask(newTask);
       onTaskChanged?.(newTask);
-      setCv(resetCvState(resolveDefaultCvStrategy(newTask)));
+      setCv(resetCvState(getEffectiveCvStrategy(newTask, uiSchema)));
     },
-    [onTaskChanged, resolveDefaultCvStrategy],
+    [onTaskChanged, uiSchema],
   );
 
   return {
