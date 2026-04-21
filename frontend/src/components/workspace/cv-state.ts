@@ -1,5 +1,24 @@
+import type { UiSchema } from "@/api/types";
 import type { BlockedGroupKFoldState } from "./BlockedGroupKFoldEditor";
 import { INITIAL_BLOCKED_STATE } from "./BlockedGroupKFoldEditor";
+import { getDefaultCvStrategy } from "./constants";
+
+/**
+ * B-5 / H-0077: resolve the default CV strategy for a task, preferring
+ * the backend's `UiSchema.capabilities.cv_default_strategy` before
+ * falling back to the UI-local `getDefaultCvStrategy` (H-0074 map).
+ * Extracted so `useDataPanel` and `useTargetSelection` share one
+ * resolution path instead of each reimplementing the nullish chain.
+ */
+export function getEffectiveCvStrategy(
+  task: string,
+  uiSchema: UiSchema | undefined,
+): string {
+  return (
+    uiSchema?.capabilities?.cv_default_strategy?.[task] ??
+    getDefaultCvStrategy(task)
+  );
+}
 
 /**
  * C-5b Part 2 (H-0076): conditional-field allow-list per strategy. This
