@@ -198,12 +198,7 @@ export function ResultsPanel({
           <h3 className="text-lg font-medium">
             {headerLabel} {modelName && `\u2014 ${modelName}`}
           </h3>
-          <Badge
-            variant="secondary"
-            className="bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200"
-          >
-            Cancelled
-          </Badge>
+          <Badge variant="secondary">Cancelled</Badge>
         </div>
         <p className="text-sm text-muted-foreground">
           This job was cancelled before completion.
