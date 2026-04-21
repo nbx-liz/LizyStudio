@@ -147,6 +147,20 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  # B-9 Part 2 (H-0078 follow-up): guard against raw Tailwind color
+  # utilities in frontend source. After the semantic-token migration
+  # (design-tokens.css + tailwind.config.ts), classes like ``bg-green-100``
+  # / ``text-red-600`` bypass dark-mode inversion and the WCAG-audited
+  # palette. Biome has no Tailwind plugin, so a grep-based check is the
+  # cheapest guard. Allowlist lives inside the script.
+  raw-color-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Scan frontend/src for raw Tailwind color classes
+        working-directory: frontend
+        run: bash scripts/check-raw-colors.sh
+
   # C-1 / INV-CI-1: committed schema.d.ts must match freshly-generated
   # output. Prevents drift between backend response_model declarations
   # and the TypeScript types that the frontend compiles against.
