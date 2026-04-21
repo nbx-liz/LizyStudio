@@ -165,6 +165,7 @@
 ### 🟠 C-6. URL パスが完全手書き、prefix 変更追跡なし
 - **場所**: `frontend/src/api/{jobs,inference,workspace,files}.ts` 全てで `/jobs/${id}/...` を文字列結合。`server.py:184-200` の prefix を変えても TS は無検出。
 - **対策**: `openapi-fetch` など `paths` 型に基づく URL ビルダーを採用（response 型も自動同期）。
+- **計画**: [docs/c6-openapi-fetch-plan.md](./c6-openapi-fetch-plan.md) に Phase 分割 (6 PR)・採用技術比較・リスク緩和策を記載（H-0080, 2026-04-21 proposal）。
 
 ### 🟠 C-7. Job status 表記ゆれ `canceled` vs `cancelled`
 - **場所**: backend 7 ファイル、frontend 8 ファイルに散在。`metrics.py` は `canceled`、他は `cancelled`。

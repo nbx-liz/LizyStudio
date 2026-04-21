@@ -2104,3 +2104,33 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (c) `raw-color-guard` job が `.github/workflows/ci.yml` の PR blocking ジョブに組み込まれ、develop/main 向け PR で自動実行される。
   - (d) vitest 1620 pass / biome / tsc / pnpm build 全 clean（ResultsPanel 変更の regression 確認）。
 - **Decision:** 2026-04-21 accepted — H-0078 の self-defending guard として実装。allowlist に JobList/JobDetail を追加した差分は Part 1 の scope-out 漏れとして扱い、新規の色使用ポリシー変更ではない。
+
+### H-0080: openapi-fetch 導入で frontend の URL パス手書きを廃止する計画（Phase 3 coupling refactor C-6）
+- **Status:** proposed (plan doc only — no code change in this PR)
+- **Scope:** Frontend | Internal only（wire format / BackendAdapter Protocol / storage layout 不変、公開 API 契約不変）
+- **Related:** docs/coupling-analysis.md C-6、docs/c6-openapi-fetch-plan.md（本 PR で新規作成）、H-0068（C-1 `response_model` 完全化）、H-0071（C-4 SSOT JobSummary/JobDetail）、H-0072（C-5a SSOT UiSchema）
+- **Context:** C-6 は 2026-04-17 の coupling-analysis 時点で未着手として残っていた最大項目。現状 `frontend/src/api/{jobs,inference,workspace,files}.ts` の 46 call site が URL を文字列結合 + `apiFetch<T>(url)` の型パラメータを手書きで指定しており、`server.py:184-200` の prefix 変更や Pydantic `response_model` の変更が TS で検出されない。既に `openapi-typescript@^7.13.0` で `generated/schema.d.ts` を出力しており、`paths` / `operations` / `components` は完備しているので、`openapi-fetch`（同一作者・+4.7 KB gzipped）を採用すれば URL + request + response を 1 箇所の型から推論できる。46 call site と 51 consumer import に一括で手を入れると diff が肥大化するため Phase 分割する。
+- **Proposal:**
+  1. `docs/c6-openapi-fetch-plan.md` を作成し、採用技術比較（openapi-fetch / openapi-typescript-fetch / Zodios / ky / 手書き builder）、Phase 分割（0–5 の 6 PR）、ApiError middleware 方針、MSW handler typing、破綻リスクと緩和策、全 Phase 完了時 acceptance を集約。
+  2. `docs/coupling-analysis.md` の C-6 entry に plan doc へのリンクと H-0080 参照を追記。
+  3. 本 Proposal を HISTORY.md に記録し、Phase 1 以降の実装 PR で各 Phase 完了時に本 entry の **Decision** を更新していく。
+  4. Phase 1 は `pnpm add openapi-fetch` + `apiClient` 併設 + `files.ts` (2 call site) のみ、最小スコープで migration pattern を確立。
+- **Impact:** `docs/c6-openapi-fetch-plan.md`（+172 行の新規）、`docs/coupling-analysis.md` C-6 entry（+1 行）、本 HISTORY.md entry。コード変更・依存追加・wire format 変更は一切なし。
+- **Compatibility:** ゼロ差分（docs のみ）。後続 Phase 1-5 の実装 PR は individual に review & rollback 可能、途中 state でも既存 `apiFetch` と新 `apiClient` が並行稼働するため機能停止なし。
+- **Alternatives:**
+  - (a) 1 PR で全 46 call site 一括置換 → 却下。diff ~1500+ 行で review 負担が大きく、問題発生時の bisect が困難。
+  - (b) openapi-typescript-fetch（openapi-fetch の前身）→ 却下、メンテ停止。
+  - (c) Zodios / oRPC / tRPC → 却下、FastAPI 生成 OpenAPI 経由では middleware が必要で依存増大、現 stack (React Query + openapi-typescript) との整合コストが型推論の利益を上回る。
+  - (d) ky / axios ラッパー → 却下、path 型推論がないため URL 手書きは残る。C-6 の本質に効かない。
+  - (e) 手書き URL builder 関数で型を付ける → 却下、`paths` interface と重複実装になり、generated 型の二重定義問題が発生。
+  - (f) 実装を proposal 省略で直接開始 → 却下、bundle size / error middleware パターン / MSW typing / Phase 境界を事前合意しないと Phase 間で方針漂流しやすい。
+- **Acceptance Criteria:**（本 Proposal PR）
+  - (a) `docs/c6-openapi-fetch-plan.md` が reviewer から approach / Phase 分割 / risk 緩和について合意を得る。
+  - (b) `docs/coupling-analysis.md` C-6 entry に plan doc link が入り、将来の調査者が H-0080 にたどり着ける。
+  - (c) この PR はコード変更・依存追加・wire format 変更を含まず、CI は既存通り green。
+- **Acceptance Criteria:**（全 Phase 完了時）
+  - (a) `grep -rn 'apiFetch(' frontend/src/` が 0 件。
+  - (b) `grep -rn "\`/[a-z]" frontend/src/api/*.ts` がゼロ（URL 直書き消滅）。
+  - (c) Bundle size 増加 +5 KB 以内（gzip）。
+  - (d) 既存 CI gate（`api-types-drift`, `raw-color-guard`, `e2e-chromium`, `frontend`, `backend`）全 green を維持。
+- **Decision:** 2026-04-21 proposed — Phase 0 plan doc のみ本 PR で merge、Phase 1 以降は順次別 PR で実装予定。各 Phase 完了時に本 entry の Decision line を update する。
