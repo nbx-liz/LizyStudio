@@ -2133,4 +2133,6 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (b) `grep -rn "\`/[a-z]" frontend/src/api/*.ts` がゼロ（URL 直書き消滅）。
   - (c) Bundle size 増加 +5 KB 以内（gzip）。
   - (d) 既存 CI gate（`api-types-drift`, `raw-color-guard`, `e2e-chromium`, `frontend`, `backend`）全 green を維持。
-- **Decision:** 2026-04-21 proposed — Phase 0 plan doc のみ本 PR で merge、Phase 1 以降は順次別 PR で実装予定。各 Phase 完了時に本 entry の Decision line を update する。
+- **Decision:**
+  - 2026-04-21 **Phase 0 accepted** — plan doc (`docs/c6-openapi-fetch-plan.md`) を merge (PR #223)。
+  - 2026-04-22 **Phase 1 accepted** — `pnpm add openapi-fetch@^0.17.0` で依存追加（gzip +2.47 KB、uncompressed +7.59 KB で +5 KB gate クリア）。`client.ts` に `apiClient` を併設（`apiFetch` は Phase 5 まで保持）、`throwOnErrorMiddleware` で non-2xx を `ApiError` へ変換、既存 51 consumer の catch 形状を保全。`files.ts` の `fetchDirectory` を `apiClient.GET("/api/files", ...)` に migrate、型は generated `components["schemas"]["DirectoryListing"]` を SSOT として re-export（手書き `FileEntry` / `DirectoryListing` 除去）。**重要な発見:** generated `schema.d.ts` の `paths` interface は `/api/*` prefix 込みの key を持つため `openapi-fetch` の `baseUrl` は空文字固定 (plan doc §4 の例示は `baseUrl: "/api"` としていたが実装時に訂正、本コミットで plan doc の該当箇所を修正)。テスト戦略は `vi.mock("./client")` から MSW 経由の integration style に切替、migration 前後で同一 wire 挙動を確認。1627 vitest pass / 2 skipped、biome / tsc / pnpm build / raw-color-guard 全 clean。

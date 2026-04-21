@@ -1,3 +1,6 @@
+import createClient, { type Middleware } from "openapi-fetch";
+import type { paths } from "./generated/schema";
+
 const BASE_URL = "/api";
 
 export class ApiError extends Error {
@@ -38,3 +41,28 @@ export async function apiFetch<T>(
 
   return res.json() as Promise<T>;
 }
+
+// C-6 Phase 1: openapi-fetch-based typed client. Paths in generated
+// ``schema.d.ts`` already include the ``/api`` prefix, so ``baseUrl`` is
+// empty and consumers call ``apiClient.GET("/api/files", ...)``. A
+// ``throwOnError`` middleware converts non-2xx responses into the same
+// ``ApiError`` that ``apiFetch`` throws, so the 51 existing consumers that
+// catch ``ApiError`` keep working unchanged during the migration.
+const rawClient = createClient<paths>({ baseUrl: "" });
+
+const throwOnErrorMiddleware: Middleware = {
+  async onResponse({ response }) {
+    if (!response.ok) {
+      const body = await response
+        .clone()
+        .json()
+        .catch(() => null);
+      throw new ApiError(response.status, body);
+    }
+    return response;
+  },
+};
+
+rawClient.use(throwOnErrorMiddleware);
+
+export const apiClient = rawClient;

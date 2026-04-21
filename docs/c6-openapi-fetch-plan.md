@@ -38,12 +38,18 @@ export function fetchJobImportance(jobId: string, kind = "default"): Promise<Imp
 import createClient from "openapi-fetch";
 import type { paths } from "./generated/schema";
 
-const client = createClient<paths>({ baseUrl: "/api" });
+// NOTE (Phase 1 correction, 2026-04-22): generated ``paths`` keys in
+// ``schema.d.ts`` already include the ``/api`` prefix (``"/api/files"``,
+// ``"/api/jobs/{job_id}/importance"`` etc.), so ``baseUrl`` must be the
+// empty string — NOT ``"/api"`` — otherwise URLs double up to
+// ``/api/api/...``.
+const client = createClient<paths>({ baseUrl: "" });
 
 export async function fetchJobImportance(jobId: string, kind = "default") {
-  const { data, error } = await client.GET("/jobs/{job_id}/importance", {
-    params: { path: { job_id: jobId }, query: { kind } },
-  });
+  const { data, error } = await client.GET(
+    "/api/jobs/{job_id}/importance",
+    { params: { path: { job_id: jobId }, query: { kind } } },
+  );
   if (error) throw new ApiError(500, error);
   return data;  // type inferred as components["schemas"]["ImportanceResponse"]
 }
@@ -110,7 +116,9 @@ export async function fetchJobImportance(jobId: string, kind = "default") {
 import createClient, { type Middleware } from "openapi-fetch";
 import type { paths } from "./generated/schema";
 
-const rawClient = createClient<paths>({ baseUrl: "/api" });
+// See §2 correction note: baseUrl is empty because generated paths
+// keys include the /api prefix.
+const rawClient = createClient<paths>({ baseUrl: "" });
 
 const errorMiddleware: Middleware = {
   async onResponse({ response }) {
