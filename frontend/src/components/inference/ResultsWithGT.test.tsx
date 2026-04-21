@@ -45,7 +45,7 @@ function makeRecord(overrides: Partial<InferenceRecord> = {}): InferenceRecord {
     inf_id: "inf-001",
     job_id: "job-001",
     data_ref: {
-      source_type: "file",
+      source_type: "upload",
       path: "/data/test.csv",
       filename: "test.csv",
       fingerprint: "abc123",
