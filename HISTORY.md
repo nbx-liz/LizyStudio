@@ -2080,3 +2080,27 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (c) `pnpm check` / `pnpm tsc --noEmit` / `pnpm build` 全 clean。
   - (d) WCAG AA コントラスト（#168 の `bg-success-solid` + 白テキスト 4.5:1）が semantic token で維持。
 - **Decision:** 2026-04-21 accepted — Part 1（token 整備 + 18 ファイル書き換え）のみ本 PR で実施。Part 2（raw color ban の CI/lint ガード）は別 PR で実装予定。
+
+### H-0079: raw Tailwind color class の CI guard（B-9 Part 2）
+- **Status:** accepted
+- **Scope:** CI / Tooling | Internal only（src 変更は ResultsPanel の 1 箇所 cleanup のみ、wire format / Protocol / storage 不変）
+- **Related:** H-0078 Part 1（semantic token 導入）、docs/coupling-analysis.md B-9 Part 2
+- **Context:** H-0078 で `frontend/src/components/**` の raw Tailwind color class（`bg-green-100`, `text-red-600` 等）を semantic token に移行したが、Biome には Tailwind-aware な lint rule がなく、PR 中に再び raw class が入り込んでも自動検知できない。Part 1 の scope-out は `DistributionBar` / `FoldPreview` / `SearchSpaceEvolutionPanel` の 3 ファイル（palette-as-identity）だけが対象だったが、その後の調査で `JobList.tsx:194` の fit/tune badge（job-type identifier）と `JobDetail.tsx:386` の historical WCAG comment、`design-tokens.css` の token-to-Tailwind mapping comment も同様に identity/documentation 目的で残存していることが判明。`ResultsPanel.tsx:203` の `bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200` は shadcn `Badge variant="secondary"` のデフォルトと完全に重複していたため、Part 1 時点で漏れた取りこぼし。
+- **Proposal:**
+  1. `frontend/scripts/check-raw-colors.sh` を追加。`grep -rEHn` で `src/**` を走査し、`(bg|text|border|ring|fill|stroke|from|to|via)-(blue|green|red|...|stone)-[0-9]{2,3}` パターンを検出。allowlist 外で 1 件でも hit したら exit 1。
+  2. allowlist は shell variable `ALLOWLIST_REGEX` に集約（`DistributionBar.tsx` / `FoldPreview.tsx` / `SearchSpaceEvolutionPanel.tsx` / `JobList.tsx` / `JobDetail.tsx` / `design-tokens.css` の 6 ファイル）。追加する際はスクリプト冒頭のコメントブロックで justification を明記するルールを導入。
+  3. `.github/workflows/ci.yml` に `raw-color-guard` job を追加。checkout のみで pnpm/node セットアップは不要（純 bash + grep）。
+  4. Part 1 の取りこぼし `ResultsPanel.tsx:203` を `<Badge variant="secondary">Cancelled</Badge>` に簡素化（`bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200` が secondary variant のデフォルト `bg-secondary text-secondary-foreground` と機能的に等価）。
+- **Impact:** `frontend/scripts/check-raw-colors.sh`（新規 80 行）、`.github/workflows/ci.yml`（+14 行で 1 job 追加）、`frontend/src/components/workspace/ResultsPanel.tsx`（-6 行、visual は unchanged）。
+- **Compatibility:** wire format / Protocol / storage 不変、ResultsPanel の cancelled badge は shadcn default と同じレンダリング結果になるため visual regression なし（既存の Nightly ゴールデンが検知可能）。
+- **Alternatives:**
+  - (a) `ripgrep` を使う → 却下。Ubuntu CI runner には標準で入っていないため `rg: command not found` が silent success になるリスクがあり（初回実装で実際に遭遇）、`grep -rE` に切り替え。
+  - (b) Biome custom rule で実装 → 却下。Biome v2 は external custom rule を未サポート、Tailwind plugin も未提供。
+  - (c) stylelint + `declaration-property-value-disallowed-list` → 却下。Biome に統一する方針（CLAUDE.md §3「ESLint / Prettier は使用禁止」）と矛盾し、依存を 1 つ増やすコストに見合わない。
+  - (d) Part 1 で Acceptance Criterion に含めた grep 判定を CI jobs に埋め込む → 却下。shell script として切り出す方が allowlist 管理が読みやすく、ローカル `bash scripts/check-raw-colors.sh` で再現可能。
+- **Acceptance Criteria:**
+  - (a) clean tree で `bash scripts/check-raw-colors.sh` が exit 0 + `OK: no raw ...` を出力。
+  - (b) 故意に `bg-blue-500` を任意ファイルに入れると exit 1 で違反行を表示（ローカルで確認済み）。
+  - (c) `raw-color-guard` job が `.github/workflows/ci.yml` の PR blocking ジョブに組み込まれ、develop/main 向け PR で自動実行される。
+  - (d) vitest 1620 pass / biome / tsc / pnpm build 全 clean（ResultsPanel 変更の regression 確認）。
+- **Decision:** 2026-04-21 accepted — H-0078 の self-defending guard として実装。allowlist に JobList/JobDetail を追加した差分は Part 1 の scope-out 漏れとして扱い、新規の色使用ポリシー変更ではない。
