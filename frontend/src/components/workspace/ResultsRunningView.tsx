@@ -45,10 +45,7 @@ export function ResultsRunningView({
             {headerLabel} {modelName && `\u2014 ${modelName}`}
           </h3>
         </div>
-        <Badge
-          variant="secondary"
-          className="bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
-        >
+        <Badge variant="secondary" className="bg-info text-info-strong-fg">
           Running
         </Badge>
       </div>

@@ -235,7 +235,7 @@ export function SearchSpaceEvolutionPanel({
               <div className="text-xs font-mono text-muted-foreground pt-0.5 break-all">
                 {name}
                 {bestValue !== null && (
-                  <span className="block text-[10px] text-amber-600 dark:text-amber-400">
+                  <span className="block text-[10px] text-warning-fg">
                     best = {formatBound(bestValue)}
                   </span>
                 )}

@@ -294,15 +294,17 @@ export function JobDetailPanel({
           </Button>
         )}
         {!isRunning && (
-          // text-red-700 / dark:text-red-400 meet WCAG 2 AA contrast
-          // against the outline button's white / dark surface; the
-          // default text-destructive token (hsl(0 84.2% 60.2%)) is
-          // only 3.76:1 which axe flags as a serious violation (#168
-          // scope expansion — same audit surfaced this button).
+          // text-danger-fg maps onto --lzs-danger-fg (hsl(0 63% 31%)
+          // light / hsl(0 94% 75%) dark), which matches the previous
+          // red-700/red-400 pair and preserves WCAG 2 AA contrast
+          // against the outline button surface (the default
+          // text-destructive token at hsl(0 84.2% 60.2%) was only
+          // 3.76:1 and axe flagged it as a serious violation — #168
+          // scope expansion).
           <Button
             variant="outline"
             size="sm"
-            className="ml-auto text-red-700 hover:text-red-700 dark:text-red-400 dark:hover:text-red-400"
+            className="ml-auto text-danger-fg hover:text-danger-fg"
             onClick={() => setDeleteOpen(true)}
           >
             <Trash2 className="mr-1 h-3 w-3" />
@@ -379,11 +381,15 @@ function JobHeader({
 function StatusBadge({ status }: { status: string }) {
   switch (status) {
     case "completed":
-      // bg-green-700 (#15803d) meets WCAG 2 AA contrast (~4.5:1)
-      // against white; the previous bg-green-600 (#16a34a) scored
-      // only 3.29:1 (Issue #168).
+      // bg-success-solid maps onto --lzs-success-solid-bg (#15803d,
+      // green-700 equivalent) which keeps WCAG 2 AA contrast (~4.5:1)
+      // against white; the previous bg-green-600 scored only 3.29:1
+      // (Issue #168).
       return (
-        <Badge variant="default" className="bg-green-700">
+        <Badge
+          variant="default"
+          className="bg-success-solid text-success-solid-fg"
+        >
           {"\u2713"} Completed
         </Badge>
       );

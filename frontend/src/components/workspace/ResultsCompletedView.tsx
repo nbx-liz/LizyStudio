@@ -73,10 +73,7 @@ export function ResultsCompletedView({
         <h3 className="text-lg font-medium">
           {headerLabel} {modelName && `\u2014 ${modelName}`}
         </h3>
-        <Badge
-          variant="default"
-          className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
-        >
+        <Badge variant="default" className="bg-success text-success-fg">
           Completed
         </Badge>
         {primaryMetric && <Badge variant="secondary">{primaryMetric}</Badge>}

@@ -25,16 +25,13 @@ export function ConvergenceSignalPanel({
     return (
       <div
         role="status"
-        className="flex items-start gap-3 rounded-md border border-emerald-200 bg-emerald-50 p-3 dark:border-emerald-800 dark:bg-emerald-950/40"
+        className="flex items-start gap-3 rounded-md border border-success-border bg-success p-3"
       >
-        <span
-          className="mt-0.5 text-emerald-600 dark:text-emerald-400"
-          aria-hidden="true"
-        >
+        <span className="mt-0.5 text-success-fg" aria-hidden="true">
           ✓
         </span>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-emerald-800 dark:text-emerald-200">
+          <p className="text-sm font-medium text-success-fg">
             Search space converged
           </p>
           <p className="text-xs text-muted-foreground mt-0.5">

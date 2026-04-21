@@ -45,7 +45,7 @@ export function ScoreTable({ metrics }: ScoreTableProps) {
                 {formatNum(oosVal)}
               </TableCell>
               <TableCell
-                className={`text-center text-xs ${isDegraded ? "text-orange-600 font-medium" : ""}`}
+                className={`text-center text-xs ${isDegraded ? "text-degraded-fg font-medium" : ""}`}
               >
                 {formatNum(infVal)}
               </TableCell>

@@ -130,10 +130,7 @@ export function ResultsPanel({
   if (job.status === "pending") {
     return (
       <div className="flex h-full flex-col items-center justify-center p-8 text-center text-muted-foreground">
-        <Badge
-          variant="secondary"
-          className="mb-3 bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200"
-        >
+        <Badge variant="secondary" className="mb-3 bg-warning text-warning-fg">
           Queued
         </Badge>
         <p className="text-sm">Job queued, starting soon...</p>

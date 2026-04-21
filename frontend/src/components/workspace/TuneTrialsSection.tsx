@@ -178,7 +178,7 @@ export function TrialResultsAccordionItem({
                       key={rowKey}
                       className={
                         isBest
-                          ? "bg-green-50 dark:bg-green-950/30 font-medium"
+                          ? "bg-success font-medium"
                           : "hover:bg-muted/50 even:bg-muted/20"
                       }
                     >

@@ -185,7 +185,7 @@ export function SetupPanel({
         <Label className="mb-1.5 block text-sm font-medium">Evaluation</Label>
         {targetCol ? (
           <div className="space-y-2">
-            <p className="text-xs text-green-600">
+            <p className="text-xs text-success-fg">
               ✓ Target &apos;{String(targetCol)}&apos; detected
             </p>
             <div className="flex items-center gap-2">

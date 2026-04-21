@@ -57,7 +57,7 @@ describe("RoundHistoryTable", () => {
     expect(dashes.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("colors delta emerald for improvement", () => {
+  it("colors delta with success token for improvement", () => {
     render(
       <RoundHistoryTable
         rounds={[
@@ -71,7 +71,7 @@ describe("RoundHistoryTable", () => {
       />,
     );
     const cell = screen.getByText("+0.0500");
-    expect(cell.className).toContain("emerald");
+    expect(cell.className).toContain("text-success-fg");
   });
 
   it("uses neutral color when delta is exactly zero", () => {
@@ -90,11 +90,11 @@ describe("RoundHistoryTable", () => {
     // delta === 0 has no sign prefix
     const cell = screen.getByText("0.0000");
     expect(cell.className).toContain("muted-foreground");
-    expect(cell.className).not.toContain("emerald");
-    expect(cell.className).not.toContain("rose");
+    expect(cell.className).not.toContain("text-success-fg");
+    expect(cell.className).not.toContain("text-danger-fg");
   });
 
-  it("colors delta rose for regression", () => {
+  it("colors delta with danger token for regression", () => {
     render(
       <RoundHistoryTable
         rounds={[
@@ -108,7 +108,7 @@ describe("RoundHistoryTable", () => {
       />,
     );
     const cell = screen.getByText("-0.1000");
-    expect(cell.className).toContain("rose");
+    expect(cell.className).toContain("text-danger-fg");
   });
 
   it("marks the last row with aria-current", () => {
