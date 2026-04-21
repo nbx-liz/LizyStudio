@@ -498,35 +498,54 @@ def build_ui_schema(
                 "blocked_group_kfold",
             ],
             "tune": {"allow_empty_space": True},
+            # H-0076 (C-5b Part 2): this map is the SSOT for the
+            # frontend CV-section conditional-field rendering AND for
+            # the values the UI writes into ``split`` / ``data``. Field
+            # names match the LizyConfig schema (e.g. ``train_size_max``,
+            # not the splitter's kwarg ``max_train_size``); ``time_col``
+            # / ``group_col`` are UI-level inputs that land in
+            # ``data`` rather than ``split``.
+            #
+            # Field ordering within each list is UI-presentation order
+            # (top-to-bottom in the form). Consumers treat the list as
+            # a set via ``.includes(...)`` / ``in`` — order has no
+            # semantic effect on the wire payload.
             "cv_strategy_fields": {
-                "kfold": ["n_splits", "shuffle", "random_state"],
-                "stratified_kfold": ["n_splits", "shuffle", "random_state"],
+                "kfold": ["n_splits", "random_state", "shuffle"],
+                "stratified_kfold": ["n_splits", "random_state", "shuffle"],
                 "group_kfold": ["n_splits", "group_col"],
-                "stratified_group_kfold": ["n_splits", "group_col"],
+                "stratified_group_kfold": [
+                    "n_splits",
+                    "random_state",
+                    "group_col",
+                ],
                 "time_series": [
                     "n_splits",
+                    "time_col",
                     "gap",
-                    "max_train_size",
-                    "max_test_size",
+                    "train_size_max",
+                    "test_size_max",
                 ],
                 "purged_time_series": [
                     "n_splits",
                     "time_col",
                     "purge_gap",
                     "embargo",
+                    "train_size_max",
+                    "test_size_max",
                 ],
                 "group_time_series": [
                     "n_splits",
+                    "time_col",
                     "group_col",
                     "gap",
-                    "max_train_size",
-                    "max_test_size",
+                    "train_size_max",
+                    "test_size_max",
                 ],
                 "blocked_group_kfold": [
-                    "blocks_col",
-                    "groups_col",
-                    "mode",
-                    "train_window",
+                    "n_splits",
+                    "time_col",
+                    "group_col",
                     "min_train_rows",
                     "min_valid_rows",
                 ],

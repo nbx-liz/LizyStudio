@@ -17,7 +17,7 @@ import {
 
 export { type BlockedGroupKFoldState, INITIAL_BLOCKED_STATE };
 
-import { CV_STRATEGY_FIELDS, CV_STRATEGY_LABELS } from "./constants";
+import { CV_STRATEGY_LABELS } from "./constants";
 import { NullableNumberField } from "./NullableNumberField";
 import { NumberInput } from "./NumberInput";
 import { SegmentGroup } from "./SegmentGroup";
@@ -34,7 +34,11 @@ export {
   resetCvState,
 } from "./cv-state";
 
-import { type CvState, resetCvState } from "./cv-state";
+import {
+  type CvState,
+  FALLBACK_CV_STRATEGY_FIELDS,
+  resetCvState,
+} from "./cv-state";
 
 // ---------------------------------------------------------------------------
 // Component
@@ -63,10 +67,14 @@ export function CvSection({
     [uiSchema],
   );
 
-  const activeFields = useMemo(
-    () => CV_STRATEGY_FIELDS[cv.strategy] ?? ["folds"],
-    [cv.strategy],
-  );
+  const activeFields = useMemo(() => {
+    const fromSchema =
+      uiSchema?.capabilities?.cv_strategy_fields?.[cv.strategy];
+    if (fromSchema !== undefined && fromSchema !== null) {
+      return fromSchema;
+    }
+    return FALLBACK_CV_STRATEGY_FIELDS[cv.strategy] ?? ["n_splits"];
+  }, [cv.strategy, uiSchema]);
 
   const has = useCallback(
     (field: string) => activeFields.includes(field),
@@ -110,7 +118,7 @@ export function CvSection({
       )}
 
       {/* Generic conditional fields (hidden when blocked_group_kfold editor is active) */}
-      {cv.strategy !== "blocked_group_kfold" && has("folds") && (
+      {cv.strategy !== "blocked_group_kfold" && has("n_splits") && (
         <div className="space-y-1">
           <Label className="text-xs font-medium text-muted-foreground">
             Folds
