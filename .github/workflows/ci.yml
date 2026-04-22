@@ -161,6 +161,20 @@ jobs:
         working-directory: frontend
         run: bash scripts/check-raw-colors.sh
 
+  # C-6 Phase 5 (H-0080): guard against reintroduction of the retired
+  # ``apiFetch`` helper. After migrating files/inference/workspace/jobs
+  # to the openapi-fetch-based ``apiClient``, the old hand-rolled fetcher
+  # was removed from client.ts. This grep check makes sure a future
+  # change (copy-paste from an old branch, port from another project)
+  # cannot silently reintroduce it.
+  no-apifetch-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Scan frontend/src for retired apiFetch usage
+        working-directory: frontend
+        run: bash scripts/check-no-apifetch.sh
+
   # C-1 / INV-CI-1: committed schema.d.ts must match freshly-generated
   # output. Prevents drift between backend response_model declarations
   # and the TypeScript types that the frontend compiles against.

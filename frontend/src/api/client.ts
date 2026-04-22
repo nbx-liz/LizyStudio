@@ -1,8 +1,13 @@
 import createClient, { type Middleware } from "openapi-fetch";
 import type { paths } from "./generated/schema";
 
-const BASE_URL = "/api";
-
+/**
+ * Thrown by ``apiClient`` when the backend responds with a non-2xx status.
+ *
+ * Consumers that need to inspect the response body (for field-level
+ * validation errors, for example) can read the ``body`` field. The
+ * ``status`` field is the numeric HTTP status.
+ */
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -13,41 +18,17 @@ export class ApiError extends Error {
   }
 }
 
-export async function apiFetch<T>(
-  path: string,
-  options?: RequestInit,
-): Promise<T> {
-  const url = `${BASE_URL}${path}`;
-  const headers: Record<string, string> = {};
-
-  const existingHeaders = (options?.headers as Record<string, string>) ?? {};
-  if (
-    options?.body &&
-    typeof options.body === "string" &&
-    !existingHeaders["Content-Type"]
-  ) {
-    headers["Content-Type"] = "application/json";
-  }
-
-  const res = await fetch(url, {
-    ...options,
-    headers: { ...headers, ...(options?.headers as Record<string, string>) },
-  });
-
-  if (!res.ok) {
-    const body = await res.json().catch(() => null);
-    throw new ApiError(res.status, body);
-  }
-
-  return res.json() as Promise<T>;
-}
-
-// C-6 Phase 1: openapi-fetch-based typed client. Paths in generated
-// ``schema.d.ts`` already include the ``/api`` prefix, so ``baseUrl`` is
-// empty and consumers call ``apiClient.GET("/api/files", ...)``. A
-// ``throwOnError`` middleware converts non-2xx responses into the same
-// ``ApiError`` that ``apiFetch`` throws, so the 51 existing consumers that
-// catch ``ApiError`` keep working unchanged during the migration.
+/**
+ * openapi-fetch-based typed API client for the LizyStudio backend.
+ *
+ * Paths in the generated ``schema.d.ts`` already include the ``/api``
+ * prefix (e.g. ``"/api/files"``), so ``baseUrl`` is an empty string —
+ * NOT ``"/api"`` — and consumers call ``apiClient.GET("/api/files", ...)``.
+ *
+ * A ``throwOnError`` middleware converts non-2xx responses into
+ * ``ApiError`` so consumers can keep a single ``catch`` path regardless
+ * of HTTP status code.
+ */
 const rawClient = createClient<paths>({ baseUrl: "" });
 
 const throwOnErrorMiddleware: Middleware = {
