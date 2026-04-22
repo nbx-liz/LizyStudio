@@ -1,8 +1,9 @@
-"""Tests for services.job_results — dispatch helpers + model LRU cache.
+"""Tests for services.job_results — ModelCache + dispatch helpers.
 
-Covers A-7 split: dispatch-layer helpers that transform a ``Job`` +
-``BackendAdapter`` into result data. Persistence-layer tests live in
-``test_jobs.py``.
+Covers the A-7 split (dispatch helpers that transform a ``Job`` +
+``BackendAdapter`` into result data) and the H-0084 refactor
+(per-app :class:`ModelCache` owned by :class:`JobStore`). Persistence
+tests live in ``test_jobs.py``.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import pytest
 
 from lizystudio.backends.types import DataRef, PlotData
 from lizystudio.services.job_results import (
-    clear_model_cache,
+    ModelCache,
     get_available_plots,
     get_importance,
     get_importance_kinds,
@@ -23,7 +24,6 @@ from lizystudio.services.job_results import (
     get_learning_curve_metrics,
     get_metrics_table,
     get_split_summary,
-    load_job_model,
 )
 from lizystudio.services.jobs import JobStore
 
@@ -46,12 +46,6 @@ def sample_data_ref() -> DataRef:
     )
 
 
-@pytest.fixture(autouse=True)
-def _reset_model_cache() -> None:
-    """Ensure each test starts with a clean cache — avoids cross-test leakage."""
-    clear_model_cache()
-
-
 def _make_completed_job(
     job_store: JobStore, data_ref: DataRef, job_type: str = "fit"
 ) -> Any:
@@ -68,14 +62,14 @@ def _make_completed_job(
 
 
 # ---------------------------------------------------------------------------
-# load_job_model — error path + LRU cache
+# ModelCache — error path + LRU semantics (H-0084)
 # ---------------------------------------------------------------------------
 
 
-def test_load_job_model_raises_when_no_model_path(
+def test_model_cache_load_raises_when_no_model_path(
     job_store: JobStore, sample_data_ref: DataRef
 ) -> None:
-    """load_job_model must raise ValueError when model_path is None."""
+    """load must raise ValueError when job.model_path is None."""
     job = job_store.create(
         backend_name="lizyml",
         config={},
@@ -86,23 +80,23 @@ def test_load_job_model_raises_when_no_model_path(
     backend = MagicMock()
 
     with pytest.raises(ValueError, match="no saved model"):
-        load_job_model(job, backend)
+        job_store.model_cache.load(job, backend)
 
 
-def test_load_job_model_returns_loaded_model(
+def test_model_cache_load_returns_loaded_model(
     job_store: JobStore, sample_data_ref: DataRef
 ) -> None:
     job = _make_completed_job(job_store, sample_data_ref)
     backend = MagicMock()
     backend.load_model.return_value = "MODEL_OBJ"
 
-    model = load_job_model(job, backend)
+    model = job_store.model_cache.load(job, backend)
 
     assert model == "MODEL_OBJ"
     backend.load_model.assert_called_once_with(job.model_path)
 
 
-def test_load_job_model_caches_by_path_and_backend(
+def test_model_cache_caches_by_path_and_backend(
     job_store: JobStore, sample_data_ref: DataRef
 ) -> None:
     """Second call with same (model_path, backend_name) must hit cache."""
@@ -110,14 +104,14 @@ def test_load_job_model_caches_by_path_and_backend(
     backend = MagicMock()
     backend.load_model.return_value = "MODEL_OBJ"
 
-    first = load_job_model(job, backend)
-    second = load_job_model(job, backend)
+    first = job_store.model_cache.load(job, backend)
+    second = job_store.model_cache.load(job, backend)
 
     assert first is second
     assert backend.load_model.call_count == 1
 
 
-def test_load_job_model_different_backends_do_not_share_cache(
+def test_model_cache_different_backends_do_not_share(
     job_store: JobStore, sample_data_ref: DataRef
 ) -> None:
     """Cache key includes backend_name, so two backends load independently."""
@@ -130,28 +124,26 @@ def test_load_job_model_different_backends_do_not_share_cache(
     backend_b = MagicMock()
     backend_b.load_model.return_value = "B"
 
-    # Prime both
-    assert load_job_model(job_a, backend_a) == "A"
-    assert load_job_model(job_b, backend_b) == "B"
+    assert job_store.model_cache.load(job_a, backend_a) == "A"
+    assert job_store.model_cache.load(job_b, backend_b) == "B"
 
-    # Repeat — both should be cached
-    load_job_model(job_a, backend_a)
-    load_job_model(job_b, backend_b)
+    job_store.model_cache.load(job_a, backend_a)
+    job_store.model_cache.load(job_b, backend_b)
 
     assert backend_a.load_model.call_count == 1
     assert backend_b.load_model.call_count == 1
 
 
-def test_clear_model_cache_forces_reload(
+def test_model_cache_clear_forces_reload(
     job_store: JobStore, sample_data_ref: DataRef
 ) -> None:
     job = _make_completed_job(job_store, sample_data_ref)
     backend = MagicMock()
     backend.load_model.return_value = "M"
 
-    load_job_model(job, backend)
-    clear_model_cache()
-    load_job_model(job, backend)
+    job_store.model_cache.load(job, backend)
+    job_store.clear_model_cache()
+    job_store.model_cache.load(job, backend)
 
     assert backend.load_model.call_count == 2
 
@@ -160,24 +152,51 @@ def test_job_store_delete_invalidates_model_cache(
     job_store: JobStore, sample_data_ref: DataRef
 ) -> None:
     """Deleting a job drops its cached model so a reused path never returns
-    a stale, pre-delete deserialized object.
+    a stale, pre-delete deserialised object (INV-2).
     """
-    from lizystudio.services.job_results import _model_cache
-
     job = _make_completed_job(job_store, sample_data_ref)
     backend = MagicMock()
     backend.load_model.return_value = "M"
 
-    load_job_model(job, backend)
+    job_store.model_cache.load(job, backend)
     key = (job.backend_name, job.model_path)
-    assert key in _model_cache
+    assert key in job_store.model_cache
 
     job_store.delete(job.job_id)
 
-    assert key not in _model_cache
+    assert key not in job_store.model_cache
 
 
-def test_load_job_model_cache_write_is_atomic_under_concurrent_reads(
+def test_model_cache_is_per_app(tmp_path: Path, sample_data_ref: DataRef) -> None:
+    """H-0084 INV-1: two JobStore instances do not share model cache."""
+    store_a = JobStore(tmp_path / "a" / "jobs")
+    store_b = JobStore(tmp_path / "b" / "jobs")
+    assert store_a.model_cache is not store_b.model_cache
+
+    job_a = _make_completed_job(store_a, sample_data_ref)
+    job_b = _make_completed_job(store_b, sample_data_ref)
+
+    backend_a = MagicMock()
+    backend_a.load_model.return_value = "A-model"
+    backend_b = MagicMock()
+    backend_b.load_model.return_value = "B-model"
+
+    store_a.model_cache.load(job_a, backend_a)
+    store_b.model_cache.load(job_b, backend_b)
+
+    # Cache entry visible only in the owning store.
+    assert (job_a.backend_name, job_a.model_path) in store_a.model_cache
+    assert (job_a.backend_name, job_a.model_path) not in store_b.model_cache
+    assert (job_b.backend_name, job_b.model_path) in store_b.model_cache
+    assert (job_b.backend_name, job_b.model_path) not in store_a.model_cache
+
+    # Clearing one store must not affect the other.
+    store_a.clear_model_cache()
+    assert (job_a.backend_name, job_a.model_path) not in store_a.model_cache
+    assert (job_b.backend_name, job_b.model_path) in store_b.model_cache
+
+
+def test_model_cache_load_is_atomic_under_concurrent_reads(
     job_store: JobStore, sample_data_ref: DataRef
 ) -> None:
     """Concurrent callers on the same (backend, path) trigger at most one
@@ -202,7 +221,7 @@ def test_load_job_model_cache_write_is_atomic_under_concurrent_reads(
     results: list[Any] = []
 
     def call() -> None:
-        results.append(load_job_model(job, backend))
+        results.append(job_store.model_cache.load(job, backend))
 
     t1 = _threading.Thread(target=call)
     t2 = _threading.Thread(target=call)
@@ -217,8 +236,31 @@ def test_load_job_model_cache_write_is_atomic_under_concurrent_reads(
     assert backend.load_model.call_count == 1
 
 
+def test_model_cache_respects_max_size() -> None:
+    """LRU eviction drops the oldest entry past max_size."""
+    cache = ModelCache(max_size=2)
+
+    class _FakeJob:
+        def __init__(self, path: str, backend: str = "b") -> None:
+            self.model_path = path
+            self.backend_name = backend
+            self.job_id = path
+
+    backend = MagicMock()
+    backend.load_model.side_effect = lambda p: f"model-{p}"
+
+    cache.load(_FakeJob("p1"), backend)  # type: ignore[arg-type]
+    cache.load(_FakeJob("p2"), backend)  # type: ignore[arg-type]
+    cache.load(_FakeJob("p3"), backend)  # type: ignore[arg-type]
+
+    # p1 evicted, p2 + p3 retained.
+    assert ("b", "p1") not in cache
+    assert ("b", "p2") in cache
+    assert ("b", "p3") in cache
+
+
 # ---------------------------------------------------------------------------
-# Dispatch helpers
+# Dispatch helpers — now take an explicit ``cache`` argument
 # ---------------------------------------------------------------------------
 
 
@@ -230,7 +272,7 @@ def test_get_metrics_table_delegates_to_backend(
     backend.load_model.return_value = "MODEL"
     backend.evaluate_table.return_value = [{"metric": "rmse", "value": 0.1}]
 
-    result = get_metrics_table(job, backend)
+    result = get_metrics_table(job, backend, job_store.model_cache)
 
     assert result == [{"metric": "rmse", "value": 0.1}]
     backend.evaluate_table.assert_called_once_with("MODEL")
@@ -244,7 +286,9 @@ def test_get_split_summary_delegates(
     backend.load_model.return_value = "M"
     backend.split_summary.return_value = [{"fold": 0, "score": 0.9}]
 
-    assert get_split_summary(job, backend) == [{"fold": 0, "score": 0.9}]
+    assert get_split_summary(job, backend, job_store.model_cache) == [
+        {"fold": 0, "score": 0.9}
+    ]
 
 
 def test_get_importance_passes_kind(
@@ -255,7 +299,7 @@ def test_get_importance_passes_kind(
     backend.load_model.return_value = "M"
     backend.importance.return_value = {"f1": 0.5}
 
-    result = get_importance(job, backend, kind="gain")
+    result = get_importance(job, backend, job_store.model_cache, kind="gain")
 
     backend.importance.assert_called_once_with("M", kind="gain")
     assert result == {"f1": 0.5}
@@ -269,7 +313,10 @@ def test_get_importance_kinds_delegates(
     backend.load_model.return_value = "M"
     backend.importance_kinds.return_value = ["split", "gain"]
 
-    assert get_importance_kinds(job, backend) == ["split", "gain"]
+    assert get_importance_kinds(job, backend, job_store.model_cache) == [
+        "split",
+        "gain",
+    ]
 
 
 def test_get_learning_curve_metrics_delegates(
@@ -280,7 +327,10 @@ def test_get_learning_curve_metrics_delegates(
     backend.load_model.return_value = "M"
     backend.learning_curve_metrics.return_value = ["rmse", "mae"]
 
-    assert get_learning_curve_metrics(job, backend) == ["rmse", "mae"]
+    assert get_learning_curve_metrics(job, backend, job_store.model_cache) == [
+        "rmse",
+        "mae",
+    ]
 
 
 def test_get_job_plot_delegates(job_store: JobStore, sample_data_ref: DataRef) -> None:
@@ -290,7 +340,9 @@ def test_get_job_plot_delegates(job_store: JobStore, sample_data_ref: DataRef) -
     expected = PlotData(plotly_json='{"data": []}')
     backend.plot.return_value = expected
 
-    assert get_job_plot(job, backend, "learning_curve") is expected
+    assert (
+        get_job_plot(job, backend, job_store.model_cache, "learning_curve") is expected
+    )
     backend.plot.assert_called_once_with("M", "learning_curve")
 
 
@@ -306,7 +358,7 @@ def test_get_job_plot_tuning_falls_back_to_file(
     backend.load_model.return_value = "M"
     backend.plot.side_effect = RuntimeError("study missing")
 
-    result = get_job_plot(job, backend, "tuning")
+    result = get_job_plot(job, backend, job_store.model_cache, "tuning")
 
     assert isinstance(result, PlotData)
     assert result.plotly_json == '{"stored": true}'
@@ -321,7 +373,7 @@ def test_get_job_plot_tuning_raises_when_no_fallback(
     backend.plot.side_effect = RuntimeError("study missing")
 
     with pytest.raises(RuntimeError, match="study missing"):
-        get_job_plot(job, backend, "tuning")
+        get_job_plot(job, backend, job_store.model_cache, "tuning")
 
 
 def test_get_available_plots_appends_tuning_when_fallback_exists(
@@ -335,7 +387,7 @@ def test_get_available_plots_appends_tuning_when_fallback_exists(
     backend.load_model.return_value = "M"
     backend.available_plots.return_value = ["learning_curve"]
 
-    plots = get_available_plots(job, backend)
+    plots = get_available_plots(job, backend, job_store.model_cache)
 
     assert "tuning" in plots
     assert "learning_curve" in plots
@@ -349,7 +401,7 @@ def test_get_available_plots_does_not_duplicate_tuning(
     backend.load_model.return_value = "M"
     backend.available_plots.return_value = ["tuning", "learning_curve"]
 
-    plots = get_available_plots(job, backend)
+    plots = get_available_plots(job, backend, job_store.model_cache)
 
     assert plots.count("tuning") == 1
 
@@ -365,22 +417,24 @@ def test_get_available_plots_fit_job_does_not_add_tuning(
     backend.load_model.return_value = "M"
     backend.available_plots.return_value = ["learning_curve"]
 
-    plots = get_available_plots(job, backend)
+    plots = get_available_plots(job, backend, job_store.model_cache)
 
     assert "tuning" not in plots
 
 
 # ---------------------------------------------------------------------------
-# Re-export back-compat — jobs.py must still expose the symbols
+# Re-export back-compat — jobs.py keeps the dispatch helpers (cache-taking
+# variants); the global load_job_model / clear_model_cache* names were
+# retired in H-0084.
 # ---------------------------------------------------------------------------
 
 
 def test_jobs_module_reexports_dispatch_helpers() -> None:
-    """External imports from services.jobs must continue to work."""
+    """External imports from services.jobs must continue to work for the
+    ``cache``-taking dispatch helpers."""
     from lizystudio.services import jobs as jobs_mod
 
     for name in (
-        "load_job_model",
         "get_metrics_table",
         "get_split_summary",
         "get_importance",
@@ -390,3 +444,20 @@ def test_jobs_module_reexports_dispatch_helpers() -> None:
         "get_available_plots",
     ):
         assert hasattr(jobs_mod, name), f"jobs module missing re-export: {name}"
+
+
+def test_retired_globals_are_gone() -> None:
+    """H-0084: global cache helpers are removed in favour of JobStore
+    methods and the ModelCache class."""
+    from lizystudio.services import job_results as jr
+    from lizystudio.services import jobs as jobs_mod
+
+    assert not hasattr(jr, "load_job_model")
+    assert not hasattr(jr, "clear_model_cache")
+    assert not hasattr(jr, "clear_model_cache_for")
+    assert not hasattr(jr, "_model_cache")
+
+    # services/jobs __all__ must not re-advertise the removed names.
+    assert "load_job_model" not in jobs_mod.__all__
+    assert "clear_model_cache" not in jobs_mod.__all__
+    assert "clear_model_cache_for" not in jobs_mod.__all__
