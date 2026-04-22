@@ -146,12 +146,16 @@ export function useJobProgress({
     }
   }, [jobId, job?.status, fireTerminal, trackFoldLog]);
 
+  // Memoised so useJobLifecycle's cancel callback keeps a stable
+  // reference across renders — see Issue #238.
+  const clearProgress = useCallback(() => {
+    setProgress(null);
+    if (trackFoldLog) setFoldLog([]);
+  }, [trackFoldLog]);
+
   return {
     progress,
     foldLog,
-    clearProgress: () => {
-      setProgress(null);
-      if (trackFoldLog) setFoldLog([]);
-    },
+    clearProgress,
   };
 }
