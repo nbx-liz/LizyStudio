@@ -11,7 +11,7 @@
  */
 
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { cancelJob } from "@/api/jobs";
 import { queryKeys } from "@/api/queryKeys";
@@ -33,7 +33,7 @@ export function useJobLifecycle({
 }: UseJobLifecycleParams) {
   const queryClient = useQueryClient();
   const { data: job, refetch: refetchJob } = useJob(jobId);
-  const progress = useJobProgress({
+  const { progress, foldLog, clearProgress } = useJobProgress({
     jobId,
     job,
     onTerminal,
@@ -41,26 +41,45 @@ export function useJobLifecycle({
     onWsError,
   });
 
+  // Issue #238: ``useQueryClient`` returns the same underlying client
+  // across renders but the hook's return value itself is not reference-
+  // stable in every React Query version. Pin it behind a ref so the
+  // cancel callback's deps are all stable.
+  const queryClientRef = useRef(queryClient);
+  queryClientRef.current = queryClient;
+
+  // Issue #237: even when cancelJob rejects (5xx, network error), the
+  // UI must not stay in "Cancelling..." forever. Run the release path
+  // in finally so the parent's running flag flips and the transient
+  // progress state is cleared regardless of the outcome.
+  //
+  // Issue #238: deps list only stable references. ``queryClientRef``
+  // is a ref (stable by definition); ``clearProgress`` is memoised in
+  // useJobProgress; ``refetchJob`` is stable via useQuery.
   const cancel = useCallback(async () => {
     if (!jobId) return;
     try {
       await cancelJob(jobId);
       toast.info("Job cancelled");
-      progress.clearProgress();
-      refetchJob();
-      queryClient.invalidateQueries({ queryKey: queryKeys.jobs() });
-      onTerminal?.();
     } catch {
       toast.error("Failed to cancel job");
+    } finally {
+      clearProgress();
+      await refetchJob();
+      queryClientRef.current.invalidateQueries({
+        queryKey: queryKeys.job(jobId),
+      });
+      queryClientRef.current.invalidateQueries({ queryKey: queryKeys.jobs() });
+      onTerminal?.();
     }
-  }, [jobId, refetchJob, queryClient, onTerminal, progress]);
+  }, [jobId, refetchJob, onTerminal, clearProgress]);
 
   return {
     job,
     refetchJob,
-    progress: progress.progress,
-    foldLog: progress.foldLog,
-    clearProgress: progress.clearProgress,
+    progress,
+    foldLog,
+    clearProgress,
     cancel,
   };
 }

@@ -165,3 +165,113 @@ class TestMigrationPipeline:
         assert isinstance(result, dict)
         assert result["foo"] == 1
         assert result["bar"] == ["baz"]
+
+
+class TestWriteAtomicity:
+    """H-0082 INV-1: concurrent readers never observe a partial state.
+
+    ``write_versioned_json`` must expose either the prior payload or the
+    next payload to concurrent readers — never an empty or truncated
+    intermediate. Historically ``Path.write_text`` was used directly,
+    which truncates-then-writes non-atomically and leaves a window
+    during which readers observe ``JSONDecodeError`` (Issue #232).
+    """
+
+    def test_write_versioned_json_is_atomic_under_concurrent_readers(
+        self, tmp_path: Path
+    ) -> None:
+        """Writer×1 + Reader×4 at 500 rounds must see no JSONDecodeError."""
+        import threading
+
+        from lizystudio.storage.versions import (
+            read_versioned_json,
+            write_versioned_json,
+        )
+
+        path = tmp_path / "meta.json"
+        write_versioned_json(path, {"status": "pending", "payload": "x" * 2048})
+
+        errors: list[str] = []
+        payloads: set[str] = set()
+        err_lock = threading.Lock()
+        stop = threading.Event()
+        rounds = 500
+
+        def reader(idx: int) -> None:
+            while not stop.is_set():
+                try:
+                    _, data = read_versioned_json(path)
+                except json.JSONDecodeError as exc:
+                    with err_lock:
+                        errors.append(f"reader{idx}: {exc}")
+                    continue
+                # INV-1: readers only see a complete, well-formed payload.
+                status = data.get("status")
+                with err_lock:
+                    payloads.add(str(status))
+
+        def writer() -> None:
+            for i in range(rounds):
+                write_versioned_json(
+                    path,
+                    {
+                        "status": "running" if i % 2 else "completed",
+                        "payload": "x" * 2048,
+                    },
+                )
+
+        readers = [threading.Thread(target=reader, args=(i,)) for i in range(4)]
+        for t in readers:
+            t.start()
+        w = threading.Thread(target=writer)
+        w.start()
+        w.join()
+        stop.set()
+        for t in readers:
+            t.join(timeout=5)
+
+        assert errors == [], (
+            f"INV-1 violated — {len(errors)} partial reads observed. "
+            f"write_versioned_json must use atomic rename. "
+            f"sample: {errors[:3]}"
+        )
+        # Payload values must come from the writer's enumeration only.
+        assert payloads <= {"pending", "running", "completed"}, payloads
+
+    def test_write_versioned_json_leaves_no_tmp_file(self, tmp_path: Path) -> None:
+        """After a successful write the tmp file must not linger."""
+        from lizystudio.storage.versions import write_versioned_json
+
+        path = tmp_path / "meta.json"
+        write_versioned_json(path, {"status": "ok"})
+
+        siblings = list(tmp_path.iterdir())
+        assert [s.name for s in siblings] == ["meta.json"], (
+            f"tmp file leaked: {[s.name for s in siblings]}"
+        )
+
+
+class TestMigrationChainGap:
+    """H-0082 INV-2: ``migrate_to_current`` raises when the chain has a gap.
+
+    Issue #239: when a developer bumps ``STUDIO_FORMAT_VERSION`` without
+    registering the corresponding migration function, the system must
+    fail loudly rather than silently returning partial state.
+    """
+
+    def test_migrate_to_current_raises_when_chain_has_gap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Gap at version N → RuntimeError naming the missing migration."""
+        from lizystudio.storage import migrations
+        from lizystudio.storage import versions as versions_module
+
+        # Simulate a v3 runtime that only has v0 → v1 registered. The
+        # developer forgot v1 → v2 and v2 → v3. Any load from v0 must
+        # stop at the first gap with an explicit RuntimeError.
+        monkeypatch.setattr(versions_module, "STUDIO_FORMAT_VERSION", 3)
+        monkeypatch.setattr(migrations, "STUDIO_FORMAT_VERSION", 3)
+        monkeypatch.setattr(migrations, "MIGRATIONS", {0: lambda d: d}, raising=True)
+
+        with pytest.raises(RuntimeError, match="No migration registered for version 1"):
+            migrations.migrate_to_current({"job_id": "j1"}, from_version=0)

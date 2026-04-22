@@ -23,6 +23,7 @@ value.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -48,12 +49,21 @@ def write_versioned_json(path: Path, payload: dict[str, Any]) -> None:
     so a quick ``head`` / ``grep`` surfaces the schema without parsing
     the whole file. The caller's ``payload`` dict is not mutated — the
     version sentinel lives only in the serialised form.
+
+    INV-1 (H-0082): concurrent readers observe either the prior payload
+    or the next payload, never a partial byte sequence. The write goes
+    through a same-directory tmp file + ``os.replace``, which is atomic
+    on POSIX and Windows. ``Path.write_text`` is *not* atomic — it
+    opens-truncates-writes, leaving a window during which a reader sees
+    an empty file and raises ``JSONDecodeError`` (Issue #232).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     versioned: dict[str, Any] = {_FORMAT_VERSION_KEY: STUDIO_FORMAT_VERSION}
     versioned.update(payload)
     text = json.dumps(versioned, ensure_ascii=False, default=str)
-    path.write_text(text, encoding="utf-8")
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def read_versioned_json(path: Path) -> tuple[int, dict[str, Any]]:
