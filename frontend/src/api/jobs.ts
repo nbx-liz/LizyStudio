@@ -1,4 +1,4 @@
-import { apiFetch } from "./client";
+import { apiClient } from "./client";
 import type {
   ImportanceResponse,
   JobDetail,
@@ -7,79 +7,155 @@ import type {
   SplitSummaryRow,
 } from "./types";
 
-export function fetchJobs(status?: string): Promise<JobSummary[]> {
-  const params = status ? `?status=${status}` : "";
-  return apiFetch(`/jobs${params}`);
+function unwrap<T>(data: T | undefined, endpoint: string): T {
+  if (!data) {
+    throw new Error(`apiClient returned no data for ${endpoint}`);
+  }
+  return data;
 }
 
-export function fetchJob(jobId: string): Promise<JobDetail> {
-  return apiFetch(`/jobs/${jobId}`);
+export async function fetchJobs(status?: string): Promise<JobSummary[]> {
+  const { data } = await apiClient.GET("/api/jobs/", {
+    params: { query: status ? { status } : {} },
+  });
+  return unwrap(data, "/api/jobs/") as unknown as JobSummary[];
 }
 
-export function fetchJobImportance(
+export async function fetchJob(jobId: string): Promise<JobDetail> {
+  const { data } = await apiClient.GET("/api/jobs/{job_id}", {
+    params: { path: { job_id: jobId } },
+  });
+  return unwrap(data, "/api/jobs/{job_id}") as unknown as JobDetail;
+}
+
+export async function fetchJobImportance(
   jobId: string,
   kind = "default",
 ): Promise<ImportanceResponse> {
-  return apiFetch(
-    `/jobs/${encodeURIComponent(jobId)}/importance?kind=${encodeURIComponent(kind)}`,
+  const { data } = await apiClient.GET("/api/jobs/{job_id}/importance", {
+    params: { path: { job_id: jobId }, query: { kind } },
+  });
+  return unwrap(
+    data,
+    "/api/jobs/{job_id}/importance",
+  ) as unknown as ImportanceResponse;
+}
+
+export async function fetchJobImportanceKinds(
+  jobId: string,
+): Promise<string[]> {
+  const { data } = await apiClient.GET("/api/jobs/{job_id}/importance-kinds", {
+    params: { path: { job_id: jobId } },
+  });
+  return unwrap(
+    data,
+    "/api/jobs/{job_id}/importance-kinds",
+  ) as unknown as string[];
+}
+
+export async function fetchJobLearningCurveMetrics(
+  jobId: string,
+): Promise<string[]> {
+  const { data } = await apiClient.GET(
+    "/api/jobs/{job_id}/learning-curve/metrics",
+    {
+      params: { path: { job_id: jobId } },
+    },
   );
+  return unwrap(
+    data,
+    "/api/jobs/{job_id}/learning-curve/metrics",
+  ) as unknown as string[];
 }
 
-export function fetchJobImportanceKinds(jobId: string): Promise<string[]> {
-  return apiFetch(`/jobs/${jobId}/importance-kinds`);
-}
-
-export function fetchJobLearningCurveMetrics(jobId: string): Promise<string[]> {
-  return apiFetch(`/jobs/${encodeURIComponent(jobId)}/learning-curve/metrics`);
-}
-
-export function fetchJobPlot(
+export async function fetchJobPlot(
   jobId: string,
   plotType: string,
   options?: { metrics?: string | string[]; kind?: string },
 ): Promise<PlotResponse> {
-  const params = new URLSearchParams();
-  if (options?.metrics) {
-    const m = Array.isArray(options.metrics)
-      ? options.metrics.join(",")
-      : options.metrics;
-    if (m) params.set("metrics", m);
+  // Backend accepts a single ``metrics`` string (comma-separated for
+  // multi-select), so normalise the array form into that shape before
+  // handing off to openapi-fetch's query serialiser.
+  const metricsStr = Array.isArray(options?.metrics)
+    ? options.metrics.join(",")
+    : options?.metrics;
+  const query: { metrics?: string; kind?: string } = {};
+  if (metricsStr) {
+    query.metrics = metricsStr;
   }
   if (options?.kind) {
-    params.set("kind", options.kind);
+    query.kind = options.kind;
   }
-  const qs = params.toString();
-  const url = `/jobs/${encodeURIComponent(jobId)}/plot/${encodeURIComponent(plotType)}${qs ? `?${qs}` : ""}`;
-  return apiFetch(url);
+  const { data } = await apiClient.GET("/api/jobs/{job_id}/plot/{plot_type}", {
+    params: { path: { job_id: jobId, plot_type: plotType }, query },
+  });
+  return unwrap(
+    data,
+    "/api/jobs/{job_id}/plot/{plot_type}",
+  ) as unknown as PlotResponse;
 }
 
-export function fetchJobPlots(jobId: string): Promise<string[]> {
-  return apiFetch(`/jobs/${jobId}/plots`);
+export async function fetchJobPlots(jobId: string): Promise<string[]> {
+  const { data } = await apiClient.GET("/api/jobs/{job_id}/plots", {
+    params: { path: { job_id: jobId } },
+  });
+  return unwrap(data, "/api/jobs/{job_id}/plots") as unknown as string[];
 }
 
-export function fetchJobSplitSummary(
+export async function fetchJobSplitSummary(
   jobId: string,
 ): Promise<SplitSummaryRow[]> {
-  return apiFetch(`/jobs/${jobId}/split-summary`);
+  const { data } = await apiClient.GET("/api/jobs/{job_id}/split-summary", {
+    params: { path: { job_id: jobId } },
+  });
+  return unwrap(
+    data,
+    "/api/jobs/{job_id}/split-summary",
+  ) as unknown as SplitSummaryRow[];
 }
 
-export function fetchJobLog(jobId: string): Promise<{ log: string }> {
-  return apiFetch(`/jobs/${jobId}/log`);
+export async function fetchJobLog(jobId: string): Promise<{ log: string }> {
+  const { data } = await apiClient.GET("/api/jobs/{job_id}/log", {
+    params: { path: { job_id: jobId } },
+  });
+  return unwrap(data, "/api/jobs/{job_id}/log") as unknown as {
+    log: string;
+  };
 }
 
-export function cancelJob(jobId: string): Promise<{ status: string }> {
-  return apiFetch(`/jobs/${jobId}/cancel`, { method: "POST" });
+export async function cancelJob(jobId: string): Promise<{ status: string }> {
+  const { data } = await apiClient.POST("/api/jobs/{job_id}/cancel", {
+    params: { path: { job_id: jobId } },
+  });
+  return unwrap(data, "/api/jobs/{job_id}/cancel") as unknown as {
+    status: string;
+  };
 }
 
-export function deleteJob(
+export async function deleteJob(
   jobId: string,
   options: { cascade?: boolean } = {},
 ): Promise<{ status: string; removed_job_ids?: string[] }> {
-  const qs = options.cascade ? "?cascade=true" : "";
-  return apiFetch(`/jobs/${jobId}${qs}`, { method: "DELETE" });
+  const query: { cascade?: boolean } = {};
+  if (options.cascade) {
+    query.cascade = true;
+  }
+  const { data } = await apiClient.DELETE("/api/jobs/{job_id}", {
+    params: { path: { job_id: jobId }, query },
+  });
+  return unwrap(data, "/api/jobs/{job_id} (DELETE)") as unknown as {
+    status: string;
+    removed_job_ids?: string[];
+  };
 }
 
 // --- H-0062: Re-tune / Resume / Lineage ---
+//
+// Backend for these endpoints returns ``{[key: string]: string}`` /
+// ``{[key: string]: unknown}`` (no explicit response_model). We keep the
+// hand-written response interfaces so consumers get named fields;
+// revisit once backend adopts Pydantic response models (out of scope
+// for C-6).
 
 export interface RetuneRequestBody {
   n_trials: number;
@@ -110,37 +186,50 @@ export interface LineageNode {
   truncated?: boolean;
 }
 
-export function retuneJob(
+export async function retuneJob(
   jobId: string,
   body: RetuneRequestBody,
 ): Promise<RetuneResponse> {
-  return apiFetch(`/jobs/${encodeURIComponent(jobId)}/retune`, {
-    method: "POST",
-    body: JSON.stringify(body),
+  const { data } = await apiClient.POST("/api/jobs/{job_id}/retune", {
+    params: { path: { job_id: jobId } },
+    body,
   });
+  return unwrap(data, "/api/jobs/{job_id}/retune") as unknown as RetuneResponse;
 }
 
-export function resumeJob(
+export async function resumeJob(
   jobId: string,
   body: ResumeRequestBody = {},
 ): Promise<RetuneResponse> {
-  return apiFetch(`/jobs/${encodeURIComponent(jobId)}/resume`, {
-    method: "POST",
-    body: JSON.stringify(body),
+  const { data } = await apiClient.POST("/api/jobs/{job_id}/resume", {
+    params: { path: { job_id: jobId } },
+    body,
   });
+  return unwrap(data, "/api/jobs/{job_id}/resume") as unknown as RetuneResponse;
 }
 
-export function fetchJobLineage(jobId: string): Promise<{ tree: LineageNode }> {
-  return apiFetch(`/jobs/${encodeURIComponent(jobId)}/lineage`);
+export async function fetchJobLineage(
+  jobId: string,
+): Promise<{ tree: LineageNode }> {
+  const { data } = await apiClient.GET("/api/jobs/{job_id}/lineage", {
+    params: { path: { job_id: jobId } },
+  });
+  return unwrap(data, "/api/jobs/{job_id}/lineage") as unknown as {
+    tree: LineageNode;
+  };
 }
 
-export function exportJob(
+export async function exportJob(
   jobId: string,
   exportType: "model" | "report",
   outputPath: string,
 ): Promise<{ exported_path: string; export_type: string }> {
-  return apiFetch(`/jobs/${jobId}/export`, {
-    method: "POST",
-    body: JSON.stringify({ export_type: exportType, output_path: outputPath }),
+  const { data } = await apiClient.POST("/api/jobs/{job_id}/export", {
+    params: { path: { job_id: jobId } },
+    body: { export_type: exportType, output_path: outputPath },
   });
+  return unwrap(data, "/api/jobs/{job_id}/export") as unknown as {
+    exported_path: string;
+    export_type: string;
+  };
 }
