@@ -24,6 +24,8 @@ export async function loadDataFromPath(
   const { data } = await apiClient.POST("/api/workspace/data/path", {
     body: { path },
   });
+  // SSOT-EXEMPT (Issue #236): backend returns DataLoadResponse but the narrow
+  // consumer interface uses an inline subset; the generated shape is wider.
   return unwrap(data, "/api/workspace/data/path") as unknown as {
     data_ref: { path: string; shape: [number, number] };
   };
@@ -35,9 +37,13 @@ export async function uploadData(
   const formData = new FormData();
   formData.append("file", file);
   const { data } = await apiClient.POST("/api/workspace/data/upload", {
+    // SSOT-EXEMPT (Issue #236): openapi-fetch's FormData bodySerializer
+    // pattern — the two casts let the browser generate the multipart
+    // boundary instead of JSON.stringify-ing the FormData.
     body: formData as unknown as components["schemas"]["Body_data_upload_api_workspace_data_upload_post"],
     bodySerializer: (body) => body as unknown as BodyInit,
   });
+  // SSOT-EXEMPT (Issue #236): inline subset of DataLoadResponse.
   return unwrap(data, "/api/workspace/data/upload") as unknown as {
     data_ref: { path: string; shape: [number, number] };
   };
@@ -67,6 +73,8 @@ export async function fetchColumnStats(
       params: { path: { col }, query: { top_n: topN } },
     },
   );
+  // SSOT-EXEMPT (Issue #236): ColumnStatsResponse is the backend Pydantic
+  // model; generated type differs in Optional/None handling only.
   return unwrap(
     data,
     "/api/workspace/data/column-stats/{col}",
@@ -119,6 +127,8 @@ export async function updateConfig(
     body: config,
     signal: opts?.signal,
   });
+  // SSOT-EXEMPT (Issue #236): ConfigUpdateResponse mirrors the backend model;
+  // cast needed to align optional/null handling with the hand-written narrow type.
   return unwrap(
     data,
     "/api/workspace/config (PUT)",
@@ -131,6 +141,8 @@ export async function validateConfig(
   const { data } = await apiClient.POST("/api/workspace/config/validate", {
     body: config,
   });
+  // SSOT-EXEMPT (Issue #236): backend returns ValidationResponse; the narrow
+  // consumer interface pins errors to ConfigError[].
   return unwrap(data, "/api/workspace/config/validate") as unknown as {
     valid: boolean;
     errors: ConfigError[];
@@ -141,9 +153,11 @@ export async function uploadConfig(file: File): Promise<ConfigUpdateResponse> {
   const formData = new FormData();
   formData.append("file", file);
   const { data } = await apiClient.POST("/api/workspace/config/upload", {
+    // SSOT-EXEMPT (Issue #236): FormData bodySerializer pattern, same as uploadData.
     body: formData as unknown as components["schemas"]["Body_config_upload_api_workspace_config_upload_post"],
     bodySerializer: (body) => body as unknown as BodyInit,
   });
+  // SSOT-EXEMPT (Issue #236): same reason as updateConfig.
   return unwrap(
     data,
     "/api/workspace/config/upload",
@@ -158,11 +172,13 @@ export function getConfigDownloadUrl(): string {
 
 export async function runFit(): Promise<{ job_id: string }> {
   const { data } = await apiClient.POST("/api/workspace/fit", {});
+  // SSOT-EXEMPT (Issue #236): backend returns JobStartResponse — wider than this subset.
   return unwrap(data, "/api/workspace/fit") as unknown as { job_id: string };
 }
 
 export async function runTune(): Promise<{ job_id: string }> {
   const { data } = await apiClient.POST("/api/workspace/tune", {});
+  // SSOT-EXEMPT (Issue #236): same as runFit.
   return unwrap(data, "/api/workspace/tune") as unknown as { job_id: string };
 }
 

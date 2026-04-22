@@ -25,6 +25,7 @@ from lizystudio.api.errors import (
     PickleIncompatibleError as PickleIncompatibleApiError,
 )
 from lizystudio.api.jobs import _get_job_or_404, router
+from lizystudio.api.models import LineageResponse, RetuneJobResponse
 from lizystudio.backends.base import BackendAdapter
 from lizystudio.backends.exceptions import CheckpointIncompatibleError
 from lizystudio.services.jobs import Job, JobStore, get_job_store
@@ -145,7 +146,7 @@ def _claim_retune_slot(parent_job_id: str, job_store: JobStore) -> str:
     return placeholder
 
 
-@router.post("/{job_id}/retune")
+@router.post("/{job_id}/retune", response_model=RetuneJobResponse)
 def retune_job(
     job_id: str,
     body: RetuneRequest,
@@ -211,7 +212,7 @@ def retune_job(
     return {"job_id": child.job_id, "parent_job_id": parent.job_id}
 
 
-@router.post("/{job_id}/resume")
+@router.post("/{job_id}/resume", response_model=RetuneJobResponse)
 def resume_job(
     job_id: str,
     body: ResumeRequest,
@@ -300,7 +301,7 @@ def _auto_remaining_trials(parent: Job) -> int:
     return max(1, expected_total - completed)
 
 
-@router.get("/{job_id}/lineage")
+@router.get("/{job_id}/lineage", response_model=LineageResponse)
 def get_job_lineage(
     job_id: str,
     job_store: JobStore = Depends(get_job_store),

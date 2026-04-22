@@ -1122,6 +1122,14 @@ export interface components {
             /** File */
             file: string;
         };
+        /**
+         * CancelJobResponse
+         * @description POST /api/jobs/{job_id}/cancel.
+         */
+        CancelJobResponse: {
+            /** Status */
+            status: string;
+        };
         /** ColumnInfoResponse */
         ColumnInfoResponse: {
             /** Name */
@@ -1246,6 +1254,16 @@ export interface components {
             /** Path */
             path: string;
         };
+        /**
+         * DeleteJobResponse
+         * @description DELETE /api/jobs/{job_id}.
+         */
+        DeleteJobResponse: {
+            /** Status */
+            status: string;
+            /** Removed Job Ids */
+            removed_job_ids?: string[] | null;
+        };
         /** DirectoryListing */
         DirectoryListing: {
             /** Path */
@@ -1254,6 +1272,26 @@ export interface components {
             parent: string | null;
             /** Entries */
             entries: components["schemas"]["FileEntry"][];
+        };
+        /**
+         * ExportCodeResponse
+         * @description GET /api/jobs/{job_id}/export-code.
+         */
+        ExportCodeResponse: {
+            /** Code */
+            code: string;
+            /** Filename */
+            filename: string;
+        };
+        /**
+         * ExportJobResponse
+         * @description POST /api/jobs/{job_id}/export.
+         */
+        ExportJobResponse: {
+            /** Exported Path */
+            exported_path: string;
+            /** Export Type */
+            export_type: string;
         };
         /** ExportRequest */
         ExportRequest: {
@@ -1445,6 +1483,14 @@ export interface components {
             fit_result?: components["schemas"]["FitResultResponse"] | null;
             tune_result?: components["schemas"]["TuneResultResponse"] | null;
         };
+        /**
+         * JobLogResponse
+         * @description GET /api/jobs/{job_id}/log.
+         */
+        JobLogResponse: {
+            /** Log */
+            log: string;
+        };
         /** JobStartResponse */
         JobStartResponse: {
             /** Job Id */
@@ -1489,6 +1535,32 @@ export interface components {
             primary_score?: number | null;
             /** Parent Job Id */
             parent_job_id?: string | null;
+        };
+        /**
+         * LineageNodeResponse
+         * @description Node in the lineage tree (H-0062). Self-referential — children
+         *     are declared via ``model_rebuild`` below because BaseModel forward-
+         *     references within the same module need an explicit rebuild call in
+         *     Python versions pydantic targets.
+         */
+        LineageNodeResponse: {
+            /** Job Id */
+            job_id: string;
+            /** Status */
+            status: string;
+            /** Job Type */
+            job_type: string;
+            /** Children */
+            children: components["schemas"]["LineageNodeResponse"][];
+            /** Truncated */
+            truncated?: boolean | null;
+        };
+        /**
+         * LineageResponse
+         * @description GET /api/jobs/{job_id}/lineage.
+         */
+        LineageResponse: {
+            tree: components["schemas"]["LineageNodeResponse"];
         };
         /**
          * ParameterHintResponse
@@ -1552,6 +1624,18 @@ export interface components {
         ResumeRequest: {
             /** N Trials */
             n_trials?: number | null;
+        };
+        /**
+         * RetuneJobResponse
+         * @description POST /api/jobs/{job_id}/retune and /resume.
+         *
+         *     Both endpoints return the child job id and its parent reference.
+         */
+        RetuneJobResponse: {
+            /** Job Id */
+            job_id: string;
+            /** Parent Job Id */
+            parent_job_id: string;
         };
         /**
          * RetuneRequest
@@ -2542,9 +2626,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["DeleteJobResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2575,9 +2657,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["JobLogResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2641,9 +2721,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["CancelJobResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2907,9 +2985,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["ExportJobResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2940,7 +3016,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ExportCodeResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2975,9 +3051,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["RetuneJobResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3012,9 +3086,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["RetuneJobResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3045,9 +3117,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LineageResponse"];
                 };
             };
             /** @description Validation Error */
