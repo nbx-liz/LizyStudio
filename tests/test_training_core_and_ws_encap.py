@@ -286,3 +286,299 @@ def test_register_and_previous_are_thread_safe() -> None:
     assert len(allowed) > 2, (
         f"test did not produce enough contention (allowed={len(allowed)})"
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #240 — defensive branches in _training_core
+# ---------------------------------------------------------------------------
+
+
+class _StubJob:
+    """Minimal Job-shaped object for duration unit tests."""
+
+    def __init__(self, created_at: str | None, completed_at: str | None) -> None:
+        self.created_at = created_at
+        self.completed_at = completed_at
+
+
+def test_subprocess_duration_returns_zero_when_completed_at_missing() -> None:
+    """INV: duration helper never raises into the finally-block — return
+    0.0 when the subprocess child never stamped ``completed_at``."""
+    from lizystudio.services._training_core import _subprocess_duration_seconds
+
+    job = _StubJob(created_at="2026-04-22T00:00:00+00:00", completed_at=None)
+    assert _subprocess_duration_seconds(job) == 0.0
+
+
+def test_subprocess_duration_returns_zero_on_malformed_iso() -> None:
+    """INV: malformed timestamps must not raise — subprocess stamps can
+    be truncated by a crash mid-write."""
+    from lizystudio.services._training_core import _subprocess_duration_seconds
+
+    job = _StubJob(
+        created_at="2026-04-22T00:00:00+00:00", completed_at="not-an-iso-timestamp"
+    )
+    assert _subprocess_duration_seconds(job) == 0.0
+
+    job2 = _StubJob(created_at="garbage", completed_at="2026-04-22T00:01:00+00:00")
+    assert _subprocess_duration_seconds(job2) == 0.0
+
+
+def test_subprocess_duration_returns_elapsed_seconds() -> None:
+    """Sanity check — the happy path still works."""
+    from lizystudio.services._training_core import _subprocess_duration_seconds
+
+    job = _StubJob(
+        created_at="2026-04-22T00:00:00+00:00",
+        completed_at="2026-04-22T00:01:30+00:00",
+    )
+    assert _subprocess_duration_seconds(job) == 90.0
+
+
+def test_subprocess_duration_clamps_to_zero_on_reverse_order() -> None:
+    """Defensive: completed < created must not yield a negative value
+    (e.g. clock skew between fork and child process on Windows)."""
+    from lizystudio.services._training_core import _subprocess_duration_seconds
+
+    job = _StubJob(
+        created_at="2026-04-22T00:05:00+00:00",
+        completed_at="2026-04-22T00:00:00+00:00",
+    )
+    assert _subprocess_duration_seconds(job) == 0.0
+
+
+def test_run_pickle_preflight_translates_backend_exception() -> None:
+    """INV: CheckpointPreflightError is translated into
+    PicklePreflightFailedError so the service layer never leaks
+    backend-specific exception types through the HTTP boundary
+    (H-0068 contract)."""
+    from lizystudio.api.errors import PicklePreflightFailedError
+    from lizystudio.backends.exceptions import CheckpointPreflightError
+    from lizystudio.services._training_core import _run_pickle_preflight
+
+    class _StubBackend:
+        def preflight_checkpoint_dir(self, _job_dir: Path) -> None:
+            raise CheckpointPreflightError("schema mismatch")
+
+    with pytest.raises(PicklePreflightFailedError, match="schema mismatch"):
+        _run_pickle_preflight(_StubBackend(), Path("/tmp/unused"))
+
+
+def test_run_pickle_preflight_is_noop_when_backend_accepts() -> None:
+    """The happy path simply returns — no exception, no side effect."""
+    from lizystudio.services._training_core import _run_pickle_preflight
+
+    calls: list[Path] = []
+
+    class _StubBackend:
+        def preflight_checkpoint_dir(self, job_dir: Path) -> None:
+            calls.append(job_dir)
+
+    _run_pickle_preflight(_StubBackend(), Path("/tmp/jobdir"))
+    assert calls == [Path("/tmp/jobdir")]
+
+
+# --- Issue #240 — _run_subprocess_job optional-kwarg dispatch -------------
+
+
+class _StubBroadcaster:
+    """Minimal broadcaster for exercising _run_subprocess_job branches."""
+
+    def __init__(self) -> None:
+        self.errors: list[tuple[str, str, str | None]] = []
+
+    def send_error(self, job_id: str, message: str, code: str | None = None) -> None:
+        self.errors.append((job_id, message, code))
+
+    def send_progress(self, *_a: object, **_k: object) -> None:  # pragma: no cover
+        return None
+
+    def send_completed(self, *_a: object, **_k: object) -> None:  # pragma: no cover
+        return None
+
+
+class _StubJobStoreForSubprocess:
+    """JobStore stand-in exposing only what _run_subprocess_job touches."""
+
+    def __init__(self) -> None:
+        self.updates: list[object] = []
+        self.released: list[str] = []
+        self.terminals: list[tuple[str, str, float]] = []
+
+    def update(self, job: object) -> None:
+        self.updates.append(job)
+
+    def release_active(self, job_id: str) -> None:
+        self.released.append(job_id)
+
+    def record_job_terminal(
+        self, job_type: str, status: str, *, duration: float = 0.0
+    ) -> None:
+        self.terminals.append((job_type, status, duration))
+
+    def get(self, _job_id: str) -> object | None:
+        return None
+
+
+class _StubWsWithData:
+    """WorkspaceState stub with a loaded data_ref."""
+
+    class _DR:
+        path = "/tmp/data.csv"
+
+    def __init__(self) -> None:
+        self.data_ref = _StubWsWithData._DR()
+        self.noted: list[str] = []
+        self.completions: list[dict[str, object]] = []
+
+    def note_current_job(self, job_id: str) -> None:
+        self.noted.append(job_id)
+
+    def record_completion(self, **kwargs: object) -> None:
+        self.completions.append(kwargs)
+
+
+class _StubWsNoData:
+    """WorkspaceState stub without a loaded dataset."""
+
+    def __init__(self) -> None:
+        self.data_ref = None
+        self.noted: list[str] = []
+
+    def note_current_job(self, job_id: str) -> None:
+        self.noted.append(job_id)
+
+    def record_completion(self, **_: object) -> None:  # pragma: no cover
+        return None
+
+
+def _make_pending_tune_job() -> object:
+    """Construct a ``Job`` dataclass instance for these tests."""
+    from lizystudio.backends.types import DataRef
+    from lizystudio.services.jobs import Job
+
+    return Job(
+        job_id="j1",
+        status="pending",
+        backend_name="stub-backend",
+        config={},
+        data_ref=DataRef(
+            source_type="upload",
+            path="/tmp/data.csv",
+            filename="data.csv",
+            fingerprint="fp",
+            shape=(1, 1),
+        ),
+        job_type="tune",
+        created_at="2026-04-22T00:00:00+00:00",
+    )
+
+
+def test_run_subprocess_job_forwards_optional_kwargs_individually(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each optional retune/resume kwarg is forwarded to
+    ``run_job_in_subprocess`` only when set — covers the five branches
+    at lines 323 / 325 / 327 / 329 / 331 that previously had no test."""
+    import lizystudio.services.subprocess_runner as sr
+    import lizystudio.services.workspace as ws_mod
+    from lizystudio.services import _training_core
+
+    captured: dict[str, object] = {}
+
+    def _fake_run(**kwargs: object) -> object:
+        captured.update(kwargs)
+
+        class _Finished:
+            fit_result = None
+            tune_result = None
+            job_id = "j1"
+
+        return _Finished()
+
+    monkeypatch.setattr(sr, "run_job_in_subprocess", _fake_run)
+    monkeypatch.setattr(ws_mod, "get_backend_name", lambda _ws: "stub-backend")
+
+    job_store = _StubJobStoreForSubprocess()
+    _training_core._run_subprocess_job(
+        _StubWsWithData(),  # type: ignore[arg-type]
+        _make_pending_tune_job(),  # type: ignore[arg-type]
+        job_store,  # type: ignore[arg-type]
+        _StubBroadcaster(),  # type: ignore[arg-type]
+        mode="retune",
+        parent_job_id="parent-1",
+        retune_n_trials=20,
+        retune_expand_boundary=True,
+        retune_boundary_threshold=0.5,
+    )
+
+    assert captured["mode"] == "retune"
+    assert captured["parent_job_id"] == "parent-1"
+    assert captured["retune_n_trials"] == 20
+    assert captured["retune_expand_boundary"] is True
+    assert captured["retune_boundary_threshold"] == 0.5
+    assert job_store.released == ["j1"]
+
+
+def test_run_subprocess_job_omits_none_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Optional kwargs left at None are NOT forwarded — otherwise
+    ``run_job_in_subprocess`` would receive ``mode=None`` and collide
+    with its own defaults."""
+    import lizystudio.services.subprocess_runner as sr
+    import lizystudio.services.workspace as ws_mod
+    from lizystudio.services import _training_core
+
+    captured: dict[str, object] = {}
+
+    def _fake_run(**kwargs: object) -> object:
+        captured.update(kwargs)
+
+        class _Finished:
+            fit_result = None
+            tune_result = None
+            job_id = "j1"
+
+        return _Finished()
+
+    monkeypatch.setattr(sr, "run_job_in_subprocess", _fake_run)
+    monkeypatch.setattr(ws_mod, "get_backend_name", lambda _ws: "stub-backend")
+
+    _training_core._run_subprocess_job(
+        _StubWsWithData(),  # type: ignore[arg-type]
+        _make_pending_tune_job(),  # type: ignore[arg-type]
+        _StubJobStoreForSubprocess(),  # type: ignore[arg-type]
+        _StubBroadcaster(),  # type: ignore[arg-type]
+    )
+
+    assert "mode" not in captured
+    assert "parent_job_id" not in captured
+    assert "retune_n_trials" not in captured
+    assert "retune_expand_boundary" not in captured
+    assert "retune_boundary_threshold" not in captured
+
+
+def test_run_subprocess_job_fails_when_no_data_loaded() -> None:
+    """WS error path: without a loaded dataset the job transitions to
+    failed, the slot is released, a single terminal metric is recorded,
+    and the broadcaster observes a clear error message."""
+    from lizystudio.services import _training_core
+
+    job_store = _StubJobStoreForSubprocess()
+    broadcaster = _StubBroadcaster()
+
+    result = _training_core._run_subprocess_job(
+        _StubWsNoData(),  # type: ignore[arg-type]
+        _make_pending_tune_job(),  # type: ignore[arg-type]
+        job_store,  # type: ignore[arg-type]
+        broadcaster,  # type: ignore[arg-type]
+    )
+
+    assert result.status == "failed"  # type: ignore[attr-defined]
+    assert "No data loaded" in (result.error or "")  # type: ignore[attr-defined]
+    assert job_store.released == ["j1"]
+    assert any("No data loaded" in msg for _, msg, _ in broadcaster.errors)
+    # Exactly one terminal metric — finally-block must not double-count.
+    assert len(job_store.terminals) == 1
+    assert job_store.terminals[0][1] == "failed"
