@@ -180,6 +180,7 @@
 ### 🟡 C-9. Format version fields 不在
 - **場所**: `backends/lizyml/pickle_compat.py:30` の `PICKLE_SCHEMA_VERSION = 1` だけ。`meta.json` / config JSON にはバージョンフィールドなし。
 - **対策**: 各保存物に `format_version: int` 埋め込み、`migrate_v1_to_v2` パターン準備。
+- **Proposal**: H-0081（2026-04-22, proposed）。Studio 共通 `STUDIO_FORMAT_VERSION` 定数 + 欠落キーは v0 自動 migration + unknown version は `IncompatibleFormatVersionError`。`model_meta.json` の backend 固有 `pickle_schema` は別レイヤとして継続保持。実装は accept 後の別 PR。
 
 ### 🟡 C-10. WS Origin allowlist ハードコード
 - **場所**: `ws/progress.py:117-122` に `localhost:5173|8501`, `127.0.0.1:5173|8501` 直書き。
