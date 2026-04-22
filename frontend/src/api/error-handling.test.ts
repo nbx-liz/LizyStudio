@@ -1,21 +1,14 @@
 /**
  * API error handling tests — verify that API functions propagate errors.
  *
- * Workspace block uses MSW (C-6 Phase 3 migration: workspace.ts calls
- * ``apiClient`` so the legacy ``vi.mock("./client")`` override no longer
- * intercepts its requests). Jobs block stays on ``vi.mock`` until Phase 4
- * migrates ``jobs.ts``, at which point the same rewrite applies.
+ * All blocks are MSW-driven after Phase 4: both workspace.ts and jobs.ts
+ * now route through ``apiClient``, so the legacy ``vi.mock("./client")``
+ * override is no longer needed. The suite now exercises the throw-on-
+ * error middleware end-to-end for every migrated fetcher.
  */
 import { HttpResponse, http } from "msw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { server } from "../test/mocks/server";
-
-vi.mock("./client", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./client")>();
-  return { ...actual, apiFetch: vi.fn() };
-});
-
-import { apiFetch } from "./client";
 import {
   cancelJob,
   deleteJob,
@@ -40,8 +33,6 @@ import {
   uploadData,
   validateConfig,
 } from "./workspace";
-
-const mockApiFetch = vi.mocked(apiFetch);
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -116,62 +107,66 @@ describe("workspace API error propagation", () => {
   });
 });
 
-// --- Jobs API error propagation ---
+// --- Jobs API error propagation (MSW-driven after Phase 4) ---
 
 describe("jobs API error propagation", () => {
-  const apiError = new Error("API error 500");
+  function jobsErrorHandler(path: string, method: "get" | "post" | "delete") {
+    return http[method](path, () =>
+      HttpResponse.json({ detail: "server error" }, { status: 500 }),
+    );
+  }
 
   it("fetchJobs rejects on error", async () => {
-    mockApiFetch.mockRejectedValue(apiError);
+    server.use(jobsErrorHandler("/api/jobs/", "get"));
     await expect(fetchJobs()).rejects.toThrow("API error 500");
   });
 
   it("fetchJob rejects on error", async () => {
-    mockApiFetch.mockRejectedValue(apiError);
+    server.use(jobsErrorHandler("/api/jobs/:jobId", "get"));
     await expect(fetchJob("job123")).rejects.toThrow("API error 500");
   });
 
   it("fetchJobImportance rejects on error", async () => {
-    mockApiFetch.mockRejectedValue(apiError);
+    server.use(jobsErrorHandler("/api/jobs/:jobId/importance", "get"));
     await expect(fetchJobImportance("job123")).rejects.toThrow("API error 500");
   });
 
   it("fetchJobPlot rejects on error", async () => {
-    mockApiFetch.mockRejectedValue(apiError);
+    server.use(jobsErrorHandler("/api/jobs/:jobId/plot/:plotType", "get"));
     await expect(fetchJobPlot("job123", "roc")).rejects.toThrow(
       "API error 500",
     );
   });
 
   it("fetchJobPlots rejects on error", async () => {
-    mockApiFetch.mockRejectedValue(apiError);
+    server.use(jobsErrorHandler("/api/jobs/:jobId/plots", "get"));
     await expect(fetchJobPlots("job123")).rejects.toThrow("API error 500");
   });
 
   it("fetchJobSplitSummary rejects on error", async () => {
-    mockApiFetch.mockRejectedValue(apiError);
+    server.use(jobsErrorHandler("/api/jobs/:jobId/split-summary", "get"));
     await expect(fetchJobSplitSummary("job123")).rejects.toThrow(
       "API error 500",
     );
   });
 
   it("fetchJobLog rejects on error", async () => {
-    mockApiFetch.mockRejectedValue(apiError);
+    server.use(jobsErrorHandler("/api/jobs/:jobId/log", "get"));
     await expect(fetchJobLog("job123")).rejects.toThrow("API error 500");
   });
 
   it("cancelJob rejects on error", async () => {
-    mockApiFetch.mockRejectedValue(apiError);
+    server.use(jobsErrorHandler("/api/jobs/:jobId/cancel", "post"));
     await expect(cancelJob("job123")).rejects.toThrow("API error 500");
   });
 
   it("deleteJob rejects on error", async () => {
-    mockApiFetch.mockRejectedValue(apiError);
+    server.use(jobsErrorHandler("/api/jobs/:jobId", "delete"));
     await expect(deleteJob("job123")).rejects.toThrow("API error 500");
   });
 
   it("exportJob rejects on error", async () => {
-    mockApiFetch.mockRejectedValue(apiError);
+    server.use(jobsErrorHandler("/api/jobs/:jobId/export", "post"));
     await expect(exportJob("job123", "model", "/out")).rejects.toThrow(
       "API error 500",
     );
