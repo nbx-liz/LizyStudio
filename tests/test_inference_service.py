@@ -725,3 +725,141 @@ def test_save_with_traversal_inf_id_raises(
     )
     with pytest.raises(ValueError, match="outside allowed root"):
         store.save(record, sample_predictions)
+
+
+# ---------------------------------------------------------------------------
+# Issue #241 — list / list_all tolerate a single corrupt meta.json
+# ---------------------------------------------------------------------------
+
+
+def _write_bad_meta(inf_dir: Path) -> None:
+    """Drop a bogus meta.json that will trip read_versioned_json."""
+    inf_dir.mkdir(parents=True, exist_ok=True)
+    (inf_dir / "meta.json").write_text("", encoding="utf-8")
+
+
+def test_list_skips_corrupt_meta_json(
+    inf_store: InferenceStore,
+    sample_predictions: pd.DataFrame,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """One corrupt record must not take the whole inference list down.
+
+    JobStore.list has skipped corrupt meta.json with a warning for a
+    long time; InferenceStore.list propagated the JSONDecodeError to
+    the REST handler → 500 on the history endpoint. This asserts the
+    two stores behave symmetrically (Issue #241).
+    """
+    healthy = InferenceRecord(
+        inf_id="inf_ok",
+        job_id="job_mixed",
+        data_ref=DataRef(
+            source_type="path",
+            path="/d.csv",
+            filename="d.csv",
+            fingerprint="fp",
+            shape=(5, 2),
+        ),
+        has_ground_truth=False,
+        created_at="2026-04-22T00:00:00Z",
+        row_count=5,
+        warnings=[],
+    )
+    inf_store.save(healthy, sample_predictions)
+
+    # Create a sibling directory with an empty meta.json (simulates a
+    # crash between truncate and write, or a concurrent delete).
+    bad_dir = inf_store.jobs_dir / "job_mixed" / "inferences" / "inf_bad"
+    _write_bad_meta(bad_dir)
+
+    with caplog.at_level("WARNING"):
+        records = inf_store.list("job_mixed")
+
+    assert [r.inf_id for r in records] == ["inf_ok"]
+    assert any("inf_bad" in rec.message for rec in caplog.records), (
+        "a warning must name the corrupt inference directory"
+    )
+
+
+def test_list_all_skips_corrupt_meta_json(
+    inf_store: InferenceStore,
+    sample_predictions: pd.DataFrame,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Cross-job variant of the above (list_all)."""
+    healthy = InferenceRecord(
+        inf_id="inf_ok",
+        job_id="job_a",
+        data_ref=DataRef(
+            source_type="path",
+            path="/d.csv",
+            filename="d.csv",
+            fingerprint="fp",
+            shape=(5, 2),
+        ),
+        has_ground_truth=False,
+        created_at="2026-04-22T00:00:00Z",
+        row_count=5,
+        warnings=[],
+    )
+    inf_store.save(healthy, sample_predictions)
+
+    bad_dir = inf_store.jobs_dir / "job_b" / "inferences" / "inf_bad"
+    _write_bad_meta(bad_dir)
+
+    with caplog.at_level("WARNING"):
+        records = inf_store.list_all()
+
+    assert [r.inf_id for r in records] == ["inf_ok"]
+    assert any("inf_bad" in rec.message for rec in caplog.records)
+
+
+def test_list_propagates_unexpected_errors(
+    inf_store: InferenceStore,
+    sample_predictions: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only expected I/O / JSON / key errors are swallowed; anything
+    else (e.g. programming errors in the record dataclass) must bubble
+    up so it can be debugged."""
+    healthy = InferenceRecord(
+        inf_id="inf_ok",
+        job_id="job_z",
+        data_ref=DataRef(
+            source_type="path",
+            path="/d.csv",
+            filename="d.csv",
+            fingerprint="fp",
+            shape=(5, 2),
+        ),
+        has_ground_truth=False,
+        created_at="2026-04-22T00:00:00Z",
+        row_count=5,
+        warnings=[],
+    )
+    inf_store.save(healthy, sample_predictions)
+
+    def _boom(_: Path) -> InferenceRecord:
+        raise RuntimeError("unexpected programming bug")
+
+    monkeypatch.setattr(inf_store, "_load_record", _boom)
+    with pytest.raises(RuntimeError, match="unexpected programming bug"):
+        inf_store.list("job_z")
+
+
+# ---------------------------------------------------------------------------
+# Issue #241 (M-3) — _compute_inf_metrics guards against missing 'pred' column
+# ---------------------------------------------------------------------------
+
+
+def test_compute_inf_metrics_raises_when_pred_column_missing() -> None:
+    """Backends that return a non-standard prediction column name must
+    surface a clear ValueError, not a late-bound KeyError that leaks
+    pandas internals through the REST surface."""
+    from lizystudio.services.inference import _compute_inf_metrics
+
+    pred_df = pd.DataFrame(
+        {"prediction": [0.1, 0.2], "actual": [0, 1]}  # 'pred' missing
+    )
+    with pytest.raises(ValueError, match="pred"):
+        _compute_inf_metrics(pred_df, {"task": "regression"})

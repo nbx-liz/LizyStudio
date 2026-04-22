@@ -2192,6 +2192,41 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - 2026-04-22 **Proposed** — Proposal のみ PR #229 で merge、実装は後続 PR。着手前に reviewer 合意を得るためのゲート entry。
   - 2026-04-22 **Implemented** — `src/lizystudio/storage/` パッケージを新規作成（`__init__.py` / `versions.py` / `migrations.py`）、`STUDIO_FORMAT_VERSION = 1` + `write_versioned_json` / `read_versioned_json` helper + `MIGRATIONS` chain + `migrate_to_current`。`backends/exceptions.py` に `IncompatibleFormatVersionError` 追加。`services/jobs.py` の `_write_json` / `_read_json` helper を versioned I/O に委譲（`_save_meta` と `update(fit_result / tune_result)` が全て自動で version 埋込）。`services/inference.py` の `save` (meta.json 書込) と `_load_record` (meta.json 読込) を versioned helper に置換。`format_version` は JSON の**先頭 key** として埋込（grep / head 友好的）。**Scope 調整** (Proposal §5 からの乖離): `inferences/{inf_id}/metrics.json` のみ **versioned 化から除外**。理由は backend-dependent な flat `{mae: 0.3, rmse: 0.5, ...}` 構造で、先頭 key 埋込は将来 `format_version` という metric と衝突、envelope 化は frontend の `fetchInferenceMetrics: Promise<Record<string, unknown>>` 契約を破壊するため。代わりに writer 箇所に NOTE コメントで revisit 条件（metrics.json が backend で Pydantic `response_model` を持った時）を明記。これにより対象は 4 種類に縮減 (meta.json / fit_result.json / tune_result.json / inference/meta.json)。Acceptance Criteria 達成状況: (a) 4 種類の writer 全てで `format_version: 1` 埋込 ✅（metrics.json は scope 外として明示）、(b) `tests/regression/test_reg_0081_v0_workspace_backward_compat.py` で pre-C-9 workspace が `JobStore.get` / `InferenceStore.get` から load できることを確認 ✅、(c) `format_version: 99` 等 unknown を読ませると `IncompatibleFormatVersionError` が raise される (`tests/test_storage_versions.py::test_unknown_version_raises_incompatible_error`) ✅、(d) `_migrate_v0_to_v1` は pure function で direct 呼び出し test 済 ✅、(e) 1164 pytest pass / ruff / ruff format / mypy / biome / tsc / pnpm build / raw-color-guard / no-apifetch-guard 全 clean ✅、(f) `model_meta.json` の `pickle_schema` は触らず H-0068 checkpoint 検証ロジック回帰なし ✅。
 
+### H-0082: Versioned JSON writer の atomic-write 保証（C-9 follow-up、Issue #232 / #239）
+- **Status:** proposed
+- **Scope:** Backend / Storage | **change-gate 対象** (write contract の invariant 追加、INV-level)
+- **Related:** H-0081 (C-9 / `write_versioned_json` / `read_versioned_json` 導入)、Issue #232（non-atomic `_write_json` race）、Issue #239（migration chain gap 未テスト）、CLAUDE.md `rules/common/invariants-first.md`
+- **Context:** H-0081 で導入した `write_versioned_json` は `path.write_text(text)` を直接使っている。これは POSIX では open-truncate-write の 3 ステップであり **atomic ではない**。concurrent reader が writer の truncate 直後に `path.read_text()` を呼ぶと空 / 部分バイトを掴み、`json.loads` が `JSONDecodeError` を raise する。実測: 2000 writer round × 8 reader で 14,152 件の `JSONDecodeError`（約 11% の reader が corruption を観測）。既存 `tests/test_job_state_transitions.py::TestConcurrentOperations::test_status_update_atomicity` は `PytestUnhandledThreadExceptionWarning` という形でこの race の発生を既に記録しているが、warning 止まりで assertion にはなっていない。本番では WS + polling の 2 系統で reader が常時走っているため、**random に job load が失敗するが retry で隠れている**状態と推定される。併せて Issue #239: `storage/migrations.py:66-71` の "No migration registered" RuntimeError パスが未到達（coverage 89%）。将来 `STUDIO_FORMAT_VERSION` を 2 に bump した際に `MIGRATIONS[1]` を書き忘れる回帰を CI で検出できない。H-0081 Acceptance Criteria (f) の補強として必要。
+- **Invariants:**
+  - INV-1: `write_versioned_json(path, payload)` 完了後、concurrent reader は**旧 payload 全体**か**新 payload 全体**のいずれかのみを観測する。部分バイト / 空ファイル状態を観測しない。
+  - INV-2: `migrate_to_current(data, from_version=N)` は `MIGRATIONS[N]` が存在しない場合、必ず `RuntimeError` を明示的に raise する（silent pass-through しない）。
+- **Proposal:**
+  1. **write_versioned_json を atomic 化**: `path.with_suffix(path.suffix + ".tmp")` に書いてから `os.replace(tmp, path)` で rename。POSIX と Windows の両方で rename は atomic。tmp ファイルは同一ディレクトリに置く（`os.replace` が cross-device でない保証）。suffix collision 対策として `os.getpid()` 等は入れない（writer はモジュール外からは単一 caller、pid 混在は起こらない）。
+  2. **INV-1 を docstring と test で明示**: "A reader observes either the prior payload or the new payload; never a partial byte sequence."
+  3. **Issue #239 対応の gap test 追加**: `tests/test_storage_versions.py::test_migrate_to_current_raises_when_chain_has_gap` — `monkeypatch` で `STUDIO_FORMAT_VERSION=3` にし、`MIGRATIONS={0: identity}` のまま `migrate_to_current({}, from_version=0)` → `RuntimeError` が "No migration registered for version 1" を含むメッセージで raise。
+- **Impact:**
+  - 修正: `src/lizystudio/storage/versions.py` の `write_versioned_json` 内 ~4 行（tmp path + `os.replace`）。
+  - 追加テスト: `tests/test_storage_versions.py` に 2 件（`test_write_versioned_json_is_atomic_under_concurrent_readers` + `test_migrate_to_current_raises_when_chain_has_gap`）。
+  - wire format / API 契約 / migration chain 定義: 不変。
+  - 既存 1164 tests の挙動変化: `test_status_update_atomicity` の `PytestUnhandledThreadExceptionWarning` 消失のみ（assertion は既に green）。
+- **Compatibility:**
+  - 既存 on-disk ファイルへの影響なし（読み書きのエンコーディング / 構造は不変）。
+  - tmp ファイルがクラッシュで残る可能性: 理論上あるが、`os.replace` は atomic で rename 前の tmp はパス違いなので reader は拾わない。次回 writer 呼出時に同名 tmp を上書きするだけ（cleanup は best-effort、data loss にはならない）。
+  - `Path.write_text` → `Path.with_suffix + os.replace` への置換は caller API 不変。
+- **Alternatives considered:**
+  - (a) **`fcntl.flock` による reader/writer mutex**: 却下。Windows 非対応、`lizystudio` は cross-platform で動く必要がある（PyPI 配布）。
+  - (b) **directory-level lock (filelock 外部依存)**: 却下。H-0081 の "dict ベース simple migration chain で十分" 原則と逆行、依存追加は overkill。
+  - (c) **`os.replace` による atomic rename** (採用): 標準ライブラリのみで完結、POSIX + Windows 対応、パフォーマンス影響なし（1 回の write_text が 1 回の write + 1 回の rename に変わるだけ）。
+  - (d) **double-write + checksum verify**: 却下。reader が JSONDecodeError を catch して retry する案は C-9 の "silent fallback を避ける" 原則に反する。
+- **Acceptance Criteria:**
+  - (a) `write_versioned_json` が tmp path + `os.replace` 経由で書き込む。
+  - (b) 新テスト `test_write_versioned_json_is_atomic_under_concurrent_readers`: writer×1 + reader×4 が 500 round 並走して `JSONDecodeError` 0 件、読み取り payload は旧 payload か新 payload のみ（partial state なし）を assert。
+  - (c) 既存 `test_status_update_atomicity` の `PytestUnhandledThreadExceptionWarning` が消える。
+  - (d) 新テスト `test_migrate_to_current_raises_when_chain_has_gap` が pass、`storage/migrations.py` coverage が 100% に到達。
+  - (e) 既存 1164 + 2 新規 test 全 pass、ruff / ruff format / mypy / biome / tsc / pnpm build 全 clean。
+  - (f) tmp ファイル残留がテスト実行後に存在しない（`os.replace` が成功時に消す、explicit cleanup は不要）。
+- **Decision:**
+  - 2026-04-22 **Proposed & Implemented** — 本 PR で Proposal + 実装 + 2 件の test を同時 merge。change-gate 最小構成として HISTORY 追記を伴う。
 ### H-0083: CORS / WS origin の env driven 化と WS allowlist 単発評価（Issue #233 / #234）
 - **Status:** proposed
 - **Scope:** Backend / Ops | **change-gate 対象** (新規 env 契約 `LIZYSTUDIO_CORS_ALLOWED_ORIGINS` 追加、deployment 前提が変わる)
