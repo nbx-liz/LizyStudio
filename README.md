@@ -91,6 +91,19 @@ lizystudio --port 9000  # custom port
 
 Open your browser and navigate to the URL shown in the terminal.
 
+### Deploying behind a non-localhost origin
+
+Set the comma-separated allowlist env vars so the server accepts your
+production URLs:
+
+```bash
+export LIZYSTUDIO_CORS_ALLOWED_ORIGINS="https://studio.example.com"
+export LIZYSTUDIO_WS_ALLOWED_ORIGINS="https://studio.example.com"
+```
+
+Both default to `http://localhost:5173` / the dev localhost set when the
+variables are unset.
+
 ### Typical workflow
 
 1. **Load data** — upload a CSV/Parquet or select a local file
