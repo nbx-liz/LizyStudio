@@ -19,6 +19,10 @@ from fastapi import Request
 
 from lizystudio.backends.types import DataRef, FitSummary, TuningSummary
 from lizystudio.security import validate_path_within  # noqa: E402
+from lizystudio.storage.versions import (  # noqa: E402
+    read_versioned_json,
+    write_versioned_json,
+)
 
 if TYPE_CHECKING:
     from lizystudio.metrics import JobType, MetricsRegistry, TerminalStatus
@@ -742,14 +746,28 @@ class JobStore:
         )
 
     @staticmethod
-    def _write_json(path: Path, data: Any) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        text = json.dumps(data, ensure_ascii=False, default=str)
-        path.write_text(text, encoding="utf-8")
+    def _write_json(path: Path, data: dict[str, Any]) -> None:
+        """Write a Studio-owned JSON artefact with ``format_version`` embedded.
+
+        Routes through :func:`lizystudio.storage.versions.write_versioned_json`
+        (C-9 / H-0081) so every persisted file declares its schema
+        version. ``data`` must already be a dict — fit/tune results and
+        job meta all derive from ``asdict(...)`` so this is satisfied
+        at the one call site that serialises a dataclass directly.
+        """
+        write_versioned_json(path, data)
 
     @staticmethod
-    def _read_json(path: Path) -> Any:
-        return json.loads(path.read_text(encoding="utf-8"))
+    def _read_json(path: Path) -> dict[str, Any]:
+        """Load a versioned JSON artefact and run migrations if needed.
+
+        Returns the migrated domain payload with the ``format_version``
+        sentinel stripped, so callers consume the same shape regardless
+        of whether the file was written by a pre-C-9 or post-C-9
+        runtime (missing key is treated as v0 per H-0081).
+        """
+        _, payload = read_versioned_json(path)
+        return payload
 
 
 def get_job_store(request: Request) -> JobStore:
