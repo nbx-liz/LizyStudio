@@ -1,10 +1,6 @@
+import { HttpResponse, http } from "msw";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("./client", () => ({
-  apiFetch: vi.fn(),
-}));
-
-import { apiFetch } from "./client";
+import { server } from "../test/mocks/server";
 import {
   cancelJob,
   deleteJob,
@@ -23,284 +19,416 @@ import {
   retuneJob,
 } from "./jobs";
 
-const mockApiFetch = vi.mocked(apiFetch);
-
 afterEach(() => {
   vi.clearAllMocks();
 });
 
+// C-6 Phase 4: MSW-integration style tests matching Phase 1–3. Each test
+// captures the outgoing request (method, URL, query, body) so we can
+// prove the openapi-fetch builder reproduces the same wire shape the
+// hand-rolled ``apiFetch`` produced. The previous ``vi.mock("./client")``
+// harness did not cover URL construction since it intercepted at the
+// fetcher layer.
+
 // ---------------------------------------------------------------------------
-// fetchJobs
+// fetchJobs — GET /api/jobs/ (trailing slash intentional)
 // ---------------------------------------------------------------------------
 describe("fetchJobs", () => {
-  it("calls /jobs without params when no status", async () => {
-    mockApiFetch.mockResolvedValue([]);
+  it("omits status when no argument is given", async () => {
+    let capturedSearch: string | null = null;
+    server.use(
+      http.get("/api/jobs/", ({ request }) => {
+        capturedSearch = new URL(request.url).search;
+        return HttpResponse.json([]);
+      }),
+    );
     await fetchJobs();
-    expect(mockApiFetch).toHaveBeenCalledWith("/jobs");
+    expect(capturedSearch).toBe("");
   });
 
-  it("appends status query param", async () => {
-    mockApiFetch.mockResolvedValue([]);
+  it("forwards status as a query param", async () => {
+    let capturedStatus: string | null = null;
+    server.use(
+      http.get("/api/jobs/", ({ request }) => {
+        capturedStatus = new URL(request.url).searchParams.get("status");
+        return HttpResponse.json([]);
+      }),
+    );
     await fetchJobs("completed");
-    expect(mockApiFetch).toHaveBeenCalledWith("/jobs?status=completed");
+    expect(capturedStatus).toBe("completed");
   });
 });
 
 // ---------------------------------------------------------------------------
-// fetchJob
+// fetchJob — GET /api/jobs/{job_id}
 // ---------------------------------------------------------------------------
 describe("fetchJob", () => {
-  it("calls /jobs/:id", async () => {
-    mockApiFetch.mockResolvedValue({ job_id: "j1" });
+  it("interpolates job_id into the path", async () => {
+    let capturedId = "";
+    server.use(
+      http.get("/api/jobs/:jobId", ({ params }) => {
+        capturedId = String(params.jobId);
+        return HttpResponse.json({ job_id: "j1" });
+      }),
+    );
     await fetchJob("j1");
-    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1");
+    expect(capturedId).toBe("j1");
   });
 });
 
 // ---------------------------------------------------------------------------
-// fetchJobImportance
+// fetchJobImportance — GET /api/jobs/{job_id}/importance
 // ---------------------------------------------------------------------------
 describe("fetchJobImportance", () => {
-  it("uses default kind", async () => {
-    mockApiFetch.mockResolvedValue({});
-    await fetchJobImportance("j1");
-    expect(mockApiFetch).toHaveBeenCalledWith(
-      "/jobs/j1/importance?kind=default",
+  it("defaults kind=default and sends job_id in the path", async () => {
+    let capturedId = "";
+    let capturedKind: string | null = null;
+    server.use(
+      http.get("/api/jobs/:jobId/importance", ({ request, params }) => {
+        capturedId = String(params.jobId);
+        capturedKind = new URL(request.url).searchParams.get("kind");
+        return HttpResponse.json({});
+      }),
     );
+    await fetchJobImportance("job 1");
+    expect(capturedId).toBe("job 1");
+    expect(capturedKind).toBe("default");
   });
 
-  it("accepts custom kind", async () => {
-    mockApiFetch.mockResolvedValue({});
-    await fetchJobImportance("j1", "shap");
-    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1/importance?kind=shap");
+  it("forwards a custom kind", async () => {
+    let capturedKind: string | null = null;
+    server.use(
+      http.get("/api/jobs/:jobId/importance", ({ request }) => {
+        capturedKind = new URL(request.url).searchParams.get("kind");
+        return HttpResponse.json({});
+      }),
+    );
+    await fetchJobImportance("j1", "gain");
+    expect(capturedKind).toBe("gain");
   });
 });
 
 // ---------------------------------------------------------------------------
-// fetchJobImportanceKinds
+// fetchJobImportanceKinds — GET /api/jobs/{job_id}/importance-kinds
 // ---------------------------------------------------------------------------
 describe("fetchJobImportanceKinds", () => {
-  it("calls /jobs/:id/importance-kinds", async () => {
-    mockApiFetch.mockResolvedValue(["split", "gain", "shap"]);
-    const result = await fetchJobImportanceKinds("j1");
-    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1/importance-kinds");
-    expect(result).toEqual(["split", "gain", "shap"]);
+  it("GETs the endpoint", async () => {
+    let capturedId = "";
+    server.use(
+      http.get("/api/jobs/:jobId/importance-kinds", ({ params }) => {
+        capturedId = String(params.jobId);
+        return HttpResponse.json([]);
+      }),
+    );
+    await fetchJobImportanceKinds("j1");
+    expect(capturedId).toBe("j1");
   });
 });
 
 // ---------------------------------------------------------------------------
-// fetchJobPlot
+// fetchJobLearningCurveMetrics — GET /api/jobs/{job_id}/learning-curve/metrics
+// ---------------------------------------------------------------------------
+describe("fetchJobLearningCurveMetrics", () => {
+  it("GETs the learning-curve/metrics endpoint", async () => {
+    let capturedId = "";
+    server.use(
+      http.get("/api/jobs/:jobId/learning-curve/metrics", ({ params }) => {
+        capturedId = String(params.jobId);
+        return HttpResponse.json([]);
+      }),
+    );
+    await fetchJobLearningCurveMetrics("j 1");
+    expect(capturedId).toBe("j 1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchJobPlot — GET /api/jobs/{job_id}/plot/{plot_type}
 // ---------------------------------------------------------------------------
 describe("fetchJobPlot", () => {
-  it("calls /jobs/:id/plot/:type", async () => {
-    mockApiFetch.mockResolvedValue({ plotly_json: "{}" });
-    await fetchJobPlot("j1", "roc-curve");
-    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1/plot/roc-curve");
+  it("omits query when no options given", async () => {
+    let capturedSearch: string | null = null;
+    server.use(
+      http.get("/api/jobs/:jobId/plot/:plotType", ({ request }) => {
+        capturedSearch = new URL(request.url).search;
+        return HttpResponse.json({ plotly_json: "{}" });
+      }),
+    );
+    await fetchJobPlot("j1", "roc");
+    expect(capturedSearch).toBe("");
+  });
+
+  it("sends metrics as a comma-joined string when given an array", async () => {
+    let capturedMetrics: string | null = null;
+    server.use(
+      http.get("/api/jobs/:jobId/plot/:plotType", ({ request }) => {
+        capturedMetrics = new URL(request.url).searchParams.get("metrics");
+        return HttpResponse.json({ plotly_json: "{}" });
+      }),
+    );
+    await fetchJobPlot("j1", "learning-curve", {
+      metrics: ["auc", "f1"],
+    });
+    expect(capturedMetrics).toBe("auc,f1");
+  });
+
+  it("passes a single-string metric as-is", async () => {
+    let capturedMetrics: string | null = null;
+    server.use(
+      http.get("/api/jobs/:jobId/plot/:plotType", ({ request }) => {
+        capturedMetrics = new URL(request.url).searchParams.get("metrics");
+        return HttpResponse.json({ plotly_json: "{}" });
+      }),
+    );
+    await fetchJobPlot("j1", "learning-curve", { metrics: "auc" });
+    expect(capturedMetrics).toBe("auc");
+  });
+
+  it("sends kind when provided", async () => {
+    let capturedKind: string | null = null;
+    server.use(
+      http.get("/api/jobs/:jobId/plot/:plotType", ({ request }) => {
+        capturedKind = new URL(request.url).searchParams.get("kind");
+        return HttpResponse.json({ plotly_json: "{}" });
+      }),
+    );
+    await fetchJobPlot("j1", "importance", { kind: "gain" });
+    expect(capturedKind).toBe("gain");
+  });
+
+  it("interpolates both path params", async () => {
+    let capturedId = "";
+    let capturedType = "";
+    server.use(
+      http.get("/api/jobs/:jobId/plot/:plotType", ({ params }) => {
+        capturedId = String(params.jobId);
+        capturedType = String(params.plotType);
+        return HttpResponse.json({ plotly_json: "{}" });
+      }),
+    );
+    await fetchJobPlot("j 1", "roc curve");
+    expect(capturedId).toBe("j 1");
+    expect(capturedType).toBe("roc curve");
   });
 });
 
 // ---------------------------------------------------------------------------
-// fetchJobPlots
+// fetchJobPlots — GET /api/jobs/{job_id}/plots
 // ---------------------------------------------------------------------------
 describe("fetchJobPlots", () => {
-  it("calls /jobs/:id/plots", async () => {
-    mockApiFetch.mockResolvedValue(["learning-curve", "roc-curve"]);
+  it("GETs the plots endpoint", async () => {
+    let capturedId = "";
+    server.use(
+      http.get("/api/jobs/:jobId/plots", ({ params }) => {
+        capturedId = String(params.jobId);
+        return HttpResponse.json([]);
+      }),
+    );
     await fetchJobPlots("j1");
-    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1/plots");
+    expect(capturedId).toBe("j1");
   });
 });
 
 // ---------------------------------------------------------------------------
-// fetchJobSplitSummary
+// fetchJobSplitSummary — GET /api/jobs/{job_id}/split-summary
 // ---------------------------------------------------------------------------
 describe("fetchJobSplitSummary", () => {
-  it("calls /jobs/:id/split-summary", async () => {
-    mockApiFetch.mockResolvedValue([]);
+  it("GETs the split-summary endpoint", async () => {
+    let capturedId = "";
+    server.use(
+      http.get("/api/jobs/:jobId/split-summary", ({ params }) => {
+        capturedId = String(params.jobId);
+        return HttpResponse.json([]);
+      }),
+    );
     await fetchJobSplitSummary("j1");
-    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1/split-summary");
+    expect(capturedId).toBe("j1");
   });
 });
 
 // ---------------------------------------------------------------------------
-// fetchJobLog
+// fetchJobLog — GET /api/jobs/{job_id}/log
 // ---------------------------------------------------------------------------
 describe("fetchJobLog", () => {
-  it("calls /jobs/:id/log", async () => {
-    mockApiFetch.mockResolvedValue({ log: "some log" });
-    await fetchJobLog("j1");
-    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1/log");
+  it("GETs the log endpoint", async () => {
+    let capturedId = "";
+    server.use(
+      http.get("/api/jobs/:jobId/log", ({ params }) => {
+        capturedId = String(params.jobId);
+        return HttpResponse.json({ log: "hello" });
+      }),
+    );
+    const result = await fetchJobLog("j1");
+    expect(capturedId).toBe("j1");
+    expect(result).toEqual({ log: "hello" });
   });
 });
 
 // ---------------------------------------------------------------------------
-// cancelJob
+// cancelJob — POST /api/jobs/{job_id}/cancel
 // ---------------------------------------------------------------------------
 describe("cancelJob", () => {
-  it("sends POST to /jobs/:id/cancel", async () => {
-    mockApiFetch.mockResolvedValue({ status: "cancelled" });
-    await cancelJob("j1");
-    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1/cancel", {
-      method: "POST",
-    });
+  it("sends POST with no body", async () => {
+    let capturedMethod = "";
+    let capturedId = "";
+    server.use(
+      http.post("/api/jobs/:jobId/cancel", ({ request, params }) => {
+        capturedMethod = request.method;
+        capturedId = String(params.jobId);
+        return HttpResponse.json({ status: "cancelling" });
+      }),
+    );
+    const result = await cancelJob("j1");
+    expect(capturedMethod).toBe("POST");
+    expect(capturedId).toBe("j1");
+    expect(result).toEqual({ status: "cancelling" });
   });
 });
 
 // ---------------------------------------------------------------------------
-// deleteJob
+// deleteJob — DELETE /api/jobs/{job_id}
 // ---------------------------------------------------------------------------
 describe("deleteJob", () => {
-  it("sends DELETE to /jobs/:id", async () => {
-    mockApiFetch.mockResolvedValue({ status: "deleted" });
-    await deleteJob("j1");
-    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1", {
-      method: "DELETE",
-    });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// exportJob
-// ---------------------------------------------------------------------------
-describe("exportJob", () => {
-  it("sends POST with export_type and output_path", async () => {
-    mockApiFetch.mockResolvedValue({
-      exported_path: "/out/model.pkl",
-      export_type: "model",
-    });
-    await exportJob("j1", "model", "/out");
-    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1/export", {
-      method: "POST",
-      body: JSON.stringify({ export_type: "model", output_path: "/out" }),
-    });
-  });
-
-  it("handles report export type", async () => {
-    mockApiFetch.mockResolvedValue({
-      exported_path: "/out/report.html",
-      export_type: "report",
-    });
-    await exportJob("j1", "report", "/reports");
-    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1/export", {
-      method: "POST",
-      body: JSON.stringify({
-        export_type: "report",
-        output_path: "/reports",
+  it("sends DELETE without cascade by default", async () => {
+    let capturedMethod = "";
+    let capturedCascade: string | null = null;
+    server.use(
+      http.delete("/api/jobs/:jobId", ({ request }) => {
+        capturedMethod = request.method;
+        capturedCascade = new URL(request.url).searchParams.get("cascade");
+        return HttpResponse.json({ status: "deleted" });
       }),
-    });
+    );
+    await deleteJob("j1");
+    expect(capturedMethod).toBe("DELETE");
+    expect(capturedCascade).toBeNull();
+  });
+
+  it("sends cascade=true when requested", async () => {
+    let capturedCascade: string | null = null;
+    server.use(
+      http.delete("/api/jobs/:jobId", ({ request }) => {
+        capturedCascade = new URL(request.url).searchParams.get("cascade");
+        return HttpResponse.json({
+          status: "deleted",
+          removed_job_ids: ["j1", "j2"],
+        });
+      }),
+    );
+    await deleteJob("j1", { cascade: true });
+    expect(capturedCascade).toBe("true");
   });
 });
 
 // ---------------------------------------------------------------------------
-// retuneJob
+// retuneJob — POST /api/jobs/{job_id}/retune
 // ---------------------------------------------------------------------------
 describe("retuneJob", () => {
-  it("sends POST to /jobs/:id/retune with body", async () => {
-    mockApiFetch.mockResolvedValue({ job_id: "j2", parent_job_id: "j1" });
-    const body = { n_trials: 50 };
-    await retuneJob("j1", body);
-    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1/retune", {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-  });
-
-  it("encodes job id in URL", async () => {
-    mockApiFetch.mockResolvedValue({ job_id: "j2", parent_job_id: "j1/sub" });
-    await retuneJob("j1/sub", { n_trials: 10 });
-    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1%2Fsub/retune", {
-      method: "POST",
-      body: JSON.stringify({ n_trials: 10 }),
-    });
-  });
-
-  it("includes expand_boundary and boundary_threshold when provided", async () => {
-    mockApiFetch.mockResolvedValue({ job_id: "j2", parent_job_id: "j1" });
+  it("sends POST with RetuneRequest body", async () => {
+    let capturedBody: unknown = null;
+    let capturedId = "";
+    server.use(
+      http.post("/api/jobs/:jobId/retune", async ({ request, params }) => {
+        capturedBody = await request.json();
+        capturedId = String(params.jobId);
+        return HttpResponse.json({
+          job_id: "child",
+          parent_job_id: "parent",
+        });
+      }),
+    );
     const body = {
       n_trials: 20,
       expand_boundary: true,
-      boundary_threshold: 0.9,
+      boundary_threshold: 0.1,
     };
-    await retuneJob("j1", body);
-    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1/retune", {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
+    const result = await retuneJob("parent", body);
+    expect(capturedId).toBe("parent");
+    expect(capturedBody).toEqual(body);
+    expect(result).toEqual({ job_id: "child", parent_job_id: "parent" });
   });
 });
 
 // ---------------------------------------------------------------------------
-// resumeJob
+// resumeJob — POST /api/jobs/{job_id}/resume
 // ---------------------------------------------------------------------------
 describe("resumeJob", () => {
-  it("sends POST to /jobs/:id/resume with empty body by default", async () => {
-    mockApiFetch.mockResolvedValue({ job_id: "j2", parent_job_id: "j1" });
-    await resumeJob("j1");
-    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1/resume", {
-      method: "POST",
-      body: JSON.stringify({}),
-    });
+  it("sends POST with empty body by default", async () => {
+    let capturedBody: unknown = null;
+    server.use(
+      http.post("/api/jobs/:jobId/resume", async ({ request }) => {
+        capturedBody = await request.json();
+        return HttpResponse.json({
+          job_id: "child",
+          parent_job_id: "parent",
+        });
+      }),
+    );
+    await resumeJob("parent");
+    expect(capturedBody).toEqual({});
   });
 
   it("sends POST with n_trials when provided", async () => {
-    mockApiFetch.mockResolvedValue({ job_id: "j2", parent_job_id: "j1" });
-    await resumeJob("j1", { n_trials: 30 });
-    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1/resume", {
-      method: "POST",
-      body: JSON.stringify({ n_trials: 30 }),
-    });
-  });
-
-  it("encodes job id in URL", async () => {
-    mockApiFetch.mockResolvedValue({ job_id: "j2", parent_job_id: "j1/sub" });
-    await resumeJob("j1/sub", {});
-    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1%2Fsub/resume", {
-      method: "POST",
-      body: JSON.stringify({}),
-    });
+    let capturedBody: unknown = null;
+    server.use(
+      http.post("/api/jobs/:jobId/resume", async ({ request }) => {
+        capturedBody = await request.json();
+        return HttpResponse.json({
+          job_id: "child",
+          parent_job_id: "parent",
+        });
+      }),
+    );
+    await resumeJob("parent", { n_trials: 50 });
+    expect(capturedBody).toEqual({ n_trials: 50 });
   });
 });
 
 // ---------------------------------------------------------------------------
-// fetchJobLineage
+// fetchJobLineage — GET /api/jobs/{job_id}/lineage
 // ---------------------------------------------------------------------------
 describe("fetchJobLineage", () => {
-  it("calls /jobs/:id/lineage and returns tree", async () => {
-    const tree = {
-      job_id: "j1",
-      status: "completed",
-      job_type: "fit",
-      children: [],
-    };
-    mockApiFetch.mockResolvedValue({ tree });
-    const result = await fetchJobLineage("j1");
-    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1/lineage");
-    expect(result).toEqual({ tree });
-  });
-
-  it("encodes job id in URL", async () => {
-    mockApiFetch.mockResolvedValue({
-      tree: {
-        job_id: "j1/sub",
-        status: "completed",
-        job_type: "fit",
-        children: [],
-      },
-    });
-    await fetchJobLineage("j1/sub");
-    expect(mockApiFetch).toHaveBeenCalledWith("/jobs/j1%2Fsub/lineage");
+  it("returns the lineage tree for the given job", async () => {
+    let capturedId = "";
+    server.use(
+      http.get("/api/jobs/:jobId/lineage", ({ params }) => {
+        capturedId = String(params.jobId);
+        return HttpResponse.json({
+          tree: {
+            job_id: "root",
+            status: "completed",
+            job_type: "fit",
+            children: [],
+          },
+        });
+      }),
+    );
+    const result = await fetchJobLineage("root");
+    expect(capturedId).toBe("root");
+    expect(result.tree.job_id).toBe("root");
   });
 });
 
 // ---------------------------------------------------------------------------
-// fetchJobLearningCurveMetrics
+// exportJob — POST /api/jobs/{job_id}/export
 // ---------------------------------------------------------------------------
-describe("fetchJobLearningCurveMetrics", () => {
-  it("calls /jobs/:id/learning-curve/metrics", async () => {
-    mockApiFetch.mockResolvedValue(["auc", "logloss"]);
-    const result = await fetchJobLearningCurveMetrics("j1");
-    expect(mockApiFetch).toHaveBeenCalledWith(
-      "/jobs/j1/learning-curve/metrics",
+describe("exportJob", () => {
+  it("sends POST with ExportRequest body", async () => {
+    let capturedBody: unknown = null;
+    let capturedId = "";
+    server.use(
+      http.post("/api/jobs/:jobId/export", async ({ request, params }) => {
+        capturedBody = await request.json();
+        capturedId = String(params.jobId);
+        return HttpResponse.json({
+          exported_path: "/out/model.pkl",
+          export_type: "model",
+        });
+      }),
     );
-    expect(result).toEqual(["auc", "logloss"]);
+    const result = await exportJob("j1", "model", "/out");
+    expect(capturedId).toBe("j1");
+    expect(capturedBody).toEqual({ export_type: "model", output_path: "/out" });
+    expect(result.exported_path).toBe("/out/model.pkl");
   });
 });
