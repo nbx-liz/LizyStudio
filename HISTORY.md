@@ -2192,4 +2192,45 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - 2026-04-22 **Proposed** — Proposal のみ PR #229 で merge、実装は後続 PR。着手前に reviewer 合意を得るためのゲート entry。
   - 2026-04-22 **Implemented** — `src/lizystudio/storage/` パッケージを新規作成（`__init__.py` / `versions.py` / `migrations.py`）、`STUDIO_FORMAT_VERSION = 1` + `write_versioned_json` / `read_versioned_json` helper + `MIGRATIONS` chain + `migrate_to_current`。`backends/exceptions.py` に `IncompatibleFormatVersionError` 追加。`services/jobs.py` の `_write_json` / `_read_json` helper を versioned I/O に委譲（`_save_meta` と `update(fit_result / tune_result)` が全て自動で version 埋込）。`services/inference.py` の `save` (meta.json 書込) と `_load_record` (meta.json 読込) を versioned helper に置換。`format_version` は JSON の**先頭 key** として埋込（grep / head 友好的）。**Scope 調整** (Proposal §5 からの乖離): `inferences/{inf_id}/metrics.json` のみ **versioned 化から除外**。理由は backend-dependent な flat `{mae: 0.3, rmse: 0.5, ...}` 構造で、先頭 key 埋込は将来 `format_version` という metric と衝突、envelope 化は frontend の `fetchInferenceMetrics: Promise<Record<string, unknown>>` 契約を破壊するため。代わりに writer 箇所に NOTE コメントで revisit 条件（metrics.json が backend で Pydantic `response_model` を持った時）を明記。これにより対象は 4 種類に縮減 (meta.json / fit_result.json / tune_result.json / inference/meta.json)。Acceptance Criteria 達成状況: (a) 4 種類の writer 全てで `format_version: 1` 埋込 ✅（metrics.json は scope 外として明示）、(b) `tests/regression/test_reg_0081_v0_workspace_backward_compat.py` で pre-C-9 workspace が `JobStore.get` / `InferenceStore.get` から load できることを確認 ✅、(c) `format_version: 99` 等 unknown を読ませると `IncompatibleFormatVersionError` が raise される (`tests/test_storage_versions.py::test_unknown_version_raises_incompatible_error`) ✅、(d) `_migrate_v0_to_v1` は pure function で direct 呼び出し test 済 ✅、(e) 1164 pytest pass / ruff / ruff format / mypy / biome / tsc / pnpm build / raw-color-guard / no-apifetch-guard 全 clean ✅、(f) `model_meta.json` の `pickle_schema` は触らず H-0068 checkpoint 検証ロジック回帰なし ✅。
 
-
+### H-0084: ModelCache の per-app 化（Phase 3 coupling refactor A-7 follow-up、Issue #235）
+- **Status:** proposed
+- **Scope:** Backend / Services | **change-gate 対象** (内部 API 変更：`services/jobs.py` の back-compat re-export からいくつかの名前を除去、`JobStore` に `load_model` / `clear_model_cache_for` メソッド追加)
+- **Related:** A-7（PR #194, H-0070 — `services/jobs.py` の God Module 分割）、A-9（PR #211, H-0075 — per-app `MetricsRegistry`）、Issue #235
+- **Context:** A-7 で `services/jobs.py` から分離した `services/job_results.py` はモジュール level の global `_model_cache` / `_model_cache_lock` を持ち、`load_job_model` / `clear_model_cache` / `clear_model_cache_for` が関数としてそれを参照する。このパターンは A-9 で per-app 化した `MetricsRegistry` の方向性と逆行しており、2 つの app instance を同一プロセスで走らせると cache 内容が混線する。テストが `clear_model_cache()` を fixture で明示的に呼ぶ necessity も、global state が原因である。
+- **Invariants:**
+  - INV-1: 2 つの `JobStore` インスタンスは互いに model cache を共有しない。片方で load / cache したモデルは他方からは観測されない。
+  - INV-2: `JobStore.delete(job_id)` は、削除対象の `model_path` に対応する cache エントリを削除する（A-7 時代の動作を保持）。
+  - INV-3: 公開 API （`JobStore.load_model`, `JobStore.clear_model_cache`, `JobStore.clear_model_cache_for`）は caller から安全に呼べる（内部 lock で synchronized）。
+- **Proposal:**
+  1. **`ModelCache` クラス新設**: `services/job_results.py` に `class ModelCache` を定義（LRU OrderedDict + `threading.Lock` を保持）。`load`/`clear`/`clear_for` メソッド。モジュール level の global state（`_model_cache`, `_model_cache_lock`）は削除。
+  2. **`JobStore` に ModelCache を所有**: `JobStore.__init__` で `self.model_cache = ModelCache(max_size=_MODEL_CACHE_MAX)`。`JobStore.load_model(job, backend)` / `JobStore.clear_model_cache()` / `JobStore.clear_model_cache_for(model_path)` メソッドを追加。
+  3. **dispatch helpers (`get_metrics_table`, `get_importance` 等) は `cache: ModelCache` 引数を受け取る**: 既存の `(job, backend)` シグネチャを `(job, backend, cache)` に変更（breaking change、全 caller は `api/jobs.py` の 6 箇所）。caller は `ws.job_store.model_cache` を渡す形になる。
+  4. **モジュール level global 関数 `load_job_model` / `clear_model_cache` / `clear_model_cache_for` を削除**: `services/jobs.py` の back-compat re-export block からも除去。`__all__` からも除去。
+  5. **テスト更新**: `test_job_results.py` の 10 箇所と `test_jobs.py` の 1 箇所を ModelCache インスタンスベースに書き換え。`_reset_model_cache` autouse fixture は不要化（ModelCache インスタンスが test ごとに切れる）。
+  6. **新規テスト**: `test_model_cache_is_per_app` — 2 つの `JobStore` インスタンスが同じプロセス内で cache を分離することを assert（INV-1）。
+- **Impact:**
+  - 修正: `src/lizystudio/services/job_results.py`（LRU global → ModelCache クラス、helper 関数 6 個に `cache` 引数追加、合計 ~80 行の書き換え）。
+  - 修正: `src/lizystudio/services/jobs.py`（`JobStore` に 3 メソッド追加、`delete` 内の import を self.clear_model_cache_for に置換、back-compat re-export block から 3 名削除）。
+  - 修正: `src/lizystudio/api/jobs.py`（dispatch helper の 6 call site に `ws.job_store.model_cache` を追加）。
+  - 修正: `tests/test_job_results.py`（10 箇所を ModelCache 経由に変更）、`tests/test_jobs.py`（1 箇所を `JobStore.load_model` 経由に変更）。
+  - 追加: `tests/test_job_results.py` に `test_model_cache_is_per_app` 1 件。
+  - wire format / API 契約: 不変。
+  - 既存 1170+ tests の挙動変化: 関数シグネチャ変更に追従するが、assert は同じ。
+- **Compatibility:**
+  - **破壊的変更（repo 内部のみ）**: `load_job_model`, `clear_model_cache`, `clear_model_cache_for` のモジュールレベル関数、および `services/jobs.py` の同名 re-export が削除される。全 caller は repo 内部のため影響範囲は明確（PyPI export には含まれない）。
+  - `services/jobs.py` の back-compat re-export から `_get_jobs_dir` / `_load_tuning_plot_from_file` / 残 `get_*` helpers は保持（H-3 の指摘は別 Issue／別 PR で対応）。
+  - `ModelCache` クラス API は新規導入のため、既存依存なし。
+- **Alternatives considered:**
+  - (a) **shim を残す**: モジュール level の global を `_default_cache = ModelCache()` として残し、`load_job_model` / `clear_model_cache*` は deprecation warning で shim に委譲。**却下**：Issue #235 の目的（2 app 分離）を達成しない、deprecated が沈殿する。A-9 は shim なしで global→per-app を一気に倒した、PR-3 だけ shim 残すと方針不整合。
+  - (b) **helper を `JobStore` メソッドに統合**: `get_metrics_table` 等を全部 `JobStore.get_metrics_table(job, backend)` のメソッドにする。**採用しない**：dispatch helpers は "model" + "backend" 両方を横断する純粋関数なので、JobStore の責務（disk CRUD）と直交している。cache 引数化の方が責務分離が明確。
+  - (c) **`dataclass` ベースの ModelCache**: 内部 OrderedDict を dataclass field で持つ。**却下**：class だけで十分、dataclass にする利点なし。
+  - (d) **`weakref.WeakValueDictionary` で GC 任せ**: モデルオブジェクトへの weak reference で自動解放。**却下**：`maxsize=8` の LRU 契約を weak ref で保てない（GC タイミング非決定）、明示的な LRU の方が挙動が読める。
+- **Acceptance Criteria:**
+  - (a) `ModelCache` クラスが `services/job_results.py` に存在し、モジュール level global は削除。
+  - (b) `JobStore.__init__` で `ModelCache` インスタンスを所有、`JobStore.load_model` / `clear_model_cache` / `clear_model_cache_for` メソッドが動作。
+  - (c) `test_model_cache_is_per_app`: 2 つの `JobStore` が互いの cache を観測できない（INV-1）。
+  - (d) `JobStore.delete` が依然として対応 `model_path` の cache を invalidate（INV-2、既存 `test_job_store_delete_invalidates_model_cache` の書き換え版で）。
+  - (e) 既存 1170 pytest + 追加 1 件 = 1171 全 pass、ruff / ruff format / mypy / biome / tsc / pnpm build 全 clean。
+  - (f) `services/jobs.py` の `__all__` から `clear_model_cache`, `clear_model_cache_for`, `load_job_model` が除去される。
+- **Decision:**
+  - 2026-04-22 **Proposed & Implemented** — 本 PR で Proposal + 実装 + テスト書き換えを同時 merge。change-gate 最小構成。
