@@ -51,8 +51,22 @@ class CheckpointPreflightError(Exception):
     """
 
 
+class IncompatibleFormatVersionError(Exception):
+    """Raised when an on-disk JSON artefact carries a ``format_version``
+    this runtime does not know how to read (C-9 / H-0081).
+
+    The storage layer tolerates missing ``format_version`` keys by
+    treating them as v0 and running the identity migration, so existing
+    workspaces keep loading without user action. Unknown versions (e.g.
+    a workspace written by a future runtime) surface through this
+    exception so the user sees a clear error rather than silently
+    corrupted state.
+    """
+
+
 __all__ = [
     "CancelledError",
     "CheckpointIncompatibleError",
     "CheckpointPreflightError",
+    "IncompatibleFormatVersionError",
 ]

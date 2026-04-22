@@ -26,6 +26,10 @@ from lizystudio.backends.types import DataRef
 from lizystudio.security import validate_path_within  # noqa: E402
 from lizystudio.services.data import load_dataframe, make_data_ref
 from lizystudio.services.jobs import Job, JobStore
+from lizystudio.storage.versions import (
+    read_versioned_json,
+    write_versioned_json,
+)
 
 
 @dataclass
@@ -64,20 +68,27 @@ class InferenceStore:
         d = self._inf_dir(record.job_id, record.inf_id)
         d.mkdir(parents=True, exist_ok=True)
 
-        # meta.json
+        # meta.json — routed through the versioned writer (C-9 / H-0081).
         meta = asdict(record)
         meta["data_ref"]["shape"] = list(meta["data_ref"]["shape"])
-        (d / "meta.json").write_text(
-            json.dumps(meta, ensure_ascii=False, default=str), encoding="utf-8"
-        )
+        write_versioned_json(d / "meta.json", meta)
 
         # predictions.parquet
         predictions.to_parquet(d / "predictions.parquet", index=False)
 
-        # metrics.json (ground truth only)
+        # metrics.json (ground truth only).
+        # NOTE (C-9 / H-0081 scope): metrics.json intentionally stays
+        # unversioned. Its shape is a backend-dependent flat mapping
+        # (``{mae: 0.3, rmse: 0.5, ...}``) that frontend consumers
+        # treat as an open-ended ``Record<string, number>``. Embedding
+        # a ``format_version`` key would either collide with a future
+        # metric name or force an envelope that breaks the REST
+        # response contract. Revisit when metrics.json gains a
+        # response_model on the backend.
         if metrics is not None:
             (d / "metrics.json").write_text(
-                json.dumps(metrics, ensure_ascii=False, default=str), encoding="utf-8"
+                json.dumps(metrics, ensure_ascii=False, default=str),
+                encoding="utf-8",
             )
 
     def get(self, job_id: str, inf_id: str) -> InferenceRecord | None:
@@ -152,7 +163,9 @@ class InferenceStore:
 
     @staticmethod
     def _load_record(meta_path: Path) -> InferenceRecord:
-        raw = json.loads(meta_path.read_text(encoding="utf-8"))
+        # Tolerates pre-C-9 workspaces via the v0 identity migration in
+        # lizystudio.storage.versions (H-0081).
+        _, raw = read_versioned_json(meta_path)
         dr = raw["data_ref"]
         dr["shape"] = tuple(dr["shape"])
         return InferenceRecord(
