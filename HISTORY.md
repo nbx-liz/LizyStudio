@@ -2383,3 +2383,36 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (i) 既存 pytest / vitest 全 pass、ruff / biome / tsc / pnpm build 全 clean。
 - **Decision:**
   - 2026-04-23 **Proposed & Implemented** — 本 PR で Proposal + 実装を同時 merge。Issue #251 を close。
+
+### P-0087: UI schema と Pydantic の drift を contract test で禁止（Issue #258 / #259）
+- **Status:** proposed & implemented
+- **Scope:** Backend / Frontend / Testing
+- **Related:** Issue #258（UI Fit が defaults でも 422 で失敗）、Issue #259（umbrella: defaults round-trip invariant 欠如）、Issue #257（UI-driven E2E 不在）、P-0086
+- **Context:** `POST /api/workspace/fit` が defaults 由来の config でも 422 を返す regression が出た。root cause は `lizystudio/backends/lizyml_ui_schema.py` の `capabilities.cv_strategy_fields` が `stratified_kfold: [..., "shuffle"]` と宣言していたが、lizyml の `StratifiedKFoldConfig` は `shuffle` を受け付けない。フロント (`buildSyncedConfig`) は UI schema を信頼して `shuffle: true` を payload に注入し、`POST /fit` が reject。2 つのスキーマが手書きで育ち drift するクラスのバグで、層単位のユニットテストでは検出できない（defaults は Pydantic を通るので backend 単体は常に pass、フロントは自分の宣言を信じるので自己閉じた契約は常に pass）。
+- **Invariants:**
+  - INV-1: `ui_schema.capabilities.cv_strategy_fields[M]` が宣言する field は、対応する Pydantic CV variant（`<M>Config`）または `DataConfig` で accept されていなければならない。
+  - INV-2: `POST /config/validate` と `POST /fit` は同じ config に対し同じ verdict を返す（両方 accept か両方 reject）。
+  - INV-3: `GET /config/defaults` が返す config をそのまま `POST /fit` に渡すと 200 が返る（defaults round-trip）。
+  - INV-4: フロントの `FALLBACK_CV_STRATEGY_FIELDS` は backend `cv_strategy_fields` と一致する（boot 時の UI schema 未取得期でも drift させない）。
+- **Proposal & Impact:**
+  - `lizyml_ui_schema.py:515` の `stratified_kfold` から `shuffle` を削除、`blocked_group_kfold` から `n_splits` を削除、`stratified_group_kfold` に `shuffle` を追加（全て Pydantic 側と整合）。
+  - `frontend/src/components/workspace/cv-state.ts` の `FALLBACK_CV_STRATEGY_FIELDS` を同期。さらに `buildSplitConfig` の `n_splits` 無条件出力を active fields チェックで gate（code-review HIGH-1: `blocked_group_kfold` で依然 422 を起こしていた同クラスバグ）。
+  - 新規 `tests/contract/` ディレクトリを作成し以下を追加:
+    - `test_ui_schema_matches_pydantic.py` — INV-1 / INV-4 を lock。全 CV variant の field が Pydantic または DataConfig に存在すること、さらに frontend の `FALLBACK_CV_STRATEGY_FIELDS` が backend SSOT と一致することを assert。
+    - `test_validate_fit_symmetry.py` — INV-2 を lock。realistic な UI payload shape で parametrize し、validate / fit の verdict が一致することを assert。
+  - `tests/regression/test_reg_0258_defaults_roundtrip.py` — INV-3 を lock。binary / regression の defaults が `POST /fit` で 200 を返すことを assert。
+  - `frontend/tests/e2e/workspace-fit.spec.ts` に "UI: load data -> pick target -> click Fit -> fit returns 200" を追加（UI-driven Fit の golden path、Issue #257 の最小対応）。
+  - 既存 `tests/test_ui_schema.py::test_capabilities_cv_strategy_fields_ui_semantics`、`frontend/src/components/workspace/cv-section.test.ts`、`CvSection.component.test.tsx` の expected map を新 SSOT に合わせて更新。
+- **Compatibility:**
+  - UI-visible: `stratified_kfold` 選択時に Shuffle トグルが **表示されなくなる**（`CvSection.tsx` の `has("shuffle")` ゲートが自動で非表示化）。`kfold` では従来通り表示。将来 lizyml に `StratifiedKFoldConfig.shuffle` が追加されたら UI schema に戻すだけで復活する。
+  - API: 破壊的変更なし。defaults の shape 不変、fit / tune の受け入れ範囲は狭くなる方向（以前から reject されていた invalid payload を、フロントが作らなくなる）。
+- **Alternatives considered:**
+  - (A) lizyml 側の `StratifiedKFoldConfig` に `shuffle: bool = True` を追加: 将来検討。外部リポジトリの PR リードタイムが必要なため Phase 3 に繰り延べ。
+  - (C) backend でサーバー側 strip: 却下。invariant を守るのではなく symptom を隠すだけで、drift class は残る。
+- **Acceptance Criteria:**
+  - (a) `tests/contract/` の 2 suite + `tests/regression/test_reg_0258_defaults_roundtrip.py` が全て pass。
+  - (b) 既存 pytest / vitest / ruff / biome / build が全 pass。
+  - (c) UI-driven E2E "UI: load data -> pick target -> click Fit" が pass する（new spec）。
+  - (d) Issue #258 の再現手順を踏んでも 200 が返る（手動検証）。
+- **Decision:**
+  - 2026-04-23 **Proposed & Implemented** — Phase 1 PR で採用。#258 / #259 の最小止血 + 再発防止 contract を同梱。#257 は minimal happy path を今 PR で追加し、残りは Phase 2 PR で拡充。#259 の UI schema Pydantic 導出化は Phase 3 PR で別途検討。

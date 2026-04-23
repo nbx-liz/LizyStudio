@@ -265,4 +265,94 @@ test.describe("Workspace Fit Flow", () => {
 
     await expect(page).toHaveScreenshot("fit-data-loaded.png");
   });
+
+  /**
+   * Issue #257 / #258 / #259 — UI-driven Fit happy path.
+   *
+   * Before this spec, the E2E suite exercised Fit only through
+   * ``request.post``. The real frontend path — where
+   * ``buildSyncedConfig`` assembles a payload on top of backend defaults
+   * — was never run in CI, so drift between the UI schema helper and
+   * the lizyml Pydantic model (#258) could only be caught by live
+   * browser testing. This spec drives the minimal UI flow and fails if
+   * ``POST /api/workspace/fit`` comes back with anything other than 200.
+   */
+  test("UI: load data -> pick target -> click Fit -> fit returns 200", async ({
+    page,
+    request,
+  }, testInfo) => {
+    // 120s was too tight on slow CI (15s schema load + 15s combo enable +
+    // 30s fit accept + 90s poll) — 180s matches the existing API-only
+    // ``run fit, verify results`` spec.
+    test.setTimeout(180_000);
+    if (isMobileProject(testInfo)) {
+      // The mobile layout hides the Fit button behind the tab nav;
+      // covered separately by ui-improvements specs.
+      test.skip(true, "Mobile layout path is covered elsewhere");
+    }
+
+    const csvPath = createTestCsv();
+
+    await dismissOnboarding(page);
+    await page.goto("/");
+    await page.waitForLoadState("networkidle");
+    await openWorkspaceSectionIfMobile(page, testInfo, "data");
+
+    // Use the UI Path flow (more faithful to user behaviour than
+    // pre-seeding via API). The Data Source segment defaults to
+    // Upload; switch to Path, type the CSV path, and click Load.
+    await page.getByRole("radio", { name: "Path" }).click();
+    const pathInput = page.getByPlaceholder("/path/to/data.csv");
+    await pathInput.fill(csvPath);
+    await page.getByRole("button", { name: "Load" }).click();
+    await expect(
+      page.getByText(/100 rows × \d+ columns/),
+    ).toBeVisible({ timeout: 15_000 });
+
+    // Pick the target column so the UI can assemble a complete config.
+    const targetCombo = page.getByRole("combobox", {
+      name: /target column/i,
+    });
+    await expect(targetCombo).toBeEnabled({ timeout: 15_000 });
+    await targetCombo.click();
+    await page.getByRole("option", { name: "target" }).click();
+
+    await openWorkspaceSectionIfMobile(page, testInfo, "model");
+
+    // The Fit button enables once target is set and config is synced.
+    const fitButton = page.getByRole("button", { name: "Fit", exact: true });
+    await expect(fitButton).toBeEnabled({ timeout: 15_000 });
+
+    // Arm the response listener *before* clicking so we capture the
+    // POST /workspace/fit round trip the click triggers.
+    const fitResponsePromise = page.waitForResponse(
+      (res) =>
+        res.url().endsWith("/api/workspace/fit") && res.request().method() === "POST",
+      { timeout: 30_000 },
+    );
+
+    await fitButton.click();
+
+    const fitResponse = await fitResponsePromise;
+    expect(
+      fitResponse.status(),
+      `POST /workspace/fit must succeed for default UI flow (got ${fitResponse.status()}). ` +
+        `Body: ${await fitResponse.text()}`,
+    ).toBe(200);
+    const fitBody = await fitResponse.json();
+    expect(fitBody.job_id).toBeTruthy();
+
+    // Poll until the job completes so the regression net covers the
+    // full lifecycle, not just the accept-on-submit moment.
+    let status = "";
+    for (let i = 0; i < 45; i++) {
+      const jobRes = await request.get(`${API}/jobs/${fitBody.job_id}`);
+      expect(jobRes.status()).toBe(200);
+      const job = await jobRes.json();
+      status = job.status;
+      if (status === "completed" || status === "failed") break;
+      await page.waitForTimeout(2000);
+    }
+    expect(status).toBe("completed");
+  });
 });

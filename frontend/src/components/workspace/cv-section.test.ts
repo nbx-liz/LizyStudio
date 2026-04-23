@@ -19,9 +19,9 @@ import {
 // previously imported `CV_STRATEGY_FIELDS` from `./constants`.
 const CV_STRATEGY_FIELDS: Record<string, readonly string[]> = {
   kfold: ["n_splits", "random_state", "shuffle"],
-  stratified_kfold: ["n_splits", "random_state", "shuffle"],
+  stratified_kfold: ["n_splits", "random_state"],
   group_kfold: ["n_splits", "group_col"],
-  stratified_group_kfold: ["n_splits", "random_state", "group_col"],
+  stratified_group_kfold: ["n_splits", "random_state", "shuffle", "group_col"],
   time_series: [
     "n_splits",
     "time_col",
@@ -46,7 +46,6 @@ const CV_STRATEGY_FIELDS: Record<string, readonly string[]> = {
     "test_size_max",
   ],
   blocked_group_kfold: [
-    "n_splits",
     "time_col",
     "group_col",
     "min_train_rows",
@@ -168,7 +167,12 @@ describe("buildSplitConfig", () => {
       });
     });
 
-    it("stratified_kfold includes folds, random_state and shuffle when fields allow all three", () => {
+    it("stratified_kfold includes folds and random_state (no shuffle — see #258 / #259)", () => {
+      // Issue #258 / #259: stratified_kfold in the lizyml Pydantic
+      // schema does not accept `shuffle` (only `kfold` does). The UI
+      // schema was updated to match; buildSplitConfig must therefore
+      // drop `shuffle` for this strategy even though the UI toggle
+      // still exists in CvState.
       const cv: CvState = {
         ...INITIAL_CV_STATE,
         strategy: "stratified_kfold",
@@ -185,7 +189,6 @@ describe("buildSplitConfig", () => {
         method: "stratified_kfold",
         n_splits: 3,
         random_state: 0,
-        shuffle: true,
       });
     });
 
@@ -314,7 +317,10 @@ describe("buildSplitConfig", () => {
       expect(result.min_valid_rows).toBe(50);
     });
 
-    it("omits undefined optional cv fields but includes blocked defaults", () => {
+    it("omits undefined optional cv fields and does not emit n_splits (Pydantic rejects it)", () => {
+      // Issue #258 / #259: BlockedGroupKFoldConfig has no `n_splits`
+      // field and rejects extras. buildSplitConfig must gate n_splits
+      // on the active fields list (which excludes it for this strategy).
       const cv: CvState = {
         ...INITIAL_CV_STATE,
         strategy: "blocked_group_kfold",
@@ -325,10 +331,10 @@ describe("buildSplitConfig", () => {
       const result = buildSplitConfig(cv);
       expect(result).toEqual({
         method: "blocked_group_kfold",
-        n_splits: 3,
         mode: "expanding",
         train_window: 1,
       });
+      expect(result).not.toHaveProperty("n_splits");
     });
 
     it("includes blocked state fields (mode, train_window, cutoffs, stratify)", () => {

@@ -264,7 +264,10 @@ describe("CvSection", () => {
   // Additional strategy rendering tests
   // -------------------------------------------------------------------------
 
-  it("shows Folds, Random State, and Group column for stratified_group_kfold", () => {
+  it("shows Folds, Random State, Shuffle, and Group column for stratified_group_kfold", () => {
+    // Issue #258 / #259 / P-0087: StratifiedGroupKFoldConfig accepts
+    // `shuffle` (Pydantic default True). The UI now exposes it so the
+    // user can override the default without editing raw config.
     render(
       <CvSection
         cv={makeCvState({ strategy: "stratified_group_kfold" })}
@@ -274,8 +277,8 @@ describe("CvSection", () => {
     );
     expect(screen.getByText("Folds")).toBeInTheDocument();
     expect(screen.getByText("Random State")).toBeInTheDocument();
+    expect(screen.getByText("Shuffle")).toBeInTheDocument();
     expect(screen.getByText("Group column")).toBeInTheDocument();
-    expect(screen.queryByText("Shuffle")).not.toBeInTheDocument();
     expect(screen.queryByText("Time column")).not.toBeInTheDocument();
   });
 
