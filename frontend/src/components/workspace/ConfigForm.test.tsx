@@ -1260,6 +1260,136 @@ describe("ConfigForm — CalibrationSection onChange propagation", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Issue #253 — ConfigForm onChange handlers must use the latest snapshot
+// (`configRef.current`), not the captured `config` prop. Two writes in the
+// same render tick must both land in the final onChange payload.
+// ---------------------------------------------------------------------------
+
+describe("ConfigForm — Issue #253 configRef (two writes in same tick)", () => {
+  afterEach(() => {
+    cleanup();
+    dynParamCalls.length = 0;
+  });
+
+  it("preserves the first write when a second DynParam write fires in the same tick (numeric branch)", () => {
+    // Two essential DynParams fire onChange back-to-back without the parent
+    // re-rendering (simulates batched React updates + effect-driven writes
+    // that all target the same commit). If the numeric branch of
+    // handleHintChange still reads the captured `config`, the second write
+    // rebuilds params from the stale snapshot and loses the first write.
+    const onChange = vi.fn();
+    renderConfigForm({
+      schema: minimalSchema,
+      config: {
+        model: {
+          name: "lgbm",
+          params: { learning_rate: 0.1, max_depth: 6 },
+        },
+      },
+      onChange,
+      uiSchema: {
+        parameter_hints: [
+          { key: "learning_rate", kind: "number", label: "LR" },
+          { key: "max_depth", kind: "integer", label: "Depth" },
+        ],
+      } as unknown as UiSchema,
+    });
+
+    const lrParam = screen
+      .getAllByTestId("dyn-param")
+      .find((el) => el.dataset.hintKey === "learning_rate");
+    const depthParam = screen
+      .getAllByTestId("dyn-param")
+      .find((el) => el.dataset.hintKey === "max_depth");
+
+    // Fire both writes before the parent re-renders with the new config.
+    fireEvent.click(lrParam!);
+    fireEvent.click(depthParam!);
+
+    // The last onChange call represents the final state the backend would
+    // observe. Both writes must be present — neither may be overwritten by
+    // a stale-snapshot rebuild.
+    const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0];
+    expect(lastCall.model.params.learning_rate).toBe("__changed__");
+    expect(lastCall.model.params.max_depth).toBe("__changed__");
+  });
+
+  it("preserves a prior handleHintChange write when FeatureWeightsEditor writes in the same tick", () => {
+    // handleHintChange (objective) goes through handleFieldChange →
+    // configRef. FeatureWeightsEditor.onChange must also use configRef, or
+    // its write rebuilds config from the stale snapshot and drops the
+    // objective change.
+    const onChange = vi.fn();
+    renderConfigForm({
+      schema: minimalSchema,
+      config: {
+        model: { name: "lgbm", params: {}, feature_weights: null },
+      },
+      onChange,
+      columns: ["age"],
+      uiSchema: {
+        parameter_hints: [
+          { key: "objective", kind: "objective", label: "Obj" },
+        ],
+      } as unknown as UiSchema,
+    });
+
+    // 1. Objective change (goes via handleFieldChange / configRef)
+    const objParam = screen
+      .getAllByTestId("dyn-param")
+      .find((el) => el.dataset.hintKey === "objective");
+    fireEvent.click(objParam!);
+
+    // 2. FeatureWeightsEditor ON (Switch). Before the parent re-renders
+    //    with the new config from step 1.
+    const weightsSwitch = screen.getByLabelText(/enable feature weights/i);
+    fireEvent.click(weightsSwitch);
+
+    // The final onChange payload must carry BOTH: the objective set in
+    // step 1 and the feature_weights toggle from step 2.
+    const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0];
+    expect(lastCall.model.params.objective).toBe("__changed__");
+    expect(lastCall.model.feature_weights).toEqual({});
+  });
+
+  it("preserves a prior handleHintChange write when CalibrationSection toggles in the same tick", () => {
+    // CalibrationSection is the last onChange site migrated to
+    // handleFieldChange. Same race shape: objective set first via
+    // handleFieldChange, then CalibrationSection writes calibration.
+    const onChange = vi.fn();
+    renderConfigForm({
+      schema: minimalSchema,
+      config: { ...minimalConfig, calibration: null },
+      onChange,
+      task: "binary",
+      uiSchema: {
+        parameter_hints: [
+          { key: "objective", kind: "objective", label: "Obj" },
+        ],
+      } as unknown as UiSchema,
+    });
+
+    const objParam = screen
+      .getAllByTestId("dyn-param")
+      .find((el) => el.dataset.hintKey === "objective");
+    fireEvent.click(objParam!);
+
+    // Toggle calibration ON (null → defaults object)
+    const calibrationHeading = screen.getByText("Calibration");
+    const calibrationSection = calibrationHeading.closest(
+      '[data-slot="accordion-item"]',
+    ) as HTMLElement;
+    const toggle = within(calibrationSection).getByRole("switch");
+    fireEvent.click(toggle);
+
+    const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0];
+    expect(lastCall.model.params.objective).toBe("__changed__");
+    expect(lastCall.calibration).not.toBeNull();
+    expect(typeof lastCall.calibration).toBe("object");
+  });
+});
+
 describe("ConfigForm — advanced DynParam onChange propagation", () => {
   afterEach(() => {
     cleanup();

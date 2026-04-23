@@ -172,7 +172,10 @@ export function ConfigForm({
     [modelParams],
   );
 
-  // Handle changes from DynParam
+  // Handle changes from DynParam. All branches route through
+  // handleFieldChange so writes merge onto the latest configRef.current
+  // snapshot (Issue #253). Using the per-key path keeps every branch
+  // symmetric and lets setNestedValue do the shallow-copy merge.
   const handleHintChange = useCallback(
     (hint: import("@/api/types").ParameterHint, value: unknown) => {
       if (hint.kind === "objective") {
@@ -180,13 +183,10 @@ export function ConfigForm({
       } else if (hint.kind === "model_metric") {
         handleFieldChange(["model", "params", "metric"], value);
       } else {
-        // numeric/boolean → model.params.<key>
-        const newParams = { ...modelParams, [hint.key]: value };
-        const updated = setNestedValue(config, ["model", "params"], newParams);
-        onChange(updated);
+        handleFieldChange(["model", "params", hint.key], value);
       }
     },
-    [handleFieldChange, modelParams, config, onChange],
+    [handleFieldChange],
   );
 
   // Check which fields should be hidden by conditional_visibility
@@ -396,12 +396,10 @@ export function ConfigForm({
                         }
                         columns={columns}
                         onChange={(weights) => {
-                          const updated = setNestedValue(
-                            config,
+                          handleFieldChange(
                             ["model", "feature_weights"],
                             weights,
                           );
-                          onChange(updated);
                         }}
                       />
 
@@ -439,12 +437,7 @@ export function ConfigForm({
                         }
                         stepMap={uiSchema?.step_map}
                         onChange={(newParams) => {
-                          const updated = setNestedValue(
-                            config,
-                            ["model", "params"],
-                            newParams,
-                          );
-                          onChange(updated);
+                          handleFieldChange(["model", "params"], newParams);
                         }}
                         modelName={modelName}
                       />
@@ -502,12 +495,10 @@ export function ConfigForm({
                         <NumberInput
                           value={innerValidRatio}
                           onChange={(v) => {
-                            const updated = setNestedValue(
-                              config,
+                            handleFieldChange(
                               ["training", "inner_valid", "ratio"],
                               v ?? 0.2,
                             );
-                            onChange(updated);
                           }}
                           step={0.05}
                           min={0.01}
@@ -534,12 +525,7 @@ export function ConfigForm({
                   selectedMetrics={selectedMetrics}
                   metricsByTask={uiSchema?.option_sets?.metric}
                   onChange={(metrics) => {
-                    const updated = setNestedValue(
-                      config,
-                      ["evaluation", "metrics"],
-                      metrics,
-                    );
-                    onChange(updated);
+                    handleFieldChange(["evaluation", "metrics"], metrics);
                   }}
                   conditionalParams={{
                     precision_at_k: {
@@ -570,8 +556,7 @@ export function ConfigForm({
             calibrationDefaults={uiSchema?.defaults?.calibration}
             calibrationMethods={uiSchema?.calibration_methods ?? undefined}
             onChange={(cal) => {
-              const updated = { ...config, calibration: cal };
-              onChange(updated);
+              handleFieldChange(["calibration"], cal);
             }}
           />
         )}
