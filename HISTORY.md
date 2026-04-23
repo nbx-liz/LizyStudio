@@ -2344,3 +2344,42 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (f) 既存 pytest 1167+ / vitest 1624+ 全 pass、ruff / mypy / biome / tsc / pnpm build 全 clean。
 - **Decision:**
   - 2026-04-22 **Proposed & Implemented** — 本 PR で Proposal + 実装 + コメント付与を同時 merge。
+
+### P-0086: `/api/workspace/fit` と `/api/workspace/tune` に optional `config` body を受け入れる（Issue #251）
+- **Status:** proposed & implemented
+- **Scope:** Backend / Frontend | **change-gate 対象** — 公開 API の request body 拡張
+- **Related:** Issue #251、#248（独立した DOM ネスト問題）、#249（form section audit）、H-0076 / H-0077（useConfigSync / useDataPanel refactor の race-prone 前提を解消）
+- **Context:** Column Settings で Exclude をチェック直後に Fit を押すと、UI で exclude 表示になっている列が学習に使われる症状が報告された。原因は、`PUT /api/workspace/config` が非同期で in-flight のまま `POST /api/workspace/fit` が発火し、サーバー側の `ws.config`（更新前の snapshot）で job が作成される race condition。`/fit` `/tune` は body なしで呼ばれ `ws.config` に暗黙依存する設計であり、どんなにクライアントで flush しても送信中の window が残るため、構造的に脆い。
+- **Invariants:**
+  - INV-1: `POST /fit` の request body に `config` が与えられた場合、その config を validate → 成功時に `ws.config` を同じ内容に更新 → fit job を作成する。
+  - INV-2: `POST /fit` の `config` が省略された場合、従来通り `ws.config` を使う（後方互換）。
+  - INV-3: `POST /tune` も `config` 受け入れについて同じ振る舞いをする（tuning injection も含む）。
+  - INV-4: Frontend の `handleFit` / `handleTune` はクリック時点の React state から merged config を組み立て、body に載せて送る。これにより race window は構造的に存在しない。
+  - INV-5: `config` body は pydantic の `extra="forbid"` で未知フィールドを拒否する（request 自体のガード。内部 config の validate は backend adapter の `validate_config` に委譲）。
+- **Proposal & Impact:**
+  - `api/models.py` に `WorkspaceFitRequest(config: dict[str, Any] | None = None)` と `WorkspaceTuneRequest(config: dict[str, Any] | None = None)` を追加。
+  - `api/workspace.py` の `workspace_fit` / `workspace_tune` の signature に `body: WorkspaceFitRequest | None = None` / `WorkspaceTuneRequest | None = None` を追加。body.config があれば `validate_config` → `ws.set_config(body.config)` → 既存の fit / tune 起動パス。
+  - `frontend/src/api/generated/schema.d.ts` を `pnpm generate:api` で再生成。
+  - `frontend/src/api/workspace.ts` の `runFit` / `runTune` に optional `config?: Record<string, unknown>` 引数を追加し、body に載せる。
+  - `frontend/src/hooks/useConfigSync.ts` から merged config 組み立てロジックを `buildSyncedConfig` 純関数として抽出し、Fit / Tune ハンドラからも再利用できるようにする。
+  - `frontend/src/pages/WorkspacePage.tsx` の `handleFit` / `handleTune` が `buildSyncedConfig` で最新 state の config を組み立てて `runFit` / `runTune` に渡す。
+- **Compatibility:**
+  - wire format: request body を optional に拡張（後方互換）。既存の body なし呼び出しは従来通り `ws.config` を使って動作する。
+  - 既存 test / CLI / curl は変更不要。
+  - 新 body schema は `extra="forbid"` により将来の拡張を明示的に制御。
+- **Alternatives considered:**
+  - (A) クライアント側で in-flight PUT を await する `flushPending()`: 却下。変更は最小だが race の構造的脆弱性が残り、CommandPalette / 将来の Run エントリポイント / 外部クライアント（curl / E2E）では race が再発する。
+  - (C) `PUT /config` を同期的にし、完了前に次の PUT / POST をブロック: 却下。UI のレスポンシビリティと開発体験を損なう。
+  - (D) WebSocket による双方向 config 同期: 却下。複雑度が現状の問題スケールに対して過大。
+- **Acceptance Criteria:**
+  - (a) `api/models.py` に `WorkspaceFitRequest` / `WorkspaceTuneRequest` が存在し `extra="forbid"` がついている。
+  - (b) `workspace_fit` / `workspace_tune` が body.config あり / なし両方で動作する（ユニットテスト追加）。
+  - (c) body.config があれば `ws.config` がそれで上書きされ、その config で job meta が作られる。
+  - (d) body.config が validate 失敗なら 4xx、`ws.config` は不変。
+  - (e) `frontend/src/api/generated/schema.d.ts` が regenerate 済み。
+  - (f) `runFit(config?)` / `runTune(config?)` が optional 引数を受ける。
+  - (g) `useConfigSync` から `buildSyncedConfig` が抽出されテストされる。
+  - (h) `handleFit` / `handleTune` が最新 state の merged config を body で送信する（Vitest で検証）。
+  - (i) 既存 pytest / vitest 全 pass、ruff / biome / tsc / pnpm build 全 clean。
+- **Decision:**
+  - 2026-04-23 **Proposed & Implemented** — 本 PR で Proposal + 実装を同時 merge。Issue #251 を close。

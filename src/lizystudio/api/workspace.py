@@ -11,10 +11,10 @@ import tempfile
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import yaml
-from fastapi import APIRouter, Depends, Query, Request, UploadFile  # noqa: F401
+from fastapi import APIRouter, Body, Depends, Query, Request, UploadFile  # noqa: F401
 from fastapi.responses import Response
 from pydantic import BaseModel  # noqa: F401
 
@@ -39,7 +39,9 @@ from lizystudio.api.models import (
     PreviewResponseModel,
     SplitPreviewResponseModel,
     ValidationResponse,
+    WorkspaceFitRequest,
     WorkspaceStatusResponse,
+    WorkspaceTuneRequest,
 )
 from lizystudio.security import (
     check_dataframe_memory,
@@ -507,11 +509,30 @@ def config_download(
 
 @router.post("/fit", response_model=JobStartResponse)
 def workspace_fit(
+    body: Annotated[WorkspaceFitRequest, Body()] = WorkspaceFitRequest(),
     ws: WorkspaceState = Depends(get_workspace),
     job_store: JobStore = Depends(get_job_store),
     broadcaster: ProgressBroadcaster = Depends(get_broadcaster),
 ) -> dict[str, Any]:
-    """Create a fit job (thread managed by Service layer)."""
+    """Create a fit job (thread managed by Service layer).
+
+    P-0086 (Issue #251): ``body.config`` may be provided to atomically
+    overwrite ``ws.config`` at fit time, closing the race window between
+    a pending ``PUT /config`` and the ``POST /fit`` call. The body is
+    declared with a ``WorkspaceFitRequest()`` default (rather than
+    ``| None``) because ``from __future__ import annotations`` together
+    with ``Optional`` + ``Depends`` breaks FastAPI's body detection,
+    causing the parameter to be parsed as a query string.
+    """
+    # P-0086: apply body.config first so validate runs against what the
+    # caller actually wants to fit, and so ws.config ends up matching
+    # the config recorded in the job's meta.json.
+    if body.config is not None:
+        candidate = body.config
+        errors = validate_config(ws, candidate)
+        if errors:
+            raise ValidationError(errors)
+        ws.set_config(candidate)
     if not ws.config:
         raise WorkspaceNoConfigError()
     if ws.dataframe is None or ws.data_ref is None:
@@ -563,11 +584,25 @@ def workspace_fit(
 
 @router.post("/tune", response_model=JobStartResponse)
 def workspace_tune(
+    body: Annotated[WorkspaceTuneRequest, Body()] = WorkspaceTuneRequest(),
     ws: WorkspaceState = Depends(get_workspace),
     job_store: JobStore = Depends(get_job_store),
     broadcaster: ProgressBroadcaster = Depends(get_broadcaster),
 ) -> dict[str, Any]:
-    """Create a tune job (thread managed by Service layer)."""
+    """Create a tune job (thread managed by Service layer).
+
+    P-0086 (Issue #251): ``body.config`` may be provided to atomically
+    overwrite ``ws.config`` at tune time. See ``workspace_fit`` above
+    for the rationale behind the ``WorkspaceTuneRequest()`` default.
+    """
+    # P-0086: same semantics as workspace_fit — body.config wins and
+    # updates ws.config before tuning injection / validation runs.
+    if body.config is not None:
+        candidate = body.config
+        errors = validate_config(ws, candidate)
+        if errors:
+            raise ValidationError(errors)
+        ws.set_config(candidate)
     if not ws.config:
         raise WorkspaceNoConfigError()
     if ws.dataframe is None or ws.data_ref is None:

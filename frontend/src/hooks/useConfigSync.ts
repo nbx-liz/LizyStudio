@@ -8,13 +8,12 @@ import {
 } from "@/api/workspace";
 import type { BlockedGroupKFoldState } from "@/components/workspace/BlockedGroupKFoldEditor";
 import {
-  applyCvDataFields,
-  buildSplitConfig,
   type CvState,
   recommendedInnerValid,
 } from "@/components/workspace/cv-state";
+import { buildSyncedConfig } from "./buildSyncedConfig";
 import type { ColumnOverride, TaskType } from "./useDataPanel.types";
-import { buildSyncKey, extractOverrideArrays } from "./useDataPanel.types";
+import { buildSyncKey } from "./useDataPanel.types";
 
 interface UseConfigSyncParams {
   dataPath: string;
@@ -54,8 +53,6 @@ export function useConfigSync({
     abortRef.current = controller;
 
     try {
-      const { categorical, excluded } = extractOverrideArrays(overrides);
-
       let base = await fetchConfig({ signal: controller.signal });
       if (controller.signal.aborted) return;
 
@@ -65,29 +62,16 @@ export function useConfigSync({
         base = await fetchConfigDefaults(task, target);
       }
 
-      const baseData = (base as Record<string, unknown>).data as Record<
-        string,
-        unknown
-      >;
-      const merged: Record<string, unknown> = {
-        ...base,
-        task: task || (base as Record<string, unknown>).task,
-        data: applyCvDataFields(
-          {
-            ...baseData,
-            path: dataPath || undefined,
-            target: target || undefined,
-          },
-          cv,
-          strategyFields,
-        ),
-        features: {
-          ...((base as Record<string, unknown>).features as object),
-          categorical,
-          exclude: excluded,
-        },
-        split: buildSplitConfig(cv, blocked, strategyFields),
-      };
+      const merged = buildSyncedConfig({
+        base: base as Record<string, unknown>,
+        dataPath,
+        target,
+        task,
+        overrides,
+        cv,
+        blocked,
+        strategyFields,
+      });
 
       const baseTraining = (merged.training as Record<string, unknown>) ?? {};
       const innerValid =

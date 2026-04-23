@@ -355,6 +355,34 @@ describe("runFit", () => {
     const result = await runFit();
     expect(result).toEqual({ job_id: "j1" });
   });
+
+  it("sends no body when called with no argument (P-0086)", async () => {
+    let capturedBody: unknown = "not captured";
+    server.use(
+      http.post("/api/workspace/fit", async ({ request }) => {
+        capturedBody = await request
+          .clone()
+          .json()
+          .catch(() => "empty");
+        return HttpResponse.json({ job_id: "j1" });
+      }),
+    );
+    await runFit();
+    expect(capturedBody).toBe("empty");
+  });
+
+  it("sends body={config} when called with config (P-0086)", async () => {
+    let capturedBody: unknown = null;
+    server.use(
+      http.post("/api/workspace/fit", async ({ request }) => {
+        capturedBody = await request.json();
+        return HttpResponse.json({ job_id: "j1" });
+      }),
+    );
+    const config = { task: "binary", features: { exclude: ["age"] } };
+    await runFit(config);
+    expect(capturedBody).toEqual({ config });
+  });
 });
 
 describe("runTune", () => {
@@ -366,6 +394,19 @@ describe("runTune", () => {
     );
     const result = await runTune();
     expect(result).toEqual({ job_id: "j2" });
+  });
+
+  it("sends body={config} when called with config (P-0086)", async () => {
+    let capturedBody: unknown = null;
+    server.use(
+      http.post("/api/workspace/tune", async ({ request }) => {
+        capturedBody = await request.json();
+        return HttpResponse.json({ job_id: "j2" });
+      }),
+    );
+    const config = { task: "regression", features: { exclude: ["x"] } };
+    await runTune(config);
+    expect(capturedBody).toEqual({ config });
   });
 });
 
