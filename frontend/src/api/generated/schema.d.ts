@@ -389,6 +389,14 @@ export interface paths {
         /**
          * Workspace Fit
          * @description Create a fit job (thread managed by Service layer).
+         *
+         *     P-0086 (Issue #251): ``body.config`` may be provided to atomically
+         *     overwrite ``ws.config`` at fit time, closing the race window between
+         *     a pending ``PUT /config`` and the ``POST /fit`` call. The body is
+         *     declared with a ``WorkspaceFitRequest()`` default (rather than
+         *     ``| None``) because ``from __future__ import annotations`` together
+         *     with ``Optional`` + ``Depends`` breaks FastAPI's body detection,
+         *     causing the parameter to be parsed as a query string.
          */
         post: operations["workspace_fit_api_workspace_fit_post"];
         delete?: never;
@@ -409,6 +417,10 @@ export interface paths {
         /**
          * Workspace Tune
          * @description Create a tune job (thread managed by Service layer).
+         *
+         *     P-0086 (Issue #251): ``body.config`` may be provided to atomically
+         *     overwrite ``ws.config`` at tune time. See ``workspace_fit`` above
+         *     for the rationale behind the ``WorkspaceTuneRequest()`` default.
          */
         post: operations["workspace_tune_api_workspace_tune_post"];
         delete?: never;
@@ -1883,6 +1895,26 @@ export interface components {
                 [key: string]: unknown;
             }[];
         };
+        /**
+         * WorkspaceFitRequest
+         * @description Request body for ``POST /api/workspace/fit`` (P-0086, Issue #251).
+         *
+         *     When ``config`` is provided it overwrites ``ws.config`` atomically at
+         *     fit time, closing the race window between an in-flight ``PUT /config``
+         *     and the subsequent ``POST /fit``. The UI sends the latest merged
+         *     config here so user edits (e.g. an Exclude toggle) are guaranteed to
+         *     be reflected in the fitted model regardless of PUT timing.
+         *
+         *     When omitted, the endpoint falls back to the current ``ws.config``
+         *     for backward compatibility with callers that still use the old
+         *     PUT-then-POST flow (curl, external clients, legacy E2E).
+         */
+        WorkspaceFitRequest: {
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            } | null;
+        };
         /** WorkspaceStatusResponse */
         WorkspaceStatusResponse: {
             /** Has Data */
@@ -1894,6 +1926,19 @@ export interface components {
             data_ref?: components["schemas"]["StatusDataRef"] | null;
             /** Current Job Id */
             current_job_id?: string | null;
+        };
+        /**
+         * WorkspaceTuneRequest
+         * @description Request body for ``POST /api/workspace/tune`` (P-0086, Issue #251).
+         *
+         *     Mirrors :class:`WorkspaceFitRequest`. Tuning-specific defaults are
+         *     still injected inside the endpoint after the body.config is applied.
+         */
+        WorkspaceTuneRequest: {
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * WsCompleted
@@ -2511,7 +2556,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceFitRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -2520,6 +2569,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobStartResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -2531,7 +2589,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceTuneRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -2540,6 +2602,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobStartResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
