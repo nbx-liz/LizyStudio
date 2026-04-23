@@ -24,6 +24,12 @@ Audit prompted by Issue #249 (follow-up to #248).
 
 ### 🔴 HIGH — bug to fix
 
+> **Update 2026-04-23:** H-1 resolved in #253 / PR bundled with this audit
+> update. All six onChange sites (five from the original finding plus
+> `CalibrationSection.onChange` found during the fix) now route through
+> `handleFieldChange`. Regression tests in `ConfigForm.test.tsx` under
+> `Issue #253 configRef (two writes in same tick)`.
+
 #### H-1: `ConfigForm` partial onChange handlers capture stale `config`
 
 File: `frontend/src/components/workspace/ConfigForm.tsx`
