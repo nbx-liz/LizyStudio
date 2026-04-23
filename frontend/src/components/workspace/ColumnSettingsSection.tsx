@@ -82,10 +82,27 @@ export function ColumnSettingsSection({
                 const stats = colStats[col.name];
                 return (
                   <div key={col.name}>
-                    <button
-                      type="button"
+                    {/* Issue #248: row must not be a <button> because it
+                        wraps other interactive controls (Checkbox, Num/Cat
+                        buttons). Real browsers hoist the inner <button>s
+                        out of the outer one, breaking click handling. Use
+                        role="button" + tabIndex + keyboard handler so the
+                        row stays activatable without nesting interactive
+                        content inside a <button>. */}
+                    {/* biome-ignore lint/a11y/useSemanticElements: cannot use <button> — nested interactive content */}
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      aria-label={col.name}
+                      aria-expanded={isExpanded}
                       className={`grid w-full grid-cols-[1fr_60px_60px_100px] items-center gap-x-2 px-3 py-1.5 text-left hover:bg-muted/40 cursor-pointer ${idx % 2 === 1 ? "bg-muted/20" : ""}`}
                       onClick={() => onColumnExpand(col.name)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          onColumnExpand(col.name);
+                        }
+                      }}
                       data-testid={`column-row-${col.name}`}
                     >
                       <span className="text-xs truncate">
@@ -102,13 +119,16 @@ export function ColumnSettingsSection({
                         )}
                       </span>
                       <span className="text-xs">{col.unique_count}</span>
-                      <div>
+                      {/* biome-ignore lint/a11y/noStaticElementInteractions: stop propagation container */}
+                      <div
+                        onClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => e.stopPropagation()}
+                      >
                         <Checkbox
                           checked={isExcluded}
                           onCheckedChange={(checked) =>
                             onExcludeToggle(col.name, checked === true)
                           }
-                          onClick={(e) => e.stopPropagation()}
                         />
                       </div>
                       {/* biome-ignore lint/a11y/noStaticElementInteractions: stop propagation container */}
@@ -142,7 +162,7 @@ export function ColumnSettingsSection({
                           Cat
                         </Button>
                       </div>
-                    </button>
+                    </div>
                     {isExpanded && stats && (
                       <div
                         className="px-3 py-2 bg-muted/10 border-t"
