@@ -510,13 +510,20 @@ def build_ui_schema(
             # (top-to-bottom in the form). Consumers treat the list as
             # a set via ``.includes(...)`` / ``in`` — order has no
             # semantic effect on the wire payload.
+            # Issue #258 / #259: every field must exist on the matching
+            # Pydantic variant (or on DataConfig for target/time_col/
+            # group_col). The contract test
+            # ``tests/contract/test_ui_schema_matches_pydantic.py``
+            # locks this invariant. Do not add a field here without
+            # extending the corresponding Pydantic model first.
             "cv_strategy_fields": {
                 "kfold": ["n_splits", "random_state", "shuffle"],
-                "stratified_kfold": ["n_splits", "random_state", "shuffle"],
+                "stratified_kfold": ["n_splits", "random_state"],
                 "group_kfold": ["n_splits", "group_col"],
                 "stratified_group_kfold": [
                     "n_splits",
                     "random_state",
+                    "shuffle",
                     "group_col",
                 ],
                 "time_series": [
@@ -542,8 +549,11 @@ def build_ui_schema(
                     "train_size_max",
                     "test_size_max",
                 ],
+                # blocked_group_kfold has no `n_splits` — the two axes
+                # (period blocks, group KFold) are configured via
+                # ``blocks`` / ``groups`` sub-objects on the Pydantic
+                # model. The UI renders those via a dedicated editor.
                 "blocked_group_kfold": [
-                    "n_splits",
                     "time_col",
                     "group_col",
                     "min_train_rows",

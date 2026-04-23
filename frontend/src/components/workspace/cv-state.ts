@@ -28,11 +28,18 @@ export function getEffectiveCvStrategy(
  * behaviour). Keep this in sync with the backend SSOT — the shape is
  * asserted by `tests/test_ui_schema.py::test_capabilities_cv_strategy_fields_ui_semantics`.
  */
+// Issue #258 / #259: every field must match the backend Pydantic
+// variant (or DataConfig for target/time_col/group_col). A contract
+// test on the backend side
+// (``tests/contract/test_ui_schema_matches_pydantic.py``) locks this
+// invariant server-side; this fallback only applies before the live
+// UI schema is fetched, so keep it in sync to avoid the same drift
+// class at boot time.
 export const FALLBACK_CV_STRATEGY_FIELDS: Record<string, readonly string[]> = {
   kfold: ["n_splits", "random_state", "shuffle"],
-  stratified_kfold: ["n_splits", "random_state", "shuffle"],
+  stratified_kfold: ["n_splits", "random_state"],
   group_kfold: ["n_splits", "group_col"],
-  stratified_group_kfold: ["n_splits", "random_state", "group_col"],
+  stratified_group_kfold: ["n_splits", "random_state", "shuffle", "group_col"],
   time_series: [
     "n_splits",
     "time_col",
@@ -57,7 +64,6 @@ export const FALLBACK_CV_STRATEGY_FIELDS: Record<string, readonly string[]> = {
     "test_size_max",
   ],
   blocked_group_kfold: [
-    "n_splits",
     "time_col",
     "group_col",
     "min_train_rows",
@@ -188,8 +194,14 @@ export function buildSplitConfig(
   const active = resolveFields(cv.strategy, fields);
   const split: Record<string, unknown> = {
     method: cv.strategy,
-    n_splits: cv.folds,
   };
+  // Issue #258 / #259: n_splits is strategy-specific. Pydantic variants
+  // like BlockedGroupKFoldConfig have no n_splits field and reject it
+  // with extra="forbid". Gate the assignment on the active fields list
+  // (same pattern as every other split property below).
+  if (active.includes("n_splits")) {
+    split.n_splits = cv.folds;
+  }
   if (active.includes("random_state") && cv.randomState !== undefined) {
     split.random_state = cv.randomState;
   }

@@ -577,13 +577,19 @@ class TestLizyMLAdapterUiSchema:
         fields = schema["capabilities"]["cv_strategy_fields"]
 
         # Expected fields per strategy — SSOT for the frontend UI map.
+        # Issue #258 / #259: these lists must match the matching
+        # Pydantic variant (or DataConfig for target/time_col/
+        # group_col). The contract test
+        # ``tests/contract/test_ui_schema_matches_pydantic.py`` locks
+        # this invariant and is the source of truth.
         expected = {
             "kfold": ["n_splits", "random_state", "shuffle"],
-            "stratified_kfold": ["n_splits", "random_state", "shuffle"],
+            "stratified_kfold": ["n_splits", "random_state"],
             "group_kfold": ["n_splits", "group_col"],
             "stratified_group_kfold": [
                 "n_splits",
                 "random_state",
+                "shuffle",
                 "group_col",
             ],
             "time_series": [
@@ -610,7 +616,6 @@ class TestLizyMLAdapterUiSchema:
                 "test_size_max",
             ],
             "blocked_group_kfold": [
-                "n_splits",
                 "time_col",
                 "group_col",
                 "min_train_rows",
