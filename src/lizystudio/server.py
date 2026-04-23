@@ -63,6 +63,24 @@ _CSP_DEV = (
 )
 
 
+_DEFAULT_CORS_ORIGINS = ("http://localhost:5173",)
+"""Development fallback when LIZYSTUDIO_CORS_ALLOWED_ORIGINS is unset."""
+
+
+def _parse_cors_allowed_origins(raw: str | None) -> list[str]:
+    """Parse the comma-separated env var for CORS allowlist (H-0083).
+
+    Returns the dev fallback when the variable is unset or empty. Blank
+    entries are filtered out: a stray empty string in ``allow_origins``
+    would accept unauthenticated cross-origin requests (mirrors the
+    C-10 WS origin guard).
+    """
+    if not raw:
+        return list(_DEFAULT_CORS_ORIGINS)
+    parsed = [entry.strip() for entry in raw.split(",") if entry.strip()]
+    return parsed or list(_DEFAULT_CORS_ORIGINS)
+
+
 def _warmup_adapter(adapter: object) -> None:
     """Pre-import ML backend modules to avoid import-lock deadlocks.
 
@@ -176,13 +194,20 @@ def create_app() -> FastAPI:
         ).observe(elapsed)
         return response
 
-    # CORS — allow frontend dev server during development
+    # CORS — allow the Vite dev server during development, or whatever
+    # origins the deployment specifies via LIZYSTUDIO_CORS_ALLOWED_ORIGINS
+    # (comma-separated). H-0083 mirrors the WS LIZYSTUDIO_WS_ALLOWED_ORIGINS
+    # pattern so production deployments behind a reverse proxy do not
+    # require a source edit.
+    cors_origins = _parse_cors_allowed_origins(
+        os.environ.get("LIZYSTUDIO_CORS_ALLOWED_ORIGINS")
+    )
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173"],
+        allow_origins=cors_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization"],
     )
 
     # Exception handlers

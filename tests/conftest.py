@@ -23,6 +23,21 @@ def _disable_subprocess_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@pytest.fixture(autouse=True)
+def _reset_ws_origin_cache() -> Iterator[None]:
+    """Clear the WS origin allowlist cache before and after each test
+    (H-0083). ``get_allowed_ws_origins`` is ``lru_cache``'d to avoid
+    re-parsing ``os.environ`` on every WS handshake in production, but
+    that process-wide memoisation otherwise leaks state between tests
+    that monkeypatch ``LIZYSTUDIO_WS_ALLOWED_ORIGINS``.
+    """
+    from lizystudio.ws.progress import get_allowed_ws_origins
+
+    get_allowed_ws_origins.cache_clear()
+    yield
+    get_allowed_ws_origins.cache_clear()
+
+
 @pytest.fixture()
 def tmp_jobs_dir(tmp_path: Path) -> Path:
     """Return a temporary directory for job storage."""

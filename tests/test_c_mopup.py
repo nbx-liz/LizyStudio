@@ -83,10 +83,11 @@ def test_c10_ws_allowed_origins_env_var_overrides_defaults(
         "LIZYSTUDIO_WS_ALLOWED_ORIGINS",
         "https://studio.example.com,https://staging.example.com",
     )
-    # Force a fresh read — the helper accepts an env lookup at call time
-    # so we don't depend on import order.
+    # H-0083: get_allowed_ws_origins() is lru_cache'd per process, so
+    # tests that change the env must reset the cache before the call.
     from lizystudio.ws.progress import get_allowed_ws_origins
 
+    get_allowed_ws_origins.cache_clear()
     origins = get_allowed_ws_origins()
     assert "https://studio.example.com" in origins
     assert "https://staging.example.com" in origins
@@ -101,6 +102,7 @@ def test_c10_ws_allowed_origins_default_when_env_unset(
     monkeypatch.delenv("LIZYSTUDIO_WS_ALLOWED_ORIGINS", raising=False)
     from lizystudio.ws.progress import get_allowed_ws_origins
 
+    get_allowed_ws_origins.cache_clear()
     origins = get_allowed_ws_origins()
     assert "http://localhost:5173" in origins
     assert "http://127.0.0.1:5173" in origins
@@ -119,10 +121,53 @@ def test_c10_ws_allowed_origins_ignores_blank_entries(
     )
     from lizystudio.ws.progress import get_allowed_ws_origins
 
+    get_allowed_ws_origins.cache_clear()
     origins = get_allowed_ws_origins()
     assert "" not in origins
     assert "https://a.example.com" in origins
     assert "https://b.example.com" in origins
+
+
+# ---------------------------------------------------------------------------
+# H-0083 — WS origin allowlist cache behaviour
+# ---------------------------------------------------------------------------
+
+
+def test_h0083_ws_allowed_origins_is_cached_across_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Second call returns the value captured at the first call even if
+    the env var was changed afterwards (Issue #234)."""
+    from lizystudio.ws.progress import get_allowed_ws_origins
+
+    monkeypatch.setenv("LIZYSTUDIO_WS_ALLOWED_ORIGINS", "https://first.example.com")
+    get_allowed_ws_origins.cache_clear()
+    first = get_allowed_ws_origins()
+    assert "https://first.example.com" in first
+
+    # Env change without cache_clear is NOT observed.
+    monkeypatch.setenv("LIZYSTUDIO_WS_ALLOWED_ORIGINS", "https://second.example.com")
+    cached = get_allowed_ws_origins()
+    assert cached is first
+    assert "https://second.example.com" not in cached
+
+
+def test_h0083_ws_allowed_origins_cache_clear_reevaluates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After ``cache_clear`` the helper reads the env again (Issue #234)."""
+    from lizystudio.ws.progress import get_allowed_ws_origins
+
+    monkeypatch.setenv("LIZYSTUDIO_WS_ALLOWED_ORIGINS", "https://first.example.com")
+    get_allowed_ws_origins.cache_clear()
+    first = get_allowed_ws_origins()
+    assert "https://first.example.com" in first
+
+    monkeypatch.setenv("LIZYSTUDIO_WS_ALLOWED_ORIGINS", "https://second.example.com")
+    get_allowed_ws_origins.cache_clear()
+    refreshed = get_allowed_ws_origins()
+    assert "https://second.example.com" in refreshed
+    assert "https://first.example.com" not in refreshed
 
 
 # ---------------------------------------------------------------------------
