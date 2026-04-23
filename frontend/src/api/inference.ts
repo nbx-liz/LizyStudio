@@ -174,5 +174,8 @@ export async function fetchInferenceComparison(
       "apiClient returned no data for /api/inference/{inf_id}/comparison/{other_inf_id}",
     );
   }
+  // SSOT-EXEMPT (Issue #236): backend returns ComparisonStatsResponse; the
+  // hand-written ComparisonStats is the narrow consumer interface with a
+  // richer union for per-task metrics.
   return data as unknown as ComparisonStats;
 }

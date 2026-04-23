@@ -24,7 +24,12 @@ from lizystudio.api.errors import (
     StudioError,
 )
 from lizystudio.api.models import (
+    CancelJobResponse,
+    DeleteJobResponse,
+    ExportCodeResponse,
+    ExportJobResponse,
     JobDetailResponse,
+    JobLogResponse,
     JobSummaryResponse,
     PlotResponseModel,
 )
@@ -139,7 +144,7 @@ def get_job(
     return result
 
 
-@router.get("/{job_id}/log")
+@router.get("/{job_id}/log", response_model=JobLogResponse)
 def get_job_log(
     job_id: str,
     job_store: JobStore = Depends(get_job_store),
@@ -159,7 +164,7 @@ def get_job_config(
     return job.config
 
 
-@router.delete("/{job_id}")
+@router.delete("/{job_id}", response_model=DeleteJobResponse)
 def delete_job(
     job_id: str,
     cascade: bool = False,
@@ -206,7 +211,7 @@ def delete_job(
     return {"status": "deleted", "removed_job_ids": removed}
 
 
-@router.post("/{job_id}/cancel")
+@router.post("/{job_id}/cancel", response_model=CancelJobResponse)
 def cancel_job(
     job_id: str,
     job_store: JobStore = Depends(get_job_store),
@@ -407,7 +412,7 @@ class ExportRequest(BaseModel):
     output_path: str
 
 
-@router.post("/{job_id}/export")
+@router.post("/{job_id}/export", response_model=ExportJobResponse)
 def export_job(
     job_id: str,
     body: ExportRequest,
@@ -437,7 +442,7 @@ def export_job(
         raise ExportError(str(exc)) from exc
 
 
-@router.get("/{job_id}/export-code")
+@router.get("/{job_id}/export-code", response_model=ExportCodeResponse)
 def export_code(
     job_id: str,
     background_tasks: BackgroundTasks,

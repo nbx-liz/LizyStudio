@@ -2311,3 +2311,36 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (f) `services/jobs.py` の `__all__` から `clear_model_cache`, `clear_model_cache_for`, `load_job_model` が除去される。
 - **Decision:**
   - 2026-04-22 **Proposed & Implemented** — 本 PR で Proposal + 実装 + テスト書き換えを同時 merge。change-gate 最小構成。
+### H-0085: バックエンド `response_model` 追加で `as unknown as T` 二重キャストを縮減（Issue #236）
+- **Status:** proposed & implemented
+- **Scope:** Backend / Frontend | **change-gate 非対象** (公開 API の shape は不変、内部的に Pydantic モデルを明示するだけ)
+- **Related:** C-6 / H-0080（openapi-fetch 導入）、Issue #236、C-1（inference response_model 先行整備）
+- **Context:** C-6 で frontend の fetcher を全て `openapi-fetch` ベースに移したが、backend 側で `response_model` を持たない endpoint が多く、結果として frontend 側の 30 箇所で `unwrap(data) as unknown as T` の二重キャストが残留。型の恩恵をほぼ打ち消している。
+- **Invariants:**
+  - INV-1: `api/jobs.py` の job lifecycle 系 endpoint (`cancel`, `delete`, `log`, `export`, `export-code`) は全て Pydantic `response_model` を宣言する。
+  - INV-2: `api/retune.py` の `retune` / `resume` / `lineage` も同様。
+  - INV-3: 削除できない残存 `as unknown as` には `// SSOT-EXEMPT (Issue #236): <reason>` コメントを付与し、理由を明記する。
+- **Proposal & Impact:**
+  - `api/models.py` に 7 つの新しい response model を追加: `JobLogResponse`, `CancelJobResponse`, `DeleteJobResponse`, `ExportJobResponse`, `ExportCodeResponse`, `RetuneJobResponse`, `LineageResponse` (+ 再帰を解決するための `LineageNodeResponse`)。
+  - `api/jobs.py` と `api/retune.py` の 8 endpoint に `response_model=` を紐付け。
+  - `frontend/src/api/generated/schema.d.ts` を `pnpm generate:api` 相当で再生成。
+  - `frontend/src/api/jobs.ts` の `as unknown as` を 15 → 9 に削減（6 箇所は生成型と直接一致、3 箇所は inline subset / flat dict で残置）。
+  - `frontend/src/api/workspace.ts` / `inference.ts` は shape 不一致が残るため、**全箇所に `// SSOT-EXEMPT (Issue #236): <理由>` コメントを追記**。将来的な削減候補を明示する。
+  - FormData upload パターン（`openapi-fetch` の公式回避策）は恒久的 exempt として個別にマーク。
+- **Compatibility:**
+  - wire format: 不変（Pydantic model が受け入れる shape は既存 REST response と完全に同じ）。
+  - 生成 schema.d.ts は新規 component schema を追加する方向で成長、既存 consumer には影響なし。
+  - 削除 / 互換切り替えなし。
+- **Alternatives considered:**
+  - (a) **全 endpoint の response_model を一括追加**: 却下。workspace 系の `Record<string, unknown>` 型（config schema / defaults / config 等）や primitive list 型（importance-kinds / learning-curve/metrics）は wrapping model を入れると wire shape が変わり、frontend の consumer 側にも波及する。追跡 Issue の follow-up として別 PR で検討。
+  - (b) **SSOT-EXEMPT コメントなしで `as unknown as` 削除**: 却下。shape 不一致の箇所を追跡できなくなる。コメントで "なぜ残したか" を明示する方が将来の clean-up が容易。
+  - (c) **`response_model_exclude_none` で optional 微細差を吸収**: 採用せず。pydantic 側でモデル変更より、frontend の narrow 型で TypeScript 的に絞る方が明快。将来 response_model を揃えれば自然に消える差。
+- **Acceptance Criteria:**
+  - (a) `api/models.py` に 7 つの新 response model が存在。
+  - (b) `api/jobs.py` と `api/retune.py` の対応 8 endpoint に `response_model=` が付いている。
+  - (c) `frontend/src/api/generated/schema.d.ts` が regenerate 済みで `tests/test_inference_response_model.py::test_schema_d_ts_matches_generated_output` が pass。
+  - (d) `frontend/src/api/*.ts` で `as unknown as` が 30 → 24 以下に削減される。
+  - (e) 残存 `as unknown as` に `// SSOT-EXEMPT (Issue #236):` コメントが付与される。
+  - (f) 既存 pytest 1167+ / vitest 1624+ 全 pass、ruff / mypy / biome / tsc / pnpm build 全 clean。
+- **Decision:**
+  - 2026-04-22 **Proposed & Implemented** — 本 PR で Proposal + 実装 + コメント付与を同時 merge。

@@ -200,6 +200,76 @@ class PlotResponseModel(BaseModel):
     plotly_json: str
 
 
+# --- Job lifecycle / actions (H-0085, Issue #236) ---
+
+
+class JobLogResponse(BaseModel):
+    """GET /api/jobs/{job_id}/log."""
+
+    log: str
+
+
+class CancelJobResponse(BaseModel):
+    """POST /api/jobs/{job_id}/cancel."""
+
+    status: str
+
+
+class DeleteJobResponse(BaseModel):
+    """DELETE /api/jobs/{job_id}."""
+
+    status: str
+    # Present when cascade=true was passed; plain delete returns the target id.
+    removed_job_ids: list[str] | None = None
+
+
+class ExportJobResponse(BaseModel):
+    """POST /api/jobs/{job_id}/export."""
+
+    exported_path: str
+    export_type: str
+
+
+class ExportCodeResponse(BaseModel):
+    """GET /api/jobs/{job_id}/export-code."""
+
+    code: str
+    filename: str
+
+
+class RetuneJobResponse(BaseModel):
+    """POST /api/jobs/{job_id}/retune and /resume.
+
+    Both endpoints return the child job id and its parent reference.
+    """
+
+    job_id: str
+    parent_job_id: str
+
+
+class LineageNodeResponse(BaseModel):
+    """Node in the lineage tree (H-0062). Self-referential — children
+    are declared via ``model_rebuild`` below because BaseModel forward-
+    references within the same module need an explicit rebuild call in
+    Python versions pydantic targets."""
+
+    job_id: str
+    status: str
+    job_type: str
+    # Concrete type resolved after class body (see ``model_rebuild`` call).
+    children: list[LineageNodeResponse]
+    truncated: bool | None = None
+
+
+LineageNodeResponse.model_rebuild()
+
+
+class LineageResponse(BaseModel):
+    """GET /api/jobs/{job_id}/lineage."""
+
+    tree: LineageNodeResponse
+
+
 # --- Backends ---
 
 
