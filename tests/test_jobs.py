@@ -146,17 +146,15 @@ def test_list_returns_empty_when_jobs_dir_missing(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# load_job_model — no model_path raises ValueError
+# JobStore.load_model — no model_path raises ValueError (H-0084)
 # ---------------------------------------------------------------------------
 
 
-def test_load_job_model_raises_when_no_model_path(
+def test_job_store_load_model_raises_when_no_model_path(
     job_store: JobStore, sample_data_ref: DataRef
 ) -> None:
-    """load_job_model must raise ValueError when model_path is None."""
+    """JobStore.load_model must raise ValueError when model_path is None."""
     from unittest.mock import MagicMock
-
-    from lizystudio.services.jobs import load_job_model
 
     job = job_store.create(
         backend_name="lizyml",
@@ -168,7 +166,7 @@ def test_load_job_model_raises_when_no_model_path(
     backend = MagicMock()
 
     with pytest.raises(ValueError, match="no saved model"):
-        load_job_model(job, backend)
+        job_store.load_model(job, backend)
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +309,7 @@ def test_get_job_plot_tuning_falls_back_to_file(
     # Backend raises when trying to get tuning plot from exported model
     backend.plot.side_effect = RuntimeError("No Optuna study data")
 
-    result = get_job_plot(job, backend, "tuning")
+    result = get_job_plot(job, backend, job_store.model_cache, "tuning")
     assert isinstance(result, PlotData)
     assert result.plotly_json == plot_json
 
@@ -337,7 +335,7 @@ def test_get_job_plot_tuning_reraises_when_no_file(
     backend.plot.side_effect = RuntimeError("No Optuna study data")
 
     with pytest.raises(RuntimeError, match="No Optuna study data"):
-        get_job_plot(job, backend, "tuning")
+        get_job_plot(job, backend, job_store.model_cache, "tuning")
 
 
 def test_get_job_plot_non_tuning_delegates_to_backend(
@@ -362,7 +360,7 @@ def test_get_job_plot_non_tuning_delegates_to_backend(
     backend.load_model.return_value = MagicMock()
     backend.plot.return_value = expected
 
-    result = get_job_plot(job, backend, "learning-curve")
+    result = get_job_plot(job, backend, job_store.model_cache, "learning-curve")
     assert result is expected
 
 
@@ -396,7 +394,7 @@ def test_get_available_plots_adds_tuning_from_file(
     backend.load_model.return_value = MagicMock()
     backend.available_plots.return_value = ["learning-curve", "importance"]
 
-    result = get_available_plots(job, backend)
+    result = get_available_plots(job, backend, job_store.model_cache)
     assert "tuning" in result
 
 
@@ -420,7 +418,7 @@ def test_get_available_plots_no_tuning_when_file_absent(
     backend.load_model.return_value = MagicMock()
     backend.available_plots.return_value = ["learning-curve"]
 
-    result = get_available_plots(job, backend)
+    result = get_available_plots(job, backend, job_store.model_cache)
     assert "tuning" not in result
 
 

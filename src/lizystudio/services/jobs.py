@@ -25,6 +25,7 @@ from lizystudio.storage.versions import (  # noqa: E402
 )
 
 if TYPE_CHECKING:
+    from lizystudio.backends.base import BackendAdapter
     from lizystudio.metrics import JobType, MetricsRegistry, TerminalStatus
 
 _logger = logging.getLogger(__name__)
@@ -136,6 +137,25 @@ class JobStore:
         # already marked failed at restart time.
         self._parent_locks: dict[str, str] = {}
         self._parent_lock_mutex = threading.Lock()
+        # H-0084 (Issue #235): model cache lives on the JobStore so two
+        # app instances sharing a process keep their caches isolated.
+        # Imported lazily to avoid a top-level cycle with job_results.
+        from lizystudio.services.job_results import ModelCache
+
+        self.model_cache: ModelCache = ModelCache()
+
+    def load_model(self, job: Job, backend: BackendAdapter) -> Any:
+        """Load a trained model, memoised via the owned ``ModelCache``
+        (H-0084)."""
+        return self.model_cache.load(job, backend)
+
+    def clear_model_cache(self) -> None:
+        """Drop all memoised models (H-0084)."""
+        self.model_cache.clear()
+
+    def clear_model_cache_for(self, model_path: str) -> None:
+        """Drop memoised entries for a specific model path (H-0084)."""
+        self.model_cache.clear_for(model_path)
 
     def _set_active_gauge(self, value: float) -> None:
         """Update the active-jobs gauge on the bound MetricsRegistry."""
@@ -311,11 +331,9 @@ class JobStore:
                 # deleted anyway; swallow the transient error instead
                 # of propagating it out of delete().
                 shutil.rmtree(target, ignore_errors=True)
-            # Drop any cached deserialized model for this job. Imported
-            # here to avoid a top-level cycle with ``job_results``.
-            from lizystudio.services.job_results import clear_model_cache_for
-
-            clear_model_cache_for(str(self.path_for(jid, "model")))
+            # Drop any cached deserialised model for this job via the
+            # JobStore-owned cache (H-0084).
+            self.clear_model_cache_for(str(self.path_for(jid, "model")))
         return removed
 
     # --- H-0062 lineage helpers ---
@@ -777,12 +795,14 @@ def get_job_store(request: Request) -> JobStore:
 
 # --- Back-compat re-exports (A-7: dispatch helpers moved to job_results) ---
 # External callers historically import these from services.jobs. The logic
-# now lives in services/job_results.py alongside the model LRU cache.
+# now lives in services/job_results.py. H-0084: the cache-management
+# helpers (clear_model_cache / clear_model_cache_for / load_job_model)
+# have been retired in favour of the JobStore-owned ModelCache; use
+# ``JobStore.load_model`` / ``JobStore.clear_model_cache`` / the helpers
+# below that accept a ``cache`` argument instead.
 from lizystudio.services.job_results import (  # noqa: E402
     _get_jobs_dir,
     _load_tuning_plot_from_file,
-    clear_model_cache,
-    clear_model_cache_for,
     get_available_plots,
     get_importance,
     get_importance_kinds,
@@ -790,7 +810,6 @@ from lizystudio.services.job_results import (  # noqa: E402
     get_learning_curve_metrics,
     get_metrics_table,
     get_split_summary,
-    load_job_model,
 )
 
 __all__ = [
@@ -799,8 +818,6 @@ __all__ = [
     "JobStore",
     "_get_jobs_dir",
     "_load_tuning_plot_from_file",
-    "clear_model_cache",
-    "clear_model_cache_for",
     "get_available_plots",
     "get_importance",
     "get_importance_kinds",
@@ -809,5 +826,4 @@ __all__ = [
     "get_learning_curve_metrics",
     "get_metrics_table",
     "get_split_summary",
-    "load_job_model",
 ]

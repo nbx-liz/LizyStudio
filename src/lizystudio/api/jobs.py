@@ -241,7 +241,7 @@ def get_job_metrics_endpoint(
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
     try:
-        return get_metrics_table(job, ws.backend)
+        return get_metrics_table(job, ws.backend, job_store.model_cache)
     except Exception as exc:
         raise BackendError(exc) from exc
 
@@ -256,7 +256,7 @@ def get_job_split_summary_endpoint(
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
     try:
-        return get_split_summary(job, ws.backend)
+        return get_split_summary(job, ws.backend, job_store.model_cache)
     except Exception as exc:
         raise BackendError(exc) from exc
 
@@ -272,7 +272,7 @@ def get_job_importance_endpoint(
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
     try:
-        return get_importance(job, ws.backend, kind=kind)
+        return get_importance(job, ws.backend, job_store.model_cache, kind=kind)
     except Exception as exc:
         raise BackendError(exc) from exc
 
@@ -287,7 +287,7 @@ def get_job_importance_kinds_endpoint(
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
     try:
-        return get_importance_kinds(job, ws.backend)
+        return get_importance_kinds(job, ws.backend, job_store.model_cache)
     except Exception as exc:
         raise BackendError(exc) from exc
 
@@ -307,7 +307,7 @@ def get_job_learning_curve_metrics_endpoint(
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
     try:
-        return get_learning_curve_metrics(job, ws.backend)
+        return get_learning_curve_metrics(job, ws.backend, job_store.model_cache)
     except Exception as exc:
         raise BackendError(exc) from exc
 
@@ -350,7 +350,9 @@ def get_job_plot_endpoint(
             raise StudioError("INVALID_PARAM", f"Invalid kind: {kind!r}", 400)
         kwargs["kind"] = kind
     try:
-        plot_data = get_job_plot(job, ws.backend, plot_type, **kwargs)
+        plot_data = get_job_plot(
+            job, ws.backend, job_store.model_cache, plot_type, **kwargs
+        )
         return {"plotly_json": plot_data.plotly_json}
     except Exception as exc:
         raise BackendError(exc) from exc
@@ -366,7 +368,7 @@ def get_job_available_plots_endpoint(
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
     try:
-        return get_available_plots(job, ws.backend)
+        return get_available_plots(job, ws.backend, job_store.model_cache)
     except Exception as exc:
         raise BackendError(exc) from exc
 
