@@ -2227,6 +2227,48 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (f) tmp ファイル残留がテスト実行後に存在しない（`os.replace` が成功時に消す、explicit cleanup は不要）。
 - **Decision:**
   - 2026-04-22 **Proposed & Implemented** — 本 PR で Proposal + 実装 + 2 件の test を同時 merge。change-gate 最小構成として HISTORY 追記を伴う。
+### H-0083: CORS / WS origin の env driven 化と WS allowlist 単発評価（Issue #233 / #234）
+- **Status:** proposed
+- **Scope:** Backend / Ops | **change-gate 対象** (新規 env 契約 `LIZYSTUDIO_CORS_ALLOWED_ORIGINS` 追加、deployment 前提が変わる)
+- **Related:** H-0069（WS discriminated union）、C-10（PR #199 — `LIZYSTUDIO_WS_ALLOWED_ORIGINS` 導入）、Issue #233（HTTP CORS がハードコード）、Issue #234（WS origin allowlist が handshake 毎に env を再パース）
+- **Context:** C-10 で WS origin allowlist は `LIZYSTUDIO_WS_ALLOWED_ORIGINS` env で上書き可能になったが、HTTP CORS 側は `server.py:182` で `allow_origins=["http://localhost:5173"]` のハードコード、`allow_methods=["*"]` / `allow_headers=["*"]` のワイルドカードのまま。デプロイターゲット（reverse proxy 配下、別 origin）では **source 編集なしに動かない**。PoC (`FastAPI TestClient` で `https://app.example.com` origin を送る) で `Access-Control-Allow-Origin` が付かないことを確認済み。
+  - 併せて Issue #234: `ws/progress.py:249` の `get_allowed_ws_origins()` が WS ハンドシェイク毎に `os.environ.get` + `split` + 空文字フィルタを再実行している。TOCTOU（起動後の環境変数変更が後続 handshake に反映される非契約挙動）と微小な perf オーバーヘッドを避けるため、プロセス起動時の 1 度評価に固定する。テスト時は `cache_clear()` で再評価可能にする。
+- **Invariants:**
+  - INV-1: `LIZYSTUDIO_CORS_ALLOWED_ORIGINS` に列挙された origin からの CORS preflight は `Access-Control-Allow-Origin` を返し、列挙されていない origin からのそれには付けない。
+  - INV-2: `LIZYSTUDIO_CORS_ALLOWED_ORIGINS` が未設定 / 空のとき、開発用 fallback `http://localhost:5173` のみを許可する（挙動後方互換）。
+  - INV-3: `get_allowed_ws_origins()` はプロセス起動後に `os.environ` を再評価しない（明示的 `cache_clear()` 以外では）。
+- **Proposal:**
+  1. **CORS env 追加**: `LIZYSTUDIO_CORS_ALLOWED_ORIGINS` をカンマ区切りで受ける。空白 trim、空エントリは filter out。未設定・空なら fallback に `["http://localhost:5173"]`。
+  2. **methods / headers 明示化**: `allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]`、`allow_headers=["Content-Type", "Authorization"]`。`allow_credentials=True` は保持。
+  3. **WS origin cache**: `get_allowed_ws_origins()` を `@functools.lru_cache(maxsize=None)` でラップ。関数内 `import os` は module top-level に移動して LOW-2 も解消。テスト用の fixture で `get_allowed_ws_origins.cache_clear()` を呼んで再評価可能にする（既存 WS handshake テストが env 切替を期待しているならその数箇所）。
+  4. **docs/deployment note**: README に 1 行追記（"Set LIZYSTUDIO_CORS_ALLOWED_ORIGINS when deploying behind a non-localhost origin"）。README の既存構造に最小追記。
+- **Impact:**
+  - 修正: `src/lizystudio/server.py` の CORS block（~8 行）、`src/lizystudio/ws/progress.py` の関数 2〜3 行 + import 整理。
+  - 追加テスト:
+    - `tests/test_server_cors.py`（新規 or 既存 server テストへ追記）— env 設定で preflight が通る / 未設定で fallback / 未登録 origin で `Access-Control-Allow-Origin` が付かない、3 case。
+    - `tests/test_ws_origin_allowlist.py`（新規 or 既存 WS テストへ追記）— `cache_clear` なしでは env 変更が反映されない / `cache_clear` 後は反映される、2 case。
+  - wire format / API 契約: 不変。
+  - 既存 1164+3 tests への影響: なし（他の挙動は保持）。
+- **Compatibility:**
+  - 未設定時 fallback が `["http://localhost:5173"]` で従来と同一 → 既存 dev workflow に影響なし。
+  - `allow_methods` / `allow_headers` の明示化は production で未使用のメソッド・ヘッダを拒否する方向の変更。現状 LizyStudio が使うメソッドは全て含めているので既存 caller には影響ゼロ。将来エンドポイント追加時に OPTIONS preflight で reject される場合は list を更新する契約。
+  - WS cache: 起動後の env 変更が反映されなくなる = 既に C-10 の契約通り "起動時設定" 扱いに格上げ。テストが env 変更に依存していた場合は `cache_clear()` で明示的に更新する。
+- **Alternatives considered:**
+  - (a) **`LIZYSTUDIO_CORS_ALLOWED_ORIGINS` を採用** (採用): WS の env 名と対称、1 つの env で設定が揃う。
+  - (b) **WS と CORS を同じ env で共有**: 却下。WS の origin と HTTP CORS の origin は同じとは限らない（WS subprotocol 上で別 port を使うケース等）。個別 env で独立制御できた方が運用柔軟。
+  - (c) **設定ファイル (`config.toml`) 経由**: 却下。LizyStudio は現状 env only で全てを制御している、新規ファイル増やす価値が小。
+  - (d) **wildcard 対応 (例: `https://*.example.com`)**: 将来課題。現時点は厳密一致で十分、必要になった時点で別 Proposal。
+  - (e) **WS cache を `cache_clear()` なしで不変にする**: 却下。テスト で env 切り替えができないと WS origin 挙動を自動検証できない。
+- **Acceptance Criteria:**
+  - (a) `LIZYSTUDIO_CORS_ALLOWED_ORIGINS=https://app.example.com` で preflight 応答に `Access-Control-Allow-Origin: https://app.example.com` が付く（新テスト）。
+  - (b) 未設定時は `http://localhost:5173` のみ allow（新テスト）。
+  - (c) 登録外 origin では `Access-Control-Allow-Origin` が付かない（新テスト）。
+  - (d) `get_allowed_ws_origins()` は 2 回呼ばれても `os.environ` アクセスは 1 度のみ（`monkeypatch.setattr(os, "environ", ...)` + call-count spy、新テスト）。
+  - (e) `cache_clear()` 後に env 変更が反映される（新テスト）。
+  - (f) README に env 名 1 行追記。
+  - (g) 既存 pytest + static gates + CI guards 全 green。
+- **Decision:**
+  - 2026-04-22 **Proposed & Implemented** — 本 PR で Proposal + 実装 + テストを同時 merge。change-gate 最小構成。
 ### H-0084: ModelCache の per-app 化（Phase 3 coupling refactor A-7 follow-up、Issue #235）
 - **Status:** proposed
 - **Scope:** Backend / Services | **change-gate 対象** (内部 API 変更：`services/jobs.py` の back-compat re-export からいくつかの名前を除去、`JobStore` に `load_model` / `clear_model_cache_for` メソッド追加)

@@ -16,14 +16,18 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import json
 import logging
+import os
 import threading
 from typing import TYPE_CHECKING, Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 
 from lizystudio.ws.messages import WsCompleted, WsError, WsPing, WsProgress
+
+# ``functools.lru_cache`` wraps ``get_allowed_ws_origins`` below (H-0083).
 
 if TYPE_CHECKING:
     from lizystudio.metrics import MetricsRegistry
@@ -246,21 +250,24 @@ _DEFAULT_WS_ORIGINS: frozenset[str] = frozenset(
 )
 
 
-def get_allowed_ws_origins() -> set[str]:
+@functools.cache
+def get_allowed_ws_origins() -> frozenset[str]:
     """Return the allowlist of origins accepted on the progress WebSocket.
 
-    Reads ``LIZYSTUDIO_WS_ALLOWED_ORIGINS`` (comma-separated) at call
-    time so remote deployments don't need to patch the source. Blank
+    H-0083: evaluated **once** per process (cached) so WS handshakes do
+    not re-parse ``os.environ`` on every connection. Call
+    :meth:`get_allowed_ws_origins.cache_clear` in tests that need to
+    observe an updated ``LIZYSTUDIO_WS_ALLOWED_ORIGINS`` value.
+
+    Reads ``LIZYSTUDIO_WS_ALLOWED_ORIGINS`` (comma-separated). Blank
     entries are filtered — the Origin check treats an empty string as
     "no Origin header", so a stray "" in the allowlist would accept
     unauthenticated cross-origin WebSockets (C-10 fix).
     """
-    import os
-
     raw = os.environ.get("LIZYSTUDIO_WS_ALLOWED_ORIGINS")
     if not raw:
-        return set(_DEFAULT_WS_ORIGINS)
-    return {entry.strip() for entry in raw.split(",") if entry.strip()}
+        return _DEFAULT_WS_ORIGINS
+    return frozenset(entry.strip() for entry in raw.split(",") if entry.strip())
 
 
 async def websocket_progress(
