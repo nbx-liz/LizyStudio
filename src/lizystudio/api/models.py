@@ -128,6 +128,37 @@ class JobStartResponse(BaseModel):
     job_id: str
 
 
+class WorkspaceFitRequest(BaseModel):
+    """Request body for ``POST /api/workspace/fit`` (P-0086, Issue #251).
+
+    When ``config`` is provided it overwrites ``ws.config`` atomically at
+    fit time, closing the race window between an in-flight ``PUT /config``
+    and the subsequent ``POST /fit``. The UI sends the latest merged
+    config here so user edits (e.g. an Exclude toggle) are guaranteed to
+    be reflected in the fitted model regardless of PUT timing.
+
+    When omitted, the endpoint falls back to the current ``ws.config``
+    for backward compatibility with callers that still use the old
+    PUT-then-POST flow (curl, external clients, legacy E2E).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    config: dict[str, Any] | None = None
+
+
+class WorkspaceTuneRequest(BaseModel):
+    """Request body for ``POST /api/workspace/tune`` (P-0086, Issue #251).
+
+    Mirrors :class:`WorkspaceFitRequest`. Tuning-specific defaults are
+    still injected inside the endpoint after the body.config is applied.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    config: dict[str, Any] | None = None
+
+
 class FitResultResponse(BaseModel):
     """Training result summary (mirror of :class:`FitSummary`).
 
