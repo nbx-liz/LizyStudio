@@ -1,4 +1,5 @@
 import { act, cleanup, screen } from "@testing-library/react";
+import { forwardRef, useImperativeHandle } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/test/helpers";
 import { WorkspacePage } from "./WorkspacePage";
@@ -16,7 +17,12 @@ const {
   mockRunFit: vi.fn(),
   mockRunTune: vi.fn(),
   mockUpdateConfig: vi.fn(),
-  mockToast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
+  mockToast: {
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
+  },
 }));
 
 const { mockFetchConfig } = vi.hoisted(() => ({
@@ -52,11 +58,41 @@ let capturedDataPanelProps: Record<string, unknown> = {};
 let capturedModelPanelProps: Record<string, unknown> = {};
 let capturedResultsPanelProps: Record<string, unknown> = {};
 
+// P-0086: DataPanel now forwards a ref that exposes ``getSubmitConfig``.
+// The mock mirrors that contract so handleFit / handleTune can read the
+// latest merged config through the ref at click time. ``submitConfigRef``
+// is created via ``vi.hoisted`` because vi.mock factories execute before
+// module-scope ``const`` initializers, and because a mutable ref is the
+// idiomatic way to let individual tests swap the value seen by the mock.
+const { submitConfigRef, submitConfigErrorRef } = vi.hoisted(() => ({
+  submitConfigRef: { current: null as Record<string, unknown> | null },
+  submitConfigErrorRef: { current: null as Error | null },
+}));
+
 vi.mock("@/components/workspace/DataPanel", () => ({
-  DataPanel: (props: Record<string, unknown>) => {
-    capturedDataPanelProps = props;
-    return <div data-testid="data-panel">DataPanel</div>;
-  },
+  DataPanel: forwardRef(
+    (
+      props: Record<string, unknown>,
+      ref: React.Ref<{
+        getSubmitConfig: () => Promise<Record<string, unknown>>;
+      }>,
+    ) => {
+      capturedDataPanelProps = props;
+      useImperativeHandle(
+        ref,
+        () => ({
+          getSubmitConfig: async () => {
+            if (submitConfigErrorRef.current) {
+              throw submitConfigErrorRef.current;
+            }
+            return submitConfigRef.current ?? ({} as Record<string, unknown>);
+          },
+        }),
+        [],
+      );
+      return <div data-testid="data-panel">DataPanel</div>;
+    },
+  ),
 }));
 vi.mock("@/components/workspace/ModelPanel", () => ({
   ModelPanel: (props: Record<string, unknown>) => {
@@ -79,6 +115,8 @@ describe("WorkspacePage", () => {
     capturedDataPanelProps = {};
     capturedModelPanelProps = {};
     capturedResultsPanelProps = {};
+    submitConfigRef.current = null;
+    submitConfigErrorRef.current = null;
 
     Object.defineProperty(window, "matchMedia", {
       writable: true,
@@ -481,6 +519,59 @@ describe("WorkspacePage", () => {
       expect(screen.getByRole("tab", { name: /model/i })).toHaveAttribute(
         "aria-selected",
         "true",
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // P-0086 (Issue #251): handleFit / handleTune must read the latest
+  // merged config from DataPanel's ref and include it in the POST body,
+  // so Fit/Tune never loses the race against an in-flight PUT /config.
+  // -------------------------------------------------------------------
+  describe("P-0086 fit/tune config body", () => {
+    it("passes DataPanel's merged config as runFit body", async () => {
+      mockRunFit.mockResolvedValue({ job_id: "job-fit-p0086" });
+      submitConfigRef.current = {
+        task: "binary",
+        features: { exclude: ["age"], categorical: [] },
+      };
+      renderWithProviders(<WorkspacePage />);
+
+      const onFit = capturedModelPanelProps.onFit as () => Promise<void>;
+      await act(async () => onFit());
+
+      expect(mockRunFit).toHaveBeenCalledWith(submitConfigRef.current);
+    });
+
+    it("passes DataPanel's merged config as runTune body", async () => {
+      mockRunTune.mockResolvedValue({ job_id: "job-tune-p0086" });
+      submitConfigRef.current = {
+        task: "regression",
+        features: { exclude: ["id"], categorical: [] },
+      };
+      renderWithProviders(<WorkspacePage />);
+
+      const onTune = capturedModelPanelProps.onTune as () => Promise<void>;
+      await act(async () => onTune());
+
+      expect(mockRunTune).toHaveBeenCalledWith(submitConfigRef.current);
+    });
+
+    it("falls back to body-less runFit and warns when getSubmitConfig throws", async () => {
+      // Review feedback on P-0086: when fetchConfig fails inside the
+      // DataPanel imperative handle, the fit/tune click must still
+      // reach the server (body-less regression path) AND surface a
+      // toast so the user knows why their latest edits may be missing.
+      mockRunFit.mockResolvedValue({ job_id: "job-fallback" });
+      submitConfigErrorRef.current = new Error("network down");
+      renderWithProviders(<WorkspacePage />);
+
+      const onFit = capturedModelPanelProps.onFit as () => Promise<void>;
+      await act(async () => onFit());
+
+      expect(mockRunFit).toHaveBeenCalledWith(undefined);
+      expect(mockToast.warning).toHaveBeenCalledWith(
+        expect.stringContaining("network down"),
       );
     });
   });

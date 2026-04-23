@@ -170,15 +170,38 @@ export function getConfigDownloadUrl(): string {
   return "/api/workspace/config/download";
 }
 
-export async function runFit(): Promise<{ job_id: string }> {
-  const { data } = await apiClient.POST("/api/workspace/fit", {});
+// P-0086 (Issue #251): accept an optional ``config`` so the latest UI state
+// is applied atomically at fit time. Without this, an in-flight ``PUT /config``
+// can lose the race against ``POST /fit`` and the server reads a stale
+// ``ws.config``, which silently drops manual Exclude / Type edits made just
+// before pressing Fit.
+export async function runFit(
+  config?: Record<string, unknown>,
+): Promise<{ job_id: string }> {
+  // SSOT-EXEMPT (Issue #236): openapi-fetch's generated body type for
+  // /api/workspace/fit is ``WorkspaceFitRequest | undefined``, but the
+  // body must be wrapped under ``{ body: ... }`` for the client and
+  // also allow complete omission when ``config`` is undefined. The
+  // conditional-wrapper + cast keeps the single call-site ergonomic.
+  const options =
+    config !== undefined
+      ? ({ body: { config } } as never)
+      : (undefined as never);
+  const { data } = await apiClient.POST("/api/workspace/fit", options);
   // SSOT-EXEMPT (Issue #236): backend returns JobStartResponse — wider than this subset.
   return unwrap(data, "/api/workspace/fit") as unknown as { job_id: string };
 }
 
-export async function runTune(): Promise<{ job_id: string }> {
-  const { data } = await apiClient.POST("/api/workspace/tune", {});
-  // SSOT-EXEMPT (Issue #236): same as runFit.
+export async function runTune(
+  config?: Record<string, unknown>,
+): Promise<{ job_id: string }> {
+  // SSOT-EXEMPT (Issue #236): see runFit above.
+  const options =
+    config !== undefined
+      ? ({ body: { config } } as never)
+      : (undefined as never);
+  const { data } = await apiClient.POST("/api/workspace/tune", options);
+  // SSOT-EXEMPT (Issue #236): backend returns JobStartResponse — wider than this subset.
   return unwrap(data, "/api/workspace/tune") as unknown as { job_id: string };
 }
 

@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { BarChart3, Database, SlidersHorizontal } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { getErrorMessage } from "@/api/errors";
 import { useConfig, useUiSchema } from "@/api/queries";
@@ -12,7 +12,10 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { DataPanel } from "@/components/workspace/DataPanel";
+import {
+  DataPanel,
+  type DataPanelHandle,
+} from "@/components/workspace/DataPanel";
 import { ModelPanel } from "@/components/workspace/ModelPanel";
 import { ResultsPanel } from "@/components/workspace/ResultsPanel";
 import { useBackgroundNotification } from "@/hooks/useBackgroundNotification";
@@ -73,27 +76,55 @@ export function WorkspacePage() {
     setTask(t);
   }, []);
 
+  // P-0086 (Issue #251): ref that exposes the DataPanel's merged config
+  // at click time so Fit/Tune never reads a stale ws.config that lost
+  // the race against an in-flight PUT /config. If the ref isn't
+  // attached yet (extremely early in mount) we fall back to the legacy
+  // body-less POST, which is backward-compatible with the server.
+  const dataPanelRef = useRef<DataPanelHandle | null>(null);
+
+  const submitConfigOrUndefined = useCallback(async () => {
+    const handle = dataPanelRef.current;
+    if (!handle) return undefined;
+    try {
+      return await handle.getSubmitConfig();
+    } catch (err) {
+      // Fall through to body-less POST so the server still receives
+      // the run request; better to fit with ws.config than to cancel
+      // the user's click on a transient fetch failure. Warn via toast
+      // so the user understands why their latest Column Settings edits
+      // may not appear in the fitted model (race-fix observability,
+      // review feedback on P-0086).
+      toast.warning(
+        `Using last saved config for this run — live config unavailable (${getErrorMessage(err)})`,
+      );
+      return undefined;
+    }
+  }, []);
+
   const handleFit = useCallback(async () => {
     setRunning(true);
     try {
-      const { job_id } = await runFit();
+      const config = await submitConfigOrUndefined();
+      const { job_id } = await runFit(config);
       setCurrentJobId(job_id);
     } catch (err) {
       toast.error(`Fit failed: ${getErrorMessage(err)}`);
       setRunning(false);
     }
-  }, [setCurrentJobId]);
+  }, [setCurrentJobId, submitConfigOrUndefined]);
 
   const handleTune = useCallback(async () => {
     setRunning(true);
     try {
-      const { job_id } = await runTune();
+      const config = await submitConfigOrUndefined();
+      const { job_id } = await runTune(config);
       setCurrentJobId(job_id);
     } catch (err) {
       toast.error(`Tune failed: ${getErrorMessage(err)}`);
       setRunning(false);
     }
-  }, [setCurrentJobId]);
+  }, [setCurrentJobId, submitConfigOrUndefined]);
 
   const handleApplyToFit = useCallback(
     async (fullConfig: Record<string, unknown>) => {
@@ -151,6 +182,7 @@ export function WorkspacePage() {
           className="flex-1 overflow-auto focus-visible:outline-none"
         >
           <DataPanel
+            ref={dataPanelRef}
             onDataChanged={handleDataChanged}
             onTaskChanged={handleTaskChanged}
             uiSchema={uiSchema}
@@ -242,6 +274,7 @@ export function WorkspacePage() {
           className="flex h-full flex-col focus-visible:outline-none"
         >
           <DataPanel
+            ref={dataPanelRef}
             onDataChanged={handleDataChanged}
             onTaskChanged={handleTaskChanged}
             uiSchema={uiSchema}
