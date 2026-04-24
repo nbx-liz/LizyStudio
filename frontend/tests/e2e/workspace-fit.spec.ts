@@ -355,4 +355,130 @@ test.describe("Workspace Fit Flow", () => {
     }
     expect(status).toBe("completed");
   });
+
+  /**
+   * Scenario B (Issue #257 Phase 2): the user edits the config via the
+   * UI — toggling a ConfigForm control — and then clicks Fit. Before the
+   * #253 fix this race would land an outdated config in the final PUT.
+   * This spec catches that regression at the integration layer (the
+   * Vitest unit only covers two-writes-in-same-tick at the hook level).
+   *
+   * Edit chosen: toggle the Calibration switch ON. It writes to a nested
+   * path (``model.calibration``) that is distinct from the defaults-only
+   * shape of Scenario A, so any drop-write regression surfaces as an
+   * absent ``model.calibration`` object in the final PUT payload.
+   */
+  test("UI: toggle Calibration, click Fit, verify edit reached PUT /config", async ({
+    page,
+    request,
+  }, testInfo) => {
+    // Same 180s budget as Scenario A (15s schema load + 15s combo enable
+    // + calibration PUT observe + 30s fit accept + 90s poll). Overrides
+    // the 120s default in playwright.config.ts.
+    test.setTimeout(180_000);
+    if (isMobileProject(testInfo)) {
+      test.skip(true, "Mobile layout path is covered elsewhere");
+    }
+
+    const csvPath = createTestCsv();
+
+    await dismissOnboarding(page);
+    await page.goto("/");
+    await page.waitForLoadState("networkidle");
+    await openWorkspaceSectionIfMobile(page, testInfo, "data");
+
+    // Same data-seeding flow as Scenario A.
+    await page.getByRole("radio", { name: "Path" }).click();
+    await page.getByPlaceholder("/path/to/data.csv").fill(csvPath);
+    await page.getByRole("button", { name: "Load" }).click();
+    await expect(
+      page.getByText(/100 rows × \d+ columns/),
+    ).toBeVisible({ timeout: 15_000 });
+
+    const targetCombo = page.getByRole("combobox", {
+      name: /target column/i,
+    });
+    await expect(targetCombo).toBeEnabled({ timeout: 15_000 });
+    await targetCombo.click();
+    await page.getByRole("option", { name: "target" }).click();
+
+    await openWorkspaceSectionIfMobile(page, testInfo, "model");
+
+    // Wait for the ConfigForm to finish seeding; the Calibration section
+    // only appears once the model accordion is populated.
+    const calibrationHeader = page.getByRole("button", {
+      name: /Calibration/i,
+    });
+    await expect(calibrationHeader).toBeVisible({ timeout: 15_000 });
+
+    // Calibration Switch is a sibling of the accordion trigger within
+    // the same row. Located by its aria-label so the query survives
+    // future layout tweaks around the header.
+    const calibrationSwitch = page.getByRole("switch", { name: "Calibration" });
+    await expect(calibrationSwitch).toBeVisible();
+
+    // Arm the PUT listener BEFORE the click so the race is observable.
+    // Calibration is written at top-level config.calibration, not under
+    // model — see ConfigForm.tsx handleFieldChange(["calibration"], cal).
+    const calibrationPutPromise = page.waitForRequest(
+      (req) =>
+        req.url().endsWith("/api/workspace/config") &&
+        req.method() === "PUT" &&
+        (() => {
+          try {
+            const body = req.postDataJSON() as { calibration?: unknown };
+            return body?.calibration != null;
+          } catch {
+            return false;
+          }
+        })(),
+      { timeout: 15_000 },
+    );
+
+    await calibrationSwitch.click();
+
+    // Confirm the UI edit produced a PUT whose payload includes the new
+    // calibration object (not a stale copy without it).
+    const calibrationPut = await calibrationPutPromise;
+    const putBody = calibrationPut.postDataJSON() as {
+      calibration: Record<string, unknown>;
+    };
+    expect(putBody.calibration).not.toBeNull();
+    expect(putBody.calibration.method).toBeTruthy();
+
+    const fitButton = page.getByRole("button", { name: "Fit", exact: true });
+    await expect(fitButton).toBeEnabled({ timeout: 15_000 });
+
+    const fitResponsePromise = page.waitForResponse(
+      (res) =>
+        res.url().endsWith("/api/workspace/fit") &&
+        res.request().method() === "POST",
+      { timeout: 30_000 },
+    );
+
+    await fitButton.click();
+
+    const fitResponse = await fitResponsePromise;
+    expect(
+      fitResponse.status(),
+      `POST /workspace/fit must succeed after UI edit (got ${fitResponse.status()}). ` +
+        `Body: ${await fitResponse.text()}`,
+    ).toBe(200);
+    const fitBody = await fitResponse.json();
+    expect(fitBody.job_id).toBeTruthy();
+
+    // Poll to completion so backend actually runs with the calibrated
+    // config (any schema mismatch on the extra field surfaces here, not
+    // only at accept-time).
+    let status = "";
+    for (let i = 0; i < 45; i++) {
+      const jobRes = await request.get(`${API}/jobs/${fitBody.job_id}`);
+      expect(jobRes.status()).toBe(200);
+      const job = await jobRes.json();
+      status = job.status;
+      if (status === "completed" || status === "failed") break;
+      await page.waitForTimeout(2000);
+    }
+    expect(status).toBe("completed");
+  });
 });

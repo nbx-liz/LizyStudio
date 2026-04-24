@@ -16,6 +16,11 @@ export default defineConfig({
   workers: 1,
   timeout: 120_000,
   retries: CI ? 2 : 0,
+  // Issue #256 / P-0088: before any spec runs, verify the backend on :8501
+  // is the E2E-configured one (LIZYSTUDIO_FILES_ROOT=/tmp). Fails loud if a
+  // developer forgot to stop ``uv run lizystudio --reload`` before invoking
+  // ``pnpm test:e2e``.
+  globalSetup: "./tests/e2e/global-setup.ts",
   snapshotPathTemplate:
     "{testDir}/__screenshots__/{projectName}/{testFilePath}/{arg}{ext}",
   expect: {

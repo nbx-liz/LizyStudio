@@ -1926,6 +1926,8 @@ export interface components {
             data_ref?: components["schemas"]["StatusDataRef"] | null;
             /** Current Job Id */
             current_job_id?: string | null;
+            /** Files Root */
+            files_root: string;
         };
         /**
          * WorkspaceTuneRequest

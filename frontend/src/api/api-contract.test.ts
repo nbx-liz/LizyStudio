@@ -83,6 +83,7 @@ describe("WorkspaceStatus", () => {
         shape: [100, 10],
       },
       current_job_id: "job-1",
+      files_root: "/tmp",
     };
     expect(status.has_data).toBe(true);
     expect(status.has_config).toBe(true);
@@ -97,6 +98,7 @@ describe("WorkspaceStatus", () => {
       has_result: false,
       data_ref: null,
       current_job_id: null,
+      files_root: "/tmp",
     };
     expect(status.data_ref).toBeNull();
     expect(status.current_job_id).toBeNull();

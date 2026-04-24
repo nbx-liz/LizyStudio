@@ -68,6 +68,21 @@ def test_status_returns_correct_shape_empty(client: TestClient) -> None:
     assert "has_result" in body
     assert "data_ref" in body
     assert "current_job_id" in body
+    # P-0088 / Issue #256: /status must expose files_root so E2E harnesses
+    # can fingerprint the backend and fail loud on env mismatch instead of
+    # silently attacking a dev-server with the wrong FILES_ROOT.
+    assert "files_root" in body
+
+
+def test_status_files_root_matches_security_setting(client: TestClient) -> None:
+    """P-0088 / Issue #256: files_root returned by /status must equal the
+    active ALLOWED_FILES_ROOT so E2E clients can assert env alignment."""
+    from lizystudio import security
+
+    res = client.get("/api/workspace/status")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["files_root"] == str(security.ALLOWED_FILES_ROOT)
 
 
 def test_status_has_data_false_initially(client: TestClient) -> None:

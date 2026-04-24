@@ -69,6 +69,10 @@ export interface WorkspaceStatus {
   has_result: boolean;
   data_ref: { filename: string; shape: [number, number] } | null;
   current_job_id: string | null;
+  // P-0088 / Issue #256: backend's active ALLOWED_FILES_ROOT. Used by
+  // the E2E globalSetup to fingerprint the server env; UI does not
+  // render this field.
+  files_root: string;
 }
 
 /**
