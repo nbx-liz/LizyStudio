@@ -333,4 +333,105 @@ test.describe("Workspace tune flow", () => {
     expect(tuneResult).toHaveProperty("best_params");
     expect(tuneResult).toHaveProperty("best_score");
   });
+
+  /**
+   * Issue #263 — UI-driven Retune happy path.
+   *
+   * Drives the full user flow: complete a Tune via the UI (Scenario T
+   * shape), wait for the workspace ResultsCompletedView to render the
+   * "Re-tune (+N trials)" button (only shown for completed Tune jobs
+   * with tune_result, see ResultsCompletedView.tsx:85), open the
+   * dialog, click "Start Re-tune", and assert
+   * ``POST /api/jobs/{parent}/retune`` returns 200 with the parent_job_id
+   * threaded through.
+   *
+   * This locks the regression class where a UI re-tune produces a
+   * malformed body (e.g. missing parent_job_id, wrong n_trials shape)
+   * because the API-only specs already in this file cannot catch it —
+   * they craft the body in TypeScript by hand.
+   */
+  test("UI: complete Tune -> click Re-tune -> dialog -> Start -> retune returns 200", async ({
+    page,
+    request,
+  }, testInfo) => {
+    // Tune + Retune walltime stacks: seed (~30s) + parent poll (90s
+    // default) + child poll (capped to 60s below since a continued
+    // Optuna study is faster than a fresh one) = ~180s in the worst
+    // case. 300s leaves ~2× headroom for CI IO jitter.
+    test.setTimeout(300_000);
+    if (isMobileProject(testInfo)) {
+      test.skip(true, "Mobile layout path is covered elsewhere");
+    }
+
+    const csvPath = createTestCsv();
+    await seedUiWorkspace(page, testInfo, { csvPath });
+
+    // Drive the parent Tune through the UI (same as Scenario T).
+    await page.getByRole("tab", { name: "Tune" }).click();
+    const tuneButton = page.getByRole("button", { name: "Tune", exact: true });
+    await expect(tuneButton).toBeEnabled({ timeout: 15_000 });
+    const tuneResponsePromise = page.waitForResponse(
+      (res) =>
+        res.url().endsWith("/api/workspace/tune") &&
+        res.request().method() === "POST",
+      { timeout: 30_000 },
+    );
+    await tuneButton.click();
+    const tuneResponse = await tuneResponsePromise;
+    expect(tuneResponse.status()).toBe(200);
+    const { job_id: parentJobId } = await tuneResponse.json();
+
+    const parentBody = await pollJobUntilTerminal(request, parentJobId);
+    expect(parentBody.status).toBe("completed");
+
+    // Once parent is completed the workspace ResultsCompletedView
+    // renders the Re-tune button. ``aria-label="Re-tune with additional
+    // trials"`` is set in RetuneActionButton.tsx:99 — locator survives
+    // copy tweaks on the visible label.
+    const retuneTrigger = page.getByRole("button", {
+      name: "Re-tune with additional trials",
+    });
+    await expect(retuneTrigger).toBeVisible({ timeout: 15_000 });
+    await retuneTrigger.click();
+
+    // Dialog opens with default n_trials pre-filled. The Start button
+    // is the second button inside the dialog footer; lookup by role.
+    const startButton = page.getByRole("button", { name: "Start Re-tune" });
+    await expect(startButton).toBeEnabled({ timeout: 5_000 });
+
+    // Arm POST /jobs/{parentId}/retune capture before clicking Start.
+    const retuneResponsePromise = page.waitForResponse(
+      (res) =>
+        res.url().endsWith(`/api/jobs/${parentJobId}/retune`) &&
+        res.request().method() === "POST",
+      { timeout: 30_000 },
+    );
+    await startButton.click();
+
+    const retuneResponse = await retuneResponsePromise;
+    expect(
+      retuneResponse.status(),
+      `POST /jobs/${parentJobId}/retune must succeed for default UI flow ` +
+        `(got ${retuneResponse.status()}). Body: ${await retuneResponse.text()}`,
+    ).toBe(200);
+    const retuneBody = await retuneResponse.json();
+    expect(retuneBody.parent_job_id).toBe(parentJobId);
+    expect(retuneBody.job_id).toBeTruthy();
+
+    // Poll the child to terminal. Re-tune continues the existing study
+    // so it is typically faster than the parent — cap at 60s so a
+    // child stuck in ``running`` surfaces as a clear timeout rather
+    // than burning the test-level 300s budget.
+    const childBody = await pollJobUntilTerminal(
+      request,
+      retuneBody.job_id as string,
+      { timeoutMs: 60_000 },
+    );
+    expect(childBody.status).toBe("completed");
+    const childTuneResult = childBody.tune_result as
+      | Record<string, unknown>
+      | null;
+    expect(childTuneResult).toBeTruthy();
+    expect(childTuneResult).toHaveProperty("best_params");
+  });
 });

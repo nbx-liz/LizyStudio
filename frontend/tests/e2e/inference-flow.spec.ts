@@ -227,4 +227,86 @@ test.describe("Inference flow", () => {
     expect(record.has_ground_truth).toBe(false);
     expect(record.row_count).toBe(50);
   });
+
+  /**
+   * Issue #263 — UI-driven Inference happy path.
+   *
+   * Drives the full user flow on /inference: complete a Fit via API
+   * (the parent setup is well-covered by Fit specs already), navigate
+   * to the Inference page, select the completed job from the combobox,
+   * type the data path, click Run Inference, and assert
+   * ``POST /api/inference/run`` returns 200 with a non-empty
+   * ``inf_id`` and the predictions endpoint is reachable for the new
+   * record.
+   *
+   * This locks the regression class where the Inference page builds a
+   * malformed body (missing ``job_id``, wrong source_type, omitted
+   * ``return_shap`` / ``evaluate``) — the API-only specs above cannot
+   * detect such a bug because they craft the body in TypeScript.
+   */
+  test("UI: select model -> set path -> Run Inference -> inference returns 200", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(180_000);
+
+    // Seed a completed Fit job via API; the UI flow we're locking is the
+    // inference page itself, not Fit (covered separately).
+    const csvPath = createTestCsv(100);
+    const jobId = await setupAndFit(request, csvPath);
+    await waitForJobDone(request, jobId);
+
+    await dismissOnboarding(page);
+    await page.goto("/inference");
+    await page.waitForLoadState("networkidle");
+
+    // Pick the completed job from the model combobox.
+    const modelCombo = page.getByRole("combobox", {
+      name: "Select completed job",
+    });
+    await expect(modelCombo).toBeEnabled({ timeout: 15_000 });
+    await modelCombo.click();
+    // Scope the option lookup to the open listbox so unrelated
+    // comboboxes (now or future) cannot leak their options into the
+    // .first() pick. Radix sets ``role="listbox"`` on the open
+    // SelectContent. The first option is the most recent job
+    // (newest-first ordering is locked by jobs.py:282 ``reverse=True``).
+    const openListbox = page.getByRole("listbox");
+    await openListbox.getByRole("option").first().click();
+
+    // The data source defaults to "Path" — fill in the same CSV the fit
+    // job consumed (target column is present, so evaluate=true by
+    // default which exercises the with-ground-truth branch).
+    const pathInput = page.getByPlaceholder("/path/to/data.csv");
+    await pathInput.fill(csvPath);
+
+    const runButton = page.getByRole("button", { name: "Run Inference" });
+    await expect(runButton).toBeEnabled({ timeout: 5_000 });
+
+    const inferResponsePromise = page.waitForResponse(
+      (res) =>
+        res.url().endsWith("/api/inference/run") &&
+        res.request().method() === "POST",
+      { timeout: 30_000 },
+    );
+    await runButton.click();
+
+    const inferResponse = await inferResponsePromise;
+    expect(
+      inferResponse.status(),
+      `POST /inference/run must succeed for default UI flow ` +
+        `(got ${inferResponse.status()}). Body: ${await inferResponse.text()}`,
+    ).toBe(200);
+    const inferBody = await inferResponse.json();
+    expect(inferBody.inf_id).toBeTruthy();
+
+    // Sanity-check the new record is reachable so a "200 OK but the
+    // record never lands on disk" regression also fails this spec.
+    const recordRes = await request.get(
+      `${API}/inference/${inferBody.inf_id}?job_id=${jobId}`,
+    );
+    expect(recordRes.status()).toBe(200);
+    const record = await recordRes.json();
+    expect(record.row_count).toBe(100);
+  });
 });
