@@ -2416,3 +2416,36 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (d) Issue #258 の再現手順を踏んでも 200 が返る（手動検証）。
 - **Decision:**
   - 2026-04-23 **Proposed & Implemented** — Phase 1 PR で採用。#258 / #259 の最小止血 + 再発防止 contract を同梱。#257 は minimal happy path を今 PR で追加し、残りは Phase 2 PR で拡充。#259 の UI schema Pydantic 導出化は Phase 3 PR で別途検討。
+
+### P-0088: `GET /api/workspace/status` に `files_root` を追加し、E2E globalSetup で env fingerprint を検証（Issue #256 / #257 Phase 2）
+- **Status:** proposed & implemented
+- **Scope:** Backend / Frontend (E2E harness only) / Testing
+- **Related:** Issue #256（DX: reuseExistingServer が dev 動作中の E2E を silent 400 にする）、Issue #257（UI-driven Fit の Scenario B 追加、follow-up）、P-0087
+- **Context:** Playwright の `webServer.reuseExistingServer` は port 8501 で応答があると managed backend の起動をスキップする。ここで dev server（`uv run lizystudio --reload`）が先に走っていると、`LIZYSTUDIO_FILES_ROOT=$HOME` のまま動作しているため `/tmp/e2e_*.csv` を書く全 spec が `PATH_NOT_FOUND 400` で失敗する。75 functional test のうち 42 が silent に red になる既知 foot-gun で、原因特定が難しく onboarding 摩擦にも直結する。
+- **Invariants:**
+  - INV-1: `GET /api/workspace/status` は `files_root: str` field を必ず返し、値は backend が resolve した `security.ALLOWED_FILES_ROOT` と等しい。
+  - INV-2: E2E suite 起動前に globalSetup が `files_root` を検証し、mismatch なら loud error（「dev server を止めて再実行」の具体的な指示付き）でテスト開始を abort する。
+- **Proposal & Impact:**
+  - `src/lizystudio/api/models.py::WorkspaceStatusResponse` に `files_root: str` を追加。
+  - `src/lizystudio/api/workspace.py::workspace_status` で `str(security.ALLOWED_FILES_ROOT)` を返す。
+  - `frontend/src/api/generated/schema.d.ts` を openapi-typescript で再生成。
+  - `frontend/tests/e2e/global-setup.ts` を新規作成し、`http://localhost:8501/api/workspace/status` を fetch、`files_root === process.env.LIZYSTUDIO_FILES_ROOT ?? "/tmp"` を assert。mismatch の場合は `pkill` で dev server を止める具体的な指示を throw。
+  - `frontend/playwright.config.ts` に `globalSetup: "./tests/e2e/global-setup.ts"` を追加。
+  - backend 側テスト `tests/test_workspace_api.py` に 2 件追加: `files_root` key の存在と値の一致。
+- **Compatibility:**
+  - API: `/status` の response は **追加 field のみ**（`files_root`）。既存 consumer（`frontend/src/hooks/useWorkspaceStatus.ts` 等）は影響なし（未参照の追加 field を無視するだけ）。
+  - UI: 変化なし。`files_root` は API 表面のみ、UI には露出しない。
+  - E2E: globalSetup の時間は backend 起動時間＋1 fetch で 1 秒未満。既存 spec には触らない。
+- **Alternatives considered:**
+  - (A) dedicated port（8502）で E2E backend を走らせる: 最もシンプルだが、既存の dev / debug 手順 (port 8501 直叩き、proxy config) を全変更する必要があり波及が大きい。
+  - (B) README / CLAUDE.md に注意書きを足すだけ: コード変更ゼロだが、読まれないと効果ゼロ。silent failure の検知自動化にならない。
+  - (C) `?e2e=1` fingerprint を URL に付けて backend が env-match 時のみ 200 を返すよう分岐: backend に E2E 専用ルート分岐を入れる必要があり、本番 / dev の挙動と乖離する。`files_root` を普通に expose するほうが副作用が少ない。
+- **Security:**
+  - `files_root` は既に CLI 引数 / env で設定された path を表示するだけで、新たな secret 漏洩は生じない。ポート 8501 に到達できるクライアントは、すでに任意 API を叩ける権限を持つ前提。
+- **Acceptance Criteria:**
+  - (a) backend `pytest tests/test_workspace_api.py` 全 pass（+2 件追加）。
+  - (b) `frontend/src/api/generated/schema.d.ts` に `files_root: string` が現れる。
+  - (c) dev server を起動した状態で `pnpm test:e2e` を実行すると、最初のテスト到達前に globalSetup が "stop the dev server" 指示付きで fail する。
+  - (d) dev server 未起動 or E2E-configured backend の状態で `pnpm test:e2e` を実行すると従来通り全 pass。
+- **Decision:**
+  - 2026-04-24 **Proposed & Implemented** — Phase 2 PR で採用。Issue #256 を close 予定。Issue #257 の Scenario B (UI 編集後 Fit の統合テスト) は同 PR で並行実装。

@@ -103,6 +103,7 @@ def workspace_status(
         if ws.data_ref
         else None,
         "current_job_id": ws.current_job_id,
+        "files_root": str(security.ALLOWED_FILES_ROOT),
     }
 
 

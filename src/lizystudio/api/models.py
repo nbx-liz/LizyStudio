@@ -99,6 +99,11 @@ class WorkspaceStatusResponse(BaseModel):
     has_result: bool
     data_ref: StatusDataRef | None = None
     current_job_id: str | None = None
+    # P-0088 / Issue #256: expose the active files root so E2E harnesses
+    # (and anyone else running automated traffic) can fingerprint the
+    # backend env and bail out on mismatch instead of attacking a dev
+    # server that will reject every /tmp path.
+    files_root: str
 
 
 # --- Config ---

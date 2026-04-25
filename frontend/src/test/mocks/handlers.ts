@@ -45,6 +45,7 @@ export const handlers = [
       has_result: false,
       data_ref: null,
       current_job_id: null,
+      files_root: "/tmp",
     }),
   ),
 ];
