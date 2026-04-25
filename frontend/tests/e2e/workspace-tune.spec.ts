@@ -434,4 +434,62 @@ test.describe("Workspace tune flow", () => {
     expect(childTuneResult).toBeTruthy();
     expect(childTuneResult).toHaveProperty("best_params");
   });
+
+  /**
+   * Issue #266 — empty-Choice Tune button gate.
+   *
+   * Switching a Search Space row to Choice mode without entering any
+   * choices used to produce ``{type:"categorical", choices:[]}`` and the
+   * backend rejected the resulting Tune with 422. This spec drives the
+   * UI through the offending sequence and asserts the Tune button is
+   * disabled with a banner pointing at the offending row, then re-
+   * enables once the user reverts the row to Fixed.
+   */
+  test("UI: empty Choice mode disables Tune button and shows a banner", async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(60_000);
+    if (isMobileProject(testInfo)) {
+      test.skip(true, "Mobile layout path is covered elsewhere");
+    }
+
+    const csvPath = createTestCsv();
+    await seedUiWorkspace(page, testInfo, { csvPath });
+
+    await page.getByRole("tab", { name: "Tune" }).click();
+    const tuneButton = page.getByRole("button", { name: "Tune", exact: true });
+    await expect(tuneButton).toBeEnabled({ timeout: 15_000 });
+
+    // Drive the SearchSpaceTable: switch the ``objective`` row to Choice.
+    // SearchSpaceRow renders the param key as ``<span class="font-mono">``
+    // and the mode segments as ``role="radio"`` with capitalized labels
+    // (Fixed / Range / Choice — see SegmentGroup.tsx + SearchSpaceRow.tsx).
+    // The row wrapper carries ``border-b`` AND ``last:border-b-0``;
+    // matching just ``border-b`` was too loose and resolved to the
+    // SearchSpaceTable header card. Anchor to the row by walking up
+    // from the param-key ``<span>`` to the closest ``<div>`` that
+    // contains the ``radiogroup``.
+    const objectiveKey = page.locator("span.font-mono", {
+      hasText: /^objective$/,
+    });
+    const objectiveRow = objectiveKey
+      .locator("xpath=ancestor::div[.//*[@role='radiogroup']][1]");
+    await expect(objectiveRow).toBeVisible({ timeout: 15_000 });
+    await objectiveRow.getByRole("radio", { name: "Choice" }).click();
+
+    // The banner appears and the Tune button gates off.
+    await expect(page.getByTestId("empty-choice-banner")).toBeVisible({
+      timeout: 5_000,
+    });
+    await expect(page.getByTestId("empty-choice-banner")).toContainText(
+      "objective",
+    );
+    await expect(tuneButton).toBeDisabled();
+
+    // Reverting the row to Fixed must re-enable Tune and remove the
+    // banner. This is the recovery path users will take.
+    await objectiveRow.getByRole("radio", { name: "Fixed" }).click();
+    await expect(page.getByTestId("empty-choice-banner")).toHaveCount(0);
+    await expect(tuneButton).toBeEnabled({ timeout: 5_000 });
+  });
 });

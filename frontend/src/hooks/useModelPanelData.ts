@@ -24,6 +24,7 @@ import {
 import { queryKeys } from "@/api/queryKeys";
 import type { ConfigError } from "@/api/types";
 import { updateConfig, uploadConfig, validateConfig } from "@/api/workspace";
+import { findEmptyChoiceKeys } from "@/components/workspace/search-space-utils";
 import { useConfigHistory } from "@/hooks/useConfigHistory";
 import { useConfigPresets } from "@/hooks/useConfigPresets";
 
@@ -179,14 +180,26 @@ export function useModelPanelData({
         | Record<string, unknown>
         | undefined
     )?.space as Record<string, unknown> | undefined) ?? {};
+  // Issue #266: any Choice-mode entry with no choices is rejected by the
+  // backend. Surface as a client-side block so the user gets a clear
+  // signal (banner + disabled Tune) instead of a 422 round-trip.
+  const emptyChoiceKeys = useMemo(
+    () => findEmptyChoiceKeys(tuningSpace),
+    [tuningSpace],
+  );
   const tuneEnabled =
-    fitEnabled && (allowEmptySpace || Object.keys(tuningSpace).length > 0);
+    fitEnabled &&
+    (allowEmptySpace || Object.keys(tuningSpace).length > 0) &&
+    emptyChoiceKeys.length === 0;
 
   const disabledReason = (() => {
     if (running) return "A job is currently running";
     if (!hasData) return "Load data first";
     if (!config) return "Loading configuration...";
     if (errors.length > 0) return "Fix validation errors first";
+    if (activeTab === "tune" && emptyChoiceKeys.length > 0) {
+      return `Add at least one choice to: ${emptyChoiceKeys.join(", ")}`;
+    }
     if (activeTab === "tune" && !tuneEnabled)
       return "Define a search space or enable empty space";
     return null;
@@ -199,6 +212,7 @@ export function useModelPanelData({
     uiSchema,
     nonExcludedColumns,
     errors,
+    emptyChoiceKeys,
     presets,
     history,
     fitEnabled,

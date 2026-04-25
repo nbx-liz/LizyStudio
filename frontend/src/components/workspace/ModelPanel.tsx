@@ -40,6 +40,7 @@ export function ModelPanel({
     uiSchema,
     nonExcludedColumns,
     errors,
+    emptyChoiceKeys,
     presets,
     history,
     fitEnabled,
@@ -74,6 +75,7 @@ export function ModelPanel({
         hasData={hasData}
         running={running}
         errors={errors}
+        emptyChoiceKeys={emptyChoiceKeys}
         schema={schema}
         config={config}
         onChange={handleConfigChange}

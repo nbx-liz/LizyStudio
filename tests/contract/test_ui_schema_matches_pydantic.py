@@ -177,3 +177,38 @@ def test_frontend_fallback_matches_backend_cv_strategy_fields() -> None:
         "FALLBACK_CV_STRATEGY_FIELDS in cv-state.ts does not match "
         "backend ui_schema.cv_strategy_fields:\n  " + "\n  ".join(diffs)
     )
+
+
+def test_parameter_hints_do_not_shadow_smart_params() -> None:
+    """Issue #265 regression guard.
+
+    ``parameter_hints`` drives the Advanced Model Params section, which
+    writes to ``model.params.<key>``. Smart Params (top-level fields on
+    ``LGBMConfig`` like ``balanced``, ``auto_num_leaves``) write to
+    ``model.<key>``. lizyml only reads Smart Params from ``model.<key>``
+    (see ``LGBMProvider.extract_smart_params``), so a hint shadowing a
+    Smart Params field renders a second toggle that silently drops the
+    user's value into the wrong path.
+
+    This test enumerates the LGBMConfig fields that are not native
+    LightGBM ``params`` (i.e. all properties except ``name`` and
+    ``params``) and asserts none of them appear as a parameter_hint key.
+    """
+    from lizyml.config.schema import LizyMLConfig
+
+    ui_schema = build_ui_schema(get_eval_metrics_by_task())
+    hint_keys = {h["key"] for h in ui_schema["parameter_hints"]}
+
+    defs = LizyMLConfig.model_json_schema().get("$defs", {})
+    lgbm = defs.get("LGBMConfig") or {}
+    lgbm_props = set((lgbm.get("properties") or {}).keys())
+    smart_param_keys = lgbm_props - {"name", "params"}
+
+    overlap = hint_keys & smart_param_keys
+    assert not overlap, (
+        "parameter_hints must not shadow LGBMConfig Smart Params fields. "
+        f"Found overlap: {sorted(overlap)}. These fields are written by "
+        "the Smart Params section to model.<key>; including them in "
+        "parameter_hints causes a duplicate Advanced toggle that writes "
+        "to model.params.<key> and is silently dropped by lizyml."
+    )

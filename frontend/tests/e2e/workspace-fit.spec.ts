@@ -434,4 +434,69 @@ test.describe("Workspace Fit Flow", () => {
     );
     expect(jobBody.status).toBe("completed");
   });
+
+  /**
+   * Issue #265 — UI-driven Balanced switch lock.
+   *
+   * The Smart Params Balanced switch must propagate to ``model.balanced``
+   * (the LGBMConfig top-level field consumed by lizyml). Before the fix
+   * a duplicate parameter_hint rendered a second toggle in Advanced
+   * Model Params that wrote to ``model.params.balanced`` — silently
+   * dropped by lizyml. This spec locks the contract: only one Balanced
+   * switch is rendered, and toggling it reaches ``model.balanced`` in
+   * the next PUT body.
+   */
+  test("UI: toggle Balanced, verify model.balanced reaches PUT /config and only one toggle exists", async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(60_000);
+    if (isMobileProject(testInfo)) {
+      test.skip(true, "Mobile layout path is covered elsewhere");
+    }
+
+    const csvPath = createTestCsv();
+    await seedUiWorkspace(page, testInfo, { csvPath });
+
+    // Smart Params Balanced switch (role="switch") — distinct from any
+    // CompactToggle in Advanced Model Params. Locating by accessible
+    // name guarantees we hit the Switch primitive, not a sibling input.
+    const balancedSwitch = page.getByRole("switch", { name: "Balanced" });
+    await expect(balancedSwitch).toBeVisible({ timeout: 15_000 });
+
+    // Issue #265 root cause: a parameter_hint named "balanced" rendered
+    // a SECOND toggle in the Advanced section that wrote to the wrong
+    // path. Open Advanced and assert there is exactly one Balanced
+    // switch on the page.
+    await page.getByTestId("toggle-advanced-params").click();
+    const allBalanced = page.getByRole("switch", { name: "Balanced" });
+    await expect(allBalanced).toHaveCount(1);
+
+    // Arm a PUT listener that watches for ``model.balanced === true``.
+    const balancedPutPromise = page.waitForRequest(
+      (req) =>
+        req.url().endsWith("/api/workspace/config") &&
+        req.method() === "PUT" &&
+        (() => {
+          try {
+            const body = req.postDataJSON() as {
+              model?: { balanced?: unknown };
+            };
+            return body?.model?.balanced === true;
+          } catch {
+            return false;
+          }
+        })(),
+      { timeout: 15_000 },
+    );
+
+    await balancedSwitch.click();
+    const put = await balancedPutPromise;
+    const putBody = put.postDataJSON() as {
+      model: { balanced: unknown; params?: { balanced?: unknown } };
+    };
+    expect(putBody.model.balanced).toBe(true);
+    // model.params.balanced must NOT be set — that path is silently
+    // dropped by lizyml and is the wrong target.
+    expect(putBody.model.params?.balanced).toBeUndefined();
+  });
 });

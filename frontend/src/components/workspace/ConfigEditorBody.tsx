@@ -16,6 +16,12 @@ export interface ConfigEditorBodyProps {
   hasData: boolean;
   running: boolean;
   errors: ConfigError[];
+  /**
+   * Search Space parameter keys that are in Choice (categorical) mode
+   * with no choices populated (Issue #266). Surfaced as a banner above
+   * the search space when activeTab === "tune".
+   */
+  emptyChoiceKeys?: string[];
   // biome-ignore lint/suspicious/noExplicitAny: JSON schema shape passes straight through to ConfigForm
   schema: any | undefined;
   config: Record<string, unknown> | undefined;
@@ -31,6 +37,7 @@ export function ConfigEditorBody({
   hasData,
   running,
   errors,
+  emptyChoiceKeys = [],
   schema,
   config,
   onChange,
@@ -39,6 +46,8 @@ export function ConfigEditorBody({
   columns,
 }: ConfigEditorBodyProps) {
   const visibleErrors = errors.filter((err) => err.path || err.message);
+  const showEmptyChoiceBanner =
+    activeTab === "tune" && emptyChoiceKeys.length > 0;
 
   return (
     // tabIndex=0 satisfies axe scrollable-region-focusable (WCAG 2.1.1)
@@ -68,6 +77,21 @@ export function ConfigEditorBody({
               {[err.path, err.message].filter(Boolean).join(": ")}
             </p>
           ))}
+        </div>
+      )}
+      {showEmptyChoiceBanner && (
+        <div
+          className="mb-4 rounded-md border border-destructive/50 bg-destructive/10 p-3"
+          data-testid="empty-choice-banner"
+          role="alert"
+        >
+          <p className="text-xs font-medium text-destructive">
+            Fix validation errors first
+          </p>
+          <p className="mt-1 text-xs text-destructive">
+            Choice mode with no choices: {emptyChoiceKeys.join(", ")}. Add at
+            least one choice to each parameter or switch the row back to Fixed.
+          </p>
         </div>
       )}
 

@@ -64,6 +64,26 @@ export function formatSummary(entry: SpaceEntry): string {
   return `${entry.low} ~ ${entry.high}${dist}`;
 }
 
+/**
+ * Find Search Space entries in Choice (categorical) mode with no choices
+ * (Issue #266). The backend rejects these with 422; surface them as a
+ * client-side validation error so the Tune button can be disabled before
+ * submission.
+ */
+export function findEmptyChoiceKeys(space: Record<string, unknown>): string[] {
+  const keys: string[] = [];
+  for (const [key, raw] of Object.entries(space)) {
+    if (raw == null || typeof raw !== "object") continue;
+    const obj = raw as Record<string, unknown>;
+    if (obj.type !== "categorical") continue;
+    const choices = obj.choices;
+    if (!Array.isArray(choices) || choices.length === 0) {
+      keys.push(key);
+    }
+  }
+  return keys;
+}
+
 /** Props for the SearchSpaceRow component. */
 export interface SearchSpaceRowProps {
   param: {
