@@ -1,5 +1,10 @@
 import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
+import { isMobileProject } from "./helpers/mobile";
+import {
+  pollJobUntilTerminal,
+  seedUiWorkspace,
+} from "./helpers/workspace-ui";
 
 const API = "http://localhost:8501/api";
 
@@ -251,5 +256,81 @@ test.describe("Workspace tune flow", () => {
     // ZIP magic bytes: PK\x03\x04
     expect(body[0]).toBe(0x50); // P
     expect(body[1]).toBe(0x4b); // K
+  });
+
+  /**
+   * Issue #257 Phase 3 — UI-driven Tune happy path.
+   *
+   * Parallel to the UI-Fit Scenario A in workspace-fit.spec.ts. Drives
+   * the real frontend path: seed data via the Path input, pick target,
+   * switch to the Tune tab, click the Tune button, assert POST
+   * /workspace/tune returns 200 and the job completes.
+   *
+   * TuneTab auto-populates a default search space from
+   * ``catalog_entries.default_range`` (see TuneTab.tsx:62-86), so a
+   * user-driven Tune with no manual search-space edits still submits a
+   * valid config. This spec locks that contract.
+   */
+  test("UI: load data -> pick target -> Tune tab -> click Tune -> tune returns 200", async ({
+    page,
+    request,
+  }, testInfo) => {
+    // Same budget as the UI-Fit scenarios (15s schema load + 15s combo
+    // enable + 30s tune accept + 90s poll), plus a margin for Optuna
+    // overhead on the first trial.
+    test.setTimeout(180_000);
+    if (isMobileProject(testInfo)) {
+      // Mobile layout collapses the Tune tab behind the tab nav;
+      // covered separately by ui-improvements specs.
+      test.skip(true, "Mobile layout path is covered elsewhere");
+    }
+
+    const csvPath = createTestCsv();
+    await seedUiWorkspace(page, testInfo, { csvPath });
+
+    // Switch to the Tune tab. Radix Tabs uses role="tab" for triggers.
+    await page.getByRole("tab", { name: "Tune" }).click();
+    const tuneButton = page.getByRole("button", { name: "Tune", exact: true });
+    await expect(tuneButton).toBeEnabled({ timeout: 15_000 });
+
+    // Arm the response listener BEFORE the click so we don't miss the
+    // fast accept-on-submit path.
+    const tuneResponsePromise = page.waitForResponse(
+      (res) =>
+        res.url().endsWith("/api/workspace/tune") &&
+        res.request().method() === "POST",
+      { timeout: 30_000 },
+    );
+
+    await tuneButton.click();
+
+    const tuneResponse = await tuneResponsePromise;
+    expect(
+      tuneResponse.status(),
+      `POST /workspace/tune must succeed for default UI flow (got ${tuneResponse.status()}). ` +
+        `Body: ${await tuneResponse.text()}`,
+    ).toBe(200);
+    const tuneBody = await tuneResponse.json();
+    expect(tuneBody.job_id).toBeTruthy();
+
+    // Poll until the job completes. Tune walltime is dominated by the
+    // number of trials; TuneTab's default n_trials comes from the
+    // backend ui_schema. The shared helper caps at 90s and breaks on
+    // any terminal status (``cancelled`` included) so a cancel in-flight
+    // surfaces with a clear status rather than timing out.
+    const terminalBody = await pollJobUntilTerminal(
+      request,
+      tuneBody.job_id as string,
+    );
+    expect(terminalBody.status).toBe("completed");
+
+    // Sanity-check the tune_result shape so a "200 OK but garbage
+    // result" regression is also caught.
+    const tuneResult = terminalBody.tune_result as
+      | Record<string, unknown>
+      | null;
+    expect(tuneResult).toBeTruthy();
+    expect(tuneResult).toHaveProperty("best_params");
+    expect(tuneResult).toHaveProperty("best_score");
   });
 });
