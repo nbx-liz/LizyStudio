@@ -461,14 +461,21 @@ test.describe("Workspace tune flow", () => {
     await expect(tuneButton).toBeEnabled({ timeout: 15_000 });
 
     // Drive the SearchSpaceTable: switch the ``objective`` row to Choice.
-    // SegmentGroup renders mode buttons inside each row; locate the
-    // row by its parameter key text and click the "choice" segment.
-    const objectiveRow = page
-      .locator("div")
-      .filter({ has: page.locator("span", { hasText: /^objective$/ }) })
-      .first();
-    await expect(objectiveRow).toBeVisible({ timeout: 5_000 });
-    await objectiveRow.getByRole("button", { name: "choice" }).click();
+    // SearchSpaceRow renders the param key as ``<span class="font-mono">``
+    // and the mode segments as ``role="radio"`` with capitalized labels
+    // (Fixed / Range / Choice — see SegmentGroup.tsx + SearchSpaceRow.tsx).
+    // The row wrapper carries ``border-b`` AND ``last:border-b-0``;
+    // matching just ``border-b`` was too loose and resolved to the
+    // SearchSpaceTable header card. Anchor to the row by walking up
+    // from the param-key ``<span>`` to the closest ``<div>`` that
+    // contains the ``radiogroup``.
+    const objectiveKey = page.locator("span.font-mono", {
+      hasText: /^objective$/,
+    });
+    const objectiveRow = objectiveKey
+      .locator("xpath=ancestor::div[.//*[@role='radiogroup']][1]");
+    await expect(objectiveRow).toBeVisible({ timeout: 15_000 });
+    await objectiveRow.getByRole("radio", { name: "Choice" }).click();
 
     // The banner appears and the Tune button gates off.
     await expect(page.getByTestId("empty-choice-banner")).toBeVisible({
@@ -481,7 +488,7 @@ test.describe("Workspace tune flow", () => {
 
     // Reverting the row to Fixed must re-enable Tune and remove the
     // banner. This is the recovery path users will take.
-    await objectiveRow.getByRole("button", { name: "fixed" }).click();
+    await objectiveRow.getByRole("radio", { name: "Fixed" }).click();
     await expect(page.getByTestId("empty-choice-banner")).toHaveCount(0);
     await expect(tuneButton).toBeEnabled({ timeout: 5_000 });
   });
