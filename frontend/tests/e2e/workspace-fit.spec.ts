@@ -5,12 +5,19 @@ import {
   openWorkspaceSectionIfMobile,
 } from "./helpers/mobile";
 import { dismissOnboarding } from "./helpers/onboarding";
+import {
+  pollJobUntilTerminal,
+  seedUiWorkspace,
+} from "./helpers/workspace-ui";
 
 const API = "http://localhost:8501/api";
 
 /**
  * Create a synthetic CSV with 100 rows for binary classification.
  * Includes numeric + categorical features and a binary target column.
+ *
+ * Kept local (vs. the shared helper) because the API-only specs at the
+ * top of this file reuse the same file path to avoid a redundant write.
  */
 function createTestCsv(): string {
   const csvPath = "/tmp/e2e_fit_test.csv";
@@ -292,32 +299,7 @@ test.describe("Workspace Fit Flow", () => {
     }
 
     const csvPath = createTestCsv();
-
-    await dismissOnboarding(page);
-    await page.goto("/");
-    await page.waitForLoadState("networkidle");
-    await openWorkspaceSectionIfMobile(page, testInfo, "data");
-
-    // Use the UI Path flow (more faithful to user behaviour than
-    // pre-seeding via API). The Data Source segment defaults to
-    // Upload; switch to Path, type the CSV path, and click Load.
-    await page.getByRole("radio", { name: "Path" }).click();
-    const pathInput = page.getByPlaceholder("/path/to/data.csv");
-    await pathInput.fill(csvPath);
-    await page.getByRole("button", { name: "Load" }).click();
-    await expect(
-      page.getByText(/100 rows × \d+ columns/),
-    ).toBeVisible({ timeout: 15_000 });
-
-    // Pick the target column so the UI can assemble a complete config.
-    const targetCombo = page.getByRole("combobox", {
-      name: /target column/i,
-    });
-    await expect(targetCombo).toBeEnabled({ timeout: 15_000 });
-    await targetCombo.click();
-    await page.getByRole("option", { name: "target" }).click();
-
-    await openWorkspaceSectionIfMobile(page, testInfo, "model");
+    await seedUiWorkspace(page, testInfo, { csvPath });
 
     // The Fit button enables once target is set and config is synced.
     const fitButton = page.getByRole("button", { name: "Fit", exact: true });
@@ -343,17 +325,14 @@ test.describe("Workspace Fit Flow", () => {
     expect(fitBody.job_id).toBeTruthy();
 
     // Poll until the job completes so the regression net covers the
-    // full lifecycle, not just the accept-on-submit moment.
-    let status = "";
-    for (let i = 0; i < 45; i++) {
-      const jobRes = await request.get(`${API}/jobs/${fitBody.job_id}`);
-      expect(jobRes.status()).toBe(200);
-      const job = await jobRes.json();
-      status = job.status;
-      if (status === "completed" || status === "failed") break;
-      await page.waitForTimeout(2000);
-    }
-    expect(status).toBe("completed");
+    // full lifecycle, not just the accept-on-submit moment. Uses the
+    // shared helper so ``cancelled`` short-circuits instead of burning
+    // the full 90s budget before the final ``=== "completed"`` assert.
+    const jobBody = await pollJobUntilTerminal(
+      request,
+      fitBody.job_id as string,
+    );
+    expect(jobBody.status).toBe("completed");
   });
 
   /**
@@ -381,28 +360,7 @@ test.describe("Workspace Fit Flow", () => {
     }
 
     const csvPath = createTestCsv();
-
-    await dismissOnboarding(page);
-    await page.goto("/");
-    await page.waitForLoadState("networkidle");
-    await openWorkspaceSectionIfMobile(page, testInfo, "data");
-
-    // Same data-seeding flow as Scenario A.
-    await page.getByRole("radio", { name: "Path" }).click();
-    await page.getByPlaceholder("/path/to/data.csv").fill(csvPath);
-    await page.getByRole("button", { name: "Load" }).click();
-    await expect(
-      page.getByText(/100 rows × \d+ columns/),
-    ).toBeVisible({ timeout: 15_000 });
-
-    const targetCombo = page.getByRole("combobox", {
-      name: /target column/i,
-    });
-    await expect(targetCombo).toBeEnabled({ timeout: 15_000 });
-    await targetCombo.click();
-    await page.getByRole("option", { name: "target" }).click();
-
-    await openWorkspaceSectionIfMobile(page, testInfo, "model");
+    await seedUiWorkspace(page, testInfo, { csvPath });
 
     // Wait for the ConfigForm to finish seeding; the Calibration section
     // only appears once the model accordion is populated.
@@ -469,16 +427,11 @@ test.describe("Workspace Fit Flow", () => {
 
     // Poll to completion so backend actually runs with the calibrated
     // config (any schema mismatch on the extra field surfaces here, not
-    // only at accept-time).
-    let status = "";
-    for (let i = 0; i < 45; i++) {
-      const jobRes = await request.get(`${API}/jobs/${fitBody.job_id}`);
-      expect(jobRes.status()).toBe(200);
-      const job = await jobRes.json();
-      status = job.status;
-      if (status === "completed" || status === "failed") break;
-      await page.waitForTimeout(2000);
-    }
-    expect(status).toBe("completed");
+    // only at accept-time). Shared helper breaks on any terminal state.
+    const jobBody = await pollJobUntilTerminal(
+      request,
+      fitBody.job_id as string,
+    );
+    expect(jobBody.status).toBe("completed");
   });
 });
