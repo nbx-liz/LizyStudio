@@ -326,11 +326,11 @@ class TestLizyMLAdapterUiSchema:
         hints = {h["key"]: h for h in schema["parameter_hints"]}
         assert hints["first_metric_only"]["default"] is False
 
-    def test_parameter_hint_balanced_default(self) -> None:
-        """balanced default must be True."""
+    def test_search_space_catalog_balanced_default(self) -> None:
+        """balanced default in search_space_catalog must be True (Issue #265)."""
         schema = LizyMLAdapter().get_ui_schema()
-        hints = {h["key"]: h for h in schema["parameter_hints"]}
-        assert hints["balanced"]["default"] is True
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        assert catalog["balanced"]["default"] is True
 
     def test_search_space_catalog_seed_default(self) -> None:
         """search_space_catalog seed default must be 1120."""
@@ -426,12 +426,21 @@ class TestLizyMLAdapterUiSchema:
 
     # --- Phase 1: Expanded parameter coverage (Widget parity) ---
 
-    def test_parameter_hints_include_balanced(self) -> None:
-        """balanced must be in parameter_hints as a boolean kind."""
+    def test_parameter_hints_exclude_balanced(self) -> None:
+        """balanced must NOT be in parameter_hints (Issue #265).
+
+        balanced is a Smart Params field on LGBMConfig (writes to
+        ``model.balanced``). Including it in parameter_hints caused
+        a duplicate render in the Advanced Model Params section that
+        wrote to ``model.params.balanced`` — silently dropped by lizyml
+        because it reads from ``model_cfg.balanced`` only.
+        """
         schema = LizyMLAdapter().get_ui_schema()
         hints = {h["key"]: h for h in schema["parameter_hints"]}
-        assert "balanced" in hints
-        assert hints["balanced"]["kind"] == "boolean"
+        assert "balanced" not in hints, (
+            "balanced must be rendered exclusively via Smart Params "
+            "(model.balanced), not via parameter_hints (model.params.balanced)"
+        )
 
     def test_parameter_hints_include_num_leaves(self) -> None:
         """num_leaves must be in parameter_hints as an integer kind."""

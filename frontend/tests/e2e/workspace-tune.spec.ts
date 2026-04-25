@@ -434,4 +434,55 @@ test.describe("Workspace tune flow", () => {
     expect(childTuneResult).toBeTruthy();
     expect(childTuneResult).toHaveProperty("best_params");
   });
+
+  /**
+   * Issue #266 — empty-Choice Tune button gate.
+   *
+   * Switching a Search Space row to Choice mode without entering any
+   * choices used to produce ``{type:"categorical", choices:[]}`` and the
+   * backend rejected the resulting Tune with 422. This spec drives the
+   * UI through the offending sequence and asserts the Tune button is
+   * disabled with a banner pointing at the offending row, then re-
+   * enables once the user reverts the row to Fixed.
+   */
+  test("UI: empty Choice mode disables Tune button and shows a banner", async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(60_000);
+    if (isMobileProject(testInfo)) {
+      test.skip(true, "Mobile layout path is covered elsewhere");
+    }
+
+    const csvPath = createTestCsv();
+    await seedUiWorkspace(page, testInfo, { csvPath });
+
+    await page.getByRole("tab", { name: "Tune" }).click();
+    const tuneButton = page.getByRole("button", { name: "Tune", exact: true });
+    await expect(tuneButton).toBeEnabled({ timeout: 15_000 });
+
+    // Drive the SearchSpaceTable: switch the ``objective`` row to Choice.
+    // SegmentGroup renders mode buttons inside each row; locate the
+    // row by its parameter key text and click the "choice" segment.
+    const objectiveRow = page
+      .locator("div")
+      .filter({ has: page.locator("span", { hasText: /^objective$/ }) })
+      .first();
+    await expect(objectiveRow).toBeVisible({ timeout: 5_000 });
+    await objectiveRow.getByRole("button", { name: "choice" }).click();
+
+    // The banner appears and the Tune button gates off.
+    await expect(page.getByTestId("empty-choice-banner")).toBeVisible({
+      timeout: 5_000,
+    });
+    await expect(page.getByTestId("empty-choice-banner")).toContainText(
+      "objective",
+    );
+    await expect(tuneButton).toBeDisabled();
+
+    // Reverting the row to Fixed must re-enable Tune and remove the
+    // banner. This is the recovery path users will take.
+    await objectiveRow.getByRole("button", { name: "fixed" }).click();
+    await expect(page.getByTestId("empty-choice-banner")).toHaveCount(0);
+    await expect(tuneButton).toBeEnabled({ timeout: 5_000 });
+  });
 });

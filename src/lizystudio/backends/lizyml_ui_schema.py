@@ -193,12 +193,6 @@ def build_ui_schema(
                 "default": -1,
             },
             {
-                "key": "balanced",
-                "label": "Balanced",
-                "kind": "boolean",
-                "default": True,
-            },
-            {
                 "key": "num_leaves",
                 "label": "Num Leaves",
                 "kind": "integer",

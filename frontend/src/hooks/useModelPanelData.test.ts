@@ -35,6 +35,7 @@ vi.mock("@/api/workspace", () => ({
 
 import {
   fetchColumns,
+  fetchConfig,
   updateConfig,
   uploadConfig,
   validateConfig,
@@ -135,6 +136,73 @@ describe("useModelPanelData", () => {
     await waitFor(() => expect(result.current.config).toBeDefined());
     // default config has no tuning.optuna.space → tune disabled
     expect(result.current.tuneEnabled).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // Issue #266: empty Choice validation gate
+  // -------------------------------------------------------------------------
+  it("flags empty Choice search-space entries via emptyChoiceKeys", async () => {
+    vi.mocked(fetchConfig).mockResolvedValueOnce({
+      model: { name: "lgbm", params: {} },
+      tuning: {
+        optuna: {
+          space: {
+            objective: { type: "categorical", choices: [] },
+            learning_rate: { type: "float", low: 0.001, high: 0.1, log: false },
+            metric: { type: "categorical", choices: [] },
+          },
+        },
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: test fixture shape
+    } as any);
+
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(
+      () =>
+        useModelPanelData({
+          hasData: true,
+          running: false,
+          activeTab: "tune",
+        }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.config).toBeDefined());
+    expect(result.current.emptyChoiceKeys.sort()).toEqual([
+      "metric",
+      "objective",
+    ]);
+    expect(result.current.tuneEnabled).toBe(false);
+    expect(result.current.disabledReason).toContain("Add at least one choice");
+  });
+
+  it("does not flag Choice entries that have at least one choice", async () => {
+    vi.mocked(fetchConfig).mockResolvedValueOnce({
+      model: { name: "lgbm", params: {} },
+      tuning: {
+        optuna: {
+          space: {
+            objective: { type: "categorical", choices: ["binary"] },
+          },
+        },
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: test fixture shape
+    } as any);
+
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(
+      () =>
+        useModelPanelData({
+          hasData: true,
+          running: false,
+          activeTab: "tune",
+        }),
+      { wrapper },
+    );
+
+    await waitFor(() => expect(result.current.config).toBeDefined());
+    expect(result.current.emptyChoiceKeys).toEqual([]);
+    expect(result.current.tuneEnabled).toBe(true);
   });
 
   // -------------------------------------------------------------------------
