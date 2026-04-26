@@ -44,9 +44,46 @@ export function buildSyncedConfig(params: {
   const { categorical, excluded } = extractOverrideArrays(overrides);
   const baseData = (base.data as Record<string, unknown>) ?? {};
   const baseTask = (base as Record<string, unknown>).task;
+  const effectiveTask = task || baseTask;
+  // Issue #272: when the task changes (e.g. user clicked a different
+  // Task radio), the inherited base config still carries the previous
+  // task's ``model.params.objective`` and ``model.params.metric``. The
+  // backend ``task_params_compat_errors`` validator rejects the PUT
+  // with ``saved=false`` because objective='binary' is not allowed for
+  // task='regression'. The PUT looks 200-OK but the server silently
+  // keeps the previous task — which is exactly the silent UI/config
+  // divergence #272 reports. Drop those task-coupled fields here so
+  // the PUT lands cleanly; ConfigForm's auto-select effect repopulates
+  // defaults on the next render.
+  const baseModel = (base.model as Record<string, unknown>) ?? {};
+  const baseModelParams = (baseModel.params as Record<string, unknown>) ?? {};
+  const taskChanged =
+    typeof baseTask === "string" &&
+    typeof effectiveTask === "string" &&
+    baseTask !== effectiveTask;
+  let mergedModel = baseModel;
+  if (taskChanged) {
+    const {
+      objective: _objective,
+      metric: _metric,
+      ...restParams
+    } = baseModelParams;
+    mergedModel = { ...baseModel, params: restParams };
+  }
+  // Issue #272 (cont.): calibration is binary-only on lizyml. Switching
+  // away from binary leaves a stale calibration object that PR #271
+  // had ConfigForm auto-clear via a separate effect — but that effect
+  // can race against this PUT. Drop it here so the same write that
+  // changes ``task`` also drops the now-invalid calibration. The
+  // backend ``task_calibration_mismatch`` rule would otherwise fail
+  // saved=false the same way as the objective mismatch above.
+  const calibrationOut =
+    taskChanged && effectiveTask !== "binary"
+      ? null
+      : ((base as Record<string, unknown>).calibration ?? null);
   return {
     ...base,
-    task: task || baseTask,
+    task: effectiveTask,
     data: applyCvDataFields(
       {
         ...baseData,
@@ -62,5 +99,7 @@ export function buildSyncedConfig(params: {
       exclude: excluded,
     },
     split: buildSplitConfig(cv, blocked, strategyFields),
+    model: mergedModel,
+    calibration: calibrationOut,
   };
 }

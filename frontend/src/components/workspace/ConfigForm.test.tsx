@@ -366,6 +366,133 @@ describe("ConfigForm", () => {
     expect(reset).toBeUndefined();
   });
 
+  // -------------------------------------------------------------------------
+  // Issue #272 — task-derived effects must wait for config.task to catch up
+  // -------------------------------------------------------------------------
+  it("skips task-derived effects while config.task is stale (Issue #272)", async () => {
+    // Race scenario: the user just clicked task=regression. WorkspacePage's
+    // task prop is regression (synchronous setter), but the cached config
+    // returned by useConfig() still has task=binary because useConfigSync
+    // has not finished its PUT yet. ConfigForm's auto-select / auto-clear
+    // effects must NOT fire on this stale snapshot — otherwise they PUT
+    // a binary-task body and revert the user's regression change.
+    const onChange = vi.fn();
+    const staleConfig = {
+      config_version: 1,
+      task: "binary",
+      model: {
+        name: "lgbm",
+        // Stale binary objective + calibration; both would normally
+        // trigger reset effects.
+        params: { objective: "binary", metric: ["auc"] },
+      },
+      calibration: { method: "platt", n_splits: 5, params: {} },
+    };
+    renderConfigForm({
+      schema: minimalSchema,
+      config: staleConfig,
+      onChange,
+      // Prop says regression — fresh from the radio click.
+      task: "regression",
+      uiSchema: {
+        parameter_hints: [],
+        option_sets: {
+          objective: {
+            binary: ["binary", "cross_entropy"],
+            regression: ["huber", "regression_l1"],
+          },
+          model_metric: {
+            binary: ["auc", "binary_logloss"],
+            regression: ["rmse", "huber"],
+          },
+        },
+      } as unknown as UiSchema,
+    });
+
+    // Allow effect microtasks to flush.
+    await new Promise((r) => setTimeout(r, 60));
+
+    // Critical guard: NONE of the task-derived effects (objective auto-
+    // select, metric auto-select, calibration auto-clear) may fire while
+    // the snapshot's task differs from the prop task. Each of those
+    // writes would otherwise PUT a body where ``task`` is still
+    // ``binary`` (because configRef.current.task is binary), reverting
+    // the user's regression intent.
+    const wroteObjective = onChange.mock.calls.find(
+      ([cfg]) =>
+        cfg?.model?.params?.objective !== undefined &&
+        cfg.model.params.objective !== "binary",
+    );
+    expect(wroteObjective).toBeUndefined();
+
+    const wroteMetric = onChange.mock.calls.find(
+      ([cfg]) =>
+        cfg?.model?.params?.metric !== undefined &&
+        JSON.stringify(cfg.model.params.metric) !== JSON.stringify(["auc"]),
+    );
+    expect(wroteMetric).toBeUndefined();
+
+    const clearedCalibration = onChange.mock.calls.find(
+      ([cfg]) => cfg?.calibration === null,
+    );
+    expect(clearedCalibration).toBeUndefined();
+  });
+
+  it("runs task-derived effects once config.task catches up (Issue #272)", async () => {
+    // Inverse case: once ``useConfigSync`` has flushed and the cached
+    // config now reflects ``task=regression``, the task-derived effects
+    // are free to fire. (configRef.current.task === task prop)
+    const onChange = vi.fn();
+    const freshConfig = {
+      config_version: 1,
+      task: "regression",
+      model: {
+        name: "lgbm",
+        // Stale binary objective from before the task change — should
+        // be reset because task is now regression and the snapshot agrees.
+        params: { objective: "binary" },
+      },
+      calibration: { method: "platt", n_splits: 5, params: {} },
+    };
+    renderConfigForm({
+      schema: minimalSchema,
+      config: freshConfig,
+      onChange,
+      task: "regression",
+      uiSchema: {
+        parameter_hints: [],
+        option_sets: {
+          objective: {
+            binary: ["binary", "cross_entropy"],
+            regression: ["huber", "regression_l1"],
+          },
+          model_metric: {
+            binary: ["auc", "binary_logloss"],
+            regression: ["rmse", "huber"],
+          },
+        },
+      } as unknown as UiSchema,
+    });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalled();
+    });
+
+    // Calibration must clear (regression doesn't support it).
+    const clearedCalibration = onChange.mock.calls.find(
+      ([cfg]) => cfg?.calibration === null,
+    );
+    expect(clearedCalibration).toBeTruthy();
+
+    // Objective must reset to a regression-valid value.
+    const resetObjective = onChange.mock.calls.find(
+      ([cfg]) =>
+        cfg?.model?.params?.objective === "huber" ||
+        cfg?.model?.params?.objective === "regression_l1",
+    );
+    expect(resetObjective).toBeTruthy();
+  });
+
   it("renders section title from uiSchema when provided", () => {
     renderConfigForm({
       schema: multiSectionSchema,
