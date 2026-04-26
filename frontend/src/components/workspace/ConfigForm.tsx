@@ -148,12 +148,26 @@ export function ConfigForm({
   // to regression sneaked a stale calibration object into POST /fit
   // and the job died ~5s later with CALIBRATION_NOT_SUPPORTED.
   // Same shape as the inner_valid auto-reset above.
+  //
+  // Issue #272: bail while the snapshot is stale. When the user clicks
+  // a different task radio, ``task`` (prop) updates synchronously but
+  // ``config.task`` (cached server state) lags behind useConfigSync's
+  // PUT. Writing here would PUT a body where ``task`` is still the
+  // previous value, reverting the user's intent. Wait for the next
+  // render after useConfigSync flushes and configRef.current catches up.
   useEffect(() => {
     if (!config.config_version) return;
+    if (task && config.task && task !== config.task) return;
     if (task && task !== "binary" && calibration !== null) {
       handleFieldChange(["calibration"], null);
     }
-  }, [task, calibration, handleFieldChange, config.config_version]);
+  }, [
+    task,
+    calibration,
+    handleFieldChange,
+    config.config_version,
+    config.task,
+  ]);
 
   // Resolve options for objective/model_metric kinds from option_sets
   const getOptionsForHint = useCallback(
@@ -241,6 +255,14 @@ export function ConfigForm({
     // required' validation errors. Wait until useDataPanel has seeded a
     // full config (recognised by config_version being set).
     if (!config.config_version) return;
+    // Issue #272: bail while config.task is stale. When the user clicks
+    // a different task radio, the prop updates synchronously but the
+    // cached config still reflects the previous task until useConfigSync
+    // flushes its PUT. Writing here would derive the body from the
+    // pre-flush snapshot (model.params.objective gets reset against the
+    // stale task field), then PUT it — reverting the user's task pick.
+    // Wait for the next render where configRef catches up.
+    if (config.task && task !== config.task) return;
 
     // Objective: single-select. Reset when empty OR when current value
     // is not in the list of objectives valid for the current task.
@@ -288,7 +310,14 @@ export function ConfigForm({
         );
       }
     }
-  }, [task, uiSchema, modelParams, handleFieldChange, config.config_version]);
+  }, [
+    task,
+    uiSchema,
+    modelParams,
+    handleFieldChange,
+    config.config_version,
+    config.task,
+  ]);
 
   if (!rawProperties) return null;
 
@@ -535,7 +564,15 @@ export function ConfigForm({
             <AccordionContent>
               <div className="lzs-form pl-[18px] pt-2">
                 <MetricsChips
-                  task={task}
+                  // Issue #272: pass the persisted ``config.task`` (not
+                  // the raw prop) so MetricsChips' task-change auto-reset
+                  // only fires once the regression PUT has actually
+                  // landed. Otherwise it auto-defaults metrics from the
+                  // PROP task while configRef still reads the old task,
+                  // PUTs a body where ``task`` and ``metrics`` disagree,
+                  // and the backend rejects the entire body with
+                  // saved=false (silently reverting the task switch).
+                  task={(config.task as string) || task}
                   selectedMetrics={selectedMetrics}
                   metricsByTask={uiSchema?.option_sets?.metric}
                   onChange={(metrics) => {

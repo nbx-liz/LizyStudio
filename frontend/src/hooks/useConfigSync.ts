@@ -73,14 +73,28 @@ export function useConfigSync({
         strategyFields,
       });
 
+      // Issue #272 (root cause): the cv-strategy-change inner_valid
+      // auto-switch was writing to ``training.inner_valid`` (top-level).
+      // The Pydantic schema accepts inner_valid at
+      // ``training.early_stopping.inner_valid`` only, so the PUT
+      // returned ``saved=false`` with "Extra inputs are not permitted".
+      // The user's task change therefore never landed even though
+      // useConfigSync emitted the correct ``task`` field — the whole
+      // body was rejected. Move the inner_valid mutation under
+      // ``early_stopping`` so the PUT lands cleanly.
       const baseTraining = (merged.training as Record<string, unknown>) ?? {};
+      const baseEarlyStopping =
+        (baseTraining.early_stopping as Record<string, unknown>) ?? {};
       const innerValid =
-        (baseTraining.inner_valid as Record<string, unknown>) ?? {};
+        (baseEarlyStopping.inner_valid as Record<string, unknown>) ?? {};
       if (prevCvStrategyRef.current !== cv.strategy) {
         const recommended = recommendedInnerValid(cv.strategy);
         merged.training = {
           ...baseTraining,
-          inner_valid: { ...innerValid, method: recommended },
+          early_stopping: {
+            ...baseEarlyStopping,
+            inner_valid: { ...innerValid, method: recommended },
+          },
         };
         prevCvStrategyRef.current = cv.strategy;
       }

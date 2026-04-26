@@ -95,4 +95,95 @@ describe("buildSyncedConfig", () => {
     expect(split.method).toBe("kfold");
     expect(split.n_splits).toBe(7);
   });
+
+  // Issue #272 — when task changes, scrub task-coupled fields so the PUT
+  // lands cleanly (the backend ``task_params_compat_errors`` validator
+  // rejects mismatched objective/metric and ``task_calibration_mismatch``
+  // rejects calibration on non-binary, both with saved=false).
+  describe("task change scrubs task-coupled fields (Issue #272)", () => {
+    const BINARY_BASE = {
+      ...BASE,
+      task: "binary",
+      model: {
+        name: "lgbm",
+        params: {
+          objective: "binary",
+          metric: ["auc", "binary_logloss"],
+          n_estimators: 1500,
+          learning_rate: 0.001,
+        },
+      },
+      calibration: { method: "platt", n_splits: 5, params: {} },
+    };
+
+    it("drops model.params.objective and model.params.metric when task differs from base", () => {
+      const out = buildSyncedConfig({
+        base: BINARY_BASE,
+        dataPath: "",
+        target: "y",
+        task: "regression",
+        overrides: {},
+        cv: { ...INITIAL_CV_STATE, strategy: "kfold" },
+        blocked: INITIAL_BLOCKED_STATE,
+      });
+      const params = (out.model as Record<string, unknown>).params as Record<
+        string,
+        unknown
+      >;
+      expect(params.objective).toBeUndefined();
+      expect(params.metric).toBeUndefined();
+      // Non-task-coupled params survive.
+      expect(params.n_estimators).toBe(1500);
+      expect(params.learning_rate).toBe(0.001);
+    });
+
+    it("drops calibration when task changes away from binary", () => {
+      const out = buildSyncedConfig({
+        base: BINARY_BASE,
+        dataPath: "",
+        target: "y",
+        task: "regression",
+        overrides: {},
+        cv: { ...INITIAL_CV_STATE, strategy: "kfold" },
+        blocked: INITIAL_BLOCKED_STATE,
+      });
+      expect(out.calibration).toBeNull();
+    });
+
+    it("preserves objective/metric/calibration when task does NOT change", () => {
+      const out = buildSyncedConfig({
+        base: BINARY_BASE,
+        dataPath: "",
+        target: "y",
+        task: "binary",
+        overrides: {},
+        cv: INITIAL_CV_STATE,
+        blocked: INITIAL_BLOCKED_STATE,
+      });
+      const params = (out.model as Record<string, unknown>).params as Record<
+        string,
+        unknown
+      >;
+      expect(params.objective).toBe("binary");
+      expect(params.metric).toEqual(["auc", "binary_logloss"]);
+      expect(out.calibration).toEqual({
+        method: "platt",
+        n_splits: 5,
+        params: {},
+      });
+    });
+
+    it("keeps calibration when switching between non-binary tasks (no-op)", () => {
+      const out = buildSyncedConfig({
+        base: { ...BINARY_BASE, task: "regression", calibration: null },
+        dataPath: "",
+        target: "y",
+        task: "multiclass",
+        overrides: {},
+        cv: INITIAL_CV_STATE,
+        blocked: INITIAL_BLOCKED_STATE,
+      });
+      expect(out.calibration).toBeNull();
+    });
+  });
 });
