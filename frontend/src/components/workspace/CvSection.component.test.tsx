@@ -55,11 +55,13 @@ vi.mock("./NumberInput", () => ({
     value,
     onChange,
     min,
+    max,
     placeholder,
   }: {
     value: number | undefined;
     onChange: (v: number | undefined) => void;
     min?: number;
+    max?: number;
     step?: number;
     placeholder?: string;
   }) => (
@@ -68,6 +70,7 @@ vi.mock("./NumberInput", () => ({
       type="number"
       value={value ?? ""}
       min={min}
+      max={max}
       onChange={(e) => {
         const v = e.target.value === "" ? undefined : Number(e.target.value);
         onChange(v);
@@ -653,5 +656,48 @@ describe("CvSection", () => {
     expect(mockOnChange).toHaveBeenCalledWith(
       expect.objectContaining({ groupCol: "col_a" }),
     );
+  });
+
+  // ---------------------------------------------------------------------------
+  // Issue #268: Folds NumberInput max
+  // ---------------------------------------------------------------------------
+  describe("Folds max (Issue #268)", () => {
+    it("passes nRows as the max attribute on the Folds NumberInput", () => {
+      render(
+        <CvSection
+          cv={makeCvState({ strategy: "kfold", folds: 5 })}
+          onChange={mockOnChange}
+          nonExcludedCols={sampleCols}
+          nRows={42}
+        />,
+      );
+      const folds = screen.getByTestId("number-input-5");
+      expect(folds.getAttribute("max")).toBe("42");
+    });
+
+    it("omits max when nRows is undefined (no data loaded yet)", () => {
+      render(
+        <CvSection
+          cv={makeCvState({ strategy: "kfold", folds: 5 })}
+          onChange={mockOnChange}
+          nonExcludedCols={sampleCols}
+        />,
+      );
+      const folds = screen.getByTestId("number-input-5");
+      expect(folds.getAttribute("max")).toBeNull();
+    });
+
+    it("omits max when nRows < 2 (a single-row dataset cannot be split)", () => {
+      render(
+        <CvSection
+          cv={makeCvState({ strategy: "kfold", folds: 5 })}
+          onChange={mockOnChange}
+          nonExcludedCols={sampleCols}
+          nRows={1}
+        />,
+      );
+      const folds = screen.getByTestId("number-input-5");
+      expect(folds.getAttribute("max")).toBeNull();
+    });
   });
 });

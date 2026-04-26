@@ -108,13 +108,19 @@ def analyze_columns(
             )
         )
 
-    # Auto-detect task from target column (BLUEPRINT §4.2.1)
+    # Auto-detect task from target column (BLUEPRINT §4.2.1).
+    # Issue #270: a single-class target is ill-posed (no signal to predict),
+    # so we leave suggested_task=None and let the user pick a different
+    # target. Otherwise the previous heuristic would suggest "multiclass"
+    # for an all-zero target and trigger a confusing LightGBM failure.
     suggested_task: Literal["binary", "multiclass", "regression"] | None = None
     if target and target in df.columns:
         target_series = df[target]
         target_unique = int(target_series.nunique())
         threshold = max(20, int(n_rows * 0.05))
-        if target_unique == 2:
+        if target_unique < 2:
+            suggested_task = None
+        elif target_unique == 2:
             suggested_task = "binary"
         elif target_series.dtype == "object" or target_series.dtype.name == "category":
             # Object/category dtype is always multiclass (BLUEPRINT §4.2.1)

@@ -112,6 +112,63 @@ def test_status_has_config_true_after_put(client: TestClient) -> None:
     assert res.json()["has_config"] is True
 
 
+def test_validate_flags_n_splits_greater_than_n_rows(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """Issue #268: a 50-row dataset with n_splits=1000 used to pass
+    validate, get accepted by POST /fit, and fail ~5s later with
+    sklearn's "Cannot have number of splits greater than the number of
+    samples". The workspace-aware validator now flags it up-front so
+    the existing 'Fix validation errors first' banner blocks the run.
+    """
+    _load_data_and_config(client, tmp_path)
+    config = _load_valid_config(client)
+    config["split"]["n_splits"] = 1000
+    res = client.post("/api/workspace/config/validate", json=config)
+    assert res.status_code == 200
+    errors = res.json()["errors"]
+    assert any(
+        "n_splits" in (err.get("path") or "") and "1000" in (err.get("message") or "")
+        for err in errors
+    ), errors
+
+
+def test_validate_does_not_flag_n_splits_when_no_data_loaded(
+    client: TestClient,
+) -> None:
+    """Without a loaded dataset the workspace cannot enforce a row-count
+    cap. The validator must short-circuit instead of raising.
+    """
+    config = _load_valid_config(client)
+    config["split"]["n_splits"] = 999_999
+    res = client.post("/api/workspace/config/validate", json=config)
+    assert res.status_code == 200
+    errors = res.json()["errors"]
+    assert not any("n_splits" in (err.get("path") or "") for err in errors)
+
+
+def test_put_config_saved_false_when_n_splits_exceeds_n_rows(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """Issue #268: an over-large n_splits arriving via PUT /config must
+    flip ``saved=false`` (errors prevent the write) so the user sees the
+    state mismatch instead of a healthy-looking PUT followed by a 5-s
+    Fit failure.
+    """
+    _load_data_and_config(client, tmp_path)
+    config = _load_valid_config(client)
+    config["split"]["n_splits"] = 1000
+    res = client.put("/api/workspace/config", json=config)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["saved"] is False
+    assert any("n_splits" in (err.get("path") or "") for err in body["errors"]), body[
+        "errors"
+    ]
+
+
 def test_status_no_disk_restore(
     client: TestClient,
     tmp_path: Path,

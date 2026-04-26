@@ -198,6 +198,75 @@ def test_adapter_validate_config_does_not_crash_on_non_dict_params() -> None:
     assert isinstance(errors, list)
 
 
+def test_adapter_validate_config_rejects_regression_with_calibration() -> None:
+    """Issue #269: lizyml only supports calibration for task='binary'
+    and raises ``CALIBRATION_NOT_SUPPORTED`` ~5s after Fit otherwise.
+    The compat helper must surface that mismatch up-front so the
+    'Fix validation errors first' banner blocks the run.
+    """
+    adapter = LizyMLAdapter()
+    cfg: dict[str, Any] = {
+        "config_version": 1,
+        "task": "regression",
+        "data": {"target": "y"},
+        "model": {"name": "lgbm", "params": {"objective": "huber"}},
+        "split": {"method": "kfold"},
+        "calibration": {"method": "platt", "n_splits": 5, "params": {}},
+    }
+    errors = adapter.validate_config(cfg)
+    assert any(
+        e.get("type") == "task_calibration_mismatch"
+        or "calibration" in str(e.get("loc", ()))
+        for e in errors
+    ), errors
+
+
+def test_adapter_validate_config_rejects_multiclass_with_calibration() -> None:
+    """Same guard for multiclass — calibration is binary-only."""
+    adapter = LizyMLAdapter()
+    cfg: dict[str, Any] = {
+        "config_version": 1,
+        "task": "multiclass",
+        "data": {"target": "y"},
+        "model": {"name": "lgbm", "params": {"objective": "multiclass"}},
+        "split": {"method": "stratified_kfold"},
+        "calibration": {"method": "platt", "n_splits": 5, "params": {}},
+    }
+    errors = adapter.validate_config(cfg)
+    assert any(e.get("type") == "task_calibration_mismatch" for e in errors), errors
+
+
+def test_adapter_validate_config_accepts_binary_with_calibration() -> None:
+    """Sanity check: calibration with task='binary' must NOT trigger the
+    new compat error."""
+    adapter = LizyMLAdapter()
+    cfg = _valid_binary_config()
+    cfg["calibration"] = {"method": "platt", "n_splits": 5, "params": {}}
+    errors = adapter.validate_config(cfg)
+    compat = [e for e in errors if e.get("type") == "task_calibration_mismatch"]
+    assert compat == []
+
+
+def test_adapter_validate_config_accepts_null_calibration_for_any_task() -> None:
+    """``calibration: null`` is the explicit 'off' state — must never
+    trigger the calibration compat error regardless of task."""
+    adapter = LizyMLAdapter()
+    for task in ("binary", "multiclass", "regression"):
+        cfg: dict[str, Any] = {
+            "config_version": 1,
+            "task": task,
+            "data": {"target": "y"},
+            "model": {"name": "lgbm"},
+            "split": {
+                "method": "stratified_kfold" if task != "regression" else "kfold"
+            },
+            "calibration": None,
+        }
+        errors = adapter.validate_config(cfg)
+        compat = [e for e in errors if e.get("type") == "task_calibration_mismatch"]
+        assert compat == [], (task, errors)
+
+
 def test_adapter_load_config_yaml() -> None:
     adapter = LizyMLAdapter()
     content = b"task: binary\nmodel:\n  name: lightgbm"

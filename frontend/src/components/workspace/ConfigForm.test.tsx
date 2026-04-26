@@ -3,6 +3,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -310,6 +311,59 @@ describe("ConfigForm", () => {
     });
 
     expect(screen.queryByText("Calibration")).not.toBeInTheDocument();
+  });
+
+  it("auto-clears stale calibration when task is not binary (Issue #269)", async () => {
+    // Reproduces the silent state bug from #269: calibration was set
+    // while task=binary, then the user switched to regression and the
+    // Calibration UI hid itself but the value lingered, causing a
+    // ~5s LightGBM error after Fit. The auto-reset effect must
+    // immediately write calibration=null on render with task!=binary.
+    const onChange = vi.fn();
+    const staleConfig = {
+      ...minimalConfig,
+      config_version: 1,
+      calibration: { method: "platt", n_splits: 5, params: {} },
+    };
+    renderConfigForm({
+      schema: minimalSchema,
+      config: staleConfig,
+      onChange,
+      task: "regression",
+    });
+
+    // Allow the effect to flush.
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalled();
+    });
+    // The reset write must zero the calibration field (immutably).
+    const calls = onChange.mock.calls.map((c) => c[0]);
+    const cleared = calls.find(
+      (c) => c && (c as { calibration?: unknown }).calibration === null,
+    );
+    expect(cleared).toBeTruthy();
+  });
+
+  it("does not auto-clear calibration on binary task", async () => {
+    const onChange = vi.fn();
+    const config = {
+      ...minimalConfig,
+      config_version: 1,
+      calibration: { method: "platt", n_splits: 5, params: {} },
+    };
+    renderConfigForm({
+      schema: minimalSchema,
+      config,
+      onChange,
+      task: "binary",
+    });
+
+    // Brief wait — binary must NOT trigger the reset effect.
+    await new Promise((r) => setTimeout(r, 50));
+    const reset = onChange.mock.calls.find(
+      (c) => c[0] && (c[0] as { calibration?: unknown }).calibration === null,
+    );
+    expect(reset).toBeUndefined();
   });
 
   it("renders section title from uiSchema when provided", () => {

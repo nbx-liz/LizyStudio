@@ -51,6 +51,12 @@ interface CvSectionProps {
   nonExcludedCols: ColumnInfo[];
   blocked?: BlockedGroupKFoldState;
   onBlockedChange?: (next: BlockedGroupKFoldState) => void;
+  /**
+   * Issue #268: dataset row count threaded down so the Folds NumberInput
+   * can clamp to ``min(n_rows, hard_max)``. Optional — when undefined
+   * (no data loaded yet) the input falls back to the hard max only.
+   */
+  nRows?: number;
 }
 
 export function CvSection({
@@ -60,6 +66,7 @@ export function CvSection({
   nonExcludedCols,
   blocked,
   onBlockedChange,
+  nRows,
 }: CvSectionProps) {
   const availableStrategies = useMemo(
     () =>
@@ -127,6 +134,11 @@ export function CvSection({
             value={cv.folds}
             onChange={(v) => update({ folds: v ?? 5 })}
             min={2}
+            // Issue #268: cap Folds at the dataset row count so the user
+            // gets feedback in the input instead of a 5-second silent
+            // failure after Fit. Backend validator catches the YAML
+            // import / preset path on top of this.
+            max={nRows && nRows >= 2 ? nRows : undefined}
             step={1}
             placeholder="5"
           />
