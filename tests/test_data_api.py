@@ -402,6 +402,25 @@ def test_analyze_columns_target_not_in_columns() -> None:
     assert result.suggested_task is None
 
 
+def test_analyze_columns_single_class_target_returns_none() -> None:
+    """Issue #270: a target column with a single unique value is ill-posed
+    (no signal to predict). The suggestion engine must NOT propose
+    ``multiclass`` for an all-zero target — that fed a confusing
+    ``LightGBM n_classes=1`` failure ~5s after Fit. Returning None makes
+    the UI prompt the user to pick a different target instead.
+    """
+    df = pd.DataFrame({"x": range(50), "target": [0] * 50})
+    result = analyze_columns(df, target="target")
+    assert result.suggested_task is None
+
+
+def test_analyze_columns_single_class_object_target_returns_none() -> None:
+    """Issue #270: same guard for an object-dtype constant column."""
+    df = pd.DataFrame({"x": range(50), "target": ["only"] * 50})
+    result = analyze_columns(df, target="target")
+    assert result.suggested_task is None
+
+
 # ---------------------------------------------------------------------------
 # API: data/upload with parquet
 # ---------------------------------------------------------------------------

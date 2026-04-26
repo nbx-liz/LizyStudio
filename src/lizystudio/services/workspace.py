@@ -157,7 +157,48 @@ def validate_config(ws: WorkspaceState, config: dict[str, Any]) -> list[dict[str
         message = err.get("msg", err.get("message", ""))
         if path or message:
             normalized.append({"path": path, "message": message})
+    # Issue #268: workspace-aware validation. n_splits > n_rows is
+    # accepted by Pydantic (no row-count knowledge inside the schema)
+    # but explodes ~5s after Fit with sklearn's
+    # "Cannot have number of splits greater than the number of samples".
+    # Surfacing it here lets the existing "Fix validation errors first"
+    # banner block the user before they even click Fit.
+    normalized.extend(_workspace_split_errors(ws, config))
     return normalized
+
+
+def _workspace_split_errors(
+    ws: WorkspaceState, config: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Return ``{path, message}`` errors for split.n_splits > n_rows.
+
+    Returns an empty list when the workspace has no data loaded yet, or
+    when the config is malformed in ways the Pydantic layer already
+    flagged (defensive to avoid raising AttributeError on top of an
+    unrelated validation failure).
+    """
+    data_ref = ws.data_ref
+    if data_ref is None:
+        return []
+    n_rows = data_ref.shape[0]
+    split = config.get("split") if isinstance(config, dict) else None
+    if not isinstance(split, dict):
+        return []
+    n_splits_raw = split.get("n_splits")
+    if not isinstance(n_splits_raw, int) or isinstance(n_splits_raw, bool):
+        return []
+    if n_splits_raw <= n_rows:
+        return []
+    return [
+        {
+            "path": "split.n_splits",
+            "message": (
+                f"n_splits={n_splits_raw} is greater than the number of "
+                f"samples in the loaded dataset (n_rows={n_rows}). "
+                f"Reduce Folds to at most {n_rows}."
+            ),
+        }
+    ]
 
 
 def load_config_from_file(

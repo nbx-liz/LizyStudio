@@ -201,4 +201,26 @@ def task_params_compat_errors(config: dict[str, Any]) -> list[dict[str, Any]]:
                 }
             )
 
+    # Issue #269: lizyml only supports calibration for task="binary" and
+    # raises CALIBRATION_NOT_SUPPORTED at fit time otherwise. The UI
+    # hides the Calibration section under conditional_visibility but
+    # leaves the value on the config when the user changes the task,
+    # so the stale calibration sneaks past Pydantic and dies ~5s after
+    # Fit. Catching it in the workspace validator surfaces the issue
+    # in the existing "Fix validation errors first" banner instead.
+    calibration = config.get("calibration")
+    if calibration is not None and task != "binary":
+        errors.append(
+            {
+                "type": "task_calibration_mismatch",
+                "loc": ("calibration",),
+                "msg": (
+                    f"calibration is only supported for task='binary'; "
+                    f"got task={task!r}. Clear the calibration block or "
+                    f"switch the task to 'binary'."
+                ),
+                "input": calibration,
+            }
+        )
+
     return errors

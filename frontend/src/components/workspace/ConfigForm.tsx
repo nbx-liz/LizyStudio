@@ -141,6 +141,20 @@ export function ConfigForm({
       ? (config.calibration as Record<string, unknown> | null)
       : null;
 
+  // Issue #269: lizyml only supports calibration for task="binary".
+  // The Calibration UI hides itself for other tasks via
+  // ``conditional_visibility``, but until now the underlying value was
+  // left alone — a user enabling calibration on binary then switching
+  // to regression sneaked a stale calibration object into POST /fit
+  // and the job died ~5s later with CALIBRATION_NOT_SUPPORTED.
+  // Same shape as the inner_valid auto-reset above.
+  useEffect(() => {
+    if (!config.config_version) return;
+    if (task && task !== "binary" && calibration !== null) {
+      handleFieldChange(["calibration"], null);
+    }
+  }, [task, calibration, handleFieldChange, config.config_version]);
+
   // Resolve options for objective/model_metric kinds from option_sets
   const getOptionsForHint = useCallback(
     (hint: import("@/api/types").ParameterHint): string[] => {
