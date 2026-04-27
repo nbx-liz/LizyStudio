@@ -2464,6 +2464,7 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - INV-1: `PUT /api/workspace/config` は `JobStore.active_job_id` が non-null の間 409 `WORKSPACE_LOCKED` を返し、`ws.config` を変更しない。
   - INV-2: `PATCH /api/workspace/config` は同条件で 409 `WORKSPACE_LOCKED` を返し、`ws.config` を変更しない。
   - INV-3: active slot が release されたあとは次の `PUT /config` が即座に 200 を返す（lock は持続しない）。
+  - INV-3b (terminal carve-out): active slot を保持していても、その holder の status が terminal (`completed` / `failed` / `cancelled`) ならば lock は無効化される。これは job の status flip と runner の `release_active` の間に存在する microsecond-scale の race window で、post-fit re-fit flow が spurious 409 を踏まないようにするため。
   - INV-4: フロントは `running=true` の間、Target / Task / Column Settings (Exclude, Num/Cat) / CV Section（Strategy / Folds / Random State / Shuffle / Group/Time column / Gap / Embargo / etc）のすべてを `disabled` にする。BlockedGroupKFold エディタは `<fieldset disabled>` で一括ロック。
   - INV-5: `useModelPanelData.handleConfigChange` と `useConfigSync.syncConfig` は 409 `WORKSPACE_LOCKED` を専用 toast (`toast.info`) で扱い、`queryKeys.config()` を invalidate して server-truth に再同期する。history への push と setQueryData は走らない。
 - **Proposal & Impact:**

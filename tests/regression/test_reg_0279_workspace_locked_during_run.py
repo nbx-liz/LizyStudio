@@ -167,3 +167,42 @@ def test_put_config_succeeds_after_slot_release(
     res = client.put("/api/workspace/config", json=config)
     assert res.status_code == 200, res.text
     assert res.json()["saved"] is True
+
+
+def test_put_config_succeeds_when_holder_is_terminal_but_slot_not_yet_released(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """INV-5 (race carve-out): a terminal-status holder must not lock /config.
+
+    There is a real race window where a job's on-disk status has
+    transitioned to ``completed`` / ``failed`` / ``cancelled`` but the
+    runner's ``finally`` block has not yet called
+    ``release_active``. The post-fit re-fit flow (Playwright
+    ``jobs-refit.spec.ts``) hits this window every time:
+    ``waitForJobDone`` returns the moment status flips, then
+    immediately PUTs the next config. Without the terminal-status
+    carve-out the PUT loses to a microsecond-scale race against the
+    runner finally and 409s spuriously.
+    """
+    config = _load_data_and_config(client, tmp_path)
+
+    job_store = client.app.state.job_store  # type: ignore[union-attr]
+    holder_id = _seed_running_holder(job_store)
+
+    for terminal_status in ("completed", "failed", "cancelled"):
+        holder_job = job_store.get(holder_id)
+        assert holder_job is not None
+        holder_job.status = terminal_status  # type: ignore[assignment]
+        job_store.update(holder_job)
+        # Slot is still held by holder_id at this point — runner finally
+        # has not run yet. The endpoint must still accept the write.
+        res = client.put("/api/workspace/config", json=config)
+        assert res.status_code == 200, (
+            f"PUT /config returned {res.status_code} while holder is "
+            f"{terminal_status} (slot not yet released): {res.text}"
+        )
+        assert res.json()["saved"] is True
+
+    # Cleanup so the next test starts clean.
+    job_store.release_active(holder_id)
