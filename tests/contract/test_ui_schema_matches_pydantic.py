@@ -179,6 +179,51 @@ def test_frontend_fallback_matches_backend_cv_strategy_fields() -> None:
     )
 
 
+def test_blocked_group_kfold_payload_shape() -> None:
+    """Issue #278: BlockedGroupKFoldConfig requires nested ``blocks`` and
+    ``groups`` sub-objects. Lock the contract here so any refactor of the
+    Pydantic model that flattens those fields fails this test, and any
+    frontend regression that re-flattens the payload is caught by the
+    cv-section unit tests on the other side.
+
+    This is a structural assertion: it asserts the Pydantic side of the
+    contract that the frontend's ``buildSplitConfig`` is built against.
+    """
+    from lizyml.config.schema import LizyMLConfig
+
+    defs = LizyMLConfig.model_json_schema().get("$defs", {})
+
+    bgk = defs.get("BlockedGroupKFoldConfig") or {}
+    bgk_props = set((bgk.get("properties") or {}).keys())
+    assert "blocks" in bgk_props, (
+        "BlockedGroupKFoldConfig must expose a `blocks` sub-object "
+        f"(got {sorted(bgk_props)})"
+    )
+    assert "groups" in bgk_props, (
+        "BlockedGroupKFoldConfig must expose a `groups` sub-object "
+        f"(got {sorted(bgk_props)})"
+    )
+    # Flat axis fields must NOT live at the split level — those belong
+    # inside `blocks` / `groups`.
+    for forbidden in ("col", "cutoffs", "mode", "train_window", "stratify"):
+        assert forbidden not in bgk_props, (
+            f"BlockedGroupKFoldConfig must NOT expose `{forbidden}` at "
+            "the split level — it belongs inside `blocks` or `groups`."
+        )
+
+    blocks = defs.get("BlocksConfig") or {}
+    blocks_props = set((blocks.get("properties") or {}).keys())
+    assert blocks_props == {"col", "cutoffs", "mode", "train_window"}, (
+        f"BlocksConfig field set drifted: {sorted(blocks_props)}"
+    )
+
+    groups = defs.get("GroupCVConfig") or {}
+    groups_props = set((groups.get("properties") or {}).keys())
+    assert groups_props == {"col", "n_splits", "stratify", "shuffle"}, (
+        f"GroupCVConfig field set drifted: {sorted(groups_props)}"
+    )
+
+
 def test_parameter_hints_do_not_shadow_smart_params() -> None:
     """Issue #265 regression guard.
 

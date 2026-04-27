@@ -229,16 +229,39 @@ export function buildSplitConfig(
   if (active.includes("min_valid_rows") && cv.minValidRows !== undefined) {
     split.min_valid_rows = cv.minValidRows;
   }
-  // blocked_group_kfold-specific fields from the dedicated editor state
+  // Issue #278: BlockedGroupKFoldConfig requires nested `blocks` and
+  // `groups` sub-objects (BlocksConfig + GroupCVConfig). Flat fields at
+  // the split level are rejected by `extra="forbid"`. Only emit the
+  // nested objects when the user has supplied the col values + at least
+  // one cutoff — otherwise omit them so the rejection localises cleanly
+  // to "blocks: Field required" / "groups: Field required" instead of a
+  // confusing "min_length=1" deep-nested message.
   if (cv.strategy === "blocked_group_kfold") {
     const b = blocked ?? INITIAL_BLOCKED_STATE;
-    split.mode = b.blockMode;
-    split.train_window = b.trainWindow;
-    if (b.cutoffs.length > 0) {
-      split.cutoffs = b.cutoffs;
+    if (cv.timeCol && b.cutoffs.length > 0) {
+      const blocks: Record<string, unknown> = {
+        col: cv.timeCol,
+        cutoffs: b.cutoffs,
+        mode: b.blockMode,
+      };
+      // BlocksConfig.train_window is None when expanding (server-side
+      // warning emitted otherwise), int when sliding.
+      if (b.blockMode === "sliding") {
+        blocks.train_window = b.trainWindow;
+      } else {
+        blocks.train_window = null;
+      }
+      split.blocks = blocks;
     }
-    if (b.stratify !== "auto") {
-      split.stratify = b.stratify === "on";
+    if (cv.groupCol) {
+      const groups: Record<string, unknown> = {
+        col: cv.groupCol,
+        n_splits: cv.folds,
+        // GroupCVConfig.stratify is "auto" | bool. The UI tristate maps
+        // to those: auto → "auto", on → true, off → false.
+        stratify: b.stratify === "auto" ? "auto" : b.stratify === "on",
+      };
+      split.groups = groups;
     }
   }
   return split;
@@ -256,14 +279,11 @@ export function applyCvDataFields(
 ): Record<string, unknown> {
   const active = resolveFields(cv.strategy, fields);
   const result = { ...data };
-  // blocked_group_kfold uses blocks_col/groups_col instead of time_col/group_col
+  // Issue #278: BlockedGroupKFoldConfig owns the col names inside
+  // split.blocks.col and split.groups.col (handled by
+  // {@link buildSplitConfig}); they do NOT live at the data level.
+  // Pass the data object through unchanged for this strategy.
   if (cv.strategy === "blocked_group_kfold") {
-    if (cv.timeCol) {
-      result.blocks_col = cv.timeCol;
-    }
-    if (cv.groupCol) {
-      result.groups_col = cv.groupCol;
-    }
     return result;
   }
   if (active.includes("group_col") && cv.groupCol) {
