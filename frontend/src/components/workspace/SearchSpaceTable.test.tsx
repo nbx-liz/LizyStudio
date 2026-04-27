@@ -189,7 +189,7 @@ describe("SearchSpaceTable", () => {
     render(<SearchSpaceTable {...defaultProps} space={space} />);
 
     // Click the row to expand
-    const row = screen.getByText("learning_rate").closest("button");
+    const row = screen.getByText("learning_rate").closest('[role="button"]');
     if (row) fireEvent.click(row);
 
     // Expanded row shows Min, Max, Distribution
@@ -221,7 +221,7 @@ describe("SearchSpaceTable", () => {
     );
 
     // Expand the row
-    const row = screen.getByText("n_estimators").closest("button");
+    const row = screen.getByText("n_estimators").closest('[role="button"]');
     if (row) fireEvent.click(row);
 
     expect(screen.getByText("Step")).toBeInTheDocument();
@@ -837,7 +837,7 @@ describe("SearchSpaceTable", () => {
         />,
       );
       // Click the row to expand choice mode
-      const row = screen.getByText("objective").closest("button");
+      const row = screen.getByText("objective").closest('[role="button"]');
       if (row) fireEvent.click(row);
 
       // ChoiceInput should be visible after expanding
@@ -1191,7 +1191,7 @@ describe("SearchSpaceTable", () => {
         <SearchSpaceTable {...defaultProps} space={{}} onChange={onChange} />,
       );
       // No range entry exists, so toggling expansion has no effect
-      const row = screen.getByText("learning_rate").closest("button");
+      const row = screen.getByText("learning_rate").closest('[role="button"]');
       if (row) fireEvent.click(row);
       // onChange should not have been called by row click alone
       expect(onChange).not.toHaveBeenCalled();
