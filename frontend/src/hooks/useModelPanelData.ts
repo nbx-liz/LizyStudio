@@ -82,14 +82,32 @@ export function useModelPanelData({
       if (cached && equal(cached, newConfig)) {
         return;
       }
+      // INV-A1/A2/A3 (Issue #276): observe `saved` from PUT /config and
+      // do not silently swallow validation rejections. When saved=false
+      // the backend kept the prior config, so the cache, history, and
+      // errors state must reflect that — not the rejected payload.
+      let response: Awaited<ReturnType<typeof updateConfig>>;
       try {
-        await updateConfig(newConfig);
-        queryClient.setQueryData(queryKeys.config(), newConfig);
-        history.push(newConfig);
+        response = await updateConfig(newConfig);
       } catch {
         toast.error("Failed to update config");
         return;
       }
+      if (response?.saved === false) {
+        const errs = response.errors ?? [];
+        setErrors(errs);
+        const summary =
+          errs[0]?.message ?? "Config rejected by backend validation";
+        toast.error(`Config not saved: ${summary}`);
+        // Re-fetch the actual backend state so the UI reflects truth,
+        // not the rejected payload the caller tried to apply.
+        queryClient.invalidateQueries({ queryKey: queryKeys.config() });
+        return;
+      }
+      queryClient.setQueryData(queryKeys.config(), newConfig);
+      history.push(newConfig);
+      // Successful save clears any prior rejection errors.
+      setErrors([]);
 
       clearTimeout(validateTimer.current);
       validateTimer.current = setTimeout(async () => {
@@ -162,10 +180,25 @@ export function useModelPanelData({
     (name: string) => {
       const preset = loadPreset(name);
       if (!preset) return;
-      handleConfigChange(preset);
+      // Issue #276: presets intentionally omit data-bound fields (path,
+      // target, time_col, group_col, output_dir). Merging them from the
+      // current config ensures the resulting PUT body is valid; without
+      // the merge, backend `validate_config` rejects with
+      // `data: Field required` and silently keeps the prior config.
+      const current = queryClient.getQueryData<Record<string, unknown>>(
+        queryKeys.config(),
+      );
+      const merged: Record<string, unknown> = { ...preset };
+      if (current?.data && merged.data === undefined) {
+        merged.data = current.data;
+      }
+      if (current?.output_dir && merged.output_dir === undefined) {
+        merged.output_dir = current.output_dir;
+      }
+      handleConfigChange(merged);
       toast.success(`Preset "${name}" loaded`);
     },
-    [loadPreset, handleConfigChange],
+    [loadPreset, handleConfigChange, queryClient],
   );
 
   // --------------------------------------------------------------------

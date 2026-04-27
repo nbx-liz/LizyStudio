@@ -171,15 +171,27 @@ describe("PreviewResponse", () => {
 // ConfigUpdateResponse + ConfigError
 // ---------------------------------------------------------------------------
 describe("ConfigUpdateResponse", () => {
-  it("has config and errors", () => {
+  it("has config, errors, and saved", () => {
     const err: ConfigError = { path: "model.name", message: "required" };
     const resp: ConfigUpdateResponse = {
       config: { model: { name: "lgbm" } },
       errors: [err],
+      saved: false,
     };
     assertDefined(resp.config, "config");
     expect(resp.errors).toHaveLength(1);
     expect(resp.errors[0].path).toBe("model.name");
+    expect(resp.saved).toBe(false);
+  });
+
+  it("saved=true means the backend persisted the PUT body (Issue #276)", () => {
+    const resp: ConfigUpdateResponse = {
+      config: { model: { name: "lgbm" } },
+      errors: [],
+      saved: true,
+    };
+    expect(resp.saved).toBe(true);
+    expect(resp.errors).toHaveLength(0);
   });
 });
 

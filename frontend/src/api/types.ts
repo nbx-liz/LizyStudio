@@ -89,10 +89,16 @@ export type ColumnsResponse = components["schemas"]["ColumnsResponseModel"];
  * ConfigUpdateResponse — hand-written because generated type has
  * `errors: {[key: string]: unknown}[]` whereas we use the structured
  * `ConfigError` type, and the generated type includes an index signature.
+ *
+ * `saved` is the backend's authoritative answer to "did this PUT
+ * actually persist?" — false when validation rejected the body.
+ * Callers must observe it (Issue #276); silently dropping it leads to
+ * UI ↔ backend divergence.
  */
 export interface ConfigUpdateResponse {
   config: Record<string, unknown>;
   errors: ConfigError[];
+  saved: boolean;
 }
 
 export interface ConfigError {
