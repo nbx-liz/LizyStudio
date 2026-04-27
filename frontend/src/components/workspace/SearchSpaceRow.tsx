@@ -50,13 +50,28 @@ export function SearchSpaceRow({
   const isInteger = param.type === "integer";
   const availableModes = param.modes ?? ["fixed", "range"];
 
+  const handleSummaryActivate = () => {
+    if (isExpandable) onToggleExpand(param.key);
+  };
+
   return (
     <div key={param.key} className="border-b last:border-b-0">
-      {/* Summary line */}
-      <button
-        type="button"
+      {/* Summary line — div+role=button avoids nesting interactive descendants
+          (SegmentGroup buttons, NumberInput steppers) inside a real <button>
+          which is invalid HTML and triggers React hydration warnings. */}
+      {/* biome-ignore lint/a11y/useSemanticElements: native <button> would nest interactive descendants (#274) */}
+      <div
+        role="button"
+        tabIndex={isExpandable ? 0 : -1}
+        aria-expanded={isExpandable ? isExpanded : undefined}
         className="flex w-full items-center px-3 py-2 hover:bg-muted/30 cursor-pointer text-left"
-        onClick={() => isExpandable && onToggleExpand(param.key)}
+        onClick={handleSummaryActivate}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            handleSummaryActivate();
+          }
+        }}
       >
         <span className="w-6 flex-shrink-0">
           {isExpandable &&
@@ -171,7 +186,7 @@ export function SearchSpaceRow({
             )
           )}
         </span>
-      </button>
+      </div>
 
       {/* Range detail */}
       {isRange && isExpanded && entry && (

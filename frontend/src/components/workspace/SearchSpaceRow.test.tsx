@@ -515,6 +515,48 @@ describe("SearchSpaceRow – precision_at_k row", () => {
 });
 
 // ---------------------------------------------------------------------------
+// HTML structural validity (no nested buttons — see #274)
+// ---------------------------------------------------------------------------
+
+describe("SearchSpaceRow – HTML validity", () => {
+  it("does not render a real <button> as the row wrapper", () => {
+    // The row wrapper must not be a <button> element because it contains
+    // interactive descendants (SegmentGroup radio buttons, stepper icon
+    // buttons), which would violate the HTML5 content model and trigger
+    // React hydration warnings (#274).
+    const { container } = renderWithQuery(<SearchSpaceRow {...makeProps()} />);
+    const wrapper = container.querySelector('[role="button"]');
+    expect(wrapper).toBeTruthy();
+    expect(wrapper?.tagName).toBe("DIV");
+  });
+
+  it("does not nest any <button> inside another <button>", () => {
+    // When rendered in range mode (expandable) with onModelParamChange
+    // present, the row contains both SegmentGroup radio buttons and stepper
+    // icon buttons. Walk every <button> and assert none of them has a
+    // <button> ancestor inside the same row.
+    const onModelParamChange = vi.fn();
+    const { container } = renderWithQuery(
+      <SearchSpaceRow
+        {...makeProps({
+          space: {
+            learning_rate: { type: "float", low: 0.001, high: 0.1, log: false },
+          },
+          modelParams: { learning_rate: 0.01 },
+          onModelParamChange,
+        })}
+      />,
+    );
+    const buttons = container.querySelectorAll("button");
+    expect(buttons.length).toBeGreaterThan(0);
+    for (const btn of Array.from(buttons)) {
+      const ancestorButton = btn.parentElement?.closest("button");
+      expect(ancestorButton).toBeNull();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Keyboard event stopPropagation (lines 77, 97)
 // ---------------------------------------------------------------------------
 
