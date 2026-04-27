@@ -13,7 +13,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import equal from "fast-deep-equal";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { getErrorMessage } from "@/api/errors";
+import { ApiError } from "@/api/client";
+import { getErrorMessage, isStudioError } from "@/api/errors";
 import {
   useBackends,
   useColumns,
@@ -89,7 +90,22 @@ export function useModelPanelData({
       let response: Awaited<ReturnType<typeof updateConfig>>;
       try {
         response = await updateConfig(newConfig);
-      } catch {
+      } catch (err) {
+        // P-0089 / Issue #279: 409 WORKSPACE_LOCKED means a fit/tune
+        // job is running and the config is intentionally immutable.
+        // Surface a quiet info toast (the section-level disabled
+        // controls already explain the lock) and re-fetch so the form
+        // resyncs to the locked-in config.
+        if (
+          err instanceof ApiError &&
+          err.status === 409 &&
+          isStudioError(err.body) &&
+          err.body.error.code === "WORKSPACE_LOCKED"
+        ) {
+          toast.info("Config is locked while a job is running");
+          queryClient.invalidateQueries({ queryKey: queryKeys.config() });
+          return;
+        }
         toast.error("Failed to update config");
         return;
       }

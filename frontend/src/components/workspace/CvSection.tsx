@@ -57,6 +57,14 @@ interface CvSectionProps {
    * (no data loaded yet) the input falls back to the hard max only.
    */
   nRows?: number;
+  /**
+   * P-0089 / Issue #279: lock the CV section while a fit/tune job is
+   * running. PUT /config returns 409 server-side; disabling the
+   * controls here prevents the user from issuing rejected writes and
+   * keeps the form value pinned to the config the running job was
+   * created with.
+   */
+  disabled?: boolean;
 }
 
 export function CvSection({
@@ -67,6 +75,7 @@ export function CvSection({
   blocked,
   onBlockedChange,
   nRows,
+  disabled = false,
 }: CvSectionProps) {
   const availableStrategies = useMemo(
     () =>
@@ -110,6 +119,7 @@ export function CvSection({
           value={cv.strategy}
           onChange={handleStrategyChange}
           labels={CV_STRATEGY_LABELS}
+          disabled={disabled}
         />
       </div>
 
@@ -121,6 +131,7 @@ export function CvSection({
           blocked={blocked}
           onBlockedChange={onBlockedChange}
           nonExcludedCols={nonExcludedCols}
+          disabled={disabled}
         />
       )}
 
@@ -141,6 +152,7 @@ export function CvSection({
             max={nRows && nRows >= 2 ? nRows : undefined}
             step={1}
             placeholder="5"
+            disabled={disabled}
           />
         </div>
       )}
@@ -155,6 +167,7 @@ export function CvSection({
             onChange={(v) => update({ randomState: v })}
             step={1}
             placeholder="42"
+            disabled={disabled}
           />
         </div>
       )}
@@ -167,6 +180,7 @@ export function CvSection({
           <Switch
             checked={cv.shuffle}
             onCheckedChange={(v) => update({ shuffle: v })}
+            disabled={disabled}
           />
         </div>
       )}
@@ -179,6 +193,7 @@ export function CvSection({
           <Select
             value={cv.groupCol ?? ""}
             onValueChange={(v) => update({ groupCol: v })}
+            disabled={disabled}
           >
             <SelectTrigger aria-label="Group column">
               <SelectValue placeholder="Select column" />
@@ -202,6 +217,7 @@ export function CvSection({
           <Select
             value={cv.timeCol ?? ""}
             onValueChange={(v) => update({ timeCol: v })}
+            disabled={disabled}
           >
             <SelectTrigger aria-label="Time column">
               <SelectValue placeholder="Select column" />
@@ -223,6 +239,7 @@ export function CvSection({
           value={cv.gap}
           onChange={(v) => update({ gap: v })}
           placeholder="0"
+          disabled={disabled}
         />
       )}
 
@@ -232,6 +249,7 @@ export function CvSection({
           value={cv.purgeGap}
           onChange={(v) => update({ purgeGap: v })}
           placeholder="0"
+          disabled={disabled}
         />
       )}
 
@@ -241,6 +259,7 @@ export function CvSection({
           value={cv.embargo}
           onChange={(v) => update({ embargo: v })}
           placeholder="0"
+          disabled={disabled}
         />
       )}
 
@@ -250,6 +269,7 @@ export function CvSection({
           value={cv.trainSizeMax}
           onChange={(v) => update({ trainSizeMax: v })}
           autoHint
+          disabled={disabled}
         />
       )}
 
@@ -259,6 +279,7 @@ export function CvSection({
           value={cv.testSizeMax}
           onChange={(v) => update({ testSizeMax: v })}
           autoHint
+          disabled={disabled}
         />
       )}
 
@@ -268,6 +289,7 @@ export function CvSection({
           value={cv.minTrainRows}
           onChange={(v) => update({ minTrainRows: v })}
           autoHint
+          disabled={disabled}
         />
       )}
 
@@ -277,6 +299,7 @@ export function CvSection({
           value={cv.minValidRows}
           onChange={(v) => update({ minValidRows: v })}
           autoHint
+          disabled={disabled}
         />
       )}
     </div>

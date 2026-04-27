@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
+import { ApiError } from "@/api/client";
+import { isStudioError } from "@/api/errors";
 import type { UiSchema } from "@/api/types";
 import {
   fetchConfig,
@@ -103,6 +105,20 @@ export function useConfigSync({
       onDataChanged();
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
+      // P-0089 / Issue #279: while a fit/tune job holds the active
+      // slot, PUT /config returns 409 WORKSPACE_LOCKED. The disabled
+      // controls upstream already explain the lock to the user; emit
+      // a quiet info toast instead of the generic error so the user
+      // is not alarmed by their own locked-state behaving correctly.
+      if (
+        err instanceof ApiError &&
+        err.status === 409 &&
+        isStudioError(err.body) &&
+        err.body.error.code === "WORKSPACE_LOCKED"
+      ) {
+        toast.info("Config is locked while a job is running");
+        return;
+      }
       toast.error("Config sync failed — changes may not be saved");
     }
   }, [

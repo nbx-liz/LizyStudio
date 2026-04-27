@@ -302,6 +302,14 @@ export interface paths {
         /**
          * Config Update
          * @description Update config with validation.
+         *
+         *     P-0089 / Issue #279: while a fit/tune job holds the active slot,
+         *     the config it was created with must be immutable. Cross-hook
+         *     competing writes (CV strategy radio, Folds NumberInput,
+         *     target/task RadioGroup) used to land mid-run and silently
+         *     corrupt the config the job's checkpoint and ``meta.json`` were
+         *     based on. Reject such writes with 409 ``WORKSPACE_LOCKED`` so
+         *     the frontend can surface a clear toast and re-sync.
          */
         put: operations["config_update_api_workspace_config_put"];
         post?: never;
@@ -311,6 +319,10 @@ export interface paths {
         /**
          * Config Patch
          * @description Partially update config via patch operations (H-0037).
+         *
+         *     P-0089 / Issue #279: same running-lock semantics as
+         *     ``config_update``. Patches against a locked workspace return 409
+         *     so the frontend can drop the in-flight edit and re-fetch.
          */
         patch: operations["config_patch_api_workspace_config_patch"];
         trace?: never;

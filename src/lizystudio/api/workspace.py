@@ -27,6 +27,7 @@ from lizystudio.api.errors import (
     JobConflictError,
     PathNotFoundError,
     ValidationError,
+    WorkspaceLockedError,
     WorkspaceNoConfigError,
     WorkspaceNoDataError,
 )
@@ -426,8 +427,21 @@ def config_get(
 def config_update(
     body: dict[str, Any],
     ws: WorkspaceState = Depends(get_workspace),
+    job_store: JobStore = Depends(get_job_store),
 ) -> dict[str, Any]:
-    """Update config with validation."""
+    """Update config with validation.
+
+    P-0089 / Issue #279: while a fit/tune job holds the active slot,
+    the config it was created with must be immutable. Cross-hook
+    competing writes (CV strategy radio, Folds NumberInput,
+    target/task RadioGroup) used to land mid-run and silently
+    corrupt the config the job's checkpoint and ``meta.json`` were
+    based on. Reject such writes with 409 ``WORKSPACE_LOCKED`` so
+    the frontend can surface a clear toast and re-sync.
+    """
+    holder = job_store.active_job_id
+    if holder is not None:
+        raise WorkspaceLockedError(holder)
     errors = validate_config(ws, body)
     if not errors:
         ws.set_config(body)
@@ -438,8 +452,17 @@ def config_update(
 def config_patch(
     body: dict[str, Any],
     ws: WorkspaceState = Depends(get_workspace),
+    job_store: JobStore = Depends(get_job_store),
 ) -> dict[str, Any]:
-    """Partially update config via patch operations (H-0037)."""
+    """Partially update config via patch operations (H-0037).
+
+    P-0089 / Issue #279: same running-lock semantics as
+    ``config_update``. Patches against a locked workspace return 409
+    so the frontend can drop the in-flight edit and re-fetch.
+    """
+    holder = job_store.active_job_id
+    if holder is not None:
+        raise WorkspaceLockedError(holder)
     if not ws.config:
         raise WorkspaceNoConfigError()
     ops = body.get("ops", [])

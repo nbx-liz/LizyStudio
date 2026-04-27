@@ -69,6 +69,27 @@ class JobConflictError(StudioError):
         )
 
 
+class WorkspaceLockedError(StudioError):
+    """Config write rejected because a fit/tune job is currently running.
+
+    P-0089 / Issue #279: while a job holds the active slot, mutating
+    ``ws.config`` would let cross-hook competing writes (CV strategy
+    radio, Folds NumberInput, target/task RadioGroup) corrupt the
+    config that the job's checkpoint and meta.json were created with.
+    The lock is released as soon as the job transitions to a terminal
+    status (``completed`` / ``failed`` / ``cancelled``) and the
+    runner's finally block calls ``release_active``.
+    """
+
+    def __init__(self, job_id: str) -> None:
+        super().__init__(
+            "WORKSPACE_LOCKED",
+            f"Config is locked while job {job_id} is running",
+            409,
+            details={"job_id": job_id},
+        )
+
+
 class ValidationError(StudioError):
     def __init__(self, errors: list[dict[str, Any]]) -> None:
         super().__init__(
