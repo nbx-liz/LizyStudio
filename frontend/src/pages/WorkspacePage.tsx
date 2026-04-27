@@ -186,6 +186,7 @@ export function WorkspacePage() {
             onDataChanged={handleDataChanged}
             onTaskChanged={handleTaskChanged}
             uiSchema={uiSchema}
+            running={running}
           />
         </TabsContent>
         <TabsContent
@@ -278,6 +279,7 @@ export function WorkspacePage() {
             onDataChanged={handleDataChanged}
             onTaskChanged={handleTaskChanged}
             uiSchema={uiSchema}
+            running={running}
           />
         </section>
       </ResizablePanel>

@@ -56,6 +56,14 @@ export interface BlockedGroupKFoldEditorProps {
   blocked: BlockedGroupKFoldState;
   onBlockedChange: (next: BlockedGroupKFoldState) => void;
   nonExcludedCols: ColumnInfo[];
+  /**
+   * P-0089 / Issue #279: lock the editor while a fit/tune job is
+   * running. The wrapping ``<fieldset disabled>`` natively prevents
+   * pointer / keyboard input from reaching the nested controls; the
+   * inner Radix triggers honor it because they render as ``<button>``
+   * elements and inherit the fieldset disabled attribute.
+   */
+  disabled?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -68,6 +76,7 @@ export function BlockedGroupKFoldEditor({
   blocked,
   onBlockedChange,
   nonExcludedCols,
+  disabled = false,
 }: BlockedGroupKFoldEditorProps) {
   const [blockStats, setBlockStats] = useState<ColumnStatsResponse | null>(
     null,
@@ -170,7 +179,11 @@ export function BlockedGroupKFoldEditor({
   );
 
   return (
-    <div className="space-y-4" data-testid="blocked-group-kfold-editor">
+    <fieldset
+      className="space-y-4 disabled:opacity-60"
+      disabled={disabled}
+      data-testid="blocked-group-kfold-editor"
+    >
       {/* ===== Blocks Section ===== */}
       <fieldset className="space-y-3 rounded-md border p-3">
         <legend className="px-1 text-xs font-semibold text-muted-foreground">
@@ -431,7 +444,7 @@ export function BlockedGroupKFoldEditor({
           />
         </div>
       </fieldset>
-    </div>
+    </fieldset>
   );
 }
 

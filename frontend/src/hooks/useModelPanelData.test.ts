@@ -391,6 +391,49 @@ describe("useModelPanelData", () => {
   });
 
   // -------------------------------------------------------------------------
+  // P-0089 / Issue #279: PUT /config returns 409 WORKSPACE_LOCKED while a
+  // fit/tune job is running. handleConfigChange must surface a quiet info
+  // toast (not the generic error path) and re-fetch so the form resyncs to
+  // the locked-in config. The cache must NOT be optimistically updated.
+  // -------------------------------------------------------------------------
+  describe("handleConfigChange — 409 WORKSPACE_LOCKED handling (#279)", () => {
+    it("invalidates cache and does not push to history when 409 fires", async () => {
+      // Lazy import inside the test to avoid hoisting weirdness with the
+      // top-level vi.mock("@/api/workspace") block.
+      const { ApiError } = await import("@/api/client");
+      vi.mocked(updateConfig).mockRejectedValueOnce(
+        new ApiError(409, {
+          error: {
+            code: "WORKSPACE_LOCKED",
+            message: "Config is locked while job xyz is running",
+            details: { job_id: "xyz" },
+          },
+        }),
+      );
+
+      const { wrapper, queryClient } = makeWrapper();
+      const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+      const { result } = renderHook(
+        () => useModelPanelData({ hasData: true, running: false }),
+        { wrapper },
+      );
+      await waitFor(() => expect(result.current.config).toBeDefined());
+
+      const undoBefore = result.current.history.canUndo;
+
+      await act(async () => {
+        await result.current.handleConfigChange({ model: { name: "Z" } });
+      });
+
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: queryKeys.config(),
+      });
+      // Rejected write must not land on history.
+      expect(result.current.history.canUndo).toBe(undoBefore);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Issue #276: handleLoadPreset must merge preset with current data so the
   // backend `data` field (which presets intentionally omit) is preserved.
   // -------------------------------------------------------------------------

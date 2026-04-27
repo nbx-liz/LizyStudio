@@ -26,6 +26,14 @@ interface ColumnSettingsSectionProps {
   onExcludeToggle: (colName: string, checked: boolean) => void;
   onTypeChange: (colName: string, type: "numeric" | "categorical") => void;
   onColumnExpand: (colName: string) => void;
+  /**
+   * P-0089 / Issue #279: lock the per-column Exclude / Num / Cat
+   * controls while a fit/tune job is running. PUT /config returns
+   * 409 server-side; disabling the controls here matches that lock
+   * so the user does not see optimistic UI flicker followed by a
+   * toast.
+   */
+  disabled?: boolean;
 }
 
 export function ColumnSettingsSection({
@@ -40,6 +48,7 @@ export function ColumnSettingsSection({
   onExcludeToggle,
   onTypeChange,
   onColumnExpand,
+  disabled = false,
 }: ColumnSettingsSectionProps) {
   return (
     <div className="pl-4">
@@ -129,6 +138,7 @@ export function ColumnSettingsSection({
                           onCheckedChange={(checked) =>
                             onExcludeToggle(col.name, checked === true)
                           }
+                          disabled={disabled}
                         />
                       </div>
                       {/* biome-ignore lint/a11y/noStaticElementInteractions: stop propagation container */}
@@ -143,7 +153,7 @@ export function ColumnSettingsSection({
                           }
                           size="sm"
                           className="h-6 text-[10px] px-2"
-                          disabled={isExcluded}
+                          disabled={isExcluded || disabled}
                           onClick={() => onTypeChange(col.name, "numeric")}
                         >
                           Num
@@ -156,7 +166,7 @@ export function ColumnSettingsSection({
                           }
                           size="sm"
                           className="h-6 text-[10px] px-2"
-                          disabled={isExcluded}
+                          disabled={isExcluded || disabled}
                           onClick={() => onTypeChange(col.name, "categorical")}
                         >
                           Cat

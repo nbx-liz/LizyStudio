@@ -8,12 +8,14 @@ export function NullableNumberField({
   onChange,
   placeholder,
   autoHint,
+  disabled,
 }: {
   label: string;
   value: number | undefined;
   onChange: (v: number | undefined) => void;
   placeholder?: string;
   autoHint?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <div className="space-y-1">
@@ -31,6 +33,7 @@ export function NullableNumberField({
         min={autoHint ? 1 : 0}
         step={1}
         placeholder={placeholder ?? "Auto"}
+        disabled={disabled}
       />
     </div>
   );

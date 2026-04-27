@@ -32,6 +32,14 @@ interface DataPanelProps {
   onDataChanged: () => void;
   onTaskChanged?: (task: string | null) => void;
   uiSchema?: UiSchema;
+  /**
+   * P-0089 / Issue #279: while a fit/tune job is running the
+   * workspace config is locked server-side (PUT /config returns 409
+   * WORKSPACE_LOCKED). The UI must mirror that lock by disabling the
+   * controls that produce competing writes — Target/Task radios, the
+   * Column Settings exclude/type buttons, and every CV field.
+   */
+  running?: boolean;
 }
 
 /**
@@ -51,7 +59,7 @@ export interface DataPanelHandle {
 
 export const DataPanel = forwardRef<DataPanelHandle, DataPanelProps>(
   function DataPanel(
-    { onDataChanged, onTaskChanged, uiSchema }: DataPanelProps,
+    { onDataChanged, onTaskChanged, uiSchema, running = false }: DataPanelProps,
     ref,
   ) {
     const {
@@ -153,7 +161,7 @@ export const DataPanel = forwardRef<DataPanelHandle, DataPanelProps>(
                     <Select
                       value={target ?? ""}
                       onValueChange={handleTargetChange}
-                      disabled={allColumnNames.length === 0}
+                      disabled={allColumnNames.length === 0 || running}
                     >
                       <SelectTrigger
                         aria-label="Target column"
@@ -177,7 +185,7 @@ export const DataPanel = forwardRef<DataPanelHandle, DataPanelProps>(
                         options={TASK_OPTIONS as unknown as string[]}
                         value={task ?? ""}
                         onChange={(v) => handleTaskChange(v as TaskType)}
-                        disabled={!target}
+                        disabled={!target || running}
                       />
                       {!target && (
                         <span className="text-xs text-muted-foreground">
@@ -218,6 +226,7 @@ export const DataPanel = forwardRef<DataPanelHandle, DataPanelProps>(
                   onExcludeToggle={handleExcludeToggle}
                   onTypeChange={handleTypeChange}
                   onColumnExpand={handleColumnExpand}
+                  disabled={running}
                 />
               </AccordionContent>
             </AccordionItem>
@@ -237,6 +246,7 @@ export const DataPanel = forwardRef<DataPanelHandle, DataPanelProps>(
                     blocked={blocked}
                     onBlockedChange={setBlocked}
                     nRows={shape ? shape[0] : undefined}
+                    disabled={running}
                   />
                   <FoldPreview
                     enabled={!!target && !!task && shape !== null}

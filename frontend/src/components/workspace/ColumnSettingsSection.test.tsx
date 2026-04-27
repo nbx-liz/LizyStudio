@@ -31,11 +31,14 @@ const SUMMARY = {
   manualCount: 0,
 };
 
-function renderSection(handlers: {
-  onExcludeToggle?: (name: string, checked: boolean) => void;
-  onTypeChange?: (name: string, type: "numeric" | "categorical") => void;
-  onColumnExpand?: (name: string) => void;
-}) {
+function renderSection(
+  handlers: {
+    onExcludeToggle?: (name: string, checked: boolean) => void;
+    onTypeChange?: (name: string, type: "numeric" | "categorical") => void;
+    onColumnExpand?: (name: string) => void;
+  },
+  options: { disabled?: boolean } = {},
+) {
   const onExcludeToggle = handlers.onExcludeToggle ?? vi.fn();
   const onTypeChange = handlers.onTypeChange ?? vi.fn();
   const onColumnExpand = handlers.onColumnExpand ?? vi.fn();
@@ -52,6 +55,7 @@ function renderSection(handlers: {
       onExcludeToggle={onExcludeToggle}
       onTypeChange={onTypeChange}
       onColumnExpand={onColumnExpand}
+      disabled={options.disabled}
     />,
   );
   return { onExcludeToggle, onTypeChange, onColumnExpand };
@@ -180,5 +184,43 @@ describe("ColumnSettingsSection DOM structure (Issue #248)", () => {
     fireEvent.keyDown(row, { key: "Tab" });
     fireEvent.keyDown(row, { key: "a" });
     expect(onColumnExpand).not.toHaveBeenCalled();
+  });
+});
+
+describe("ColumnSettingsSection running lock (P-0089 / Issue #279)", () => {
+  it("disables Exclude checkbox when disabled=true", () => {
+    renderSection({}, { disabled: true });
+    const row = screen.getByTestId("column-row-color");
+    const checkbox = row.querySelector('[role="checkbox"]') as HTMLElement;
+    expect(checkbox).not.toBeNull();
+    expect(checkbox).toHaveAttribute("disabled");
+  });
+
+  it("disables Num and Cat buttons when disabled=true", () => {
+    renderSection({}, { disabled: true });
+    const row = screen.getByTestId("column-row-color");
+    const buttons = Array.from(row.querySelectorAll("button"));
+    const numBtn = buttons.find((b) => b.textContent === "Num");
+    const catBtn = buttons.find((b) => b.textContent === "Cat");
+    expect(numBtn).toBeDefined();
+    expect(catBtn).toBeDefined();
+    expect(numBtn).toBeDisabled();
+    expect(catBtn).toBeDisabled();
+  });
+
+  it("does not call handlers when disabled and the controls are clicked", async () => {
+    const { onExcludeToggle, onTypeChange } = renderSection(
+      {},
+      { disabled: true },
+    );
+    const row = screen.getByTestId("column-row-color");
+    const checkbox = row.querySelector('[role="checkbox"]') as HTMLElement;
+    fireEvent.click(checkbox);
+    const numBtn = Array.from(row.querySelectorAll("button")).find(
+      (b) => b.textContent === "Num",
+    ) as HTMLElement;
+    await userEvent.click(numBtn);
+    expect(onExcludeToggle).not.toHaveBeenCalled();
+    expect(onTypeChange).not.toHaveBeenCalled();
   });
 });

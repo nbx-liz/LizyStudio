@@ -2449,3 +2449,57 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (d) dev server 未起動 or E2E-configured backend の状態で `pnpm test:e2e` を実行すると従来通り全 pass。
 - **Decision:**
   - 2026-04-24 **Proposed & Implemented** — Phase 2 PR で採用。Issue #256 を close 予定。Issue #257 の Scenario B (UI 編集後 Fit の統合テスト) は同 PR で並行実装。
+
+### P-0089: 実行中ジョブが Workspace config を保護する running lock（Issue #279, PR-C1）
+- **Status:** proposed & implemented
+- **Scope:** Backend / Frontend / Testing
+- **Related:** Issue #279（Tune 実行中に Folds / Random State / CV Strategy 等が引き続き編集できる）、Issue #277（FeatureWeightsEditor first-toggle race の同族）、Issue #278 残課題（GroupKFold radio が即座に stratified_kfold に上書きされる cross-hook race）、P-0086（Fit/Tune body.config による race-window 解消）、Coupling refactor PR-A/PR-B/PR-C
+- **Context:** Tune 実行中でも `PUT /api/workspace/config` を受け付けるため、ジョブの `meta.json` / checkpoint が作成された config と、UI が後から書き換える config が乖離する。ユーザは radio や NumberInput を触り続けられ、競合 PUT が job の前提を壊す。Smoke テストで以下が再現:
+  - INV違反: 走行中の Tune の隣で Folds NumberInput を 8→3 に変更すると `PUT /config` が 200 で通る。job は折数 8 で実行中だが、UI と保存 config は折数 3 を表示してしまう。
+  - Cross-hook race（#278 残課題）: GroupKFold radio クリックで `useConfigSync` が正しい payload を送るが、`useDataPanel` 系の別 effect が古い snapshot から `stratified_kfold` を上書きする。`saved:false` の toast で表面化はするが、race そのものは残る。
+  - 同族の症状: setQueryData 直後に controlled-input が再描画されない（Folds NumberInput が `8` のまま固定）→ PR-C2 で対応予定。
+  
+  根本対策は二段。**(1) サーバ側で immutability を保証** することで、どれだけ UI 側で取りこぼしがあっても job 中の config は壊れない。**(2) UI を server-truth に揃える**: ロックされている間は対応する controls を `disabled` にしてユーザに状態を伝え、エラー toast の連発を避ける。
+- **Invariants:**
+  - INV-1: `PUT /api/workspace/config` は `JobStore.active_job_id` が non-null の間 409 `WORKSPACE_LOCKED` を返し、`ws.config` を変更しない。
+  - INV-2: `PATCH /api/workspace/config` は同条件で 409 `WORKSPACE_LOCKED` を返し、`ws.config` を変更しない。
+  - INV-3: active slot が release されたあとは次の `PUT /config` が即座に 200 を返す（lock は持続しない）。
+  - INV-3b (terminal carve-out): active slot を保持していても、その holder の status が terminal (`completed` / `failed` / `cancelled`) ならば lock は無効化される。これは job の status flip と runner の `release_active` の間に存在する microsecond-scale の race window で、post-fit re-fit flow が spurious 409 を踏まないようにするため。
+  - INV-4: フロントは `running=true` の間、Target / Task / Column Settings (Exclude, Num/Cat) / CV Section（Strategy / Folds / Random State / Shuffle / Group/Time column / Gap / Embargo / etc）のすべてを `disabled` にする。BlockedGroupKFold エディタは `<fieldset disabled>` で一括ロック。
+  - INV-5: `useModelPanelData.handleConfigChange` と `useConfigSync.syncConfig` は 409 `WORKSPACE_LOCKED` を専用 toast (`toast.info`) で扱い、`queryKeys.config()` を invalidate して server-truth に再同期する。history への push と setQueryData は走らない。
+- **Proposal & Impact:**
+  - `src/lizystudio/api/errors.py` に `WorkspaceLockedError(status=409, code="WORKSPACE_LOCKED", details={"job_id": ...})` を追加。
+  - `src/lizystudio/api/workspace.py::config_update` / `config_patch` に `job_store: JobStore = Depends(get_job_store)` を追加し、`active_job_id` が non-null なら `WorkspaceLockedError` を raise。validate より前にロックチェックを行うことで、不要な validate を回避し副作用も発生させない。
+  - `tests/regression/test_reg_0279_workspace_locked_during_run.py` 新規追加: 既存の `_seed_running_holder` パターンを再利用して INV-1/2/3 を pin。
+  - `frontend/src/api/generated/schema.d.ts` を `pnpm generate:api` で再生成（新 error code をクライアント型に反映）。
+  - `frontend/src/pages/WorkspacePage.tsx` の `<DataPanel>` に `running={running}` を渡す（mobile/desktop の両 Layout で）。
+  - `frontend/src/components/workspace/DataPanel.tsx`: `running?: boolean` prop を追加し、Target Select / Task SegmentGroup を `disabled={... || running}` に。`<ColumnSettingsSection disabled={running} />` と `<CvSection disabled={running} />` を渡す。
+  - `frontend/src/components/workspace/ColumnSettingsSection.tsx`: `disabled?: boolean` prop を追加。Exclude `<Checkbox>` / Num/Cat `<Button>` に `disabled={isExcluded || disabled}` を伝搬。
+  - `frontend/src/components/workspace/CvSection.tsx`: `disabled?: boolean` を追加し、Strategy SegmentGroup / Folds NumberInput / Random State NumberInput / Shuffle Switch / Group Select / Time Select / Gap・Purge Gap・Embargo・Train Size Max・Test Size Max・Min Train Rows・Min Valid Rows の各 NullableNumberField に `disabled` を渡す。
+  - `frontend/src/components/workspace/NullableNumberField.tsx`: `disabled?: boolean` を追加して `<NumberInput>` に転送。
+  - `frontend/src/components/workspace/BlockedGroupKFoldEditor.tsx`: `disabled?: boolean` を追加し、ルート `<div>` を `<fieldset disabled>` に変更（HTML native semantics で内部の Radix triggers / NumberInput / Switch を一括ロック）。
+  - `frontend/src/hooks/useModelPanelData.ts::handleConfigChange`: `ApiError` + `isStudioError` で 409 / `WORKSPACE_LOCKED` を判定し、`toast.info("Config is locked while a job is running")` + `queryClient.invalidateQueries(queryKeys.config())` で再同期。history.push と setQueryData は走らない。
+  - `frontend/src/hooks/useConfigSync.ts::syncConfig`: 同様の 409 判定を catch ブロックに追加し、generic error toast を出さない。
+  - 既存テスト追加 / 更新:
+    - `frontend/src/components/workspace/ColumnSettingsSection.test.tsx`: `running lock` describe ブロックを追加（Checkbox / Num / Cat の disabled、handler が呼ばれないことを assert）。
+    - `frontend/src/components/workspace/CvSection.runningLock.test.tsx`: 新規。Strategy SegmentGroup / Folds NumberInput / BlockedGroupKFoldEditor の disabled 伝搬を assert。
+    - `frontend/src/hooks/useModelPanelData.test.ts`: 409 `WORKSPACE_LOCKED` ハンドラの describe ブロックを追加。
+- **Compatibility:**
+  - API: 新 error code `WORKSPACE_LOCKED` を追加（既存クライアントは status 409 を見て扱う既存 `JOB_CONFLICT` と同じ動作で十分: 警告して再 fetch）。`/fit` / `/tune` の挙動は不変。
+  - UI: `running=true` の間に編集できなくなる範囲は ModelPanel + DataPanel 全体だが、これは元々サーバ側で reject されるべきものを UI が「先回り」して防ぐ formality であり、reject されていた挙動と一貫している。Fit/Tune ボタンと Cancel ボタンは従来通り押下可能。
+  - State machine: 既存の `JobStore.active_job_id` lifecycle に依存。新しい lock primitive は導入しない。release タイミング（terminal status + `release_active`）も既存と同一。
+- **Alternatives considered:**
+  - (A) クライアント側のみで disabled 化: 却下。WS 経由 / 直接 curl / E2E で race が再発する。サーバ invariant が無いと脆い。
+  - (B) PUT を受理して silent ignore: 却下。`saved:false` を返しても UI が「保存された風」に見えるリスクがある。明示 409 + invalidate のほうが安全。
+  - (C) JobStore に専用の `config_locked` フラグを別途持つ: 却下。`active_job_id` で十分かつ単一情報源。新たな ownership invariant を追加すると保守コストが増える。
+  - (D) PR-C を 1 PR で C1 (lock) + C2 (cross-hook funnel + setQueryData→input subscription fix) としてまとめる: 却下。C2 は `useConfigSync` / `useDataPanel` の refactor を含み diff が肥大化する。C1 だけでも `meta.json` corruption は完全に止まる（INV-1～3 がサーバで保証される）ため、独立 PR として価値が高い。C2 は別 PR で実施予定。
+- **Acceptance Criteria:**
+  - (a) `tests/regression/test_reg_0279_workspace_locked_during_run.py` の 3 件が pass（INV-1/2/3）。
+  - (b) `frontend/src/components/workspace/CvSection.runningLock.test.tsx` の disabled 伝搬テストが pass（INV-4）。
+  - (c) `frontend/src/components/workspace/ColumnSettingsSection.test.tsx` の running lock describe ブロックが pass（INV-4）。
+  - (d) `frontend/src/hooks/useModelPanelData.test.ts` の 409 ハンドラテストが pass（INV-5）。
+  - (e) 既存の backend pytest / frontend vitest / ruff / biome / mypy / pnpm build がすべて green。
+  - (f) `tests/contract/` の P-0087 invariant が引き続き pass（schema drift 無し）。
+  - (g) `frontend/src/api/generated/schema.d.ts` が regenerate 済み（`/api/workspace/config` の 409 response に新 error envelope が出る）。
+- **Decision:**
+  - 2026-04-28 **Proposed & Implemented** — PR-C1 として merge 予定。Issue #279 を close。Issue #277 / #278 残課題 / setQueryData→input race は PR-C2 にて continue。

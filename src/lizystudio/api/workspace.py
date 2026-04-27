@@ -27,6 +27,7 @@ from lizystudio.api.errors import (
     JobConflictError,
     PathNotFoundError,
     ValidationError,
+    WorkspaceLockedError,
     WorkspaceNoConfigError,
     WorkspaceNoDataError,
 )
@@ -422,12 +423,55 @@ def config_get(
     return ws.config
 
 
+def _check_workspace_lock(job_store: JobStore) -> None:
+    """Raise ``WorkspaceLockedError`` iff a non-terminal job holds the slot.
+
+    P-0089 / Issue #279: the config must be immutable while a fit/tune
+    job is actively running, but **only while it is actively running**.
+    Once a job transitions to a terminal status (``completed`` /
+    ``failed`` / ``cancelled``), the workspace must accept config
+    writes again — even if the runner's ``finally`` block has not yet
+    called ``release_active`` to drop the slot.
+
+    Without this terminal-status carve-out, the post-fit re-fit flow
+    (``waitForJobDone`` returns the moment status flips, but
+    ``release_active`` lags by an arbitrary number of microseconds)
+    races against the lock and produces spurious 409s for clients
+    that did the right thing — see the ``jobs-refit.spec.ts`` E2E
+    failure that surfaced this.
+    """
+    holder = job_store.active_job_id
+    if holder is None:
+        return
+    holder_job = job_store.get(holder)
+    if holder_job is not None and holder_job.status in (
+        "completed",
+        "failed",
+        "cancelled",
+    ):
+        return
+    raise WorkspaceLockedError(holder)
+
+
 @router.put("/config", response_model=ConfigUpdateResponse)
 def config_update(
     body: dict[str, Any],
     ws: WorkspaceState = Depends(get_workspace),
+    job_store: JobStore = Depends(get_job_store),
 ) -> dict[str, Any]:
-    """Update config with validation."""
+    """Update config with validation.
+
+    P-0089 / Issue #279: while a fit/tune job is actively running, the
+    config it was created with must be immutable. Cross-hook competing
+    writes (CV strategy radio, Folds NumberInput, target/task
+    RadioGroup) used to land mid-run and silently corrupt the config
+    the job's checkpoint and ``meta.json`` were based on. Reject such
+    writes with 409 ``WORKSPACE_LOCKED`` so the frontend can surface a
+    clear toast and re-sync. See ``_check_workspace_lock`` for the
+    terminal-status carve-out that lets the post-fit re-fit flow
+    proceed without racing against the runner's slot release.
+    """
+    _check_workspace_lock(job_store)
     errors = validate_config(ws, body)
     if not errors:
         ws.set_config(body)
@@ -438,8 +482,15 @@ def config_update(
 def config_patch(
     body: dict[str, Any],
     ws: WorkspaceState = Depends(get_workspace),
+    job_store: JobStore = Depends(get_job_store),
 ) -> dict[str, Any]:
-    """Partially update config via patch operations (H-0037)."""
+    """Partially update config via patch operations (H-0037).
+
+    P-0089 / Issue #279: same running-lock semantics as
+    ``config_update``. Patches against a locked workspace return 409
+    so the frontend can drop the in-flight edit and re-fetch.
+    """
+    _check_workspace_lock(job_store)
     if not ws.config:
         raise WorkspaceNoConfigError()
     ops = body.get("ops", [])
