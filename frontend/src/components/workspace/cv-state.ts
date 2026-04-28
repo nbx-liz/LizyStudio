@@ -294,3 +294,55 @@ export function applyCvDataFields(
   }
   return result;
 }
+
+/** Inverse of {@link buildSplitConfig} — read the CvState slice that an
+ * external write has stored in the cached config back into local state.
+ *
+ * Used by ``useDataPanel`` (P-0090 / Issue #278 residual) to reconcile
+ * its controlled inputs with the TanStack Query cache after preset
+ * Load, undo/redo, or any other path that writes to ``queryKeys.config()``
+ * without going through the normal user-edit flow. The function returns
+ * a partial CvState — only fields that are present in the input ``split``
+ * are returned, so callers can spread the result onto their existing
+ * state without erasing fields that the cached config does not declare.
+ */
+export function parseSplitToCv(
+  split: Record<string, unknown> | undefined | null,
+  data?: Record<string, unknown> | undefined | null,
+): Partial<CvState> {
+  if (!split) return {};
+  const out: Partial<CvState> = {};
+  if (typeof split.method === "string") out.strategy = split.method;
+  if (typeof split.n_splits === "number") out.folds = split.n_splits;
+  if (typeof split.random_state === "number")
+    out.randomState = split.random_state;
+  if (typeof split.shuffle === "boolean") out.shuffle = split.shuffle;
+  if (typeof split.gap === "number") out.gap = split.gap;
+  if (typeof split.purge_gap === "number") out.purgeGap = split.purge_gap;
+  if (typeof split.embargo === "number") out.embargo = split.embargo;
+  if (typeof split.train_size_max === "number")
+    out.trainSizeMax = split.train_size_max;
+  if (typeof split.test_size_max === "number")
+    out.testSizeMax = split.test_size_max;
+  if (typeof split.min_train_rows === "number")
+    out.minTrainRows = split.min_train_rows;
+  if (typeof split.min_valid_rows === "number")
+    out.minValidRows = split.min_valid_rows;
+  // group_col / time_col live in `data` for non-blocked strategies and
+  // inside split.blocks/groups for blocked_group_kfold (handled by a
+  // dedicated parser if needed). Read from data here so the simple
+  // cases — Load Preset on a kfold/group_kfold/time_series config —
+  // resync the column dropdowns too.
+  if (data) {
+    if (typeof data.group_col === "string") out.groupCol = data.group_col;
+    if (typeof data.time_col === "string") out.timeCol = data.time_col;
+  }
+  // BlockedGroupKFold: read the nested split.blocks/groups col fields
+  // when present so the editor shows what was loaded. The full
+  // BlockedGroupKFoldState (cutoffs etc.) is parsed by a separate path.
+  const blocks = split.blocks as Record<string, unknown> | undefined;
+  const groups = split.groups as Record<string, unknown> | undefined;
+  if (typeof blocks?.col === "string") out.timeCol = blocks.col;
+  if (typeof groups?.col === "string") out.groupCol = groups.col;
+  return out;
+}

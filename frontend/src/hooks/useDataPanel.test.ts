@@ -369,6 +369,89 @@ describe("useDataPanel", () => {
 
     expect(result.current.cv.strategy).toBe("time_series");
   });
+
+  // -------------------------------------------------------------------------
+  // P-0090 / Issue #278 residual: when an external write updates the cached
+  // config (e.g. handleLoadPreset → setQueryData with n_splits=5), the
+  // controlled inputs in CvSection must re-render to the new value. The
+  // inputs are bound to useDataPanel's local `cv` state, which has no
+  // subscription to the config cache, so without an explicit back-sync the
+  // Folds NumberInput stays stuck at the pre-preset value (8) until a full
+  // page reload re-derives the state. The hook subscribes to the
+  // queryKeys.config() cache and reconciles cv.folds / cv.strategy / etc.
+  // when the cache value diverges from local state.
+  // -------------------------------------------------------------------------
+  describe("back-sync from config cache (#278 residual / setQueryData input race)", () => {
+    it("updates cv.folds when an external setQueryData writes a new n_splits", async () => {
+      const { wrapper, queryClient } = createWrapper();
+      const { result } = renderHook(
+        () => useDataPanel({ onDataChanged: vi.fn() }),
+        { wrapper },
+      );
+
+      // Initial state: defaults — folds=5 (per CV_FIELD_DEFAULTS).
+      expect(result.current.cv.folds).toBe(5);
+
+      // Simulate an external write (e.g. preset Load or
+      // useConfigSync's new setQueryData path) that drops a new
+      // config into the TanStack Query cache.
+      act(() => {
+        queryClient.setQueryData(queryKeys.config(), {
+          config_version: 1,
+          task: "binary",
+          split: { method: "stratified_kfold", n_splits: 8, random_state: 42 },
+        });
+      });
+
+      await waitFor(() => expect(result.current.cv.folds).toBe(8));
+      expect(result.current.cv.strategy).toBe("stratified_kfold");
+    });
+
+    it("updates cv.strategy when external config switches the CV method", async () => {
+      const { wrapper, queryClient } = createWrapper();
+      const { result } = renderHook(
+        () => useDataPanel({ onDataChanged: vi.fn() }),
+        { wrapper },
+      );
+
+      act(() => {
+        queryClient.setQueryData(queryKeys.config(), {
+          config_version: 1,
+          task: "regression",
+          split: { method: "time_series", n_splits: 4 },
+        });
+      });
+
+      await waitFor(() =>
+        expect(result.current.cv.strategy).toBe("time_series"),
+      );
+      expect(result.current.cv.folds).toBe(4);
+    });
+
+    it("does not write back to the cache when reconciling from external state", async () => {
+      const { wrapper, queryClient } = createWrapper();
+      renderHook(() => useDataPanel({ onDataChanged: vi.fn() }), { wrapper });
+
+      // Reset call count so we observe only post-back-sync writes.
+      mocks.updateConfig.mockClear();
+
+      act(() => {
+        queryClient.setQueryData(queryKeys.config(), {
+          config_version: 1,
+          task: "binary",
+          split: { method: "kfold", n_splits: 7 },
+        });
+      });
+
+      // Allow the back-sync effect to run and any erroneous useConfigSync
+      // re-fire to settle.
+      await new Promise((r) => setTimeout(r, 30));
+      // Back-sync must not echo the cached value back to the server —
+      // that would loop infinitely. Without target set the sync effect
+      // is gated, so updateConfig should remain at zero calls.
+      expect(mocks.updateConfig).not.toHaveBeenCalled();
+    });
+  });
 });
 
 // --- Issue #128: pure helper unit tests ---

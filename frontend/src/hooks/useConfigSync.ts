@@ -1,7 +1,9 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { isStudioError } from "@/api/errors";
+import { queryKeys } from "@/api/queryKeys";
 import type { UiSchema } from "@/api/types";
 import {
   fetchConfig,
@@ -38,6 +40,7 @@ export function useConfigSync({
   uiSchema,
   onDataChanged,
 }: UseConfigSyncParams) {
+  const queryClient = useQueryClient();
   const abortRef = useRef<AbortController | null>(null);
   const prevCvStrategyRef = useRef<string>(cv.strategy);
   const skipNextSyncRef = useRef(false);
@@ -102,6 +105,18 @@ export function useConfigSync({
       }
       await updateConfig(merged, { signal: controller.signal });
       if (controller.signal.aborted) return;
+      // P-0090 / Issue #278 residual: write the merged config to the
+      // cache atomically with the PUT so ConfigForm's stale-snapshot
+      // effects (inner_valid reset, calibration auto-clear) don't race
+      // a second PUT through useModelPanelData.handleConfigChange that
+      // reverts the user's just-applied CV strategy or task. Without
+      // this setQueryData, ConfigForm reads the pre-PUT cache, computes
+      // setNestedValue against the OLD split.method, and the resulting
+      // PUT silently overwrites the user's intent. Updating the cache
+      // here means ConfigForm's next render sees the merged config and
+      // its effects either no-op (already consistent) or compose
+      // correctly on top of the new state.
+      queryClient.setQueryData(queryKeys.config(), merged);
       onDataChanged();
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
@@ -130,6 +145,7 @@ export function useConfigSync({
     blocked,
     strategyFields,
     onDataChanged,
+    queryClient,
   ]);
 
   // H-0076: key suffix that makes the dedup guard resync when

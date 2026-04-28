@@ -2503,3 +2503,41 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (g) `frontend/src/api/generated/schema.d.ts` が regenerate 済み（`/api/workspace/config` の 409 response に新 error envelope が出る）。
 - **Decision:**
   - 2026-04-28 **Proposed & Implemented** — PR-C1 として merge 予定。Issue #279 を close。Issue #277 / #278 残課題 / setQueryData→input race は PR-C2 にて continue。
+
+### P-0090: cross-hook 競合書き込みの構造的解消（Issue #278 残課題, PR-C2）
+- **Status:** proposed & implemented
+- **Scope:** Frontend / Testing
+- **Related:** Issue #278（CV strategy radios for BlockedGroup / TimeSeries / GroupKFold are silently rejected — UI state diverges from backend）の残課題、Issue #279（PR-C1 で running lock 化済み）、setQueryData→controlled-input non-rerender（PR-A の post-#271 smoke で観測された Folds NumberInput stuck-at-8 after Load Preset）、P-0089（PR-C1 running lock）。Issue #277（FeatureWeightsEditor first-toggle）は PR-C3 にて別途対応。
+- **Context:** PR-C1（P-0089）でサーバ invariant が確立したため、走行中ジョブの config 破壊は構造的に防げるようになった。一方、走行中でないときの**クライアント側 cross-hook 競合書き込み**は残存しており、symptom として:
+  - **#278 残課題**: ユーザが GroupKFold / TimeSeries / GroupTimeSeries の radio を click → `useConfigSync` が正しい payload (`split.method=group_kfold`) で PUT を発火 → `useModelPanelData.handleConfigChange` 経由で ConfigForm の `inner_valid` reset effect / `calibration` auto-clear effect が**古い**キャッシュ snapshot から `setNestedValue` を計算 → 別 PUT が `split.method=stratified_kfold` で上書き → server 状態が radio click 前に巻き戻る。
+  - **setQueryData → controlled-input non-rerender**: handleLoadPreset 経由で cache に `split.n_splits=5` が書かれても、`useDataPanel` の local `cv.folds` は preset Load 前の値（例: 8）のまま。Folds NumberInput はそれにバインドしているのでページリロードまで再描画されない。
+  
+  両者の root cause は同じ: **`useConfigSync` の PUT 後の cache 更新が非対称**（`onDataChanged` 経由の `invalidateQueries` で eventual fetch を待つだけで、`setQueryData` で即時反映していない）。これにより ConfigForm が PR-C1 と同様の race window で古い snapshot を見て競合 PUT を撃つ。さらに `useDataPanel.cv` は cache に subscribe していないので外部書き込みを受け取れない。
+- **Invariants:**
+  - INV-1: `useConfigSync.syncConfig` は `await updateConfig(merged)` 成功時、`onDataChanged()` の前に `queryClient.setQueryData(queryKeys.config(), merged)` を呼ぶ。これにより ConfigForm の次 render が merged config を見て、stale-snapshot effects が no-op 化または正しい上書き構成に変化する。
+  - INV-2: `updateConfig` が失敗（reject / abort）した場合は `setQueryData` を呼ばない（partial cache 汚染の防止）。
+  - INV-3: `useDataPanel` は `queryKeys.config()` cache に subscribe し、外部書き込み（preset Load / undo / useConfigSync の新 setQueryData path）が起きたら `parseSplitToCv` で local `cv` を reconcile する。差分があるフィールドのみ更新し、全一致なら no-op（render 抑制）。
+  - INV-4: back-sync effect は cache の echo（自分の syncConfig が書いた値）でも fire するが、parseSplitToCv → 差分チェックで no-op になり、PUT の無限ループは発生しない。
+  - INV-5: `parseSplitToCv` は wire format（snake_case fields）→ CvState（camelCase）の対称な逆変換で、`buildSplitConfig` が emit するすべてのフィールドを read 可能。
+- **Proposal & Impact:**
+  - `frontend/src/hooks/useConfigSync.ts`: `useQueryClient` を追加し、`syncConfig` の `await updateConfig(merged)` 成功直後に `queryClient.setQueryData(queryKeys.config(), merged)` を呼ぶ。エラーパスは現状維持（cache 不変）。
+  - `frontend/src/components/workspace/cv-state.ts`: `parseSplitToCv(split, data)` 関数を新規追加。`buildSplitConfig` の wire format 出力を `Partial<CvState>` に逆変換。`split.blocks.col` / `split.groups.col` / `data.group_col` / `data.time_col` も含む。
+  - `frontend/src/hooks/useDataPanel.ts`: `useQueryClient` + `useEffect` で `QueryCache.subscribe()` し、`queryKeys.config()` の更新 event で `parseSplitToCv` の出力を局所 `cv` state にマージ（差分があるフィールドだけ）。`cvRef` で stale closure 回避。
+  - `frontend/src/hooks/useConfigSync.test.ts`: `QueryClientProvider` wrapper を追加し、既存の renderHook 呼び出しを wrapper 付きに移行（13 件）。新規 describe `setQueryData cache update on success (#278 residual)` で 2 ケース追加（成功時に cache が書かれる / 失敗時に cache が書かれない）。
+  - `frontend/src/hooks/useDataPanel.test.ts`: 新規 describe `back-sync from config cache` で 3 ケース追加（n_splits 更新 → cv.folds 更新 / strategy 更新 → cv.strategy 更新 / 更新が PUT を発火しないこと）。
+- **Compatibility:**
+  - API: 変更なし（クライアント側 only）。
+  - UI: 既存の編集フローは不変。Preset Load 後に Folds 入力が即時更新されるようになる（regression ではなく fix）。
+  - State machine: `useDataPanel.cv` の局所 state が cache の従属に近づくが、ユーザ入力は依然として setCv 経由で先に local state を更新（その後 useConfigSync が PUT → setQueryData → cache → back-sync → no-op）。illegal な書き戻しループは差分チェックで防止。
+- **Alternatives considered:**
+  - (A) ConfigForm の effects（inner_valid reset, calibration auto-clear）から `configRef.current` を読まず、毎回 cache を再取得: 却下。configRef は stale-write 防止で導入された設計（HIGH-5）で、外すと別の race を再発させる。
+  - (B) `useConfigSync` 経由ではなく、ConfigForm の effects 自体を `useConfigSync.syncConfig` に集約: refactor が大きく PR-C2 のスコープを超える。スキーマ・field-renderer 側に effects が分散しているので、まず cache の対称化で症状を消すほうが Reach/Effort 比が高い。
+  - (C) `useDataPanel` で `useConfig({ enabled: false })` を subscribe: TanStack 上は等価だが、observer が増えると `useConfig` の `enabled` トグル時に再検証が走る等の副作用があるため、`QueryCache.subscribe()` で event-only 購読のほうが副作用最小。
+- **Acceptance Criteria:**
+  - (a) `frontend/src/hooks/useConfigSync.test.ts` の `setQueryData cache update on success` 2 ケースが pass（INV-1, INV-2）。
+  - (b) `frontend/src/hooks/useDataPanel.test.ts` の `back-sync from config cache` 3 ケースが pass（INV-3, INV-4）。
+  - (c) 既存の vitest / pytest / ruff / biome / mypy / pnpm build がすべて green（regression なし）。
+  - (d) Manual smoke: Tune 未走行の状態で BlockedGroupKFold radio を click → 1 click で `split.method=blocked_group_kfold` が server に lands し、ConfigForm の表示も追従する（再 click 不要）。
+  - (e) Manual smoke: Load Preset で `n_splits=5` の preset を読み込むと、Folds NumberInput が即時に 5 表示になる（reload 不要）。
+- **Decision:**
+  - 2026-04-28 **Proposed & Implemented** — PR-C2 として merge 予定。Issue #278 残課題を close。Issue #277 (FeatureWeightsEditor first-toggle) は initial-value handling の別問題なので PR-C3 で対応。
