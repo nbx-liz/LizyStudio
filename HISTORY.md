@@ -2541,3 +2541,37 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (e) Manual smoke: Load Preset で `n_splits=5` の preset を読み込むと、Folds NumberInput が即時に 5 表示になる（reload 不要）。
 - **Decision:**
   - 2026-04-28 **Proposed & Implemented** — PR-C2 として merge 予定。Issue #278 残課題を close。Issue #277 (FeatureWeightsEditor first-toggle) は initial-value handling の別問題なので PR-C3 で対応。
+
+### P-0091: FeatureWeightsEditor の `nonExcludedColumns` から target / 除外 features を除く（Issue #277, PR-C3）
+- **Status:** proposed & implemented
+- **Scope:** Frontend / Testing
+- **Related:** Issue #277（FeatureWeightsEditor: editor body not rendered on first toggle ON; columns prop empty so 'Add feature' never appears）、P-0089（PR-C1 running lock）、P-0090（PR-C2 cross-hook race fix）
+- **Context:** post-#271 smoke で報告された 2 つの症状のうち、(1) "first toggle ON does not expand the editor body" は PR-C2 (P-0090) の `useConfigSync.setQueryData` で解消済み（実機 Playwright 検証済）。残る (2) "columns prop empty so 'Add feature' never appears" は実際には**逆**で、`nonExcludedColumns` に target column （Survived 等）と user-excluded features までが含まれている状態だった。これにより:
+  - FeatureWeightsEditor の "Add feature" picker に target column が candidate として表示され、ユーザが target に weight を割り当ててしまう（無意味な操作で backend に reject される）。
+  - Column Settings で除外した features も Picker に表示され、weight を付けても backend が無視する dead-end UX。
+  
+  根本原因は `useModelPanelData.useColumns({ enabled: hasData })` が target を渡さず `fetchColumns()` を呼ぶため、backend の `analyze_columns` が target を含めた全 column を返すこと。さらに `nonExcludedColumns` の filter は `suggested_excluded` のみで、target / `features.exclude` は filter していなかった。
+- **Invariants:**
+  - INV-1: `useModelPanelData.nonExcludedColumns` は `cached config.data.target` に一致する column を必ず除く。
+  - INV-2: `nonExcludedColumns` は `cached config.features.exclude` に列挙された column も除く。
+  - INV-3: `cached config` が未 seed（`config_version` なし、`data` なし）の場合、`suggested_excluded` のみによる従来の filter にフォールバックする（regression なし）。
+  - INV-4: 上記の filter 順序は冪等で、各 filter は集合演算（差集合）として可換に振る舞う。
+- **Proposal & Impact:**
+  - `frontend/src/hooks/useModelPanelData.ts`: `nonExcludedColumns` の `useMemo` を拡張。`config?.data?.target` で target を、`config?.features?.exclude` (Array) で user-excluded を除外。`config` を deps に追加。
+  - `frontend/src/hooks/useModelPanelData.test.ts`: 新規 describe `nonExcludedColumns filters target + features.exclude (#277)` で 3 case 追加（target filter、features.exclude filter、未 seed 時のフォールバック）。
+  - 上位の Issue #277 における "first toggle empty body" は P-0090 で構造的に解消済みのため、PR-C3 では新たな修正は不要（実機 Playwright で確認、本 Proposal の context に記録）。
+- **Compatibility:**
+  - API: 変更なし。
+  - UI: FeatureWeightsEditor の "Add feature" picker から target / user-excluded features が消える（regression ではなく仕様準拠化）。
+  - Backend: 変更なし。`fetchColumns()` の signature は既に `target?: string` を受け付けるが、PR-C3 では client-side filter のみで対処（`useColumns` cache key を target で複雑化しない方針）。将来的に target-aware cache が必要になれば別 PR で。
+- **Alternatives considered:**
+  - (A) `useColumns` を target-aware にして cache key に含める: client-side filter より厳密だが、cache key が target 変更で完全に invalidate されるため、target を変えるたびに full re-fetch が走る。target は頻繁に変わらないので overhead は小さいが、現状の client-side filter で十分な情報量があり追加実装は不要と判断。
+  - (B) Backend `analyze_columns` を呼ぶたびに target を渡すよう `useColumns` の signature を変える: 同上、client-side filter で十分。
+  - (C) `nonExcludedColumns` を `useColumnOverrides.nonExcludedCols` (Data 側の既存 helper) に統合: Model 側と Data 側で `target` の保持位置が異なる（Data: useDataPanel.target / Model: cached config.data.target）。SoT を分けるほうがレイヤ設計として clean。
+- **Acceptance Criteria:**
+  - (a) `useModelPanelData.test.ts` の `nonExcludedColumns filters target + features.exclude (#277)` 3 case が pass（INV-1, INV-2, INV-3）。
+  - (b) 既存の `nonExcludedColumns` test が引き続き pass（regression なし）。
+  - (c) frontend vitest / biome / build / backend pytest / ruff / mypy がすべて green。
+  - (d) Manual smoke: target=Survived の状態で Feature Weights を ON にし、"Add feature" picker に Survived が **含まれない** ことを確認（実機 Playwright）。
+- **Decision:**
+  - 2026-04-28 **Proposed & Implemented** — PR-C3 として merge 予定。Issue #277 を close。post-#271 smoke 3-PR plan (PR-C1 / PR-C2 / PR-C3) はこれで完了。

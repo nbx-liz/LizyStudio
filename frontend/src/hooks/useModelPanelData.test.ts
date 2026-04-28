@@ -84,6 +84,98 @@ describe("useModelPanelData", () => {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // Issue #277 / P-0091: nonExcludedColumns must NOT contain the target
+  // column or any column the user explicitly excluded via Column Settings.
+  // FeatureWeightsEditor consumes this list — if target / excluded columns
+  // leak in, the user can attach a weight to the prediction target or to a
+  // feature the backend ignores, both of which the backend either rejects
+  // at fit-time or silently drops.
+  // -------------------------------------------------------------------------
+  describe("nonExcludedColumns filters target + features.exclude (#277)", () => {
+    it("filters target out when config.data.target is set", async () => {
+      vi.mocked(fetchColumns).mockResolvedValueOnce({
+        columns: [
+          { name: "Pclass", suggested_excluded: false },
+          { name: "Survived", suggested_excluded: false },
+          { name: "Age", suggested_excluded: false },
+        ],
+        // biome-ignore lint/suspicious/noExplicitAny: test fixture shape
+      } as any);
+      vi.mocked(fetchConfig).mockResolvedValueOnce({
+        config_version: 1,
+        task: "binary",
+        data: { target: "Survived" },
+        features: { exclude: [], categorical: [] },
+        model: {},
+      });
+
+      const { wrapper } = makeWrapper();
+      const { result } = renderHook(
+        () => useModelPanelData({ hasData: true }),
+        { wrapper },
+      );
+
+      await waitFor(() => {
+        expect(result.current.nonExcludedColumns).toEqual(["Pclass", "Age"]);
+      });
+    });
+
+    it("filters columns listed in config.features.exclude", async () => {
+      vi.mocked(fetchColumns).mockResolvedValueOnce({
+        columns: [
+          { name: "Pclass", suggested_excluded: false },
+          { name: "Ticket", suggested_excluded: false },
+          { name: "Cabin", suggested_excluded: false },
+          { name: "Age", suggested_excluded: false },
+        ],
+        // biome-ignore lint/suspicious/noExplicitAny: test fixture shape
+      } as any);
+      vi.mocked(fetchConfig).mockResolvedValueOnce({
+        config_version: 1,
+        task: "binary",
+        data: { target: "Survived" },
+        features: { exclude: ["Ticket", "Cabin"], categorical: [] },
+        model: {},
+      });
+
+      const { wrapper } = makeWrapper();
+      const { result } = renderHook(
+        () => useModelPanelData({ hasData: true }),
+        { wrapper },
+      );
+
+      await waitFor(() => {
+        expect(result.current.nonExcludedColumns).toEqual(["Pclass", "Age"]);
+      });
+    });
+
+    it("falls back to suggested_excluded only when config is not yet seeded", async () => {
+      vi.mocked(fetchColumns).mockResolvedValueOnce({
+        columns: [
+          { name: "a", suggested_excluded: false },
+          { name: "b", suggested_excluded: true },
+          { name: "c", suggested_excluded: false },
+        ],
+        // biome-ignore lint/suspicious/noExplicitAny: test fixture shape
+      } as any);
+      // No config_version / data.target — pre-seeding state.
+      vi.mocked(fetchConfig).mockResolvedValueOnce({
+        model: {},
+      });
+
+      const { wrapper } = makeWrapper();
+      const { result } = renderHook(
+        () => useModelPanelData({ hasData: true }),
+        { wrapper },
+      );
+
+      await waitFor(() => {
+        expect(result.current.nonExcludedColumns).toEqual(["a", "c"]);
+      });
+    });
+  });
+
   it("does NOT fetch columns until hasData is true", async () => {
     const { wrapper } = makeWrapper();
     renderHook(() => useModelPanelData({ hasData: false }), { wrapper });

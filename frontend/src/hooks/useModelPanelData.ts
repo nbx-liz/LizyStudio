@@ -57,12 +57,35 @@ export function useModelPanelData({
   const { data: uiSchema } = useUiSchema();
   const { data: columnsData } = useColumns({ enabled: hasData });
 
+  // P-0091 / Issue #277: nonExcludedColumns is the source list for
+  // FeatureWeightsEditor's "Add feature" picker (and any other model-side
+  // consumer that needs the user-selectable feature names). It must
+  // exclude:
+  //   1. The target column — weighting the prediction target is
+  //      semantically nonsensical and gets dropped server-side.
+  //   2. User-excluded features (config.features.exclude) — the backend
+  //      will not see those columns at fit time, so allowing the user
+  //      to weight them is a confusing dead-end.
+  //   3. Auto-suggested excluded columns (id-like / constant) — same
+  //      class of dead-end as #2.
+  // The cached config is the source of truth for #1 and #2; columnsData
+  // covers #3 via ``suggested_excluded``.
   const nonExcludedColumns = useMemo(() => {
     if (!columnsData?.columns) return [];
+    const target = (config?.data as { target?: string } | undefined)?.target;
+    const excludedRaw = (config?.features as { exclude?: unknown } | undefined)
+      ?.exclude;
+    const userExcluded = new Set<string>(
+      Array.isArray(excludedRaw)
+        ? excludedRaw.filter((v): v is string => typeof v === "string")
+        : [],
+    );
     return columnsData.columns
       .filter((c) => !c.suggested_excluded)
+      .filter((c) => c.name !== target)
+      .filter((c) => !userExcluded.has(c.name))
       .map((c) => c.name);
-  }, [columnsData]);
+  }, [columnsData, config]);
 
   // --------------------------------------------------------------------
   // Debounced validation on change
