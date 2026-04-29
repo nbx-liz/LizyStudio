@@ -2610,4 +2610,118 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - 2026-04-29 **Proposed** — initial diagnosis (ConfigForm の単一 writer race) に基づく実装試行（仮称 PR #291）は中断。実機 + cache polling で 3 writer race と判明したため、Q-1 〜 Q-4 から方針を確定するまで実装を止め、設計議論を待つ。
   - PR #289 (`workspace-cv.spec.ts`) は本 Proposal が解決するまで draft のまま保持。本 Proposal の Acceptance には PR #289 の B-3 spec が CI で 7 strategy 全 pass することを最終条件として残す。
   - 当面の Workaround: `develop` 上の手動 smoke では cv strategy 変更後 1 秒待ってから次の操作に進むことで巻き戻しを観察できる。回避策ではあるが本質的修正ではない。
+  - 2026-04-29 **Approach selected: Q-1 (Write funnel 単一化)** — 全 PUT を `useConfigSync` 一本に集約する。短期の partial fix (Q-3) は P-0086 / P-0090 と同じ "塞いでも次の隙間が出る" pattern を再生産する risk が高く、根治しない。Q-2 (If-Match) と Q-4 (server auto-adjust) は backend 変更を伴い change-gate 範囲が広い。Q-1 は frontend 内で完結し、構造的に race を消す唯一の選択肢。
+
+#### Phase plan (Q-1 段階実装)
+
+PR を 6 段階に分け、**各段階で B-3 spec の進捗を確認**しながら進める。各段階の commit は単独で revert 可能な単位とする。
+
+##### Phase 0: writer inventory (この Proposal 内でドキュメント済)
+
+現在の writer 一覧（PUT `/api/workspace/config` を発行する 6 箇所）:
+
+| ID | 場所 | 経路 | 用途 |
+|----|------|------|------|
+| W1 | `hooks/useConfigSync.ts:106` | `syncConfig` | DataPanel state (target/task/cv/blocked/overrides) 変更 |
+| W2 | `hooks/useTargetSelection.ts:110` | target 選択時の `merged` PUT | target 選択 + defaults 取得 |
+| W3 | `hooks/useModelPanelData.ts:115` | `handleConfigChange` | ConfigForm onChange (auto-reset effects 含む) |
+| W4 | `hooks/useModelPanelData.ts:186` | `handleUndo` | undo |
+| W5 | `hooks/useModelPanelData.ts:198` | `handleRedo` | redo |
+| W6 | `pages/WorkspacePage.tsx:132` | `handleApplyToFit` | Re-fit ボタン |
+
+`setQueryData(queryKeys.config(), ...)` の cache writer も同 5 箇所に分散。
+
+##### Phase 1: write funnel API を `useConfigSync` 上に新設
+
+- **目的:** 既存 writer を順次 funnel に移すための受け皿を用意する。実 writer 数を増やさない (W1 内に新 API を生やすだけ)。
+- **API 設計:**
+  ```ts
+  // useConfigSync の return
+  return {
+    syncConfig,           // 既存 — DataPanel 由来 sync (Phase 5 で内部実装が funnel.enqueue に置き換わる)
+    setSyncSuppressed,    // 既存
+    preseedSyncKey,       // 既存
+    // --- new ---
+    enqueueWrite,         // (op: WriteOp) => Promise<WriteResult> — 全外部 writer の入口
+    onTerminal,           // (cb) => unsubscribe — 完了通知 (test と downstream effects 用)
+  };
+
+  type WriteOp =
+    | { kind: 'replace'; config: FullConfig; reason: WriteReason }
+    | { kind: 'patch'; path: string[]; value: unknown; reason: WriteReason };
+
+  type WriteReason =
+    | 'target-select' | 'cv-change' | 'config-form-edit'
+    | 'undo' | 'redo' | 'apply-to-fit' | 'preset-load' | 'auto-reset';
+  ```
+- **State machine:**
+  - `idle` → `enqueueing` → `flushing` → `idle` (or `error`)
+  - `flushing` 中の enqueue は **後勝ち merge**: 同じ `WriteReason` は最新で上書き、異なる reason は serial に直列化
+  - `abort` は `flushing` 中の controller のみに作用、queue 上の op は維持
+- **scope:** `useConfigSync.ts` 内のみ。新 export 追加、既存 syncConfig 呼び出し側は変更しない。
+- **出口テスト:** vitest unit tests for funnel state machine. B-3 spec は **まだ red のまま** (writer がまだ funnel に流れていない)。
+- **PR 規模:** ~200 行追加, 0 行削除
+
+##### Phase 2: ConfigForm auto-reset effects → funnel に移行 (W3 の auto-reset 経路)
+
+- **目的:** B-3 race の最大要因の一つ、ConfigForm の inner_valid / calibration / objective auto-reset effect を funnel に流す。
+- **変更:**
+  - `ConfigForm` に `enqueueWrite` prop (or `useWorkspaceWriter()` context) を渡す。
+  - 3 つの auto-reset useEffect 内の `handleFieldChange(...)` → `enqueueWrite({ kind: 'patch', path, value, reason: 'auto-reset' })` に置き換え。
+  - 既存 `handleFieldChange` は user の field edit 用 (W3 の本筋) のみ残す → これは Phase 4 で扱う。
+- **出口テスト:** B-3 spec の **少なくとも一部の strategy が green になる**ことを確認 (auto-reset 由来の race が消える)。残りの strategy は W3 の user edit 経路や W2 の target merge race で red のまま。
+- **PR 規模:** ~150 行 ± 80 行
+- **チェックポイント:** 実装後ローカル `pnpm dev` + Playwright MCP で 8 strategy 巡回、saved config の遷移を 50ms polling で確認。
+
+##### Phase 3: useTargetSelection (W2) の merged PUT → funnel
+
+- **目的:** target 選択時の rapid PUT バーストを 1 つの funnel write に統合する。
+- **変更:**
+  - `useTargetSelection.ts:110` の `updateConfig(merged)` → `enqueueWrite({ kind: 'replace', config: merged, reason: 'target-select' })`
+  - `setQueryData` も funnel 内で行うため除去。
+- **出口テスト:** B-3 spec の **target 選択直後の strategy 切替** で green 化を確認。
+- **PR 規模:** ~80 行
+
+##### Phase 4: useModelPanelData (W3 user edit 経路) → funnel
+
+- **目的:** ConfigForm の user 由来 onChange (numeric/text/select の手編集) を funnel に流す。
+- **変更:**
+  - `useModelPanelData.handleConfigChange` の `updateConfig(newConfig)` → `enqueueWrite({ kind: 'replace', config: newConfig, reason: 'config-form-edit' })`
+  - undo / redo (W4 / W5) も同 PR で `reason: 'undo' | 'redo'` で funnel 経由に。
+  - validate debounce timer は funnel 完了後に動かす。
+- **出口テスト:** ConfigForm 経由の rapid edit (numeric stepper 連打 + cv strategy click) で巻き戻しが起きないことを Playwright MCP で確認。
+- **PR 規模:** ~150 行
+
+##### Phase 5: useConfigSync.syncConfig 内部実装も funnel ベースに統合
+
+- **目的:** W1 自身も funnel.enqueue を経由する形に書き換え、`abortRef` を funnel state machine に吸収。
+- **変更:**
+  - syncConfig が `cv` deps closure を持つ問題を、`enqueueWrite({ kind: 'replace', config: rebuiltFromLatestState, reason: 'cv-change' })` で解消。
+  - dedup key の概念を funnel 側に移管。
+- **出口テスト:** B-3 spec の **8 strategy 全部 green**。
+- **PR 規模:** ~200 行
+
+##### Phase 6: WorkspacePage.handleApplyToFit (W6) と Preset Load → funnel
+
+- **目的:** 残る writer を funnel に取り込み、`updateConfig` の **唯一の caller が useConfigSync 内の 1 箇所** になる状態を達成。
+- **変更:**
+  - `WorkspacePage.tsx:132` を `enqueueWrite({ kind: 'replace', reason: 'apply-to-fit' })` に。
+  - Preset Load (`useModelPanelData` 経由) も funnel に。
+- **出口テスト:** `grep -rE "updateConfig\(" frontend/src/` が `useConfigSync.ts` の 1 箇所のみを返すこと。 B-3 spec + 既存 e2e 全 green 維持。
+- **PR 規模:** ~120 行
+
+#### Acceptance criteria (全 Phase 完了時)
+
+- (a) PR #289 の `workspace-cv.spec.ts` が 7 strategy 全 pass。
+- (b) `frontend/src/` 内の `updateConfig(` call site が **1 箇所のみ** (`useConfigSync.ts` 内 funnel 実装)。
+- (c) `setQueryData(queryKeys.config(), ...)` 同様に funnel 内 1 箇所。
+- (d) `useConfigSync.test.ts` に funnel state machine の invariant test を追加 (concurrent enqueue / abort during flush / dedup by reason)。
+- (e) frontend vitest / biome / build / backend pytest がすべて green。既存 unit test の意図的な書き換え (mock の差し替え) は許容、新規スキップは禁止。
+- (f) 各 Phase の PR は単独で revert 可能 (incremental release safety)。
+
+#### Risk / 撤退基準
+
+- Phase 2 完了時に B-3 spec の **どの strategy も green にならない** 場合、診断が更に外れている可能性。Phase 3 に進まず再調査。
+- 各 Phase で既存 e2e (workspace-fit / workspace-tune / inference-flow) に regression が出たら、その PR を merge せず原因究明を優先。
+- 全 6 PR で **累計 frontend bundle 増加が +5KB を超えない** ことを bundle-size チェックで確認 (recent coupling refactor の予算に倣う)。
 
