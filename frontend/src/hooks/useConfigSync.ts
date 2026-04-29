@@ -16,6 +16,8 @@ import {
   recommendedInnerValid,
 } from "@/components/workspace/cv-state";
 import { buildSyncedConfig } from "./buildSyncedConfig";
+import type { ConfigWriteFunnel } from "./useConfigWriteFunnel";
+import { useConfigWriteFunnelOptional } from "./useConfigWriteFunnelContext";
 import type { ColumnOverride, TaskType } from "./useDataPanel.types";
 import { buildSyncKey } from "./useDataPanel.types";
 
@@ -28,6 +30,13 @@ interface UseConfigSyncParams {
   blocked: BlockedGroupKFoldState;
   uiSchema?: UiSchema;
   onDataChanged: () => void;
+  /**
+   * P-0092 Q-1 Phase 5: write funnel injected by tests when they need
+   * to drive the hook outside a `ConfigWriteFunnelProvider`. Production
+   * code reads the funnel from context — leave this `undefined` and let
+   * `useConfigWriteFunnelOptional()` resolve it.
+   */
+  writeFunnel?: ConfigWriteFunnel | null;
 }
 
 export function useConfigSync({
@@ -39,12 +48,30 @@ export function useConfigSync({
   blocked,
   uiSchema,
   onDataChanged,
+  writeFunnel: writeFunnelOverride,
 }: UseConfigSyncParams) {
   const queryClient = useQueryClient();
+  // P-0092 Q-1 Phase 5: `abortRef` now only guards the GET pre-fetch
+  // (`fetchConfig` / `fetchConfigDefaults`). The PUT itself rides the
+  // funnel, where same-reason coalescing collapses bursts of cv-change
+  // events into a single in-flight PUT. The previous AbortController-
+  // based race guard was an early sketch of what the funnel now owns
+  // properly: when a second cv-change lands while the first is still
+  // flushing, the funnel coalesces them into the latest snapshot, so
+  // we no longer need to abort the first PUT mid-wire.
   const abortRef = useRef<AbortController | null>(null);
   const prevCvStrategyRef = useRef<string>(cv.strategy);
   const skipNextSyncRef = useRef(false);
   const prevSyncKey = useRef("");
+
+  // P-0092 Q-1 Phase 5: pull the optional write funnel from the
+  // Workspace-level provider so cv-change PUTs serialise behind any
+  // in-flight target-select / config-form-edit / auto-reset writers.
+  // When no provider is mounted (test paths) we fall back to the
+  // legacy direct `updateConfig` + `setQueryData` pair.
+  const contextFunnel = useConfigWriteFunnelOptional();
+  const writeFunnel =
+    writeFunnelOverride !== undefined ? writeFunnelOverride : contextFunnel;
 
   // H-0076: field list comes from the backend UiSchema. ``undefined``
   // falls through to the legacy "emit whatever CvState provides" path.
@@ -103,28 +130,72 @@ export function useConfigSync({
         };
         prevCvStrategyRef.current = cv.strategy;
       }
-      await updateConfig(merged, { signal: controller.signal });
-      if (controller.signal.aborted) return;
-      // P-0090 / Issue #278 residual: write the merged config to the
-      // cache atomically with the PUT so ConfigForm's stale-snapshot
-      // effects (inner_valid reset, calibration auto-clear) don't race
-      // a second PUT through useModelPanelData.handleConfigChange that
-      // reverts the user's just-applied CV strategy or task. Without
-      // this setQueryData, ConfigForm reads the pre-PUT cache, computes
-      // setNestedValue against the OLD split.method, and the resulting
-      // PUT silently overwrites the user's intent. Updating the cache
-      // here means ConfigForm's next render sees the merged config and
-      // its effects either no-op (already consistent) or compose
-      // correctly on top of the new state.
-      queryClient.setQueryData(queryKeys.config(), merged);
+      // P-0092 Q-1 Phase 5: route the merged-config PUT through the
+      // funnel when one is mounted. Same-reason coalescing collapses
+      // a burst of cv-change events into the latest snapshot, and
+      // different-reason ops (target-select / config-form-edit /
+      // auto-reset) serialise behind any in-flight cv-change so the
+      // (1)↔(2)↔(3) writer triangle the §P-0092 plan diagnoses can
+      // no longer cross-stomp. The funnel's `onWriteCommitted` writes
+      // the saved snapshot to the React Query cache, so the legacy
+      // `setQueryData` is no longer needed in that path.
+      //
+      // The legacy fallback (`updateConfig` + `setQueryData`) stays
+      // for test paths that mount the hook without a Provider; those
+      // tests assert the merged config via the legacy seam.
+      let putError: unknown = null;
+      if (writeFunnel) {
+        const result = await writeFunnel.enqueueWrite({
+          kind: "replace",
+          config: merged,
+          reason: "cv-change",
+        });
+        if (!result.ok) {
+          putError = result.details;
+        }
+      } else {
+        try {
+          await updateConfig(merged, { signal: controller.signal });
+          if (controller.signal.aborted) return;
+          // P-0090 / Issue #278 residual: write the merged config to
+          // the cache atomically with the PUT so ConfigForm's stale-
+          // snapshot effects (inner_valid reset, calibration auto-
+          // clear) don't race a second PUT through
+          // useModelPanelData.handleConfigChange that reverts the
+          // user's just-applied CV strategy or task.
+          queryClient.setQueryData(queryKeys.config(), merged);
+        } catch (err) {
+          putError = err;
+        }
+      }
+      if (putError) {
+        if (putError instanceof DOMException && putError.name === "AbortError")
+          return;
+        if (
+          putError instanceof ApiError &&
+          putError.status === 409 &&
+          isStudioError(putError.body) &&
+          putError.body.error.code === "WORKSPACE_LOCKED"
+        ) {
+          toast.info("Config is locked while a job is running");
+          return;
+        }
+        toast.error("Config sync failed — changes may not be saved");
+        return;
+      }
       onDataChanged();
     } catch (err) {
+      // GET-side failures (fetchConfig / fetchConfigDefaults) and
+      // any other thrown exceptions land here. PUT errors are now
+      // surfaced via the inline `putError` check above so the funnel
+      // path can short-circuit without throwing.
       if (err instanceof DOMException && err.name === "AbortError") return;
       // P-0089 / Issue #279: while a fit/tune job holds the active
-      // slot, PUT /config returns 409 WORKSPACE_LOCKED. The disabled
-      // controls upstream already explain the lock to the user; emit
-      // a quiet info toast instead of the generic error so the user
-      // is not alarmed by their own locked-state behaving correctly.
+      // slot, the GET /config defaults endpoint can also surface
+      // 409 WORKSPACE_LOCKED. The disabled controls upstream already
+      // explain the lock to the user; emit a quiet info toast
+      // instead of the generic error so the user is not alarmed by
+      // their own locked-state behaving correctly.
       if (
         err instanceof ApiError &&
         err.status === 409 &&
@@ -146,6 +217,7 @@ export function useConfigSync({
     strategyFields,
     onDataChanged,
     queryClient,
+    writeFunnel,
   ]);
 
   // H-0076: key suffix that makes the dedup guard resync when

@@ -278,4 +278,168 @@ describe("useConfigSync", () => {
       expect(queryClient.getQueryData(queryKeys.config())).toBeUndefined();
     });
   });
+
+  // -------------------------------------------------------------------------
+  // P-0092 Q-1 Phase 5: write funnel routing.
+  //
+  // When a `writeFunnel` is provided, useConfigSync.syncConfig MUST enqueue
+  // through the funnel with `reason="cv-change"` instead of calling
+  // `updateConfig` directly. The funnel's onWriteCommitted owns the cache
+  // write, so the hook must NOT do its own setQueryData on the funnel path
+  // — otherwise the wrapper-leak fix in WorkspacePage.onWriteCommitted
+  // would be bypassed.
+  // -------------------------------------------------------------------------
+  describe("write funnel routing (P-0092 Phase 5)", () => {
+    function createStubFunnel(
+      stub?: (op: {
+        kind: "replace";
+        config: Record<string, unknown>;
+        reason: string;
+      }) =>
+        | { ok: true; saved: unknown }
+        | { ok: false; error: string; details?: unknown },
+    ) {
+      const calls: { reason: string; config: Record<string, unknown> }[] = [];
+      const enqueueWrite = vi.fn(async (op: unknown) => {
+        const replace = op as {
+          kind: "replace";
+          config: Record<string, unknown>;
+          reason: string;
+        };
+        calls.push({ reason: replace.reason, config: replace.config });
+        return (
+          stub?.(replace) ?? {
+            ok: true as const,
+            saved: { config: replace.config, errors: [], saved: true },
+          }
+        );
+      });
+      return {
+        funnel: { enqueueWrite, isFlushing: () => false },
+        calls,
+      };
+    }
+
+    it("enqueues with reason=cv-change when a funnel is mounted", async () => {
+      const { funnel, calls } = createStubFunnel();
+      const { wrapper } = testWrapper;
+      renderHook(
+        () =>
+          useConfigSync(
+            defaultParams({
+              // biome-ignore lint/suspicious/noExplicitAny: stub funnel
+              writeFunnel: funnel as any,
+            }),
+          ),
+        { wrapper },
+      );
+
+      await waitFor(() => expect(calls.length).toBe(1));
+      expect(calls[0].reason).toBe("cv-change");
+      // updateConfig must NOT have been called when the funnel is wired —
+      // the funnel's putConfig (which IS updateConfig in production) is
+      // a separate seam owned by the funnel itself.
+      expect(mocks.updateConfig).not.toHaveBeenCalled();
+    });
+
+    it("does not write to React Query cache directly when funnel is mounted", async () => {
+      // The funnel's onWriteCommitted is the sole cache writer — the hook
+      // must not bypass it with its own setQueryData. This is what unblocks
+      // the wrapper-leak fix in WorkspacePage.onWriteCommitted.
+      const { funnel } = createStubFunnel();
+      const { queryClient, wrapper } = testWrapper;
+      renderHook(
+        () =>
+          useConfigSync(
+            defaultParams({
+              // biome-ignore lint/suspicious/noExplicitAny: stub funnel
+              writeFunnel: funnel as any,
+            }),
+          ),
+        { wrapper },
+      );
+
+      await waitFor(() => expect(funnel.enqueueWrite).toHaveBeenCalledTimes(1));
+      // Cache must be untouched on the funnel path. (Production's funnel
+      // would set the cache via onWriteCommitted, but our stub doesn't.)
+      expect(queryClient.getQueryData(queryKeys.config())).toBeUndefined();
+    });
+
+    it("calls onDataChanged after a successful funnel enqueue", async () => {
+      const onDataChanged = vi.fn();
+      const { funnel } = createStubFunnel();
+      const { wrapper } = testWrapper;
+      renderHook(
+        () =>
+          useConfigSync(
+            defaultParams({
+              onDataChanged,
+              // biome-ignore lint/suspicious/noExplicitAny: stub funnel
+              writeFunnel: funnel as any,
+            }),
+          ),
+        { wrapper },
+      );
+
+      await waitFor(() => expect(onDataChanged).toHaveBeenCalledTimes(1));
+    });
+
+    it("surfaces error toast when funnel returns ok=false (network/other)", async () => {
+      const { funnel } = createStubFunnel(() => ({
+        ok: false,
+        error: "network",
+        details: new Error("boom"),
+      }));
+      const { wrapper } = testWrapper;
+      renderHook(
+        () =>
+          useConfigSync(
+            defaultParams({
+              // biome-ignore lint/suspicious/noExplicitAny: stub funnel
+              writeFunnel: funnel as any,
+            }),
+          ),
+        { wrapper },
+      );
+
+      await waitFor(() =>
+        expect(mocks.toastError).toHaveBeenCalledWith(
+          "Config sync failed — changes may not be saved",
+        ),
+      );
+    });
+
+    it("surfaces info toast (not error) when funnel returns 409 WORKSPACE_LOCKED via details", async () => {
+      const { ApiError } = await import("@/api/client");
+      const lockErr = new ApiError(409, {
+        error: {
+          code: "WORKSPACE_LOCKED",
+          message: "Config is locked while job xyz is running",
+          details: { job_id: "xyz" },
+        },
+      });
+      const { funnel } = createStubFunnel(() => ({
+        ok: false,
+        error: "network",
+        details: lockErr,
+      }));
+      const { wrapper } = testWrapper;
+      renderHook(
+        () =>
+          useConfigSync(
+            defaultParams({
+              // biome-ignore lint/suspicious/noExplicitAny: stub funnel
+              writeFunnel: funnel as any,
+            }),
+          ),
+        { wrapper },
+      );
+
+      // The hook must NOT show the generic error toast for the lock case.
+      await new Promise((r) => setTimeout(r, 30));
+      expect(mocks.toastError).not.toHaveBeenCalledWith(
+        "Config sync failed — changes may not be saved",
+      );
+    });
+  });
 });
