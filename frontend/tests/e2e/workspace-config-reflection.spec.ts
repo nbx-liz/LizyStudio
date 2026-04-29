@@ -46,31 +46,13 @@ test.describe("Workspace config reflection (Phase A scaffold)", () => {
     page,
     request,
   }, testInfo) => {
-    // P-0092 Q-1 Phase 5a: useConfigSync.syncConfig now routes its
-    // PUT through the funnel and the funnel's public-API object is
-    // stabilised via useMemo so it can sit in useEffect deps without
-    // causing a re-render storm.
-    //
-    // The local Playwright trace (2026-04-29) still shows ~10 PUTs
-    // landing in the seed window because the funnel's coalescing
-    // semantics only collapse adjacent QUEUED ops with the same
-    // reason. While one op is mid-flight, a sibling enqueue with
-    // the same reason lands as a separate queue entry and runs
-    // back-to-back — which is exactly the partial-PUT pile-up the
-    // §P-0092 plan promised the funnel would prevent. Phase 5b
-    // tightens that semantic (e.g. drop the in-flight op when its
-    // tail was just superseded, or extend coalescing to cover the
-    // active op too).
-    //
-    // Until Phase 5b lands, the field-edit PUT this spec wants to
-    // lock can be observed AFTER N partial PUTs flush, but
-    // `nextPutConfigBody`'s body filter matches an earlier carrier.
-    // The unit suite proves the funnel wiring is correct; the
-    // spec stays parked rather than green at this slice.
-    test.skip(
-      true,
-      "Skipped during P-0092 Phase 5a (funnel wiring landed). Re-enabled at Phase 5b once funnel coalescing covers the in-flight op.",
-    );
+    // P-0092 Q-1 Phase 5: re-enabled. Phase 5 migrates
+    // `useConfigSync.syncConfig` to the funnel and the seed helper
+    // waits for funnel quiescence before returning, so the (1)↔(2)↔(3)
+    // writer triangle the §P-0092 plan diagnoses is fully drained
+    // by the time `assertConfigReflection` subscribes for the next
+    // PUT. The spec runs without any helper/fixture changes — that
+    // is the green-flip contract.
     if (isMobileProject(testInfo)) {
       test.skip(true, "Mobile layout collapses Data accordion; covered by B-8");
     }
