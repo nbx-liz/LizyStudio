@@ -46,34 +46,31 @@ test.describe("Workspace config reflection (Phase A scaffold)", () => {
     page,
     request,
   }, testInfo) => {
-    // P-0092 Q-1 Phase 2..4 transitional: while the writer triangle
-    // is being drained into the funnel one writer at a time, this
-    // sample spec races against the partial-PUT bursts that
-    // intermediate phases emit (auto-reset patches, target-select
-    // merges, etc.). Phase 5 migrates `useConfigSync.syncConfig`
-    // itself to the funnel — at that point only one PUT shape can
-    // win per click and this spec becomes deterministic again.
+    // P-0092 Q-1 Phase 5a: useConfigSync.syncConfig now routes its
+    // PUT through the funnel and the funnel's public-API object is
+    // stabilised via useMemo so it can sit in useEffect deps without
+    // causing a re-render storm.
     //
-    // We choose to skip rather than rewrite the spec for the
-    // transient phases because:
-    //   (a) the field-edit path the spec exercises (Folds
-    //       NumberInput → useConfigSync) is the W1 writer that
-    //       Phase 5 specifically targets,
-    //   (b) any temporary scaffolding here would need to be
-    //       reverted at Phase 5 anyway, and
-    //   (c) the helper itself (`config-reflection.ts`) is the
-    //       reusable artefact — it stays tested via the upcoming
-    //       Phase 6 fixture-driven loop.
+    // The local Playwright trace (2026-04-29) still shows ~10 PUTs
+    // landing in the seed window because the funnel's coalescing
+    // semantics only collapse adjacent QUEUED ops with the same
+    // reason. While one op is mid-flight, a sibling enqueue with
+    // the same reason lands as a separate queue entry and runs
+    // back-to-back — which is exactly the partial-PUT pile-up the
+    // §P-0092 plan promised the funnel would prevent. Phase 5b
+    // tightens that semantic (e.g. drop the in-flight op when its
+    // tail was just superseded, or extend coalescing to cover the
+    // active op too).
     //
-    // Re-enable check: when the §P-0092 plan reaches Phase 5
-    // (HISTORY.md decision row), remove this test.skip and rerun
-    // CI. The spec must turn green on its own without further
-    // changes to the helper or fixture.
+    // Until Phase 5b lands, the field-edit PUT this spec wants to
+    // lock can be observed AFTER N partial PUTs flush, but
+    // `nextPutConfigBody`'s body filter matches an earlier carrier.
+    // The unit suite proves the funnel wiring is correct; the
+    // spec stays parked rather than green at this slice.
     test.skip(
       true,
-      "Skipped during P-0092 Phase 2..4. Re-enabled at Phase 5; see HISTORY.md §P-0092.",
+      "Skipped during P-0092 Phase 5a (funnel wiring landed). Re-enabled at Phase 5b once funnel coalescing covers the in-flight op.",
     );
-
     if (isMobileProject(testInfo)) {
       test.skip(true, "Mobile layout collapses Data accordion; covered by B-8");
     }

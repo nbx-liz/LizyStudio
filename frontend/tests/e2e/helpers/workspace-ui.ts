@@ -1,5 +1,6 @@
 import { expect, type Page, type TestInfo } from "@playwright/test";
 import type { APIRequestContext } from "@playwright/test";
+import { API } from "./api";
 import { isMobileProject, openWorkspaceSectionIfMobile } from "./mobile";
 import { dismissOnboarding } from "./onboarding";
 
@@ -74,6 +75,33 @@ export async function seedUiWorkspace(
   // On mobile the Model panel collapses; re-open it so the caller can
   // interact with Fit/Tune controls. On desktop this is a no-op.
   await openWorkspaceSectionIfMobile(page, testInfo, "model");
+
+  // P-0092 Q-1 Phase 5 helper invariant: target-select kicks off
+  // a funnel-routed PUT (useTargetSelection writes the merged
+  // config). Specs that hit GET /workspace/config via a direct
+  // APIRequestContext immediately after seedUiWorkspace returns
+  // would otherwise race the funnel flush and observe a partial
+  // backend state. Polling for `split.method` here is the cheapest
+  // way to gate the helper on "backend has the seeded config".
+  // 5s is generous — the merged-PUT lands within ~50-200ms locally,
+  // but CI runners are slower and ConfigForm's auto-reset effects
+  // may queue behind it.
+  await expect
+    .poll(
+      async () => {
+        const res = await page.request.get(`${API}/workspace/config`);
+        if (res.status() !== 200) return null;
+        const body = (await res.json()) as { split?: { method?: string } };
+        return body.split?.method ?? null;
+      },
+      {
+        timeout: 5_000,
+        intervals: [50, 100, 200, 500],
+        message:
+          "seedUiWorkspace: backend never observed the seeded config.split.method (target-select PUT likely failed)",
+      },
+    )
+    .not.toBeNull();
 }
 
 /** Re-export mobile guard so specs don't need two imports. */
