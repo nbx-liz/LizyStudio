@@ -19,6 +19,8 @@ import {
 import { ModelPanel } from "@/components/workspace/ModelPanel";
 import { ResultsPanel } from "@/components/workspace/ResultsPanel";
 import { useBackgroundNotification } from "@/hooks/useBackgroundNotification";
+import { useConfigWriteFunnel } from "@/hooks/useConfigWriteFunnel";
+import { ConfigWriteFunnelProvider } from "@/hooks/useConfigWriteFunnelContext";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useJobIdParam } from "@/hooks/useJobIdParam";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
@@ -66,6 +68,22 @@ export function WorkspacePage() {
 
   const { data: uiSchema } = useUiSchema();
   const { data: config } = useConfig({ enabled: hasData, retry: false });
+
+  // P-0092 Q-1 Phase 2: instantiate the write funnel for the entire
+  // Workspace tree. ConfigForm's auto-reset effects route through
+  // `enqueueWrite` to keep their PUTs ordered behind whichever cv /
+  // target / task change triggered them. Cache writes ride the same
+  // funnel so the next render of any consumer reads a consistent
+  // snapshot. `getCachedConfig` is a getter (not a value) so the
+  // funnel always reads the freshest cache entry at flush time, not
+  // a stale closure capture from when the hook was registered.
+  const writeFunnel = useConfigWriteFunnel({
+    getCachedConfig: () =>
+      queryClient.getQueryData<Record<string, unknown>>(queryKeys.config()),
+    onWriteCommitted: (saved) => {
+      queryClient.setQueryData(queryKeys.config(), saved);
+    },
+  });
 
   const handleDataChanged = useCallback(() => {
     setHasData(true);
@@ -172,153 +190,157 @@ export function WorkspacePage() {
 
   if (isMobile) {
     return (
-      <Tabs
-        value={mobileTab}
-        onValueChange={(v) => setMobileTab(v as MobileTab)}
-        className="flex h-full flex-col gap-0"
-      >
-        <TabsContent
-          value="data"
-          className="flex-1 overflow-auto focus-visible:outline-none"
+      <ConfigWriteFunnelProvider funnel={writeFunnel}>
+        <Tabs
+          value={mobileTab}
+          onValueChange={(v) => setMobileTab(v as MobileTab)}
+          className="flex h-full flex-col gap-0"
         >
-          <DataPanel
-            ref={dataPanelRef}
-            onDataChanged={handleDataChanged}
-            onTaskChanged={handleTaskChanged}
-            uiSchema={uiSchema}
-            running={running}
-          />
-        </TabsContent>
-        <TabsContent
-          value="model"
-          className="flex-1 overflow-auto focus-visible:outline-none"
-        >
-          <ModelPanel
-            hasData={hasData}
-            task={task}
-            onFit={handleFit}
-            onTune={handleTune}
-            running={running}
-            activeTab={modelTab}
-            onActiveTabChange={setModelTab}
-          />
-        </TabsContent>
-        <TabsContent
-          value="results"
-          className="flex-1 overflow-auto focus-visible:outline-none"
-        >
-          <ResultsPanel
-            jobId={currentJobId}
-            hasData={hasData}
-            hasConfig={hasData && config != null}
-            currentConfig={config ?? undefined}
-            onApplyToFit={handleApplyToFit}
-            onJobDone={handleJobDone}
-            onJobStarted={handleJobStarted}
-          />
-        </TabsContent>
-        <TabsList
-          aria-label="Workspace sections"
-          className="h-14 w-full shrink-0 justify-around rounded-none border-t border-border bg-background p-0"
-        >
-          <TabsTrigger
+          <TabsContent
             value="data"
-            className="flex h-full flex-1 flex-col gap-0.5 rounded-none text-xs"
+            className="flex-1 overflow-auto focus-visible:outline-none"
           >
-            <Database className="size-4" />
-            Data
-          </TabsTrigger>
-          <TabsTrigger
+            <DataPanel
+              ref={dataPanelRef}
+              onDataChanged={handleDataChanged}
+              onTaskChanged={handleTaskChanged}
+              uiSchema={uiSchema}
+              running={running}
+            />
+          </TabsContent>
+          <TabsContent
             value="model"
-            className="flex h-full flex-1 flex-col gap-0.5 rounded-none text-xs"
+            className="flex-1 overflow-auto focus-visible:outline-none"
           >
-            <SlidersHorizontal className="size-4" />
-            Model
-          </TabsTrigger>
-          <TabsTrigger
+            <ModelPanel
+              hasData={hasData}
+              task={task}
+              onFit={handleFit}
+              onTune={handleTune}
+              running={running}
+              activeTab={modelTab}
+              onActiveTabChange={setModelTab}
+            />
+          </TabsContent>
+          <TabsContent
             value="results"
-            className="relative flex h-full flex-1 flex-col gap-0.5 rounded-none text-xs"
+            className="flex-1 overflow-auto focus-visible:outline-none"
           >
-            <BarChart3 className="size-4" />
-            Results
-            {running && mobileTab !== "results" && (
-              <span
-                aria-hidden="true"
-                className="absolute top-1 right-3 size-2 animate-pulse rounded-full bg-primary"
-              />
-            )}
-          </TabsTrigger>
-        </TabsList>
-      </Tabs>
+            <ResultsPanel
+              jobId={currentJobId}
+              hasData={hasData}
+              hasConfig={hasData && config != null}
+              currentConfig={config ?? undefined}
+              onApplyToFit={handleApplyToFit}
+              onJobDone={handleJobDone}
+              onJobStarted={handleJobStarted}
+            />
+          </TabsContent>
+          <TabsList
+            aria-label="Workspace sections"
+            className="h-14 w-full shrink-0 justify-around rounded-none border-t border-border bg-background p-0"
+          >
+            <TabsTrigger
+              value="data"
+              className="flex h-full flex-1 flex-col gap-0.5 rounded-none text-xs"
+            >
+              <Database className="size-4" />
+              Data
+            </TabsTrigger>
+            <TabsTrigger
+              value="model"
+              className="flex h-full flex-1 flex-col gap-0.5 rounded-none text-xs"
+            >
+              <SlidersHorizontal className="size-4" />
+              Model
+            </TabsTrigger>
+            <TabsTrigger
+              value="results"
+              className="relative flex h-full flex-1 flex-col gap-0.5 rounded-none text-xs"
+            >
+              <BarChart3 className="size-4" />
+              Results
+              {running && mobileTab !== "results" && (
+                <span
+                  aria-hidden="true"
+                  className="absolute top-1 right-3 size-2 animate-pulse rounded-full bg-primary"
+                />
+              )}
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </ConfigWriteFunnelProvider>
     );
   }
 
   return (
-    <ResizablePanelGroup
-      orientation="horizontal"
-      className="h-full"
-      id="workspace-panels"
-    >
-      {/*
-       * Issue #167: on narrow viewports the inline-styled scroll
-       * wrappers inside react-resizable-panels lack keyboard access
-       * (axe `scrollable-region-focusable`). The panel children are
-       * wrapped in <section tabIndex={0}> so each resizable region is
-       * reachable via Tab and scrollable via arrow keys. The inner
-       * components already render their own h-full wrappers; the
-       * section keeps h-full + flex so layout is unchanged.
-       */}
-      <ResizablePanel defaultSize="30%" minSize="20%" maxSize="45%">
-        <section
-          aria-label="Data region"
-          tabIndex={0}
-          className="flex h-full flex-col focus-visible:outline-none"
-        >
-          <DataPanel
-            ref={dataPanelRef}
-            onDataChanged={handleDataChanged}
-            onTaskChanged={handleTaskChanged}
-            uiSchema={uiSchema}
-            running={running}
-          />
-        </section>
-      </ResizablePanel>
-      <ResizableHandle withHandle />
-      <ResizablePanel defaultSize="35%" minSize="20%">
-        <section
-          aria-label="Model region"
-          tabIndex={0}
-          className="flex h-full flex-col focus-visible:outline-none"
-        >
-          <ModelPanel
-            hasData={hasData}
-            task={task}
-            onFit={handleFit}
-            onTune={handleTune}
-            running={running}
-            activeTab={modelTab}
-            onActiveTabChange={setModelTab}
-          />
-        </section>
-      </ResizablePanel>
-      <ResizableHandle withHandle />
-      <ResizablePanel defaultSize="35%" minSize="20%">
-        <section
-          aria-label="Results region"
-          tabIndex={0}
-          className="flex h-full flex-col focus-visible:outline-none"
-        >
-          <ResultsPanel
-            jobId={currentJobId}
-            hasData={hasData}
-            hasConfig={hasData && config != null}
-            currentConfig={config ?? undefined}
-            onApplyToFit={handleApplyToFit}
-            onJobDone={handleJobDone}
-            onJobStarted={handleJobStarted}
-          />
-        </section>
-      </ResizablePanel>
-    </ResizablePanelGroup>
+    <ConfigWriteFunnelProvider funnel={writeFunnel}>
+      <ResizablePanelGroup
+        orientation="horizontal"
+        className="h-full"
+        id="workspace-panels"
+      >
+        {/*
+         * Issue #167: on narrow viewports the inline-styled scroll
+         * wrappers inside react-resizable-panels lack keyboard access
+         * (axe `scrollable-region-focusable`). The panel children are
+         * wrapped in <section tabIndex={0}> so each resizable region is
+         * reachable via Tab and scrollable via arrow keys. The inner
+         * components already render their own h-full wrappers; the
+         * section keeps h-full + flex so layout is unchanged.
+         */}
+        <ResizablePanel defaultSize="30%" minSize="20%" maxSize="45%">
+          <section
+            aria-label="Data region"
+            tabIndex={0}
+            className="flex h-full flex-col focus-visible:outline-none"
+          >
+            <DataPanel
+              ref={dataPanelRef}
+              onDataChanged={handleDataChanged}
+              onTaskChanged={handleTaskChanged}
+              uiSchema={uiSchema}
+              running={running}
+            />
+          </section>
+        </ResizablePanel>
+        <ResizableHandle withHandle />
+        <ResizablePanel defaultSize="35%" minSize="20%">
+          <section
+            aria-label="Model region"
+            tabIndex={0}
+            className="flex h-full flex-col focus-visible:outline-none"
+          >
+            <ModelPanel
+              hasData={hasData}
+              task={task}
+              onFit={handleFit}
+              onTune={handleTune}
+              running={running}
+              activeTab={modelTab}
+              onActiveTabChange={setModelTab}
+            />
+          </section>
+        </ResizablePanel>
+        <ResizableHandle withHandle />
+        <ResizablePanel defaultSize="35%" minSize="20%">
+          <section
+            aria-label="Results region"
+            tabIndex={0}
+            className="flex h-full flex-col focus-visible:outline-none"
+          >
+            <ResultsPanel
+              jobId={currentJobId}
+              hasData={hasData}
+              hasConfig={hasData && config != null}
+              currentConfig={config ?? undefined}
+              onApplyToFit={handleApplyToFit}
+              onJobDone={handleJobDone}
+              onJobStarted={handleJobStarted}
+            />
+          </section>
+        </ResizablePanel>
+      </ResizablePanelGroup>
+    </ConfigWriteFunnelProvider>
   );
 }
