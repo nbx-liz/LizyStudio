@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { updateConfig } from "@/api/workspace";
 
 /**
@@ -280,8 +280,18 @@ export function useConfigWriteFunnel(
     };
   }, []);
 
-  return {
-    enqueueWrite,
-    isFlushing,
-  };
+  // P-0092 Q-1 Phase 5: stabilise the public API object reference
+  // so consumers that pull the funnel via context can put it in
+  // useEffect dependencies (e.g. `useConfigSync`) without firing
+  // a re-render storm. `enqueueWrite` and `isFlushing` are already
+  // useCallback-stabilised, so `useMemo` here only collapses the
+  // object identity — its dep array intentionally does not depend
+  // on render-time scope, just on the two stable callbacks.
+  return useMemo(
+    () => ({
+      enqueueWrite,
+      isFlushing,
+    }),
+    [enqueueWrite, isFlushing],
+  );
 }
