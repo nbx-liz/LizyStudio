@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
 import { API, createTestCsv } from "./helpers/api";
-import { readSavedConfig } from "./helpers/config-reflection";
+import { waitForConfigSettle } from "./helpers/config-reflection";
 import { isMobileProject } from "./helpers/mobile";
 import { seedUiWorkspace } from "./helpers/workspace-ui";
 
@@ -113,45 +113,53 @@ test.describe("Workspace CV strategy switching (B-3)", () => {
         expectedRows: 100,
       });
 
+      // useConfigSync issues several PUTs after target selection (one
+      // per state dependency) before settling on the seeded default.
+      // Wait for that burst to land before treating the saved config
+      // as the baseline — otherwise the GET races against an in-flight
+      // PUT and `seeded.split` can be observed as undefined.
+      const seeded = await waitForConfigSettle(
+        request,
+        (cfg) =>
+          (cfg.split as Record<string, unknown> | undefined)?.method ===
+          "stratified_kfold",
+      );
       // Sanity guard: seedUiWorkspace lands on stratified_kfold for a
       // binary classification target. If the default ever changes we
       // want this to fail loudly with a meaningful message rather than
       // a confusing downstream mismatch.
-      const seeded = await readSavedConfig(request);
       expect((seeded.split as Record<string, unknown>).method).toBe(
         "stratified_kfold",
       );
 
       // The Strategy SegmentGroup renders each method as a role=radio
-      // with the visible label as accessible name. Click the desired
-      // strategy and wait for the resulting PUT /config to land.
+      // with the visible label as accessible name. Click the radio and
+      // poll the saved config until the new method lands. We do not
+      // try to single out the "right" PUT in waitForRequest because
+      // useConfigSync emits a short burst of PUTs across multiple
+      // useEffect re-runs after a state change — racing against that
+      // burst is brittle. The saved config (post-burst) is the
+      // observable contract we actually want to lock.
       const strategyRadio = page.getByRole("radio", {
         name: label,
         exact: true,
       });
       await expect(strategyRadio).toBeVisible();
-
-      const putPromise = page.waitForRequest(
-        (req) =>
-          req.method() === "PUT" &&
-          req.url().endsWith("/api/workspace/config"),
-      );
       await strategyRadio.click();
-      const putReq = await putPromise;
-      const putBody = putReq.postDataJSON() as {
-        split?: { method?: string };
-      };
-      expect(putBody.split?.method).toBe(strategy);
 
-      // Verify the saved config: method matches AND every key on the
-      // saved split block is allowed for that strategy. The second
-      // assertion is the post-#271 invariant — it catches the case
-      // where previously-selected strategy fields leak into the wire
-      // payload and survive Pydantic discrimination.
-      const after = await readSavedConfig(request);
+      const after = await waitForConfigSettle(
+        request,
+        (cfg) =>
+          (cfg.split as Record<string, unknown> | undefined)?.method ===
+          strategy,
+      );
       const splitAfter = after.split as Record<string, unknown>;
       expect(splitAfter.method).toBe(strategy);
 
+      // post-#271 invariant: the saved split block exposes ONLY the
+      // fields declared by the new strategy's Pydantic model. Fields
+      // belonging to a previously selected strategy must not survive
+      // the discriminated union.
       const allowed = ALLOWED_SPLIT_KEYS[strategy];
       const actualKeys = Object.keys(splitAfter).sort();
       const unexpected = actualKeys.filter((k) => !allowed.includes(k));
