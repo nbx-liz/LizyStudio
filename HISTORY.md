@@ -2575,3 +2575,50 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (d) Manual smoke: target=Survived の状態で Feature Weights を ON にし、"Add feature" picker に Survived が **含まれない** ことを確認（実機 Playwright）。
 - **Decision:**
   - 2026-04-28 **Proposed & Implemented** — PR-C3 として merge 予定。Issue #277 を close。post-#271 smoke 3-PR plan (PR-C1 / PR-C2 / PR-C3) はこれで完了。
+
+### P-0092: ConfigForm auto-reset effect が cv 切替の wire を巻き戻す cross-hook race（PR #289 で発覚）
+- **Status:** proposed
+- **Scope:** Frontend / State management
+- **Related:** Issue #272 / Issue #278（cross-hook competing-write race の前段）、P-0090 (PR #286, useConfigSync の setQueryData + back-sync)、PR #289（B-3 e2e spec、本 race を CI で再現）、gui-e2e-plan.md B-3
+- **Context:** B-3 e2e spec (`workspace-cv.spec.ts`) を `develop` で走らせると、CV strategy radio をクリックして 5 秒待っても server 側 saved config が新しい strategy に切り替わらない。PR #289 のローカル再現 + Playwright MCP + `browser_network_requests` で root cause を特定:
+  1. ユーザが GroupKFold radio を click → `DataPanel.cv` state 更新 → `useConfigSync` が PUT (split.method=group_kfold, inner_valid.method=group_holdout) を発火し server 保存される。
+  2. Server レスポンスを `useConfig` (TanStack Query) が取り込み ConfigForm が再 render。
+  3. しかし `ConfigForm.tsx:121-136` の `useEffect`（inner_valid auto-reset）は、`useConfigSync` の最新 PUT を待たずに **`configRef.current` (= 古い stratified_kfold snapshot)** を base として PUT を発火する。
+  4. 結果: `split.method=stratified_kfold + inner_valid.method=holdout + random_state=42` が server に PUT され、cv 変更が完全に巻き戻される。
+  5. UI 上の Strategy radio は `cv` state を反映するため一瞬 GroupKFold が selected になるが、`useConfig` が refetch して stratified_kfold を取り込んだ次の render で StratifiedKFold に戻る。
+
+  P-0090 (PR #286) は `useConfigSync` ↔ `useDataPanel` 間の race を `setQueryData` 即時同期と `QueryCache.subscribe` back-sync で塞いだ。**ConfigForm の auto-reset effect は同じ pattern の third-party writer であり、その race の対象外**だった。
+- **Invariants:**
+  - INV-1: PUT `/api/workspace/config` の body は **直前に server に lands した config** をベースに生成されなければならない。古い `configRef.current` snapshot を使った partial-merge PUT は禁止。
+  - INV-2: ConfigForm の auto-reset effect (inner_valid / calibration) は、`useConfigSync` が in-flight な間は発火しない、または in-flight 完了を待ってから発火する。
+  - INV-3: cv strategy 切替で派生する inner_valid のリセット (e.g., group_kfold → group_holdout) は、cv 変更の **同一 PUT** で flush されなければならない。別 PUT で後追いすると race 窓を開く。
+  - INV-4: Backend が cv 変更時に inner_valid を auto-update する behaviour（実機観察: server が group_holdout を返す）と、frontend の auto-reset effect は同じ集合論的結果を生む（最終 saved config が一意に決まる）。
+- **Proposal & Impact:** 修正候補 3 つを比較し、いずれか 1 つで実装する。
+  - **(A) `configRef.current` を React Query cache に subscribe**（PR #286 と同じ pattern）。
+    - `ConfigForm.tsx`: `configRef.current = config` を `useEffect` + `queryClient.getQueryCache().subscribe` 経由に置き換え。setQueryData が走った瞬間に ref が更新され、次の auto-reset effect が最新 base を使う。
+    - `useConfigSync` 側は無変更。
+  - **(B) auto-reset を `useConfigSync` に統合**。
+    - `useConfigSync.syncConfig` 内で cv 変更を検知し、必要なら inner_valid を同 PUT で reset。`ConfigForm` の effect は廃止。
+    - 利点: cv と inner_valid が常に 1 PUT で flush され、INV-3 が構造的に保証される。
+    - 欠点: `useConfigSync` の責務が広がる（CV 以外の strategy 依存ロジックを取り込みやすい）。
+  - **(C) auto-reset effect を debounce + in-flight guard 付きに書き換え**。
+    - `useConfigSync.isFlushing` を export し、ConfigForm の effect が flushing 中は発火を skip。flush 完了後に effect が再走するよう dependency を整える。
+    - 利点: ConfigForm の責務を維持。
+    - 欠点: in-flight guard の race が残る（flush 完了直後 / effect 発火前の窓）。
+  - 推奨: **(A)**。PR #286 と同じ pattern で確立済みの contract を踏襲。Auto-reset effect の責務 (`ConfigForm` 内に閉じる) を維持しつつ INV-1 を満たす。
+- **Compatibility:**
+  - API: 変更なし（PUT /config の wire shape は不変）。
+  - UI: cv 切替が**実際に**反映されるようになる（regression ではなく仕様準拠化）。post-#271 smoke の Manual smoke 項目（"BlockedGroupKFold radio click → 1 click で server に lands"）を強化する形。
+  - Backend: 変更なし。
+- **Alternatives considered:**
+  - (D) ConfigForm の auto-reset effect 自体を廃止し、backend が cv 変更時に inner_valid を必ず adjust する仕様にする → 却下。frontend の filter (`filteredInnerValidOptions`) は UI 表示にも使うため、UI と server が同期しないと現在選択中の inner_valid 値が UI 上で消えるだけになる。
+  - (E) `useConfig` の `staleTime` を 0 にして毎回 refetch → 却下。race 窓が短くなるだけで根本解決にならず、network トラフィックも倍増。
+- **Acceptance Criteria:**
+  - (a) PR #289 の `workspace-cv.spec.ts` が CI で 7 strategy 全て pass する（chromium project）。
+  - (b) `frontend/src/components/workspace/ConfigForm.tsx` の auto-reset effect が `configRef.current` を base に PUT する behaviour に対する unit test が追加され、最新 cache subscription が反映されることを locking する。
+  - (c) Manual smoke (Playwright MCP): GroupKFold radio click → 1 click で `split.method=group_kfold` が server に lands し続け、inner_valid auto-reset 後も group_kfold が保たれる。
+  - (d) `frontend/src/hooks/useConfigSync.test.ts` の既存 race test が引き続き pass（PR #286 で導入された invariants を破壊しない）。
+  - (e) frontend vitest / biome / build / backend pytest / ruff / mypy がすべて green。
+- **Decision:**
+  - 2026-04-29 **Proposed** — PR は別途起票（implementation 候補 (A) を採用）。PR #289 は本 Proposal の実装 PR にマージ吸収するか、本 Proposal 完了後に rebase + re-run する。
+
