@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { queryKeys } from "@/api/queryKeys";
 import type { ColumnInfo, UiSchema } from "@/api/types";
+import { updateConfig } from "@/api/workspace";
 import {
   type BlockedGroupKFoldState,
   INITIAL_BLOCKED_STATE,
@@ -15,6 +16,7 @@ import {
 } from "@/components/workspace/cv-state";
 import { useColumnOverrides } from "./useColumnOverrides";
 import { useConfigSync } from "./useConfigSync";
+import { useConfigWriteFunnelOptional } from "./useConfigWriteFunnelContext";
 import { useDataLoad } from "./useDataLoad";
 import {
   buildMergedConfig,
@@ -40,6 +42,7 @@ export function useDataPanel({
   onTaskChanged,
   uiSchema,
 }: UseDataPanelParams) {
+  const queryClient = useQueryClient();
   const [target, setTarget] = useState<string | null>(null);
   const [task, setTask] = useState<TaskType | null>(null);
   const [allColumnNames, setAllColumnNames] = useState<string[]>([]);
@@ -83,6 +86,13 @@ export function useDataPanel({
     onDataChanged,
   });
 
+  // P-0092 Phase 3: pull the optional write funnel from the
+  // Workspace-level provider. When mounted, target-select PUTs go
+  // through it; otherwise the legacy direct PUT + setQueryData
+  // path keeps working for any caller that renders the hook outside
+  // a provider (test paths, the few story setups).
+  const writeFunnel = useConfigWriteFunnelOptional();
+
   const { handleTargetChange } = useTargetSelection({
     task,
     cv,
@@ -98,6 +108,14 @@ export function useDataPanel({
     preseedSyncKey: configSync.preseedSyncKey,
     onDataChanged,
     onTaskChanged,
+    writeFunnel,
+    legacyUpdateConfig: writeFunnel
+      ? undefined
+      : {
+          putConfig: updateConfig,
+          setQueryData: (config) =>
+            queryClient.setQueryData(queryKeys.config(), config),
+        },
   });
 
   const handleTaskChange = useCallback(
@@ -122,7 +140,6 @@ export function useDataPanel({
   // useConfigSync's PUT-then-setQueryData echoes back into setCv —
   // we only call setCv when the parsed split actually differs from
   // current local state.
-  const queryClient = useQueryClient();
   const cvRef = useRef(cv);
   cvRef.current = cv;
   useEffect(() => {
