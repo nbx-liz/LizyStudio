@@ -2725,3 +2725,24 @@ PR を 6 段階に分け、**各段階で B-3 spec の進捗を確認**しなが
 - 各 Phase で既存 e2e (workspace-fit / workspace-tune / inference-flow) に regression が出たら、その PR を merge せず原因究明を優先。
 - 全 6 PR で **累計 frontend bundle 増加が +5KB を超えない** ことを bundle-size チェックで確認 (recent coupling refactor の予算に倣う)。
 
+#### Progress log
+
+| Phase | PR | Status | Date | 観察 |
+|---|---|---|---|---|
+| Proposal | [#290](https://github.com/nbx-liz/LizyStudio/pull/290) | open | 2026-04-29 | Q-1 採用、6-phase plan 確定 |
+| Phase 1 (funnel skeleton) | [#291](https://github.com/nbx-liz/LizyStudio/pull/291) | **CI green** | 2026-04-29 | 14 unit tests pass。1680 / 1682 既存 vitest pass。dead code (production wiring 無し) |
+| Phase 2 (ConfigForm auto-reset) | [#292](https://github.com/nbx-liz/LizyStudio/pull/292) | **CI green** | 2026-04-29 | StratifiedKFold → KFold 切替の race **解消** (ローカル実機 confirmed)。GroupKFold は引き続き race (W1 経路、Phase 5 scope)。`workspace-config-reflection.spec.ts` は Phase 5 まで `test.skip` |
+| Phase 3 (useTargetSelection) | [#293](https://github.com/nbx-liz/LizyStudio/pull/293) | **CI green** | 2026-04-29 | target-select 直後の rapid PUT バーストを `target-select` reason で funnel serialise。stratified→kfold の安定性は維持 (regression なし)。`legacyUpdateConfig` seam pattern を導入 |
+| Phase 4 (useModelPanelData W3 + undo/redo) | — | not started | — | Phase 4 着手時、Phase 3 と同様の `legacyUpdateConfig` seam を `useModelPanelData.handleConfigChange` / `handleUndo` / `handleRedo` に拡げる |
+| Phase 5 (useConfigSync.syncConfig W1) | — | not started | — | **B-3 spec が green になる出口**。GroupKFold race の根治。`useConfigSync` の deps closure / abortRef を funnel state machine に吸収 |
+| Phase 6 (WorkspacePage W6 + Preset Load) | — | not started | — | `grep -rE "updateConfig\(" frontend/src/` を **`useConfigWriteFunnel.ts` 1 箇所** にする |
+
+##### B-3 / D-1 spec status
+
+- **PR #289** (`workspace-cv.spec.ts`) — draft 維持。Phase 5 で 7 strategy 全 pass する想定。
+- **`workspace-config-reflection.spec.ts`** (D-1 sample) — `test.skip(true, "Skipped during P-0092 Phase 2..4. Re-enabled at Phase 5...")`。Phase 5 完了で skip 削除し、spec への変更なしに green になることを確認。
+
+##### Phase 2 で見つけた副次的バグ
+
+ConfigForm の inner_valid auto-reset effect は `["training", "inner_valid", "method"]` を書いていたが、lizyml schema (`extra="forbid"`) は `training.early_stopping.inner_valid` のみ受け付ける。Phase 2 で path を canonical 形に修正済み (`useConfigSync.ts:90-103` のコメント参照)。Issue #272 の partial fix だった可能性あり、後追い検証は Phase 5 完了後に。
+
