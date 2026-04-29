@@ -153,6 +153,7 @@ export function CvSection({
             step={1}
             placeholder="5"
             disabled={disabled}
+            ariaLabel="Folds"
           />
         </div>
       )}

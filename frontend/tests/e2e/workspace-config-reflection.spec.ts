@@ -70,15 +70,14 @@ test.describe("Workspace config reflection (Phase A scaffold)", () => {
       defaultValue: 5,
       testValue: 7,
       uiLocator: (p) =>
-        // The Folds NumberInput uses an unlabelled <Label> + <Input
-        // type="text" inputMode="decimal">, so we anchor on the wrapper
-        // div's "Folds" label text and grab the child input. Order is
-        // stable because CvSection renders Folds before Random State.
-        p
-          .locator("div", { has: p.getByText("Folds", { exact: true }) })
-          .filter({ has: p.locator("input[inputmode='decimal']") })
-          .locator("input")
-          .first(),
+        // CvSection renders the Folds NumberInput with `ariaLabel="Folds"`,
+        // surfacing the input as a role=textbox with that accessible name.
+        // Using getByRole avoids the deeply-nested locator chain that the
+        // first iteration of this spec relied on (which paid a several-
+        // minute auto-wait penalty under React's re-render churn after
+        // target selection — the helper would time out before the first
+        // `fill` call could even resolve).
+        p.getByRole("textbox", { name: "Folds", exact: true }),
       uiAction: async (locator, value) => {
         await locator.fill(String(value));
         await locator.blur();
