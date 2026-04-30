@@ -439,11 +439,144 @@ const splitEmbargo: FixtureEntry = {
   },
 };
 
+const splitTrainSizeMax: FixtureEntry = {
+  spec: {
+    name: "split.train_size_max (time_series) via Train Size Max NumberInput",
+    configPath: "split.train_size_max",
+    // The NullableNumberField at CvSection.tsx:267 uses autoHint=true,
+    // so the input renders empty by default and the saved config
+    // omits split.train_size_max until the user types. defaultValue
+    // is undefined; testValue=50 is the first write.
+    defaultValue: undefined,
+    testValue: 50,
+    // The Label includes a "(empty = auto)" hint span, so :text-is
+    // does not match. Use hasText filter instead.
+    uiLocator: (p): Locator =>
+      p
+        .locator("label")
+        .filter({ hasText: "Train Size Max" })
+        .locator("..")
+        .getByRole("textbox"),
+    uiAction: async (locator, value) => {
+      await locator.fill(String(value));
+      await locator.blur();
+    },
+  } as ConfigFieldSpec<unknown>,
+  precondition: async (page) => {
+    await switchToCvStrategy(page, "TimeSeriesSplit", "Gap");
+    // Train Size Max sits below Gap; wait for its label too so the
+    // locator is reachable when assertConfigReflection resolves it.
+    await page
+      .locator("label")
+      .filter({ hasText: "Train Size Max" })
+      .first()
+      .waitFor({ state: "visible", timeout: 5000 });
+  },
+};
+
+const splitTestSizeMax: FixtureEntry = {
+  spec: {
+    name: "split.test_size_max (time_series) via Test Size Max NumberInput",
+    configPath: "split.test_size_max",
+    defaultValue: undefined,
+    testValue: 25,
+    uiLocator: (p): Locator =>
+      p
+        .locator("label")
+        .filter({ hasText: "Test Size Max" })
+        .locator("..")
+        .getByRole("textbox"),
+    uiAction: async (locator, value) => {
+      await locator.fill(String(value));
+      await locator.blur();
+    },
+  } as ConfigFieldSpec<unknown>,
+  precondition: async (page) => {
+    await switchToCvStrategy(page, "TimeSeriesSplit", "Gap");
+    await page
+      .locator("label")
+      .filter({ hasText: "Test Size Max" })
+      .first()
+      .waitFor({ state: "visible", timeout: 5000 });
+  },
+};
+
 /**
- * Phase C wave 6: 16 fields. Adds 3 time-series strategy fixtures
- * (gap / purge_gap / embargo). Demonstrates a shared
- * `switchToCvStrategy` precondition helper that wraps the
- * radio-click + wait-for-mount pattern.
+ * Calibration fields require enabling the Calibration switch
+ * first; the CalibrationSection at CalibrationSection.tsx mounts
+ * the method Select + n_splits NumberInput inside the
+ * AccordionContent only when calibration is non-null.
+ */
+async function enableCalibration(page: Page): Promise<void> {
+  // Toggle ON first — the AccordionContent only renders when
+  // calibration is non-null (CalibrationSection.tsx:68).
+  await page
+    .getByRole("switch", { name: "Calibration", exact: true })
+    .click();
+  // ConfigForm's Accordion `defaultValue` does NOT include
+  // "calibration" (ConfigForm.tsx:420), so the AccordionItem is
+  // collapsed by default. Click the trigger to expand the content.
+  // The trigger text is "Calibration" — `exact: true` against the
+  // role=button matcher pins it (the Switch above shares the
+  // same accessible name but role=switch, not role=button).
+  await page
+    .getByRole("button", { name: "Calibration", exact: true })
+    .click();
+  await page
+    .getByRole("combobox", { name: "Calibration method" })
+    .waitFor({ state: "visible", timeout: 5000 });
+}
+
+const calibrationMethod: FixtureEntry = {
+  spec: {
+    name: "calibration.method via Calibration method Select",
+    configPath: "calibration.method",
+    // CALIBRATION_DEFAULTS at constants.ts: method=isotonic,
+    // n_splits=5. After enabling, saved config has these values.
+    defaultValue: "isotonic",
+    testValue: "platt",
+    uiLocator: (p): Locator =>
+      p.getByRole("combobox", { name: "Calibration method" }),
+    uiAction: async (locator, value) => {
+      await locator.click();
+      await locator
+        .page()
+        .getByRole("option", { name: String(value), exact: true })
+        .click();
+    },
+  } as ConfigFieldSpec<unknown>,
+  precondition: enableCalibration,
+};
+
+const calibrationNSplits: FixtureEntry = {
+  spec: {
+    name: "calibration.n_splits via Calibration n_splits NumberInput",
+    configPath: "calibration.n_splits",
+    defaultValue: 5,
+    testValue: 7,
+    // CalibrationSection.tsx:93 wraps the n_splits row as
+    //   <div class="flex ..."><div><Label>n_splits</Label><p>...</p></div><NumberInput/></div>
+    // so we walk up TWO levels from the label (`../..`) to hit the
+    // outer flex container which scopes the textbox lookup.
+    uiLocator: (p): Locator =>
+      p
+        .locator('label:text-is("n_splits")')
+        .locator("../..")
+        .getByRole("textbox"),
+    uiAction: async (locator, value) => {
+      await locator.fill(String(value));
+      await locator.blur();
+    },
+  } as ConfigFieldSpec<unknown>,
+  precondition: enableCalibration,
+};
+
+/**
+ * Phase C wave 7: 20 fields. Adds 4 nullable / conditional
+ * fixtures: time-series train_size_max / test_size_max plus
+ * calibration method / n_splits (both gated by the Calibration
+ * Switch precondition). Introduces an `enableCalibration` helper
+ * mirroring the `switchToCvStrategy` pattern.
  */
 export const CONFIG_FIELD_FIXTURES: FixtureEntry[] = [
   splitNSplits,
@@ -462,4 +595,8 @@ export const CONFIG_FIELD_FIXTURES: FixtureEntry[] = [
   splitGap,
   splitPurgeGap,
   splitEmbargo,
+  splitTrainSizeMax,
+  splitTestSizeMax,
+  calibrationMethod,
+  calibrationNSplits,
 ];
