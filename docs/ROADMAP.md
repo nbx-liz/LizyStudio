@@ -6,7 +6,7 @@
 - このファイルは **横串インデックス** であり、詳細はリンク先で確認すること。
 - 着手する際は HISTORY に Proposal を起票（変更ゲート対象の場合）→ PLAN にフェーズ追加 → 実装、の順で進める。
 
-最終更新: 2026-04-30（Phase D 全 spec 完了 / Phase C generator 起動）
+最終更新: 2026-05-01（Phase C wave 1〜8 完了：22/40+ field カバー）
 
 ---
 
@@ -136,7 +136,7 @@
 
 ## 4. アクティブ：GUI E2E カバレッジ強化（gui-e2e-plan.md Phase D）
 
-`docs/gui-e2e-plan.md` の段階実装プラン。**Phase A の Config field × E2E カバレッジは現状約 18%（7/40）**。Phase C generator が完成すれば一気に解消する。
+`docs/gui-e2e-plan.md` の段階実装プラン。**Phase A の Config field × E2E カバレッジは現状約 55%（22/40）**。Phase C generator + wave 1〜8 で大幅進捗、残りは UI 露出無し / 隠しフィールド / 複合 UI のため §4.2 末尾「カバー困難」表に分類。
 
 ### 4.1 Phase B 残：個別 spec の追加
 
@@ -156,11 +156,47 @@
 
 | 項目 | 状態 |
 |---|---|
-| Helper（`tests/e2e/helpers/config-reflection.ts`） | ✅ 既存（206 行、PR #288） |
+| Helper（`tests/e2e/helpers/config-reflection.ts`） | ✅ 既存（PR #288 / #320 で testValue 厳格化 / #325 で waitForConfigSettle 移行） |
 | Sample spec（`split.n_splits` のみ） | ✅ 既存 |
 | Fixture data（`tests/e2e/fixtures/config-fields.ts`） | ✅ 完了（PR #317） |
 | Generator spec（`workspace-config-fields-loop.spec.ts`） | ✅ 完了（PR #317） |
-| 32+ フィールドの自動 loop | 🟡 wave 1（2 fields）完了。残り fixture 追加で増設 |
+| Phase A field 自動 loop | 🟢 **22 / 40+ field（≈55%）カバー済**。wave 1〜8 完了（PR #317 / #319 / #320 / #321 / #322 / #323 / #324 / #325） |
+
+#### Phase C 着手済み fixture（22 field）
+
+| Section | Field | Wave | PR |
+|---|---|---|---|
+| `data` | `data.path` / `data.target` / `data.task` | （既存 spec） | — |
+| `data` | `data.group_col` / `data.time_col` | wave 8 | #325 |
+| `features` | `features.exclude` / `features.categorical` | （B-5 spec） | #313 |
+| `split` | `split.method` (7 strategy) | （B-3 spec） | #289 |
+| `split` | `split.n_splits` / `split.random_state` | wave 1 / wave 4 | #317 / #321 |
+| `split` | `split.shuffle` / `split.gap` / `split.purge_gap` / `split.embargo` | wave 5 / wave 6 | #322 / #323 |
+| `split` | `split.train_size_max` / `split.test_size_max` | wave 7 | #324 |
+| `model` | `model.balanced` / `model.feature_weights` | wave 1 / B-4 | #317 / #312 |
+| `model` | `model.auto_num_leaves` / `model.num_leaves_ratio` | wave 3 | #320 |
+| `model` | `model.min_data_in_leaf_ratio` / `model.min_data_in_bin_ratio` | wave 3 | #320 |
+| `training` | `training.seed` / `training.early_stopping.rounds` | wave 2 | #319 |
+| `training` | `training.early_stopping.enabled` | wave 3 | #320 |
+| `tuning` | `tuning.optuna.params.direction` (metric chips) | （既存 spec） | — |
+| `tuning` | `tuning.optuna.params.n_trials` | wave 4 | #321 |
+| `tuning` | `tuning.optuna.params.timeout` | wave 5 | #322 |
+| `tuning` | `tuning.optuna.space.kind` | （既存 spec） | — |
+| `calibration` | `calibration` enable | （既存 spec） | — |
+| `calibration` | `calibration.method` / `calibration.n_splits` | wave 7 | #324 |
+
+#### Phase C 残（カバー困難または対象外）
+
+| Field | 状態 | 理由 |
+|---|---|---|
+| `features.auto_categorical` | UI 露出なし | 常に true、コントロール無し |
+| `split.min_train_rows` / `split.min_valid_rows` | UI/wire 不一致 | 全 strategy で UI 表示するが `active.includes` フィルタで wire 出力されるのは blocked_group_kfold のみ。B-3b 経由が必要 |
+| `split.blocks.*` / `split.groups.*` | 🔴 deferred | B-3b funnel state 問題 |
+| `model.params` (KeyValueEditor) | unit のみ | 動的キーの dict、wave loop に乗らない |
+| `training.early_stopping.inner_valid.*` | GLOBALLY_HIDDEN | field-renderers.tsx:22 で常時非表示 |
+| `training.early_stopping.validation_ratio` | GLOBALLY_HIDDEN | 同上 |
+| `tuning.optuna.space.{range,choices,fixed}` | 複合 UI | param-by-param で kind 切替 + value editor。専用 spec 候補 |
+| `evaluation.metrics` | UI 露出なし | Tune タブの metric chips が一部担当（既存カバー） |
 
 ### 4.3 Phase D 段階プラン進捗
 
@@ -170,7 +206,7 @@
 | D-2 | B-1（Jobs UI） + B-3（CV strategy） | ✅ 完了（B-3 #289 / B-1 #316） |
 | D-3 | B-2 / B-4 / B-5 / B-6 | ✅ 完了（#315 / #312 / #313 / #314） |
 | D-4 | B-7 + B-8 | ✅ 完了（#300 / #318） |
-| D-5 | Phase C generator 起動 + 全フィールド loop | 🟡 generator 起動済み（#317）、fixture 拡張継続中 |
+| D-5 | Phase C generator 起動 + 全フィールド loop | 🟢 generator + 22 field 完了（#317〜#325）。残課題は §4.2「カバー困難」表に記載 |
 
 ---
 
