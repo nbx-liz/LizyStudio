@@ -14,12 +14,13 @@
  */
 
 import { renderHook, waitFor } from "@testing-library/react";
-import { createElement, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import {
   type ConfigSnapshot,
   useConfigWriteFunnel,
   type WriteReason,
+  type WriteResult,
 } from "./useConfigWriteFunnel";
 import {
   ConfigWriteFunnelProvider,
@@ -36,7 +37,7 @@ function useWriterConsumer(reason: WriteReason) {
   const funnel = useConfigWriteFunnelOptional();
   return {
     funnel,
-    send: (config: ConfigSnapshot) =>
+    send: (config: ConfigSnapshot): Promise<WriteResult> | undefined =>
       funnel?.enqueueWrite({ kind: "replace", config, reason }),
   };
 }
@@ -55,10 +56,15 @@ describe("funnel cross-hook integration (G-2)", () => {
         getCachedConfig: () => undefined,
         putConfig,
       });
-      return createElement(ConfigWriteFunnelProvider, { funnel }, children);
+      return (
+        <ConfigWriteFunnelProvider funnel={funnel}>
+          {children}
+        </ConfigWriteFunnelProvider>
+      );
     }
-    const wrapper = ({ children }: { children: ReactNode }) =>
-      createElement(Host, null, children);
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <Host>{children}</Host>
+    );
     return wrapper;
   }
 
@@ -207,6 +213,7 @@ describe("funnel cross-hook integration (G-2)", () => {
     // drained on unmount or the caller hangs forever.
     const p1 = result.current.send({ task: "binary" });
     const p2 = result.current.send({ task: "regression" });
+    if (!p1 || !p2) throw new Error("Funnel must be mounted under Provider");
 
     await flushMicrotasks();
     unmount();
