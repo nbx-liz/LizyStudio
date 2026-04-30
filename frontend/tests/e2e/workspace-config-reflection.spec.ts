@@ -46,34 +46,13 @@ test.describe("Workspace config reflection (Phase A scaffold)", () => {
     page,
     request,
   }, testInfo) => {
-    // P-0092 Q-1 Phase 2..4 transitional: while the writer triangle
-    // is being drained into the funnel one writer at a time, this
-    // sample spec races against the partial-PUT bursts that
-    // intermediate phases emit (auto-reset patches, target-select
-    // merges, etc.). Phase 5 migrates `useConfigSync.syncConfig`
-    // itself to the funnel — at that point only one PUT shape can
-    // win per click and this spec becomes deterministic again.
-    //
-    // We choose to skip rather than rewrite the spec for the
-    // transient phases because:
-    //   (a) the field-edit path the spec exercises (Folds
-    //       NumberInput → useConfigSync) is the W1 writer that
-    //       Phase 5 specifically targets,
-    //   (b) any temporary scaffolding here would need to be
-    //       reverted at Phase 5 anyway, and
-    //   (c) the helper itself (`config-reflection.ts`) is the
-    //       reusable artefact — it stays tested via the upcoming
-    //       Phase 6 fixture-driven loop.
-    //
-    // Re-enable check: when the §P-0092 plan reaches Phase 5
-    // (HISTORY.md decision row), remove this test.skip and rerun
-    // CI. The spec must turn green on its own without further
-    // changes to the helper or fixture.
-    test.skip(
-      true,
-      "Skipped during P-0092 Phase 2..4. Re-enabled at Phase 5; see HISTORY.md §P-0092.",
-    );
-
+    // P-0092 Q-1 Phase 5: re-enabled. Phase 5 migrates
+    // `useConfigSync.syncConfig` to the funnel and the seed helper
+    // waits for funnel quiescence before returning, so the (1)↔(2)↔(3)
+    // writer triangle the §P-0092 plan diagnoses is fully drained
+    // by the time `assertConfigReflection` subscribes for the next
+    // PUT. The spec runs without any helper/fixture changes — that
+    // is the green-flip contract.
     if (isMobileProject(testInfo)) {
       test.skip(true, "Mobile layout collapses Data accordion; covered by B-8");
     }

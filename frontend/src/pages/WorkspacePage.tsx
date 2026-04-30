@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { getErrorMessage } from "@/api/errors";
 import { useConfig, useUiSchema } from "@/api/queries";
 import { queryKeys } from "@/api/queryKeys";
-import { runFit, runTune, updateConfig } from "@/api/workspace";
+import { runFit, runTune } from "@/api/workspace";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -164,18 +164,39 @@ export function WorkspacePage() {
     }
   }, [setCurrentJobId, submitConfigOrUndefined]);
 
+  // P-0092 Q-1 Phase 6 (cleanup): the last writer to migrate. Apply-to-Fit
+  // copies the best Tune params into the Fit config in one atomic write.
+  // Routing through the funnel here means it serialises behind any in-flight
+  // cv-change / config-form-edit / target-select / auto-reset PUT instead
+  // of cross-stomping them. The funnel's onWriteCommitted owns the cache
+  // write, so the explicit invalidateQueries that the legacy path needed
+  // is no longer required — the saved snapshot is reflected in the cache
+  // synchronously after the PUT lands. We still call it on failure so the
+  // UI re-syncs to whatever the backend kept.
   const handleApplyToFit = useCallback(
     async (fullConfig: Record<string, unknown>) => {
-      try {
-        await updateConfig(fullConfig);
-        queryClient.invalidateQueries({ queryKey: queryKeys.config() });
-        setModelTab("fit");
-        toast.success("Best params applied to Fit tab. Click Fit to run.");
-      } catch {
+      const result = await writeFunnel.enqueueWrite({
+        kind: "replace",
+        config: fullConfig,
+        reason: "apply-to-fit",
+      });
+      if (!result.ok) {
         toast.error("Failed to apply tune config");
+        queryClient.invalidateQueries({ queryKey: queryKeys.config() });
+        return;
       }
+      const wrapper = result.saved as
+        | { saved?: boolean; errors?: unknown[] }
+        | undefined;
+      if (wrapper?.saved === false) {
+        toast.error("Failed to apply tune config: backend rejected the body");
+        queryClient.invalidateQueries({ queryKey: queryKeys.config() });
+        return;
+      }
+      setModelTab("fit");
+      toast.success("Best params applied to Fit tab. Click Fit to run.");
     },
-    [queryClient],
+    [queryClient, writeFunnel],
   );
 
   // HIGH-3: stable handler references so ResultsPanel's effect does not
