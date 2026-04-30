@@ -12,6 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useConfigWriteFunnelOptional } from "@/hooks/useConfigWriteFunnelContext";
 
 import { CalibrationSection } from "./CalibrationSection";
 import {
@@ -75,6 +76,46 @@ export function ConfigForm({
     [onChange],
   );
 
+  // P-0092 Q-1 Phase 2: route the three auto-reset effects (inner_valid,
+  // calibration, objective/metric) through the write funnel so their
+  // PUTs land *behind* whichever cv / task / target change triggered
+  // them. The funnel guarantees per-reason serialisation, so a
+  // `cv-change` PUT cannot be silently overwritten by an `auto-reset`
+  // PUT that started from a stale snapshot.
+  //
+  // User-driven field edits keep using `handleFieldChange` and the
+  // legacy onChange path — Phase 4 migrates that as well. Until then
+  // the auto-reset case (which is what fired the post-#271 smoke
+  // regression PR #289 caught) is the only user of `enqueueAutoReset`.
+  //
+  // We use the *optional* hook so isolated rendering paths (Storybook,
+  // ConfigForm.test.tsx without a provider) can keep falling back to
+  // `handleFieldChange`. Production WorkspacePage always mounts the
+  // provider so this fallback never fires under real usage.
+  const funnel = useConfigWriteFunnelOptional();
+  const enqueueAutoReset = useCallback(
+    (path: readonly string[], value: unknown) => {
+      if (funnel === null) {
+        handleFieldChange([...path], value);
+        return;
+      }
+      // Fire-and-forget: the funnel's onWriteCommitted updates the
+      // React Query cache, and the next render of any consumer reads
+      // the saved snapshot via TanStack Query. We deliberately do not
+      // await here — auto-reset effects are React effect callbacks,
+      // and awaiting would change their scheduling semantics in ways
+      // we have not green-lit. Errors surface via the funnel's own
+      // toast/log path (Phase 5 will add it formally).
+      void funnel.enqueueWrite({
+        kind: "patch",
+        path,
+        value,
+        reason: "auto-reset",
+      });
+    },
+    [funnel, handleFieldChange],
+  );
+
   const defs = useMemo(
     () => ((schema as { $defs?: Defs }).$defs ?? {}) as Defs,
     [schema],
@@ -126,12 +167,22 @@ export function ConfigForm({
       filteredInnerValidOptions.length > 0 &&
       !filteredInnerValidOptions.includes(currentInnerValid)
     ) {
-      handleFieldChange(["training", "inner_valid", "method"], "holdout");
+      // P-0092 Phase 2: route through funnel as `auto-reset`. The
+      // wire path moved up to `training.early_stopping.inner_valid`
+      // per useConfigSync.ts:90-103 — the legacy
+      // ["training","inner_valid"] path was the original Issue #272
+      // root cause. Keeping the corrected path here means a Phase
+      // 2-only consumer (no funnel) and a funnel consumer write to
+      // the same backend field.
+      enqueueAutoReset(
+        ["training", "early_stopping", "inner_valid", "method"],
+        "holdout",
+      );
     }
   }, [
     filteredInnerValidOptions,
     currentInnerValid,
-    handleFieldChange,
+    enqueueAutoReset,
     config.config_version,
   ]);
 
@@ -159,15 +210,10 @@ export function ConfigForm({
     if (!config.config_version) return;
     if (task && config.task && task !== config.task) return;
     if (task && task !== "binary" && calibration !== null) {
-      handleFieldChange(["calibration"], null);
+      // P-0092 Phase 2: funnel-routed auto-reset.
+      enqueueAutoReset(["calibration"], null);
     }
-  }, [
-    task,
-    calibration,
-    handleFieldChange,
-    config.config_version,
-    config.task,
-  ]);
+  }, [task, calibration, enqueueAutoReset, config.config_version, config.task]);
 
   // Resolve options for objective/model_metric kinds from option_sets
   const getOptionsForHint = useCallback(
@@ -272,7 +318,8 @@ export function ConfigForm({
       const objInvalid =
         typeof currentObj === "string" && !objOpts.includes(currentObj);
       if (!currentObj || objInvalid) {
-        handleFieldChange(["model", "params", "objective"], objOpts[0]);
+        // P-0092 Phase 2: funnel-routed auto-reset.
+        enqueueAutoReset(["model", "params", "objective"], objOpts[0]);
       }
     }
 
@@ -304,7 +351,8 @@ export function ConfigForm({
                 typeof m === "string" && metricOpts.includes(m),
             )
           : [];
-        handleFieldChange(
+        // P-0092 Phase 2: funnel-routed auto-reset.
+        enqueueAutoReset(
           ["model", "params", "metric"],
           defaults.length > 0 ? defaults : metricOpts.slice(0, 1),
         );
@@ -314,7 +362,7 @@ export function ConfigForm({
     task,
     uiSchema,
     modelParams,
-    handleFieldChange,
+    enqueueAutoReset,
     config.config_version,
     config.task,
   ]);
