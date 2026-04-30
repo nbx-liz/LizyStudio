@@ -10,7 +10,76 @@
 
 ---
 
-## 0. ナンバリング体系の Glossary
+## 0. ドキュメント役割分担マップ
+
+プロジェクト内のすべての markdown を Tier 構造で整理する。**新規ドキュメントを追加するときは、本セクションを最初に更新する**。
+
+### Tier 1: 仕様の正（CLAUDE.md §1 で priority order が定義済）
+
+| ドキュメント | 役割 | 採番系統 | 更新トリガー |
+|---|---|---|---|
+| `BLUEPRINT.md` | 設計意図 (WHAT)。構造・責務・画面定義・API・Adapter | — | 仕様変更時（Proposal の Decision 後） |
+| `HISTORY.md` | Proposal → Decision の通時記録 (WHY) | `H-00XX` (旧) / `P-00XX` (新) | Proposal 起票時 + Decision 確定時 |
+| `PLAN.md` | フェーズ別実装ロードマップ (WHEN) | `v1` / `v2-N` / `v3-N` | フェーズ着手時 + 完了時 |
+| `CLAUDE.md` | Claude の working rules + tech stack 制約 (HOW) | — | ルール変更時 |
+
+### Tier 2: アクティブ運用（横串 INDEX）
+
+| ドキュメント | 役割 | 更新トリガー |
+|---|---|---|
+| `docs/ROADMAP.md` | 残課題のバックログ・Next Action ROI ランキング・命名 Glossary・本ドキュメント役割マップ | 課題着手時／完了時／新規ドキュメント追加時 |
+
+### Tier 3: リファレンス（read-mostly、現役）
+
+| ドキュメント | 役割 | 最終更新 | 関係 |
+|---|---|---|---|
+| `docs/architecture.md` | 入門レベルの architecture overview。BLUEPRINT §3 へのゲートウェイ | 2026-04-10 | 内容は BLUEPRINT 派生 |
+| `docs/architecture-as-implemented.md` | 実装の現状 snapshot（BLUEPRINT は意図、こちらは現実） | 2026-04-17 | BLUEPRINT との対比で読む |
+| `docs/api.md` | REST API リファレンス。BLUEPRINT §5 へのゲートウェイ | 2026-04-10 | 内容は BLUEPRINT 派生 |
+| `docs/adapter-guide.md` | BackendAdapter Protocol 実装手順 | 2026-04-10 | BLUEPRINT §6 (Adapter 設計) と対 |
+
+> **Tier 3 のドキュメントは BLUEPRINT.md からの派生であり、BLUEPRINT が真。drift が見つかったら BLUEPRINT 側を真として Tier 3 を更新する。**
+
+### Tier 4: アクティブな個別計画
+
+仕様変更（Proposal）には届かないが、複数 PR をまたいで実装する計画は個別ドキュメントを起こす。
+
+| ドキュメント | 役割 | ステータス | 進捗追跡 |
+|---|---|---|---|
+| `docs/gui-e2e-plan.md` | GUI E2E Phase A/B/C/D 計画 | 🟡 進行中（Phase D 残り B-1/B-2/B-4/B-5/B-6/B-8 + Phase C generator） | 本 ROADMAP §4 |
+
+### Tier 5: アーカイブ（完了済み・参照のみ）
+
+完了したらヘッダに `**Status**: ✅ shipped <YYYY-MM-DD>` を付けて Tier 5 へ。**ファイル移動はしない**（検索可能性のため）。
+
+| ドキュメント | 内容 | クローズ日 |
+|---|---|---|
+| `docs/coupling-analysis.md` | A-1..A-10 / B-1..B-10 / C-1..C-12 の疎結合化計画 | 2026-04-22 |
+| `docs/c6-openapi-fetch-plan.md` | C-6（openapi-fetch 導入）の実装計画 | 2026-04-22 |
+| `docs/ui-config-sync-audit-2026-04.md` | Issue #249 起点の Workspace form config-sync 監査 | 2026-04-23 |
+
+### Project Chrome（外部向け）
+
+| ドキュメント | 役割 |
+|---|---|
+| `README.md` | PyPI / install / quick-start。end users 向けランディング |
+| `CONTRIBUTING.md` | 貢献ワークフロー + 品質ゲート |
+| `CHANGELOG.md` | リリースノート（Keep a Changelog 形式） |
+| `SECURITY.md` | セキュリティポリシー |
+| `frontend/README.md` | Frontend dev startup |
+| `.claude/AGENTS.md` | エージェント orchestration ガイド |
+
+### 運用ルール
+
+1. **新規 Tier 4 ドキュメント追加時** — `docs/<topic>-plan.md` で起こし、本表 Tier 4 行を追加、ROADMAP §4〜§6 へリンク登録。
+2. **完了通知（Tier 4 → Tier 5）** — `**Status**: ✅ shipped <YYYY-MM-DD>` をドキュメント先頭に付与し、本表で行を Tier 4 → Tier 5 へ移す。
+3. **Tier 3 が drift していると分かったとき** — BLUEPRINT が真。Tier 3 を BLUEPRINT に追従させる。逆にしない。
+4. **memory ノートの位置付け** — `~/.claude/projects/-home-rem-repos-LizyStudio/memory/` は Claude の point-in-time observations。仕様の正ではない。drift が見つかれば memory を更新するか削除する。
+5. **どこにも該当しない雑文** — 書かない。Issue / PR description / `docs/<topic>-plan.md` のいずれかに納める。
+
+---
+
+## 1. ナンバリング体系の Glossary
 
 過去のリファクタリングごとに別系統の ID が乱立しているため、最初にマッピングを示す。
 
@@ -28,7 +97,7 @@
 
 ---
 
-## 1. 直近完了（参考）
+## 2. 直近完了（参考）
 
 新規着手の前に、直近完了した大きな塊を把握しておく：
 
@@ -46,9 +115,9 @@
 
 ---
 
-## 2. アクティブ：仕様変更を伴う Proposal
+## 3. アクティブ：仕様変更を伴う Proposal
 
-### 2.1 P-0087 Phase 3：`cv_strategy_fields` を Pydantic から自動派生
+### 3.1 P-0087 Phase 3：`cv_strategy_fields` を Pydantic から自動派生
 
 - **状態**: 🟡 未着手（HISTORY.md:2418 で「Phase 3 PR で別途検討」と記載）
 - **動機**: 現在 `lizystudio/backends/lizyml_ui_schema.py` で hand-coded。lizyml 側の Pydantic model から生成すれば drift が原理的に消える
@@ -56,7 +125,7 @@
 - **優先度**: 中（P-0087 Phase 1+2 で contract test が drift を検出可能なので、緊急ではないが残課題）
 - **着手手順**: HISTORY に P-0093 として Proposal 起票 → lizyml 側調整 → PLAN.md に `v3-13` として登録 → 実装
 
-### 2.2 ML Backend 抽象の 2nd 実装による検証
+### 3.2 ML Backend 抽象の 2nd 実装による検証
 
 - **状態**: 🟡 未着手（`docs/coupling-analysis.md:283` に flag、Issue 未起票）
 - **動機**: A-1〜A-6 で `BackendAdapter` Protocol を整備したが、実装が lizyml 1 件のみ。第 2 実装で抽象の妥当性を検証したい
@@ -65,11 +134,11 @@
 
 ---
 
-## 3. アクティブ：GUI E2E カバレッジ強化（gui-e2e-plan.md Phase D）
+## 4. アクティブ：GUI E2E カバレッジ強化（gui-e2e-plan.md Phase D）
 
 `docs/gui-e2e-plan.md` の段階実装プラン。**Phase A の Config field × E2E カバレッジは現状約 18%（7/40）**。Phase C generator が完成すれば一気に解消する。
 
-### 3.1 Phase B 残：個別 spec の追加
+### 4.1 Phase B 残：個別 spec の追加
 
 | ID | spec | 状態 | 規模 | ROI |
 |---|---|---|---|---|
@@ -83,7 +152,7 @@
 | **B-7** | `workspace-running-lock.spec.ts` — running lock UI mapping | ✅ 完了（PR #300） | — | — |
 | **B-8** | `workspace-mobile.spec.ts` — bottom-tab traversal | ❌ 未着手（Issue #304 と連動） | 中 | 低〜中 |
 
-### 3.2 Phase C: Config-reflection invariant generator
+### 4.2 Phase C: Config-reflection invariant generator
 
 | 項目 | 状態 |
 |---|---|
@@ -94,7 +163,7 @@
 
 着手すれば B-4/B-5/B-6 の一部を fixture 行追加だけで済ませられるため、**B-N より先に Phase C 起動を狙う方が ROI が高い可能性あり**。
 
-### 3.3 Phase D 段階プラン進捗
+### 4.3 Phase D 段階プラン進捗
 
 | Phase | 内容 | 状態 |
 |---|---|---|
@@ -106,7 +175,7 @@
 
 ---
 
-## 4. アクティブ：Open Issues
+## 5. アクティブ：Open Issues
 
 | Issue | タイトル | priority | 推奨アクション |
 |---|---|---|---|
@@ -118,7 +187,7 @@
 
 ---
 
-## 5. ドキュメントドリフト（要メンテナンス）
+## 6. ドキュメントドリフト（要メンテナンス）
 
 | 対象 | 最終更新 | リスク | 対応 |
 |---|---|---|---|
@@ -130,7 +199,7 @@
 
 ---
 
-## 6. 推奨 Next Action（ROI 順 / 1 PR 単位）
+## 7. 推奨 Next Action（ROI 順 / 1 PR 単位）
 
 ### Tier 0：即効・低リスク
 
@@ -163,7 +232,7 @@
 
 ---
 
-## 7. 運用メモ
+## 8. 運用メモ
 
 - 新規 Proposal を起票するときは **P-0093 から採番**。`H-XXXX` 採番は終了。
 - E2E 単独追加（仕様変更なし）は HISTORY 起票不要、本 ROADMAP の §3 を更新するだけで OK。

@@ -2,7 +2,7 @@
 
 **作成日**: 2026-04-21
 **Related**: [docs/coupling-analysis.md §C-6](./coupling-analysis.md#c-6-url-パスが完全手書きprefix-変更追跡なし) / HISTORY.md H-0080
-**Status**: proposal (this PR) — implementation PRs will follow
+**Status**: ✅ shipped 2026-04-22 — Phase 1〜5 すべてマージ済（PRs #224〜#228）。**本ドキュメントはアーカイブ**（履歴参照のみ）。最新の関連バックログは [docs/ROADMAP.md](./ROADMAP.md) を参照。
 **Change-gate**: 不要（FE 内部 refactor、wire format / BackendAdapter / storage 不変）
 
 ---

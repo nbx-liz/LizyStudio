@@ -1,5 +1,7 @@
 # Workspace Form Config-Sync Audit — 2026-04-23
 
+**Status**: ✅ shipped 2026-04-23 — Audit completed; findings rolled into PR #255 and the subsequent post-#271 plan + P-0090〜P-0092 work. **本ドキュメントはアーカイブ**（履歴参照のみ）。最新の関連バックログは [docs/ROADMAP.md](./ROADMAP.md) を参照。
+
 Audit prompted by Issue #249 (follow-up to #248).
 
 ## Scope
