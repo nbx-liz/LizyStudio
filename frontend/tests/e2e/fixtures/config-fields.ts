@@ -216,11 +216,84 @@ const modelMinDataInBinRatio: FixtureEntry = {
   } as ConfigFieldSpec<unknown>,
 };
 
+const splitRandomState: FixtureEntry = {
+  spec: {
+    name: "split.random_state via Random State NumberInput",
+    configPath: "split.random_state",
+    // The post-seed saved config does NOT include split.random_state
+    // — useTargetSelection's buildMergedConfig writes only
+    // { method, n_splits } (useDataPanel.types.ts:72), and the
+    // post-target useConfigSync run is skipped via preseedSyncKey.
+    // The user's click on the Random State NumberInput is the FIRST
+    // event that flushes split.random_state into the wire body.
+    // Local cv.randomState is 42 the whole time — that's the value
+    // the input shows — but the saved config has no key for it
+    // until the user types.
+    defaultValue: undefined,
+    testValue: 7,
+    // CvSection.tsx:162 renders the Random State block as
+    // <div><Label>Random State</Label><NumberInput .../></div>.
+    // The NumberInput has no aria-label (the surrounding Label is
+    // not htmlFor-wired because CvSection uses bare Label + control,
+    // not the schema-driven FormField). Anchor on the label and walk
+    // to the parent div's textbox descendant.
+    uiLocator: (p): Locator =>
+      p
+        .locator('label:text-is("Random State")')
+        .locator("..")
+        .getByRole("textbox"),
+    uiAction: async (locator, value) => {
+      await locator.fill(String(value));
+      await locator.blur();
+    },
+  } as ConfigFieldSpec<unknown>,
+};
+
+const tuningNTrials: FixtureEntry = {
+  spec: {
+    name: "tuning.optuna.params.n_trials via N Trials preset 100",
+    configPath: "tuning.optuna.params.n_trials",
+    // After the Tune tab precondition fires, the saved config has
+    // tuning = { optuna: { params: { direction: "maximize" } } }
+    // (probed via tests/e2e). n_trials is undefined until the
+    // user clicks a preset; the SegmentedControl's local fallback
+    // of 50 is the displayed default but does NOT land in the
+    // saved config until a preset is selected.
+    defaultValue: undefined,
+    testValue: 100,
+    // The TuneSettings SegmentedControl renders each N_TRIALS_PRESETS
+    // value as a <button> with the value as text. Presets are
+    // [10, 50, 100, 200, 500] so "100" is unambiguous (no other
+    // button on the Tune tab carries the literal text "100" —
+    // TIMEOUT_PRESETS use "None"/"5m"/"10m"/"30m").
+    uiLocator: (p): Locator =>
+      p.getByRole("button", { name: "100", exact: true }),
+    uiAction: async (locator) => {
+      await locator.click();
+    },
+  } as ConfigFieldSpec<unknown>,
+  precondition: async (page) => {
+    // Switch from Fit (default) to Tune so the SegmentedControl
+    // mounts. The Settings accordion is open by default inside the
+    // Tune tab's left rail.
+    await page.getByRole("tab", { name: "Tune", exact: true }).click();
+    // Wait for the Tune action button to appear so the tab content
+    // has finished mounting before the spec resolves the locator.
+    await page
+      .getByRole("button", { name: "Tune", exact: true })
+      .first()
+      .waitFor({ state: "visible", timeout: 5000 });
+  },
+};
+
 /**
- * Phase C wave 3: 9 fields covering NumberInput + Switch shapes
- * across 3 sections (split / model / training). Adding a fixture
- * row in the next PR is the unit of work for extending coverage
- * to the remaining ~26 Config fields enumerated in gui-e2e-plan §A.
+ * Phase C wave 4: 11 fields. Adds split.random_state (no
+ * precondition — visible on the seed default of stratified_kfold)
+ * and tuning.optuna.params.n_trials (precondition: switch to the
+ * Tune tab so the SegmentedControl mounts). The Tune-tab fixture
+ * is the first precondition entry — it validates that the loop
+ * spec correctly invokes `precondition` before resolving the
+ * locator.
  */
 export const CONFIG_FIELD_FIXTURES: FixtureEntry[] = [
   splitNSplits,
@@ -232,4 +305,6 @@ export const CONFIG_FIELD_FIXTURES: FixtureEntry[] = [
   modelNumLeavesRatio,
   modelMinDataInLeafRatio,
   modelMinDataInBinRatio,
+  splitRandomState,
+  tuningNTrials,
 ];
