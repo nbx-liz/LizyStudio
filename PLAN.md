@@ -50,6 +50,10 @@ Phase 0〜30 は v1 で完了済み。バックエンド（Python / FastAPI / Ad
 | v3-10 | Search Space デフォルト Range 自動ポピュレート | H-0053 | v3-3 | ✅ |
 | v3-11 | Re-tune Dashboard Phase A（Study Resume + Boundary Expansion 可視化） | H-0061 | v3-6 | ✅ |
 | v3-12 | Re-tune Dashboard Phase B（Job lineage + Incremental checkpoint + Re-tune/Resume actions） | H-0062 | v3-11 | ✅ |
+| v3-13 | Workspace 信頼性 Sprint（fit/tune body / UI-Pydantic drift contract / running lock / cross-hook funnel） | P-0086〜P-0092 | v3-9, v3-12 | ✅ |
+| v3-14 | GUI E2E カバレッジ強化（Phase D 残）— B-1/B-2/B-4/B-5/B-6/B-8 + Phase C generator | gui-e2e-plan.md | v3-13 | 🟡 進行中 |
+
+> 詳細な未着手バックログ・命名体系の Glossary は [docs/ROADMAP.md](docs/ROADMAP.md) を参照。
 
 ---
 
@@ -1118,3 +1122,67 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 - [x] Phase A の re_tune 実行が影響を受けない（後方互換）
 - [x] pytest / mypy / ruff / vitest / biome / pnpm build がすべて緑
 - [x] BLUEPRINT §3.4.4 / §4.3 / §6.1 に仕様が反映されている
+
+
+---
+
+## Phase v3-13: Workspace 信頼性 Sprint（P-0086〜P-0092）✅
+
+**期間:** 2026-04-25 〜 2026-04-30
+
+**対象 Proposal:** P-0086 / P-0087 (Phase 1+2) / P-0088 / P-0089 / P-0090 / P-0091 / P-0092
+
+**動機:** post-#271 smoke で複数の cross-hook write race と silent rejection を観測。Workspace の write path を「観察できる単一 funnel」に集約し、ConfigForm / useConfigSync / useTargetSelection / useModelPanelData / useDataPanel / WorkspacePage の 6 writer を順次 funnel 経由化することで、設計レベルで race 条件を解消した。
+
+**成果物:**
+- `useConfigWriteFunnel.ts` + `useConfigWriteFunnelContext.tsx`（FIFO + per-reason 直列化 + same-reason coalesce）
+- `cv-state.ts` で CV state machine を ConfigForm から抽出
+- `B-3 workspace-cv.spec.ts` で 7 strategy 巡回が green（P-0092 hypothesis 検証）
+- `tests/regression/test_reg_0279_workspace_locked_during_run.py` でバックエンド INV-1〜INV-4 をロック
+- `tests/contract/test_ui_schema_pydantic_alignment.py` で UI schema ↔ Pydantic drift をロック（P-0087 Phase 1+2）
+- `/api/workspace/status` に `files_root` 追加（P-0088）+ E2E globalSetup で env fingerprint 検証
+- `/fit` `/tune` に optional `config` body を追加（P-0086）
+
+**主要 PR:** #260〜#264, #281〜#287, #288, #289, #290〜#295, #296, #298 系（後続 hardening は #300/#303/#306〜#310）
+
+**DoD:**
+- [x] B-3 e2e spec が 7/7 strategy で green（P-0092 hypothesis 証明）
+- [x] `tests/contract/` で UI schema drift がブロック可能
+- [x] `tests/regression/` で running-lock の INV-1〜INV-4 がロック
+- [x] post-merge 監査の H-1〜H-4 / G-1〜G-8 / Issue #298 が解消（HISTORY.md §P-0092 follow-ups 参照）
+- [x] pytest / mypy / ruff / vitest / biome / pnpm build がすべて緑
+
+---
+
+## Phase v3-14: GUI E2E カバレッジ強化（gui-e2e-plan.md Phase D 残）🟡
+
+**動機:** Phase A の Config field × E2E カバレッジが約 18% にとどまる。残 80% のフィールド（B-1/B-2/B-4/B-5/B-6/B-8 + Phase C generator）を計画的に埋める。
+
+**対象 Proposal/Plan:** `docs/gui-e2e-plan.md` Phase B 残 + Phase C generator、`docs/ROADMAP.md` §3 で進捗管理
+
+**サブフェーズ:** 規模が大きいため、各 PR 単位で独立に進めて OK（HISTORY.md の Proposal は不要、ROADMAP.md §3 で進捗追跡）
+
+| サブフェーズ | 内容 | 状態 |
+|---|---|---|
+| v3-14a | B-4 Feature Weights editor spec | ❌ |
+| v3-14b | B-5 Column Settings spec | ❌ |
+| v3-14c | B-1 Jobs UI spec | ❌ |
+| v3-14d | B-6 Preset Load reflection 拡張 | ❌ |
+| v3-14e | Phase C fixture loop 起動（5〜10 フィールド） | ❌ |
+| v3-14f | B-8 mobile spec + Issue #304 完全クローズ | ❌ |
+| v3-14g | B-2 Inference history click 拡張 | ❌ |
+| v3-14h | B-3b BlockedGroupKFold 専用 spec | ❌ |
+
+**DoD:**
+- [ ] Phase A マトリクスのカバレッジが 80% 以上
+- [ ] Issue #304 の DataPanel skip / mobile skip がすべて整理（restore / delete / 適切なリンク）
+- [ ] Phase C generator が fixture 行追加だけで新規フィールド E2E をカバーできる状態
+- [ ] CI の e2e-chromium が安定して green
+
+---
+
+## 採番ガイダンス（v3-15 以降）
+
+- 新規 Proposal は **P-0093** 以降を起票。
+- 仕様変更を伴う作業は HISTORY.md に Proposal → 本 PLAN.md にフェーズ追加（`v3-15`...）の順で進める。
+- 詳細な未着手バックログは `docs/ROADMAP.md` を参照。

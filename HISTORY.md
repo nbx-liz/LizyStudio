@@ -2784,3 +2784,23 @@ ConfigForm の inner_valid auto-reset effect は `["training", "inner_valid", "m
 - Lessons captured globally:
   - `~/.claude/skills/learned/diagnosis-before-prescription.md` — the Three Verification Gates pattern that caught two false-positive diagnoses on this thread (the original "ConfigForm single writer" Phase 0 diagnosis and the Phase 5b "in-flight coalesce" misdiagnosis). Each was avoided once decoded PUT bodies replaced inferred ones.
 
+#### Post-merge follow-ups (2026-04-30)
+
+A code-review + test-coverage audit run immediately after the §P-0092 Resolved Decision surfaced 4 HIGH-level issues (H-1..H-4) and 3 critical E2E coverage gaps (G-1..G-3) plus 5 supporting gaps (G-6..G-8 etc.). All landed in 8 follow-up PRs against develop on 2026-04-30. Recording them here so the §P-0092 thread is auditable end-to-end.
+
+| ID | Description | Resolved by |
+|---|---|---|
+| H-1 | `useConfigSync` funnel path: `aborted` result fell through to `onDataChanged()` → spurious cache invalidation | PR #306 (was #296) — `fix(workspace): bail useConfigSync funnel path on aborted result` |
+| H-2 | User-driven Inner Validation Select wrote to legacy `training.inner_valid.{method,ratio}` (rejected by Pydantic `extra="forbid"`); auto-reset path was already migrated in Phase 2, user-driven path was missed | PR #308 (was #299), Issue #298 — `fix(workspace): route user-driven Inner Validation through early_stopping path` |
+| H-3 | `handleUndo` / `handleRedo` overwrote backend canonical (post-normalisation) snapshot with local history entry on the funnel path; `sendThroughFunnelOrLegacy` now returns `viaFunnel` so legacy path keeps its `setQueryData`, funnel path defers to `onWriteCommitted` | PR #303 (kept ID) — `fix(workspace): funnel error classification + undo/redo cache override` |
+| H-4 | `coalesceByReason` had a dead `if` branch (caller already gates by reason) — removed for clarity, comment expanded to document the extension point | PR #303 |
+| G-1 | Apply-to-Fit (P-0092 Phase 6) had zero Playwright coverage — only prop-capture mocks in `WorkspacePage.test.tsx:239+` | PR #309 (was #301) — `test(e2e): add Apply-to-Fit UI flow spec` |
+| G-2 | Cross-hook funnel integration test missing (Provider <-> consumer boundary unverified outside the queue-level unit tests) | PR #307 (was #297) — `test(workspace): add cross-hook funnel integration test` |
+| G-3 | `#279` running-lock UI mapping had only the backend regression at `tests/regression/test_reg_0279_workspace_locked_during_run.py`, no UI E2E (form disabled / 409 / re-enable) | PR #300 — `test(e2e): add workspace running-lock UI mapping spec` (later reworked around the disabled-input UI guard) |
+| G-6 | Funnel `WriteResult.error` flattened all errors into `"network"` — callers had to rummage through `details` for `ApiError + WORKSPACE_LOCKED` | PR #303 — added `classifyPutError` distinguishing `locked` / `rejected` / `network` |
+| G-8 | `ConfigUpdateResponse` wrapper pass-through to `onWriteCommitted` had no test, prone to wrapper-leak class of bug that bit Phase 4 follow-up | PR #303 — added 2 wrapper-shape pass-through tests |
+| Cleanup | Strict-context hook `useConfigWriteFunnelContext` (throw-on-missing variant) was unused in production; stale phase-milestone comments referenced shipped phases as future work | PR #310 (was #302) — `refactor(workspace): remove unused strict funnel hook + refresh stale comments` |
+| Cleanup | 8 `it.skip` / `test.skip` markers had no tracking issue (CLAUDE.md §7 rule violation) | PR #305 + Issue #304 — `chore(testing): link skipped tests to tracking issue #304` |
+
+PRs were initially opened against `main` (the repo's default base for `gh pr create`) and merged 5 of 8 before the deviation was caught. main was rolled back to `cd1c51e` and all 8 PRs re-created against develop. Branch-guard hook (`.claude/hooks/branch-guard.sh`) extended to require explicit `--base develop` on `gh pr create` to prevent recurrence.
+
