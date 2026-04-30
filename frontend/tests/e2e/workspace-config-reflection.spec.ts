@@ -46,6 +46,13 @@ test.describe("Workspace config reflection (Phase A scaffold)", () => {
     page,
     request,
   }, testInfo) => {
+    // P-0092 Q-1 Phase 5: re-enabled. Phase 5 migrates
+    // `useConfigSync.syncConfig` to the funnel and the seed helper
+    // waits for funnel quiescence before returning, so the (1)↔(2)↔(3)
+    // writer triangle the §P-0092 plan diagnoses is fully drained
+    // by the time `assertConfigReflection` subscribes for the next
+    // PUT. The spec runs without any helper/fixture changes — that
+    // is the green-flip contract.
     if (isMobileProject(testInfo)) {
       test.skip(true, "Mobile layout collapses Data accordion; covered by B-8");
     }

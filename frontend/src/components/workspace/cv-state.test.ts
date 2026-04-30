@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { filterInnerValidOptions, recommendedInnerValid } from "./cv-state";
+import {
+  filterInnerValidOptions,
+  pruneInnerValidForMethod,
+  recommendedInnerValid,
+} from "./cv-state";
 
 const ALL_OPTIONS = ["holdout", "group_holdout", "time_holdout"];
 
@@ -79,5 +83,85 @@ describe("recommendedInnerValid", () => {
 
   it("stratified_kfold → holdout", () => {
     expect(recommendedInnerValid("stratified_kfold")).toBe("holdout");
+  });
+});
+
+// P-0092 follow-up (2026-04-30): pruning inner_valid fields by the
+// new method's allowed schema. Mirrors the lizyml Pydantic schema:
+//   - holdout:        method, ratio, stratify, random_state
+//   - group_holdout:  method, ratio, random_state          (no stratify)
+//   - time_holdout:   method, ratio                        (no stratify, no random_state)
+//
+// The fix landed because clicking GroupKFold while inner_valid was on
+// holdout previously kept `stratify: false` in the body, which
+// GroupHoldoutInnerValidConfig rejects with `extra="forbid"`. The
+// 5 group/time strategies in B-3 spec exposed this for all of them.
+describe("pruneInnerValidForMethod", () => {
+  it("strips stratify when switching from holdout → group_holdout", () => {
+    const before = {
+      method: "holdout",
+      ratio: 0.2,
+      stratify: false,
+      random_state: 42,
+    };
+    expect(pruneInnerValidForMethod(before, "group_holdout")).toEqual({
+      method: "group_holdout",
+      ratio: 0.2,
+      random_state: 42,
+    });
+  });
+
+  it("strips stratify and random_state when switching from holdout → time_holdout", () => {
+    const before = {
+      method: "holdout",
+      ratio: 0.15,
+      stratify: true,
+      random_state: 7,
+    };
+    expect(pruneInnerValidForMethod(before, "time_holdout")).toEqual({
+      method: "time_holdout",
+      ratio: 0.15,
+    });
+  });
+
+  it("preserves all fields when staying on holdout", () => {
+    const before = {
+      method: "holdout",
+      ratio: 0.3,
+      stratify: true,
+      random_state: 1,
+    };
+    expect(pruneInnerValidForMethod(before, "holdout")).toEqual({
+      method: "holdout",
+      ratio: 0.3,
+      stratify: true,
+      random_state: 1,
+    });
+  });
+
+  it("returns method change when source has no shared fields", () => {
+    expect(pruneInnerValidForMethod({}, "group_holdout")).toEqual({
+      method: "group_holdout",
+    });
+  });
+
+  it("does not invent fields not present in source", () => {
+    const before = { method: "time_holdout", ratio: 0.1 };
+    // group_holdout allows random_state, but source has no random_state.
+    expect(pruneInnerValidForMethod(before, "group_holdout")).toEqual({
+      method: "group_holdout",
+      ratio: 0.1,
+    });
+  });
+
+  it("passes through unchanged for unknown methods (forward-compat)", () => {
+    const before = { method: "holdout", ratio: 0.1, stratify: true };
+    // future method we don't know about: keep current fields, just
+    // update method, so the backend can surface the schema error.
+    expect(pruneInnerValidForMethod(before, "future_method")).toEqual({
+      method: "future_method",
+      ratio: 0.1,
+      stratify: true,
+    });
   });
 });

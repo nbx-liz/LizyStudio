@@ -649,4 +649,270 @@ describe("useModelPanelData", () => {
       { path: "model", message: "required" },
     ]);
   });
+
+  // -------------------------------------------------------------------------
+  // P-0092 Q-1 Phase 4: write funnel routing
+  //
+  // When a `writeFunnel` is provided (production: via context provider in
+  // WorkspacePage; tests: via the params override), handleConfigChange /
+  // handleUndo / handleRedo enqueue through the funnel instead of calling
+  // updateConfig directly. The hook still owns the saved=false / 409 /
+  // debounce-validation observation logic — the funnel only owns the
+  // network call ordering.
+  // -------------------------------------------------------------------------
+  describe("write funnel routing (P-0092 Phase 4)", () => {
+    function createStubFunnel(
+      stub: (op: {
+        kind: "replace";
+        config: Record<string, unknown>;
+        reason: string;
+      }) =>
+        | {
+            ok: true;
+            saved: { config: Record<string, unknown>; errors: []; saved: true };
+          }
+        | { ok: true; saved: unknown }
+        | { ok: false; error: "network"; details?: unknown },
+    ) {
+      const calls: { reason: string; config: Record<string, unknown> }[] = [];
+      const enqueueWrite = vi.fn(async (op: unknown) => {
+        const replace = op as {
+          kind: "replace";
+          config: Record<string, unknown>;
+          reason: string;
+        };
+        calls.push({ reason: replace.reason, config: replace.config });
+        return stub(replace);
+      });
+      return {
+        funnel: { enqueueWrite, isFlushing: () => false },
+        calls,
+        enqueueWrite,
+      };
+    }
+
+    it("handleConfigChange routes through funnel with reason=config-form-edit", async () => {
+      const { funnel, calls } = createStubFunnel(() => ({
+        ok: true,
+        saved: { config: {}, errors: [], saved: true },
+      }));
+
+      const { wrapper, queryClient } = makeWrapper();
+      const { result } = renderHook(
+        () =>
+          useModelPanelData({
+            hasData: true,
+            running: false,
+            // biome-ignore lint/suspicious/noExplicitAny: stub funnel for test
+            writeFunnel: funnel as any,
+          }),
+        { wrapper },
+      );
+      await waitFor(() => expect(result.current.config).toBeDefined());
+
+      await act(async () => {
+        await result.current.handleConfigChange({ model: { name: "LGBM" } });
+      });
+
+      expect(calls).toEqual([
+        { reason: "config-form-edit", config: { model: { name: "LGBM" } } },
+      ]);
+      // Direct updateConfig must NOT have been called when the funnel is wired.
+      expect(updateConfig).not.toHaveBeenCalled();
+      expect(queryClient.getQueryData(queryKeys.config())).toEqual({
+        model: { name: "LGBM" },
+      });
+    });
+
+    it("handleConfigChange observes saved=false from funnel response and surfaces errors", async () => {
+      const rejectionErrors = [{ path: "data", message: "Field required" }];
+      const { funnel } = createStubFunnel(() => ({
+        ok: true,
+        saved: { config: {}, errors: rejectionErrors, saved: false },
+      }));
+
+      const { wrapper, queryClient } = makeWrapper();
+      const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+      const { result } = renderHook(
+        () =>
+          useModelPanelData({
+            hasData: true,
+            running: false,
+            // biome-ignore lint/suspicious/noExplicitAny: stub funnel for test
+            writeFunnel: funnel as any,
+          }),
+        { wrapper },
+      );
+      await waitFor(() => expect(result.current.config).toBeDefined());
+
+      await act(async () => {
+        await result.current.handleConfigChange({ model: { name: "X" } });
+      });
+
+      expect(result.current.errors).toEqual(rejectionErrors);
+      // Cache must NOT contain the rejected payload — invalidate forces re-fetch.
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: queryKeys.config(),
+      });
+      // Rejected change must not have been recorded in history.
+      expect(result.current.history.canUndo).toBe(false);
+    });
+
+    it("handleConfigChange surfaces 409 WORKSPACE_LOCKED from funnel result.details", async () => {
+      const { ApiError } = await import("@/api/client");
+      const lockErr = new ApiError(409, {
+        error: {
+          code: "WORKSPACE_LOCKED",
+          message: "Config is locked while job xyz is running",
+          details: { job_id: "xyz" },
+        },
+      });
+      const { funnel } = createStubFunnel(() => ({
+        ok: false,
+        error: "network",
+        details: lockErr,
+      }));
+
+      const { wrapper, queryClient } = makeWrapper();
+      const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+      const { result } = renderHook(
+        () =>
+          useModelPanelData({
+            hasData: true,
+            running: false,
+            // biome-ignore lint/suspicious/noExplicitAny: stub funnel for test
+            writeFunnel: funnel as any,
+          }),
+        { wrapper },
+      );
+      await waitFor(() => expect(result.current.config).toBeDefined());
+
+      await act(async () => {
+        await result.current.handleConfigChange({ model: { name: "Z" } });
+      });
+
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: queryKeys.config(),
+      });
+      expect(result.current.history.canUndo).toBe(false);
+    });
+
+    it("handleUndo routes through funnel with reason=undo on success", async () => {
+      const { funnel, calls } = createStubFunnel(() => ({
+        ok: true,
+        saved: { config: {}, errors: [], saved: true },
+      }));
+
+      const { wrapper, queryClient } = makeWrapper();
+      const { result } = renderHook(
+        () =>
+          useModelPanelData({
+            hasData: true,
+            running: false,
+            // biome-ignore lint/suspicious/noExplicitAny: stub funnel for test
+            writeFunnel: funnel as any,
+          }),
+        { wrapper },
+      );
+      await waitFor(() => expect(result.current.config).toBeDefined());
+
+      // Seed history with two entries so undo has somewhere to go.
+      await act(async () => {
+        await result.current.handleConfigChange({ model: { name: "A" } });
+      });
+      await act(async () => {
+        await result.current.handleConfigChange({ model: { name: "B" } });
+      });
+      expect(result.current.history.canUndo).toBe(true);
+
+      await act(async () => {
+        await result.current.handleUndo();
+      });
+
+      const reasons = calls.map((c) => c.reason);
+      expect(reasons).toContain("undo");
+      expect(queryClient.getQueryData(queryKeys.config())).toEqual({
+        model: { name: "A" },
+      });
+    });
+
+    it("handleRedo routes through funnel with reason=redo", async () => {
+      const { funnel, calls } = createStubFunnel(() => ({
+        ok: true,
+        saved: { config: {}, errors: [], saved: true },
+      }));
+
+      const { wrapper, queryClient } = makeWrapper();
+      const { result } = renderHook(
+        () =>
+          useModelPanelData({
+            hasData: true,
+            running: false,
+            // biome-ignore lint/suspicious/noExplicitAny: stub funnel for test
+            writeFunnel: funnel as any,
+          }),
+        { wrapper },
+      );
+      await waitFor(() => expect(result.current.config).toBeDefined());
+
+      await act(async () => {
+        await result.current.handleConfigChange({ model: { name: "A" } });
+      });
+      await act(async () => {
+        await result.current.handleConfigChange({ model: { name: "B" } });
+      });
+      await act(async () => {
+        await result.current.handleUndo();
+      });
+      await act(async () => {
+        await result.current.handleRedo();
+      });
+
+      const reasons = calls.map((c) => c.reason);
+      expect(reasons).toContain("redo");
+      expect(queryClient.getQueryData(queryKeys.config())).toEqual({
+        model: { name: "B" },
+      });
+    });
+
+    it("handleUndo surfaces 'Undo failed' toast when funnel returns ok=false", async () => {
+      const { funnel } = createStubFunnel((op) => {
+        if (op.reason === "undo") {
+          return { ok: false, error: "network", details: new Error("boom") };
+        }
+        return {
+          ok: true,
+          saved: { config: {}, errors: [], saved: true },
+        };
+      });
+
+      const { wrapper, queryClient } = makeWrapper();
+      const { result } = renderHook(
+        () =>
+          useModelPanelData({
+            hasData: true,
+            running: false,
+            // biome-ignore lint/suspicious/noExplicitAny: stub funnel for test
+            writeFunnel: funnel as any,
+          }),
+        { wrapper },
+      );
+      await waitFor(() => expect(result.current.config).toBeDefined());
+
+      await act(async () => {
+        await result.current.handleConfigChange({ model: { name: "A" } });
+      });
+      await act(async () => {
+        await result.current.handleConfigChange({ model: { name: "B" } });
+      });
+      const beforeUndo = queryClient.getQueryData(queryKeys.config());
+
+      await act(async () => {
+        await result.current.handleUndo();
+      });
+
+      // Cache must not have been updated to the undone state on failure.
+      expect(queryClient.getQueryData(queryKeys.config())).toEqual(beforeUndo);
+    });
+  });
 });

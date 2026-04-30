@@ -110,21 +110,39 @@ export function deepGet(
 }
 
 /**
- * Wait for the very next PUT /api/workspace/config that the page
- * issues, returning the parsed JSON body. The matcher anchors on the
- * exact path and HTTP method so we do not pick up unrelated PATCH or
- * sibling routes (e.g. /config/validate).
+ * Wait for the next PUT /api/workspace/config whose body satisfies
+ * `bodyPredicate`. The matcher anchors on the exact URL + HTTP
+ * method, then filters bodies — this skips the partial-only PUTs
+ * that P-0092 Phase 2 introduced (e.g. an `auto-reset` patch that
+ * carries only `{evaluation: {...}}` and no `split` block). Without
+ * the body filter, those partial PUTs land in the queue ahead of
+ * the field-edit PUT we are actually trying to lock and the spec
+ * fails with `Received: undefined` at the configPath we asked for.
  *
  * Caller is responsible for invoking the UI action AFTER this promise
- * is created — Playwright's `waitForRequest` is one-shot, so racing
- * the action before subscribing drops the event.
+ * is created — Playwright's `waitForRequest` is a one-shot
+ * subscription, so racing the action before subscribing drops the
+ * event.
+ *
+ * If `bodyPredicate` is omitted the function preserves the original
+ * behaviour (any PUT to /workspace/config) for callers that haven't
+ * been migrated yet.
  */
 export async function nextPutConfigBody(
   page: Page,
+  bodyPredicate?: (body: Record<string, unknown>) => boolean,
 ): Promise<Record<string, unknown>> {
   const req = await page.waitForRequest((r: Request) => {
     if (r.method() !== "PUT") return false;
-    return r.url().endsWith("/api/workspace/config");
+    if (!r.url().endsWith("/api/workspace/config")) return false;
+    if (bodyPredicate === undefined) return true;
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = r.postDataJSON() as Record<string, unknown>;
+    } catch {
+      return false;
+    }
+    return bodyPredicate(parsed);
   });
   const body = req.postDataJSON();
   return body as Record<string, unknown>;
@@ -157,9 +175,17 @@ export async function assertConfigReflection<TValue>(
   // (2)+(3) drive the UI and observe the immediate PUT body. The
   // promise is created BEFORE the UI action so we don't drop the
   // request — Playwright's waitForRequest is a one-shot subscription.
+  // We filter the body so partial PUTs that don't carry `configPath`
+  // (e.g. P-0092 Phase 2 `auto-reset` patches that only flush the
+  // evaluation/objective fields) are skipped — the spec asserts a
+  // specific field, so the relevant PUT is the one whose body
+  // contains a value at that path.
   const locator = spec.uiLocator(page);
   await expect(locator).toBeVisible();
-  const putPromise = nextPutConfigBody(page);
+  const putPromise = nextPutConfigBody(
+    page,
+    (body) => deepGet(body, spec.configPath) !== undefined,
+  );
   await spec.uiAction(locator, spec.testValue);
   const putBody = await putPromise;
   expect(

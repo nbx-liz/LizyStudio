@@ -1,20 +1,15 @@
-import { useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { toast } from "sonner";
 import { getErrorMessage } from "@/api/errors";
-import { queryKeys } from "@/api/queryKeys";
 import type { ColumnInfo, UiSchema } from "@/api/types";
-import {
-  fetchColumns,
-  fetchConfigDefaults,
-  updateConfig,
-} from "@/api/workspace";
+import { fetchColumns, fetchConfigDefaults } from "@/api/workspace";
 import type { BlockedGroupKFoldState } from "@/components/workspace/BlockedGroupKFoldEditor";
 import {
   type CvState,
   getEffectiveCvStrategy,
   resetCvState,
 } from "@/components/workspace/cv-state";
+import type { ConfigWriteFunnel } from "./useConfigWriteFunnel";
 import {
   buildMergedConfig,
   buildOverridesFromColumns,
@@ -48,6 +43,24 @@ interface UseTargetSelectionParams {
   preseedSyncKey: (key: string) => void;
   onDataChanged: () => void;
   onTaskChanged?: (task: string | null) => void;
+  /**
+   * P-0092 Q-1 Phase 3: write funnel injected by `useDataPanel`. When
+   * provided, the merged-config PUT goes through `enqueueWrite` so the
+   * target-select operation serialises behind any in-flight cv-change
+   * or auto-reset writers. When `null` (test paths that render the
+   * hook without a Provider), falls back to the legacy direct
+   * `updateConfig` + `setQueryData` pair via `legacyUpdateConfig`.
+   */
+  writeFunnel?: ConfigWriteFunnel | null;
+  /**
+   * Legacy code path used only when `writeFunnel` is not supplied.
+   * Tests inject a stubbed pair to assert the merged config that
+   * would have been PUT.
+   */
+  legacyUpdateConfig?: {
+    putConfig: (body: Record<string, unknown>) => Promise<unknown>;
+    setQueryData: (config: Record<string, unknown>) => void;
+  };
 }
 
 export function useTargetSelection({
@@ -65,9 +78,9 @@ export function useTargetSelection({
   preseedSyncKey,
   onDataChanged,
   onTaskChanged,
+  writeFunnel,
+  legacyUpdateConfig,
 }: UseTargetSelectionParams) {
-  const queryClient = useQueryClient();
-
   const handleTargetChange = useCallback(
     async (value: string) => {
       setSyncSuppressed(true);
@@ -107,8 +120,31 @@ export function useTargetSelection({
             target: value,
             overrides: newOverrides,
           });
-          await updateConfig(merged);
-          queryClient.setQueryData(queryKeys.config(), merged);
+          // P-0092 Phase 3: route the merged-config PUT through the
+          // write funnel when one is wired. The funnel's
+          // `onWriteCommitted` writes the saved snapshot to the
+          // React Query cache, so the legacy `setQueryData` is no
+          // longer needed in that path. Test paths that mount the
+          // hook without a Provider keep using `legacyUpdateConfig`
+          // — the seam exists for the exact reason the funnel does:
+          // we want to migrate this writer without breaking unit
+          // tests that drive it directly.
+          if (writeFunnel) {
+            await writeFunnel.enqueueWrite({
+              kind: "replace",
+              config: merged,
+              reason: "target-select",
+            });
+          } else if (legacyUpdateConfig) {
+            await legacyUpdateConfig.putConfig(merged);
+            legacyUpdateConfig.setQueryData(merged);
+          } else {
+            // No writer wired — surface clearly instead of silently
+            // dropping the user's target pick.
+            throw new Error(
+              "useTargetSelection: neither writeFunnel nor legacyUpdateConfig was provided",
+            );
+          }
           preseedSyncKey(
             buildSyncKey(value, detectedTask, newOverrides, nextCv, blocked),
           );
@@ -137,7 +173,6 @@ export function useTargetSelection({
       uiSchema,
       onDataChanged,
       onTaskChanged,
-      queryClient,
       setTarget,
       setTask,
       setCv,
@@ -145,6 +180,8 @@ export function useTargetSelection({
       setOverrides,
       setSyncSuppressed,
       preseedSyncKey,
+      writeFunnel,
+      legacyUpdateConfig,
     ],
   );
 

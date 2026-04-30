@@ -1,5 +1,6 @@
 import { expect, type Page, type TestInfo } from "@playwright/test";
 import type { APIRequestContext } from "@playwright/test";
+import { API } from "./api";
 import { isMobileProject, openWorkspaceSectionIfMobile } from "./mobile";
 import { dismissOnboarding } from "./onboarding";
 
@@ -74,6 +75,65 @@ export async function seedUiWorkspace(
   // On mobile the Model panel collapses; re-open it so the caller can
   // interact with Fit/Tune controls. On desktop this is a no-op.
   await openWorkspaceSectionIfMobile(page, testInfo, "model");
+
+  // P-0092 Q-1 Phase 5 helper invariant: target-select kicks off a
+  // chain of funnel-routed PUTs (useTargetSelection's merged write,
+  // ConfigForm auto-reset patches, useConfigSync cv-change PUTs).
+  // Local trace verification (commit message of the helper PR):
+  // 6 PUTs land in the seed window, all carrying split.n_splits=5
+  // (the seed default). If a spec subscribes for the next PUT
+  // immediately after seedUiWorkspace returns and a stale n_splits=5
+  // PUT is still queued in the funnel, the spec's body filter
+  // matches that stale carrier instead of the post-fill PUT it was
+  // meant to lock.
+  //
+  // The fix is "quiescence detection": wait until N consecutive GETs
+  // observe the same backend state across a settle window. When the
+  // GETs stabilise, no more PUTs are landing — the funnel queue is
+  // drained. This is a black-box check; it does not depend on funnel
+  // internals and works the same in dev (StrictMode double-fire) as
+  // in production.
+  await expect
+    .poll(
+      async () => {
+        const res = await page.request.get(`${API}/workspace/config`);
+        if (res.status() !== 200) return null;
+        const body = (await res.json()) as { split?: { method?: string } };
+        return body.split?.method ?? null;
+      },
+      {
+        timeout: 5_000,
+        intervals: [50, 100, 200, 500],
+        message:
+          "seedUiWorkspace: backend never observed the seeded config.split.method (target-select PUT likely failed)",
+      },
+    )
+    .not.toBeNull();
+
+  // Quiescence: snapshot the saved config 4 times across 200ms; if
+  // all four match, the funnel has settled. If any differ, restart
+  // the count. 1s total budget — every observed local repro settles
+  // in <500ms, but CI machines vary.
+  await expect
+    .poll(
+      async () => {
+        const samples: string[] = [];
+        for (let i = 0; i < 4; i++) {
+          const res = await page.request.get(`${API}/workspace/config`);
+          if (res.status() !== 200) return "no-200";
+          samples.push(await res.text());
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        return samples.every((s) => s === samples[0]) ? "stable" : "moving";
+      },
+      {
+        timeout: 4_000,
+        intervals: [100, 200, 400, 800],
+        message:
+          "seedUiWorkspace: funnel never quiesced — pending PUTs kept changing the backend state",
+      },
+    )
+    .toBe("stable");
 }
 
 /** Re-export mobile guard so specs don't need two imports. */

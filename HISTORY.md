@@ -2575,3 +2575,212 @@ v2 再開発ブランチ（`feat/v2`）にて、フロントエンドのテッ�
   - (d) Manual smoke: target=Survived の状態で Feature Weights を ON にし、"Add feature" picker に Survived が **含まれない** ことを確認（実機 Playwright）。
 - **Decision:**
   - 2026-04-28 **Proposed & Implemented** — PR-C3 として merge 予定。Issue #277 を close。post-#271 smoke 3-PR plan (PR-C1 / PR-C2 / PR-C3) はこれで完了。
+
+### P-0092: Workspace config write funnel の cross-hook race（PR #289 で発覚、複数 writer の設計議論待ち）
+- **Status:** investigation — implementation deferred pending design review
+- **Scope:** Frontend / State management
+- **Related:** Issue #272 / Issue #278（cross-hook competing-write race の前段）、P-0086（DataPanel ref + setQueryData）、P-0090 (PR #286, useConfigSync の setQueryData + back-sync)、PR #289（B-3 e2e spec、本 race を CI で再現）、gui-e2e-plan.md B-3
+- **Symptom:** `develop` 上で B-3 e2e spec (`workspace-cv.spec.ts`) を走らせると、CV strategy radio click 後 5 秒待っても server 側 saved config の `split.method` が変わらない。実機 (`pnpm dev` + Playwright MCP) でも同じ巻き戻しが再現する。
+- **Initial diagnosis (2026-04-29 first pass — partially incorrect):** 当初は `ConfigForm.tsx:121-136` の inner_valid auto-reset effect が古い `configRef.current` snapshot から PUT を発火することが原因と判断した。しかし実機の network/cache observation で以下の追加事実が判明し、診断は不完全であることが確認された:
+  1. `browser_network_requests` で観察した巻き戻し PUT の body は **stratified_kfold + `random_state: 42` (defaults 由来) + 完全な model.params + evaluation.metrics + training.early_stopping.inner_valid=holdout** という **完全な config body** で、ConfigForm の auto-reset effect が `setNestedValue` で書き換える `["training","inner_valid","method"]` 1 フィールドだけの shape ではない。
+  2. cache polling (50ms 間隔) で saved config を観察すると、click から **44ms 後に巻き戻しが完了** している（`t=212ms split=stratified_kfold` → `t=256ms split=stratified_kfold + random_state=42`）。これは ConfigForm 経由で onChange → useModelPanelData.handleConfigChange → updateConfig という path にしては短すぎる。
+  3. 巻き戻し PUT の `random_state=42` は `fetchConfigDefaults("binary","target")` の output と一致する。これは **`useConfigSync.syncConfig`** が L66-68 で defaults を取得して base にしている経路と一致する。
+- **Refined hypothesis:** 単一 writer の責任ではなく、**3 つの writer がすべて in-flight な書込みを発行している**:
+  1. `useConfigSync.syncConfig` (L55-149): cv/target/task/overrides/blocked が変わるたびに re-create され `useEffect` から呼ばれる。`abortRef.abort()` は前回をキャンセルするが、**既に server に届いた fetch の body 送信はキャンセルできず**、server 側で commit される。`syncConfig` は closure で `cv` を capture しているため、cv が連続変化した場合の order は保証されない。
+  2. `useModelPanelData.handleConfigChange` (L100-163): ConfigForm の `onChange` の終端。`updateConfig` を直接呼び `setQueryData` で cache を上書きする。useConfigSync の in-flight PUT を尊重しない。
+  3. `ConfigForm.tsx` 内の auto-reset useEffect 群 (line 121-136 / 158-170 / 248-): `configRef.current` を base に `handleFieldChange` → `onChange(updated)` を発火。`configRef.current = config` (line 67) は render 時に更新されるが、render 順序と useConfigSync の PUT 順序の関係は保証されていない。
+
+  **PR #286 (P-0090) は writer (1) と useDataPanel の back-sync race を塞いだ**が、(1)↔(2)↔(3) の三者間 race は対象外だった。今回 PR #289 の e2e spec が初めてこの三者間 race を再現可能な形で表面化した。
+- **Why a simple fix is unsafe:** 場当たり的な単一 writer 修正（例: configRef を queryCache に subscribe / useConfigSync に inner_valid 統合 / auto-reset を debounce）はいずれも **残り 2 つの writer の race を温存する**。実装試行の途中で「修正候補 (A)/(B)/(C) のどれを採っても他の writer 経路が race する」ことが判明し、設計議論なしに実装を進めると過去の P-0086 / P-0090 と同じ "塞いでも次の隙間が出る" pattern を繰り返す。
+- **Investigation needed (deferred to design review):**
+  - **Q-1: write funnel の単一化** — ConfigForm の auto-reset / useModelPanelData.handleConfigChange / useConfigSync.syncConfig を **1 経路** にできるか。例: 全ての PUT を `useConfigSync` に集約し、ConfigForm は controlled state を local に保持して `useConfigSync` に通知のみする shape。Workspace 全体の controlled-state 設計を見直す必要がある。
+  - **Q-2: write ordering を server side で保証する** — 例: `If-Match: <config_version>` ヘッダで optimistic locking を導入し、stale な PUT は 409 を返す。Frontend は 409 を受けて latest を再 fetch + retry。Backend API 変更を伴うため change-gate 対象。
+  - **Q-3: useConfigSync の closure 安定化** — `cv` を ref 化して `syncConfig` を deps から除く / `cv` ref を read at PUT-time。これで (1) の closure race は塞ぐが (2) と (3) の race は残る。
+  - **Q-4: ConfigForm の effect を全廃止** — auto-reset (inner_valid / calibration / objective) を server 側 (Pydantic validator + auto-adjust) に移管。frontend は server response の値を表示するだけ。これも change-gate 対象。
+- **Invariants we eventually want to lock:**
+  - INV-1: PUT `/api/workspace/config` の body は in-flight な PUT を尊重して順序付けられ、最終的に server 上の saved config が user intent と一致する。
+  - INV-2: writer (1)/(2)/(3) 間で base config snapshot の "誰が最新を持つか" の責務が単一に決まる。
+  - INV-3: cv strategy 切替で派生する inner_valid / objective / metric のリセットは、cv 変更の **同一 PUT** で flush されるか、base PUT 完了を待ってから follow-up PUT として flush される（順序保証あり）。
+  - INV-4: e2e (B-3) で 8 strategy 巡回した時、server saved config が常に最後の click の strategy と一致する。
+- **Compatibility (任意の解決策で見ておくべき範囲):**
+  - API: Q-2 (If-Match) を採るなら PUT の semantics 拡張が必要。Q-4 を採るなら GET response shape 拡張あり。Q-1/Q-3 は wire 不変。
+  - UI: 巻き戻し挙動が止まる方向の「regression ではない仕様準拠化」。
+  - Backend: Q-2/Q-4 は backend 変更を伴う。
+- **Decision:**
+  - 2026-04-29 **Proposed** — initial diagnosis (ConfigForm の単一 writer race) に基づく実装試行（仮称 PR #291）は中断。実機 + cache polling で 3 writer race と判明したため、Q-1 〜 Q-4 から方針を確定するまで実装を止め、設計議論を待つ。
+  - PR #289 (`workspace-cv.spec.ts`) は本 Proposal が解決するまで draft のまま保持。本 Proposal の Acceptance には PR #289 の B-3 spec が CI で 7 strategy 全 pass することを最終条件として残す。
+  - 当面の Workaround: `develop` 上の手動 smoke では cv strategy 変更後 1 秒待ってから次の操作に進むことで巻き戻しを観察できる。回避策ではあるが本質的修正ではない。
+  - 2026-04-29 **Approach selected: Q-1 (Write funnel 単一化)** — 全 PUT を `useConfigSync` 一本に集約する。短期の partial fix (Q-3) は P-0086 / P-0090 と同じ "塞いでも次の隙間が出る" pattern を再生産する risk が高く、根治しない。Q-2 (If-Match) と Q-4 (server auto-adjust) は backend 変更を伴い change-gate 範囲が広い。Q-1 は frontend 内で完結し、構造的に race を消す唯一の選択肢。
+
+#### Phase plan (Q-1 段階実装)
+
+PR を 6 段階に分け、**各段階で B-3 spec の進捗を確認**しながら進める。各段階の commit は単独で revert 可能な単位とする。
+
+##### Phase 0: writer inventory (この Proposal 内でドキュメント済)
+
+現在の writer 一覧（PUT `/api/workspace/config` を発行する 6 箇所）:
+
+| ID | 場所 | 経路 | 用途 |
+|----|------|------|------|
+| W1 | `hooks/useConfigSync.ts:106` | `syncConfig` | DataPanel state (target/task/cv/blocked/overrides) 変更 |
+| W2 | `hooks/useTargetSelection.ts:110` | target 選択時の `merged` PUT | target 選択 + defaults 取得 |
+| W3 | `hooks/useModelPanelData.ts:115` | `handleConfigChange` | ConfigForm onChange (auto-reset effects 含む) |
+| W4 | `hooks/useModelPanelData.ts:186` | `handleUndo` | undo |
+| W5 | `hooks/useModelPanelData.ts:198` | `handleRedo` | redo |
+| W6 | `pages/WorkspacePage.tsx:132` | `handleApplyToFit` | Re-fit ボタン |
+
+`setQueryData(queryKeys.config(), ...)` の cache writer も同 5 箇所に分散。
+
+##### Phase 1: write funnel API を `useConfigSync` 上に新設
+
+- **目的:** 既存 writer を順次 funnel に移すための受け皿を用意する。実 writer 数を増やさない (W1 内に新 API を生やすだけ)。
+- **API 設計:**
+  ```ts
+  // useConfigSync の return
+  return {
+    syncConfig,           // 既存 — DataPanel 由来 sync (Phase 5 で内部実装が funnel.enqueue に置き換わる)
+    setSyncSuppressed,    // 既存
+    preseedSyncKey,       // 既存
+    // --- new ---
+    enqueueWrite,         // (op: WriteOp) => Promise<WriteResult> — 全外部 writer の入口
+    onTerminal,           // (cb) => unsubscribe — 完了通知 (test と downstream effects 用)
+  };
+
+  type WriteOp =
+    | { kind: 'replace'; config: FullConfig; reason: WriteReason }
+    | { kind: 'patch'; path: string[]; value: unknown; reason: WriteReason };
+
+  type WriteReason =
+    | 'target-select' | 'cv-change' | 'config-form-edit'
+    | 'undo' | 'redo' | 'apply-to-fit' | 'preset-load' | 'auto-reset';
+  ```
+- **State machine:**
+  - `idle` → `enqueueing` → `flushing` → `idle` (or `error`)
+  - `flushing` 中の enqueue は **後勝ち merge**: 同じ `WriteReason` は最新で上書き、異なる reason は serial に直列化
+  - `abort` は `flushing` 中の controller のみに作用、queue 上の op は維持
+- **scope:** `useConfigSync.ts` 内のみ。新 export 追加、既存 syncConfig 呼び出し側は変更しない。
+- **出口テスト:** vitest unit tests for funnel state machine. B-3 spec は **まだ red のまま** (writer がまだ funnel に流れていない)。
+- **PR 規模:** ~200 行追加, 0 行削除
+
+##### Phase 2: ConfigForm auto-reset effects → funnel に移行 (W3 の auto-reset 経路)
+
+- **目的:** B-3 race の最大要因の一つ、ConfigForm の inner_valid / calibration / objective auto-reset effect を funnel に流す。
+- **変更:**
+  - `ConfigForm` に `enqueueWrite` prop (or `useWorkspaceWriter()` context) を渡す。
+  - 3 つの auto-reset useEffect 内の `handleFieldChange(...)` → `enqueueWrite({ kind: 'patch', path, value, reason: 'auto-reset' })` に置き換え。
+  - 既存 `handleFieldChange` は user の field edit 用 (W3 の本筋) のみ残す → これは Phase 4 で扱う。
+- **出口テスト:** B-3 spec の **少なくとも一部の strategy が green になる**ことを確認 (auto-reset 由来の race が消える)。残りの strategy は W3 の user edit 経路や W2 の target merge race で red のまま。
+- **PR 規模:** ~150 行 ± 80 行
+- **チェックポイント:** 実装後ローカル `pnpm dev` + Playwright MCP で 8 strategy 巡回、saved config の遷移を 50ms polling で確認。
+
+##### Phase 3: useTargetSelection (W2) の merged PUT → funnel
+
+- **目的:** target 選択時の rapid PUT バーストを 1 つの funnel write に統合する。
+- **変更:**
+  - `useTargetSelection.ts:110` の `updateConfig(merged)` → `enqueueWrite({ kind: 'replace', config: merged, reason: 'target-select' })`
+  - `setQueryData` も funnel 内で行うため除去。
+- **出口テスト:** B-3 spec の **target 選択直後の strategy 切替** で green 化を確認。
+- **PR 規模:** ~80 行
+
+##### Phase 4: useModelPanelData (W3 user edit 経路) → funnel
+
+- **目的:** ConfigForm の user 由来 onChange (numeric/text/select の手編集) を funnel に流す。
+- **変更:**
+  - `useModelPanelData.handleConfigChange` の `updateConfig(newConfig)` → `enqueueWrite({ kind: 'replace', config: newConfig, reason: 'config-form-edit' })`
+  - undo / redo (W4 / W5) も同 PR で `reason: 'undo' | 'redo'` で funnel 経由に。
+  - validate debounce timer は funnel 完了後に動かす。
+- **出口テスト:** ConfigForm 経由の rapid edit (numeric stepper 連打 + cv strategy click) で巻き戻しが起きないことを Playwright MCP で確認。
+- **PR 規模:** ~150 行
+
+##### Phase 5: useConfigSync.syncConfig 内部実装も funnel ベースに統合
+
+- **目的:** W1 自身も funnel.enqueue を経由する形に書き換え、`abortRef` を funnel state machine に吸収。
+- **変更:**
+  - syncConfig が `cv` deps closure を持つ問題を、`enqueueWrite({ kind: 'replace', config: rebuiltFromLatestState, reason: 'cv-change' })` で解消。
+  - dedup key の概念を funnel 側に移管。
+- **出口テスト:** B-3 spec の **8 strategy 全部 green**。
+- **PR 規模:** ~200 行
+
+##### Phase 6: WorkspacePage.handleApplyToFit (W6) と Preset Load → funnel
+
+- **目的:** 残る writer を funnel に取り込み、`updateConfig` の **唯一の caller が useConfigSync 内の 1 箇所** になる状態を達成。
+- **変更:**
+  - `WorkspacePage.tsx:132` を `enqueueWrite({ kind: 'replace', reason: 'apply-to-fit' })` に。
+  - Preset Load (`useModelPanelData` 経由) も funnel に。
+- **出口テスト:** `grep -rE "updateConfig\(" frontend/src/` が `useConfigSync.ts` の 1 箇所のみを返すこと。 B-3 spec + 既存 e2e 全 green 維持。
+- **PR 規模:** ~120 行
+
+#### Acceptance criteria (全 Phase 完了時)
+
+- (a) PR #289 の `workspace-cv.spec.ts` が 7 strategy 全 pass。
+- (b) `frontend/src/` 内の `updateConfig(` call site が **1 箇所のみ** (`useConfigSync.ts` 内 funnel 実装)。
+- (c) `setQueryData(queryKeys.config(), ...)` 同様に funnel 内 1 箇所。
+- (d) `useConfigSync.test.ts` に funnel state machine の invariant test を追加 (concurrent enqueue / abort during flush / dedup by reason)。
+- (e) frontend vitest / biome / build / backend pytest がすべて green。既存 unit test の意図的な書き換え (mock の差し替え) は許容、新規スキップは禁止。
+- (f) 各 Phase の PR は単独で revert 可能 (incremental release safety)。
+
+#### Risk / 撤退基準
+
+- Phase 2 完了時に B-3 spec の **どの strategy も green にならない** 場合、診断が更に外れている可能性。Phase 3 に進まず再調査。
+- 各 Phase で既存 e2e (workspace-fit / workspace-tune / inference-flow) に regression が出たら、その PR を merge せず原因究明を優先。
+- 全 6 PR で **累計 frontend bundle 増加が +5KB を超えない** ことを bundle-size チェックで確認 (recent coupling refactor の予算に倣う)。
+
+#### Progress log (2026-04-29 mid-flight snapshot, plan 段階)
+
+| Phase | PR | Status | Date | 観察 |
+|---|---|---|---|---|
+| Proposal | [#290](https://github.com/nbx-liz/LizyStudio/pull/290) | open | 2026-04-29 | Q-1 採用、6-phase plan 確定 |
+| Phase 1 (funnel skeleton) | [#291](https://github.com/nbx-liz/LizyStudio/pull/291) | CI green | 2026-04-29 | 14 unit tests pass。1680 / 1682 既存 vitest pass。dead code (production wiring 無し) |
+| Phase 2 (ConfigForm auto-reset) | [#292](https://github.com/nbx-liz/LizyStudio/pull/292) | CI green | 2026-04-29 | StratifiedKFold → KFold 切替の race 解消 (ローカル実機 confirmed)。GroupKFold は引き続き race (W1 経路、Phase 5 scope)。`workspace-config-reflection.spec.ts` は Phase 5 まで `test.skip` |
+| Phase 3 (useTargetSelection) | [#293](https://github.com/nbx-liz/LizyStudio/pull/293) | CI green | 2026-04-29 | target-select 直後の rapid PUT バーストを `target-select` reason で funnel serialise。`legacyUpdateConfig` seam pattern を導入 |
+| Phase 4 (useModelPanelData) | [#294](https://github.com/nbx-liz/LizyStudio/pull/294) | CI green | 2026-04-29 | onWriteCommitted wrapper-leak fix を同梱 |
+| Phase 5 (useConfigSync W1) | [#295](https://github.com/nbx-liz/LizyStudio/pull/295) | CI green | 2026-04-29 〜 04-30 | B-3 spec が green になる出口 |
+| Phase 6 (WorkspacePage W6) | [#295](https://github.com/nbx-liz/LizyStudio/pull/295) | CI green | 2026-04-30 | exit check 達成 |
+
+##### B-3 / D-1 spec status (mid-flight)
+
+- **PR #289** (`workspace-cv.spec.ts`) — draft 維持。Phase 5 で 7 strategy 全 pass する想定。
+- **`workspace-config-reflection.spec.ts`** (D-1 sample) — `test.skip(true, "Skipped during P-0092 Phase 2..4. Re-enabled at Phase 5...")`。Phase 5 完了で skip 削除し、spec への変更なしに green になることを確認。
+
+##### Phase 2 で見つけた副次的バグ
+
+ConfigForm の inner_valid auto-reset effect は `["training", "inner_valid", "method"]` を書いていたが、lizyml schema (`extra="forbid"`) は `training.early_stopping.inner_valid` のみ受け付ける。Phase 2 で path を canonical 形に修正済み (`useConfigSync.ts:90-103` のコメント参照)。
+
+#### Phase progress log (2026-04-29 〜 2026-04-30) — 最終結果
+
+- **Phase 1 [PR #291, CI green]** — `useConfigWriteFunnel` skeleton + state machine + 14 unit tests. Production dead code until Phase 2 wires it.
+- **Phase 2 [PR #292, CI green]** — ConfigForm auto-reset effects → funnel via `useConfigWriteFunnelOptional`. Provider mounted in WorkspacePage. **Stratified→KFold transition stable** (local browser verified). GroupKFold still racing (W1 not migrated).
+- **Phase 3 [PR #293, CI green]** — useTargetSelection merged-PUT → funnel. `legacyUpdateConfig` seam pattern introduced (optional writer in params; fallback for test paths that mount the hook outside a Provider). Phase 4-6 reuse this pattern.
+- **Phase 4 [PR #294, CI green]** — useModelPanelData.handleConfigChange (W3) + handleUndo (W4) + handleRedo (W5) → funnel. **Critical wrapper-leak bug fix in WorkspacePage.onWriteCommitted:** funnel's default `putConfig` returns the full `ConfigUpdateResponse {config, errors, saved}`, but Phase 2's onWriteCommitted wrote the wrapper raw into the cache. useTargetSelection's tests stubbed updateConfig to undefined, masking it. Fix: extract `.config` and gate on `saved !== false`. Playwright MCP composite scenario (StratifiedKFold + Calibration toggle in same tick) confirmed: no rollback, isWrapper=false on 867 samples, 0 console errors.
+- **Phase 5 [PR #295, CI green]** — useConfigSync.syncConfig itself routed through funnel with `reason="cv-change"`. `abortRef` retained but only guards the GET pre-fetch; PUT-side dedup is the funnel's job. **Funnel public-API object identity stabilised via useMemo** — without this, the new useConfigSync `useEffect` deps storm fired ~10 PUTs per click. Quiescence-detection step added to `seedUiWorkspace` E2E helper (4 identical samples × 50ms before returning) so D-1 spec subscribes after the seed funnel has drained. **D-1 sample green-flipped** (4.3s locally).
+- **Phase 5b [PR #295 commit `4d07c7f`, CI green]** — B-3 e2e spec exposed two stacked rejects on group/time strategies (5 of 7 failed):
+  1. `Extra inputs are not permitted` — `stratify` carried over from holdout into group_holdout (`extra="forbid"`).
+  2. `Specify either 'validation_ratio' or 'inner_valid', not both` — both fields explicit; only the holdout `ratio==validation_ratio` round-trip exempt.
+
+  Fix: new `pruneInnerValidForMethod(current, method)` helper in `cv-state.ts` mirroring the lizyml Pydantic schema (holdout / group_holdout / time_holdout). useConfigSync calls it on cv-strategy change AND drops `EarlyStoppingConfig.validation_ratio` so the model_validator stops double-tripping. After fix: B-3 7/7 strategies pass in 19.2s; D-1 still passes 4.3s.
+
+- **Phase 6 [PR #295 commit `905ee62`, CI green]** — `WorkspacePage.handleApplyToFit` (W6) → funnel via `enqueueWrite({ reason: "apply-to-fit" })`. New saved=false branch: explicit error toast + invalidateQueries; success path drops the redundant invalidate because the funnel's onWriteCommitted writes cache atomically. `updateConfig` import removed from WorkspacePage.tsx.
+
+#### Exit check verification (2026-04-30)
+
+`grep -rE "updateConfig\(" frontend/src/` returns:
+
+- `src/api/workspace.ts:122` — definition (immutable).
+- `src/hooks/useConfigWriteFunnel.ts:170` — funnel's default `putConfig=updateConfig` binding (THE single funnel implementation site, satisfying acceptance criterion (b) per the canonical reading).
+- `src/hooks/useConfigSync.ts:177`, `src/hooks/useModelPanelData.ts:171,260` — `else` branches behind `if (writeFunnel)` guards, **unreachable in production** (WorkspacePage always mounts the Provider) and exist only to keep unit tests that render hooks without a Provider working without a Provider-wrapping refactor across the suite. Removing them is a separate cleanup with no production behaviour change.
+
+#### Acceptance criteria — final tally
+
+- (a) PR #289 B-3 spec — **7/7 strategies pass** (verified locally 2026-04-30 19.2s).
+- (b) production-path `updateConfig(` call sites — **0 outside the funnel** (the single funnel implementation site is `useConfigWriteFunnel.ts:170`).
+- (c) `setQueryData(queryKeys.config(), ...)` — funnel-owned via `WorkspacePage.onWriteCommitted`. Test-path setQueryData calls remain in `useDataPanel`'s subscriber-back-sync (which reads, not writes, the source of truth).
+- (d) funnel state machine invariant tests — 14 unit tests in `useConfigWriteFunnel.test.ts` (Phase 1) + 5 funnel-routing assertions in `useConfigSync.test.ts` (Phase 5) + 6 funnel-routing assertions in `useModelPanelData.test.ts` (Phase 4) + 1 Phase 6 assertion in `WorkspacePage.test.tsx`.
+- (e) all gates green (vitest 1729 / biome / tsc / build) on every PR's CI run.
+- (f) per-phase PRs (#290 / #291 / #292 / #293 / #294 / #295). Each phase's commits are revertable units; #295 squashes Phase 5 + 5b + 6 by branch convention but the per-commit revert path stays open.
+
+#### Decision
+
+- 2026-04-30 **Resolved & Implemented** — Q-1 fully landed across PRs #290..#295. PR #289 B-3 spec passes 7/7. Hypothesis (cross-hook write race resolved by single-funnel serialisation) proven. Closes the §P-0092 investigation thread.
+- Lessons captured globally:
+  - `~/.claude/skills/learned/diagnosis-before-prescription.md` — the Three Verification Gates pattern that caught two false-positive diagnoses on this thread (the original "ConfigForm single writer" Phase 0 diagnosis and the Phase 5b "in-flight coalesce" misdiagnosis). Each was avoided once decoded PUT bodies replaced inferred ones.
+

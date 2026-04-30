@@ -306,6 +306,34 @@ describe("WorkspacePage", () => {
     expect(mockToast.error).toHaveBeenCalledWith("Failed to apply tune config");
   });
 
+  // P-0092 Q-1 Phase 6 (cleanup): handleApplyToFit must route through the
+  // funnel so it serialises behind any in-flight writers. The default
+  // putConfig is updateConfig, so mockUpdateConfig still fires — but the
+  // funnel-specific behaviour is observable via the saved=false branch:
+  // when backend returns saved=false the toast must be the error toast,
+  // and the cache must be invalidated, NOT updated with the rejected body.
+  it("handleApplyToFit surfaces error toast when backend returns saved=false", async () => {
+    mockUpdateConfig.mockResolvedValueOnce({
+      config: {},
+      errors: [{ path: "data", message: "Field required" }],
+      saved: false,
+    });
+    renderWithProviders(<WorkspacePage />);
+
+    const onApplyToFit = capturedResultsPanelProps.onApplyToFit as (
+      config: Record<string, unknown>,
+    ) => Promise<void>;
+    await act(async () => onApplyToFit({ model: { name: "X" } }));
+
+    expect(mockToast.error).toHaveBeenCalledWith(
+      "Failed to apply tune config: backend rejected the body",
+    );
+    // Tab MUST NOT have switched to fit on backend rejection.
+    expect(mockToast.success).not.toHaveBeenCalledWith(
+      "Best params applied to Fit tab. Click Fit to run.",
+    );
+  });
+
   it("updates task when onTaskChanged is called", () => {
     renderWithProviders(<WorkspacePage />);
 
