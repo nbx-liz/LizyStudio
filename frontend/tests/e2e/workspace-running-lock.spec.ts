@@ -12,26 +12,27 @@ import { seedUiWorkspace } from "./helpers/workspace-ui";
  * `tests/regression/test_reg_0279_workspace_locked_during_run.py`
  * already pins the server-side INV-1..INV-4 contract: PUT/PATCH
  * /api/workspace/config returns 409 WORKSPACE_LOCKED while a job is
- * active and the saved config is unchanged. What is NOT covered
- * anywhere is the UI mapping:
+ * active and the saved config is unchanged. This spec covers the
+ * **UI mapping** half:
  *
- *   - Does the funnel-routed PUT actually surface as the
- *     `Config is locked while a job is running` info-toast (and
- *     not the generic error-toast)?
- *   - Does the cache invalidate so the form resyncs to the locked
- *     config instead of holding the rejected payload?
- *   - Once the job finishes, does the same edit succeed?
+ *   1. While the job runs, the workspace controls (Folds NumberInput
+ *      stands in for the whole disabled-form set) are visibly disabled.
+ *      This is the user-facing "you cannot edit" surface.
+ *   2. A direct PUT issued by the test runner — simulating any in-flight
+ *      writer that bypasses the disabled UI (e.g. delayed funnel ops
+ *      coalesced after `running=true` propagated) — gets 409 +
+ *      WORKSPACE_LOCKED, and ws.config stays unchanged.
+ *   3. Once the job releases (cancel → terminal), the controls re-enable
+ *      and a UI-driven edit lands as a 200 PUT.
  *
- * The spec drives a real Tune (tune is slower than Fit on a 100-row
- * dataset, giving us a ~10s "running" window without needing a
- * synthetic test backdoor) and then issues a config edit through
- * the UI while the job is in flight.
- *
- * Why Tune and not Fit: a 100-row Fit completes in <2s on the CI
- * runners, leaving an unreliable race window. Tune with a default
- * n_trials runs Optuna iterations sequentially and stays in the
- * `running` state long enough for the spec to issue a UI edit and
- * still observe the lock.
+ * Why we do NOT try to drive the UI lock surface via the disabled input:
+ * the production UI guards the lock at TWO layers (input disabled
+ * AND backend 409). The disabled-input guard fires first under normal
+ * user interaction, so a direct UI fill returns no PUT response at
+ * all and the spec deadlocks waiting for one. The toast that fires
+ * from useConfigSync / useModelPanelData on a 409 is reachable only
+ * through asynchronous race conditions that are not deterministic at
+ * the E2E layer; it is locked at the unit level instead.
  */
 
 const CSV_PATH = "/tmp/e2e_running_lock.csv";
@@ -60,14 +61,14 @@ test.describe("Workspace running-lock UI mapping (G-3 / Issue #279)", () => {
     }
   });
 
-  test("UI: PUT /config while tune is running → info-toast + cache resync + later edit succeeds", async ({
+  test("UI: form disables + backend 409s while tune runs; both release on terminal", async ({
     page,
     request,
   }, testInfo) => {
     test.setTimeout(120_000);
     if (isMobileProject(testInfo)) {
       // Mobile collapses the Data accordion that holds the Folds input
-      // we use to drive the lock; the desktop spec is the contract.
+      // we use as the lock-surface witness; covered by B-8.
       test.skip(true, "Mobile layout collapses Data accordion; covered by B-8");
     }
 
@@ -84,6 +85,10 @@ test.describe("Workspace running-lock UI mapping (G-3 / Issue #279)", () => {
     const seededConfig = await seededRes.json();
     const seededFolds = seededConfig.split.n_splits as number;
     expect(seededFolds).toBe(5);
+
+    const folds = page.getByRole("textbox", { name: "Folds", exact: true });
+    await expect(folds).toBeVisible();
+    await expect(folds).toBeEnabled();
 
     // Switch to Tune tab and start a real tune. Same pattern as the
     // happy-path workspace-tune spec.
@@ -105,7 +110,8 @@ test.describe("Workspace running-lock UI mapping (G-3 / Issue #279)", () => {
 
     // Wait until the backend reports the job as `running`. The
     // active-slot lock engages the moment the runner takes over,
-    // which is the same instant the UI starts polling for status.
+    // which is the same instant the UI receives `running=true` and
+    // disables the form controls.
     await expect
       .poll(
         async () => {
@@ -122,38 +128,29 @@ test.describe("Workspace running-lock UI mapping (G-3 / Issue #279)", () => {
       )
       .toBe("running");
 
-    // Now drive a UI edit while the lock is engaged. The Folds
-    // NumberInput lives in the Data panel; on Tune-tab it is still
-    // mounted (only the Model panel switched between Fit/Tune).
-    //
-    // Watch for the PUT response so we can assert the 409 mapping
-    // surfaced before any test-side polling could mask the toast.
-    const putWhileLockedPromise = page.waitForResponse(
-      (res) =>
-        res.url().endsWith("/api/workspace/config") &&
-        res.request().method() === "PUT",
-      { timeout: 15_000 },
-    );
+    // INV (UI mapping): the Folds NumberInput is disabled while a job
+    // is running. This is the user-facing half of the lock — without
+    // it, the user sees a clickable input that mysteriously rejects
+    // their edit.
+    await expect(folds).toBeDisabled({ timeout: 5_000 });
 
-    const folds = page.getByRole("textbox", { name: "Folds", exact: true });
-    await expect(folds).toBeVisible();
-    await folds.fill("8");
-    await folds.blur();
-
-    const lockedPut = await putWhileLockedPromise;
+    // INV-1 + INV-3 (backend contract under UI fixture): a PUT issued
+    // by anyone OTHER than the disabled input — e.g. an in-flight
+    // funnel op coalesced after `running=true` propagated, or a
+    // direct API caller — gets 409 + WORKSPACE_LOCKED, and ws.config
+    // is unchanged. We drive this from the test-runner request rather
+    // than the UI because the UI input is now disabled (which is the
+    // correct production behaviour); the contract under test is the
+    // server-side rejection path.
+    const lockedPut = await request.put(`${API}/workspace/config`, {
+      data: { ...seededConfig, split: { ...seededConfig.split, n_splits: 8 } },
+    });
     expect(
       lockedPut.status(),
       "PUT /config while tune is running must be rejected with 409",
     ).toBe(409);
     const lockedBody = await lockedPut.json();
     expect(lockedBody.error?.code).toBe("WORKSPACE_LOCKED");
-
-    // Info-toast surfaces, NOT the generic error-toast. sonner renders
-    // the toast text directly into the DOM with role=status; matching
-    // by text is enough.
-    await expect(
-      page.getByText("Config is locked while a job is running"),
-    ).toBeVisible({ timeout: 5_000 });
 
     // INV-3 (no mutation): the saved config still carries the seeded
     // n_splits=5, not the rejected n_splits=8.
@@ -162,21 +159,8 @@ test.describe("Workspace running-lock UI mapping (G-3 / Issue #279)", () => {
     const lockedConfig = await lockedGet.json();
     expect(lockedConfig.split.n_splits).toBe(seededFolds);
 
-    // The 409 path must invalidate the React Query cache so the form
-    // re-fetches and re-renders the input back to the saved value.
-    // Wait for the input to reflect the saved n_splits, not the
-    // rejected n_splits=8 the user tried to type.
-    await expect
-      .poll(async () => folds.inputValue(), {
-        timeout: 5_000,
-        intervals: [100, 200, 400],
-        message: "Folds NumberInput never resynced to saved n_splits",
-      })
-      .toBe(String(seededFolds));
-
-    // Wait for the tune to terminate so INV-4 (release) can be
-    // exercised. Cancel for speed — the lock releases on any
-    // terminal status.
+    // Cancel the tune so INV-4 (release) can be exercised. Lock
+    // releases on any terminal status.
     await request.post(`${API}/jobs/${jobId}/cancel`);
     await expect
       .poll(
@@ -194,9 +178,14 @@ test.describe("Workspace running-lock UI mapping (G-3 / Issue #279)", () => {
       )
       .toMatch(/^(cancelled|completed|failed)$/);
 
-    // INV-4 (release): the same edit now succeeds. Use a fresh value
-    // (n_splits=6) so the assertion is positive — if the lock were
-    // still engaged, the input would remain at seededFolds=5 again.
+    // INV (UI mapping, release half): the input re-enables once the
+    // job hits a terminal status, the workspace polling layer
+    // observes it, and `running=false` propagates to the form.
+    await expect(folds).toBeEnabled({ timeout: 15_000 });
+
+    // INV-4 (release): a UI-driven edit now lands as a 200 PUT.
+    // Use a fresh value (n_splits=6) so the assertion is positive —
+    // if the lock were still engaged, the PUT would 409.
     const putAfterReleasePromise = page.waitForResponse(
       (res) =>
         res.url().endsWith("/api/workspace/config") &&
