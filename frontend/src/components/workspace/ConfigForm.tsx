@@ -76,20 +76,21 @@ export function ConfigForm({
     [onChange],
   );
 
-  // P-0092 Q-1 Phase 2: route the three auto-reset effects (inner_valid,
-  // calibration, objective/metric) through the write funnel so their
-  // PUTs land *behind* whichever cv / task / target change triggered
-  // them. The funnel guarantees per-reason serialisation, so a
-  // `cv-change` PUT cannot be silently overwritten by an `auto-reset`
-  // PUT that started from a stale snapshot.
+  // P-0092 Q-1: the three auto-reset effects (inner_valid, calibration,
+  // objective/metric) route through the write funnel so their PUTs land
+  // *behind* whichever cv / task / target change triggered them. The
+  // funnel guarantees per-reason serialisation, so a `cv-change` PUT
+  // cannot be silently overwritten by an `auto-reset` PUT that started
+  // from a stale snapshot.
   //
-  // User-driven field edits keep using `handleFieldChange` and the
-  // legacy onChange path — Phase 4 migrates that as well. Until then
-  // the auto-reset case (which is what fired the post-#271 smoke
-  // regression PR #289 caught) is the only user of `enqueueAutoReset`.
+  // User-driven field edits still use `handleFieldChange` and the
+  // legacy onChange path — production-side that path also rides the
+  // funnel via the per-hook reasons (config-form-edit, target-select,
+  // cv-change), so the only paths that go directly through onChange
+  // are isolated test/story renders without a Provider.
   //
   // We use the *optional* hook so isolated rendering paths (Storybook,
-  // ConfigForm.test.tsx without a provider) can keep falling back to
+  // ConfigForm.test.tsx without a provider) keep falling back to
   // `handleFieldChange`. Production WorkspacePage always mounts the
   // provider so this fallback never fires under real usage.
   const funnel = useConfigWriteFunnelOptional();

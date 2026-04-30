@@ -137,10 +137,10 @@ interface UseConfigWriteFunnelOptions {
    */
   getCachedConfig: () => ConfigSnapshot | undefined;
   /**
-   * Called immediately after a successful PUT lands. Phase 5 will use
-   * this to update the React Query cache atomically; Phase 1 leaves
-   * it as an injectable hook so unit tests can observe terminal state
-   * without coupling to TanStack Query.
+   * Called immediately after a successful PUT lands. WorkspacePage
+   * uses this to update the React Query cache atomically with the
+   * server-side saved snapshot. Optional so unit tests can observe
+   * terminal state without coupling to TanStack Query.
    */
   onWriteCommitted?: (saved: ConfigSnapshot) => void;
   /**
