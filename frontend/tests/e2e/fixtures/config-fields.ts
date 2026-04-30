@@ -356,10 +356,94 @@ const tuningTimeout: FixtureEntry = {
 };
 
 /**
- * Phase C wave 5: 13 fields. Adds split.shuffle (precondition:
- * switch to kfold strategy) and tuning.optuna.params.timeout
- * (precondition: Tune tab). Both demonstrate fixtures that need
- * conditional UI to materialise before the locator is reachable.
+ * Time-series strategy preconditions share boilerplate: switch
+ * via the Strategy radio and wait for the conditional row's label
+ * to mount. Centralising avoids per-fixture drift.
+ */
+async function switchToCvStrategy(
+  page: Page,
+  strategyLabel: string,
+  rowLabelText: string,
+): Promise<void> {
+  await page.getByRole("radio", { name: strategyLabel, exact: true }).click();
+  await page
+    .locator(`label:text-is("${rowLabelText}")`)
+    .first()
+    .waitFor({ state: "visible", timeout: 5000 });
+}
+
+const splitGap: FixtureEntry = {
+  spec: {
+    name: "split.gap (time_series) via Gap NumberInput",
+    configPath: "split.gap",
+    // After switching to time_series, useConfigSync writes
+    // split.gap=0 (CV_FIELD_DEFAULTS.gap). Probed via tests/e2e:
+    // {"method":"time_series","n_splits":5,"gap":0}.
+    defaultValue: 0,
+    testValue: 2,
+    uiLocator: (p): Locator =>
+      p.locator('label:text-is("Gap")').locator("..").getByRole("textbox"),
+    uiAction: async (locator, value) => {
+      await locator.fill(String(value));
+      await locator.blur();
+    },
+  } as ConfigFieldSpec<unknown>,
+  precondition: async (page) => {
+    await switchToCvStrategy(page, "TimeSeriesSplit", "Gap");
+  },
+};
+
+const splitPurgeGap: FixtureEntry = {
+  spec: {
+    name: "split.purge_gap (purged_time_series) via Purge Gap NumberInput",
+    configPath: "split.purge_gap",
+    // After switching to purged_time_series, useConfigSync writes
+    // split.purge_gap=0 (CV_FIELD_DEFAULTS.purge_gap).
+    defaultValue: 0,
+    testValue: 1,
+    uiLocator: (p): Locator =>
+      p
+        .locator('label:text-is("Purge Gap")')
+        .locator("..")
+        .getByRole("textbox"),
+    uiAction: async (locator, value) => {
+      await locator.fill(String(value));
+      await locator.blur();
+    },
+  } as ConfigFieldSpec<unknown>,
+  precondition: async (page) => {
+    await switchToCvStrategy(page, "PurgedTimeSeries", "Purge Gap");
+  },
+};
+
+const splitEmbargo: FixtureEntry = {
+  spec: {
+    name: "split.embargo (purged_time_series) via Embargo NumberInput",
+    configPath: "split.embargo",
+    // Same precondition as purge_gap; both fields land together
+    // when the strategy switches to purged_time_series.
+    defaultValue: 0,
+    testValue: 1,
+    uiLocator: (p): Locator =>
+      p
+        .locator('label:text-is("Embargo")')
+        .locator("..")
+        .getByRole("textbox"),
+    uiAction: async (locator, value) => {
+      await locator.fill(String(value));
+      await locator.blur();
+    },
+  } as ConfigFieldSpec<unknown>,
+  precondition: async (page) => {
+    await switchToCvStrategy(page, "PurgedTimeSeries", "Embargo");
+  },
+};
+
+/**
+ * Phase C wave 6: 16 fields. Adds 3 time-series strategy fixtures
+ * (gap / purge_gap / embargo). Demonstrates a shared
+ * `switchToCvStrategy` precondition helper that wraps the
+ * radio-click + wait-for-mount pattern.
  */
 export const CONFIG_FIELD_FIXTURES: FixtureEntry[] = [
   splitNSplits,
@@ -375,4 +459,7 @@ export const CONFIG_FIELD_FIXTURES: FixtureEntry[] = [
   tuningNTrials,
   splitShuffleKfold,
   tuningTimeout,
+  splitGap,
+  splitPurgeGap,
+  splitEmbargo,
 ];
