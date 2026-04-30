@@ -286,14 +286,80 @@ const tuningNTrials: FixtureEntry = {
   },
 };
 
+const splitShuffleKfold: FixtureEntry = {
+  spec: {
+    name: "split.shuffle (kfold) via Shuffle Switch",
+    configPath: "split.shuffle",
+    // The CV strategy precondition switches to kfold, which has
+    // shuffle in FALLBACK_CV_STRATEGY_FIELDS. After the strategy
+    // switch, useConfigSync writes split.shuffle=true (the
+    // CV_FIELD_DEFAULTS.shuffle default). The user's click flips
+    // it to false.
+    defaultValue: true,
+    testValue: false,
+    // CvSection.tsx:178 renders Shuffle as
+    // <div><Label>Shuffle</Label><Switch checked={cv.shuffle} ... /></div>.
+    // The Switch lacks aria-label and the Label is not htmlFor-wired,
+    // so anchor on the label and walk to its parent's switch descendant.
+    uiLocator: (p): Locator =>
+      p
+        .locator('label:text-is("Shuffle")')
+        .locator("..")
+        .getByRole("switch"),
+    uiAction: async (locator) => {
+      await locator.click();
+    },
+  } as ConfigFieldSpec<unknown>,
+  precondition: async (page) => {
+    // Switch from the seeded stratified_kfold to kfold so the
+    // Shuffle row mounts. KFold's FALLBACK_CV_STRATEGY_FIELDS
+    // includes "shuffle"; stratified_kfold does not.
+    await page.getByRole("radio", { name: "KFold", exact: true }).click();
+    // Wait until the Shuffle row appears (it's the proxy for "the
+    // saved config has flipped to kfold AND the conditional render
+    // has settled"). Without this, the spec races the rerender
+    // and the locator can resolve before the row mounts.
+    await page
+      .locator('label:text-is("Shuffle")')
+      .first()
+      .waitFor({ state: "visible", timeout: 5000 });
+  },
+};
+
+const tuningTimeout: FixtureEntry = {
+  spec: {
+    name: "tuning.optuna.params.timeout via Timeout preset 5m",
+    configPath: "tuning.optuna.params.timeout",
+    // After the Tune tab precondition, saved config has tuning
+    // populated but no `timeout` key. Clicking a Timeout preset
+    // is the first write that lands tuning.optuna.params.timeout.
+    // TIMEOUT_PRESETS at constants.ts: "5m" → 300, "10m" → 600,
+    // "30m" → 1800.
+    defaultValue: undefined,
+    testValue: 300,
+    // "5m" / "10m" / "30m" are unique Timeout preset labels —
+    // N_TRIALS_PRESETS use bare numbers ("10", "50", ...) so
+    // there's no overlap.
+    uiLocator: (p): Locator =>
+      p.getByRole("button", { name: "5m", exact: true }),
+    uiAction: async (locator) => {
+      await locator.click();
+    },
+  } as ConfigFieldSpec<unknown>,
+  precondition: async (page) => {
+    await page.getByRole("tab", { name: "Tune", exact: true }).click();
+    await page
+      .getByRole("button", { name: "Tune", exact: true })
+      .first()
+      .waitFor({ state: "visible", timeout: 5000 });
+  },
+};
+
 /**
- * Phase C wave 4: 11 fields. Adds split.random_state (no
- * precondition — visible on the seed default of stratified_kfold)
- * and tuning.optuna.params.n_trials (precondition: switch to the
- * Tune tab so the SegmentedControl mounts). The Tune-tab fixture
- * is the first precondition entry — it validates that the loop
- * spec correctly invokes `precondition` before resolving the
- * locator.
+ * Phase C wave 5: 13 fields. Adds split.shuffle (precondition:
+ * switch to kfold strategy) and tuning.optuna.params.timeout
+ * (precondition: Tune tab). Both demonstrate fixtures that need
+ * conditional UI to materialise before the locator is reachable.
  */
 export const CONFIG_FIELD_FIXTURES: FixtureEntry[] = [
   splitNSplits,
@@ -307,4 +373,6 @@ export const CONFIG_FIELD_FIXTURES: FixtureEntry[] = [
   modelMinDataInBinRatio,
   splitRandomState,
   tuningNTrials,
+  splitShuffleKfold,
+  tuningTimeout,
 ];
