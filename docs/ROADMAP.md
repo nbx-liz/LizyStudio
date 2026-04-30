@@ -146,7 +146,7 @@
 | **B-2** | `inference-flow.spec.ts` 拡張 — History クリックで結果切替 | ❌ 既存 spec に未追加 | 小 | 中 |
 | **B-3** | `workspace-cv.spec.ts` — 7 strategy 巡回 | ✅ 完了（PR #289） | — | — |
 | **B-3b** | BlockedGroupKFold エディタ専用 spec | ❌ 未着手（B-3 が deferred） | 中 | 中 |
-| **B-4** | `workspace-feature-weights.spec.ts` — FW エディタ操作 | ❌ 未着手（unit only、リグレッションリスク高） | 小 | **最高** |
+| **B-4** | `workspace-feature-weights.spec.ts` — FW エディタ操作 | ✅ 完了（test/e2e-feature-weights-b4） | 小 | — |
 | **B-5** | `workspace-columns.spec.ts` — Excl/Type 操作 | ❌ 未着手（`features.exclude` / `features.categorical` 無 E2E） | 小 | 高 |
 | **B-6** | `workspace-presets.spec.ts` — Preset Load → form 反映 | ⚠️ Save のみ既存（`workspace-model-panel.spec.ts:101`）、Load 反映未 assertion | 小 | 中 |
 | **B-7** | `workspace-running-lock.spec.ts` — running lock UI mapping | ✅ 完了（PR #300） | — | — |
