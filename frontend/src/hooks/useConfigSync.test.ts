@@ -441,5 +441,35 @@ describe("useConfigSync", () => {
         "Config sync failed — changes may not be saved",
       );
     });
+
+    it("does not call onDataChanged when funnel returns ok=false with error=aborted", async () => {
+      // H-1 regression: when the funnel returns { ok:false, error:"aborted" }
+      // (e.g. unmount mid-flush), `result.details` is undefined. Earlier
+      // code coerced that to a falsy `putError` and fell through to the
+      // success path, firing onDataChanged + spurious cache invalidations
+      // even though the PUT was never sent.
+      const onDataChanged = vi.fn();
+      const { funnel } = createStubFunnel(() => ({
+        ok: false,
+        error: "aborted",
+      }));
+      const { wrapper } = testWrapper;
+      renderHook(
+        () =>
+          useConfigSync(
+            defaultParams({
+              onDataChanged,
+              // biome-ignore lint/suspicious/noExplicitAny: stub funnel
+              writeFunnel: funnel as any,
+            }),
+          ),
+        { wrapper },
+      );
+
+      await waitFor(() => expect(funnel.enqueueWrite).toHaveBeenCalledTimes(1));
+      await new Promise((r) => setTimeout(r, 30));
+      expect(onDataChanged).not.toHaveBeenCalled();
+      expect(mocks.toastError).not.toHaveBeenCalled();
+    });
   });
 });

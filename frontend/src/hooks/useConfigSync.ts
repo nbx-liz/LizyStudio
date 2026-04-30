@@ -170,7 +170,12 @@ export function useConfigSync({
           reason: "cv-change",
         });
         if (!result.ok) {
-          putError = result.details;
+          // Aborted writes (funnel unmount, or upstream cancel) are not
+          // user-visible failures — the caller has already torn down,
+          // so falling through to onDataChanged would fire spurious
+          // cache invalidations. Bail silently.
+          if (result.error === "aborted") return;
+          putError = result.details ?? result.error;
         }
       } else {
         try {
