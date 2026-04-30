@@ -140,9 +140,21 @@ export function ConfigForm({
     : [];
 
   // Training section — inner_valid
+  //
+  // H-2: the canonical Pydantic path is
+  // ``training.early_stopping.inner_valid``. The legacy top-level
+  // ``training.inner_valid`` path is rejected by the backend with
+  // ``Extra inputs are not permitted`` (TrainingConfig has
+  // extra="forbid"). Phase 2's auto-reset effect was migrated to the
+  // correct path, but the user-driven Select / NumberInput below were
+  // missed — splitting the read/write surface so a user pick of
+  // method/ratio silently failed validation. Read AND write through
+  // the early_stopping nesting now so the two paths agree.
   const trainingConfig = (config.training as Record<string, unknown>) ?? {};
+  const earlyStoppingConfig =
+    (trainingConfig.early_stopping as Record<string, unknown>) ?? {};
   const innerValid =
-    (trainingConfig.inner_valid as Record<string, unknown>) ?? {};
+    (earlyStoppingConfig.inner_valid as Record<string, unknown>) ?? {};
   const innerValidRatio = (innerValid.ratio as number) ?? 0.2;
 
   // Filter inner_valid options by CV strategy
@@ -545,17 +557,15 @@ export function ConfigForm({
                         description="Inner validation strategy for early stopping"
                       >
                         <Select
-                          value={String(
-                            (
-                              trainingConfig.inner_valid as Record<
-                                string,
-                                unknown
-                              >
-                            )?.method ?? "holdout",
-                          )}
+                          value={String(innerValid.method ?? "holdout")}
                           onValueChange={(v) =>
                             handleFieldChange(
-                              ["training", "inner_valid", "method"],
+                              [
+                                "training",
+                                "early_stopping",
+                                "inner_valid",
+                                "method",
+                              ],
                               v,
                             )
                           }
@@ -587,7 +597,12 @@ export function ConfigForm({
                           value={innerValidRatio}
                           onChange={(v) => {
                             handleFieldChange(
-                              ["training", "inner_valid", "ratio"],
+                              [
+                                "training",
+                                "early_stopping",
+                                "inner_valid",
+                                "ratio",
+                              ],
                               v ?? 0.2,
                             );
                           }}

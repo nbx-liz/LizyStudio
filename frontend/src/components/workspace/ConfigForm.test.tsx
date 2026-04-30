@@ -235,8 +235,11 @@ describe("ConfigForm", () => {
     const config = {
       model: { name: "lgbm", params: {} },
       training: {
-        early_stopping: { enabled: true, patience: 10 },
-        inner_valid: { method: "holdout", ratio: 0.15 },
+        early_stopping: {
+          enabled: true,
+          patience: 10,
+          inner_valid: { method: "holdout", ratio: 0.15 },
+        },
       },
     };
 
@@ -1267,6 +1270,83 @@ describe("ConfigForm — inner_valid_options (Inner Validation select)", () => {
     });
 
     expect(screen.queryByText("Inner Validation")).not.toBeInTheDocument();
+  });
+
+  it("reads inner_valid.method from training.early_stopping.inner_valid (H-2)", () => {
+    // H-2 regression: the read site used to look at
+    // ``trainingConfig.inner_valid`` (top-level), which is the
+    // ``Extra inputs are not permitted`` path. The Select must
+    // reflect the canonical nested path the backend accepts.
+    renderConfigForm({
+      schema: schemaWithTraining,
+      config: {
+        model: { name: "lgbm", params: {} },
+        training: {
+          early_stopping: {
+            enabled: true,
+            inner_valid: { method: "cv", ratio: 0.2 },
+          },
+        },
+      },
+      onChange: vi.fn(),
+      uiSchema: {
+        inner_valid_options: ["holdout", "cv"],
+      } as unknown as UiSchema,
+    });
+
+    // The Select renders its current value as visible text inside
+    // the trigger. Read it from the trigger's accessible name.
+    const trigger = screen.getByLabelText("Inner validation method");
+    expect(trigger).toHaveTextContent("cv");
+  });
+
+  it("writes Inner Validation method change to training.early_stopping.inner_valid (H-2)", () => {
+    // H-2 regression: the user-driven Select onValueChange used to
+    // emit ``["training", "inner_valid", "method"]``, which lizyml
+    // rejects with ``Extra inputs are not permitted``. The auto-reset
+    // effect was already migrated in P-0092 Phase 2 — this test pins
+    // the write half of the same surface.
+    const onChange = vi.fn();
+    renderConfigForm({
+      schema: schemaWithTraining,
+      config: {
+        model: { name: "lgbm", params: {} },
+        training: {
+          early_stopping: {
+            enabled: true,
+            inner_valid: { method: "holdout", ratio: 0.2 },
+          },
+        },
+      },
+      onChange,
+      uiSchema: {
+        inner_valid_options: ["holdout", "cv"],
+      } as unknown as UiSchema,
+    });
+
+    // Open the Select and pick "cv". Radix's Select renders options in
+    // a portal — open via keyboard so the listbox mounts deterministically
+    // even in jsdom (where pointer events are simulated, not real).
+    const trigger = screen.getByLabelText("Inner validation method");
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    const cvOption = screen.getByRole("option", { name: "cv" });
+    fireEvent.click(cvOption);
+
+    expect(onChange).toHaveBeenCalled();
+    const lastCall = onChange.mock.calls.at(-1);
+    const nextConfig = lastCall?.[0] as Record<string, unknown>;
+    const written = (
+      (
+        (nextConfig.training as Record<string, unknown>)
+          ?.early_stopping as Record<string, unknown>
+      )?.inner_valid as Record<string, unknown>
+    )?.method;
+    expect(written).toBe("cv");
+    // The legacy top-level path must NOT be touched — that was the
+    // P-0087 ``Extra inputs are not permitted`` regression.
+    expect(
+      (nextConfig.training as Record<string, unknown>)?.inner_valid,
+    ).toBeUndefined();
   });
 });
 
