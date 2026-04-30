@@ -282,7 +282,7 @@ test.describe("Workspace tune flow", () => {
     if (isMobileProject(testInfo)) {
       // Mobile layout collapses the Tune tab behind the tab nav;
       // covered separately by ui-improvements specs.
-      test.skip(true, "Mobile layout path is covered elsewhere");
+      test.skip(true, "Mobile layout path is covered elsewhere — see Issue #304");
     }
 
     const csvPath = createTestCsv();
@@ -360,7 +360,7 @@ test.describe("Workspace tune flow", () => {
     // case. 300s leaves ~2× headroom for CI IO jitter.
     test.setTimeout(300_000);
     if (isMobileProject(testInfo)) {
-      test.skip(true, "Mobile layout path is covered elsewhere");
+      test.skip(true, "Mobile layout path is covered elsewhere — see Issue #304");
     }
 
     const csvPath = createTestCsv();
@@ -450,7 +450,7 @@ test.describe("Workspace tune flow", () => {
   }, testInfo) => {
     test.setTimeout(60_000);
     if (isMobileProject(testInfo)) {
-      test.skip(true, "Mobile layout path is covered elsewhere");
+      test.skip(true, "Mobile layout path is covered elsewhere — see Issue #304");
     }
 
     const csvPath = createTestCsv();
