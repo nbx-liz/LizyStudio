@@ -175,16 +175,30 @@ export async function assertConfigReflection<TValue>(
   // (2)+(3) drive the UI and observe the immediate PUT body. The
   // promise is created BEFORE the UI action so we don't drop the
   // request — Playwright's waitForRequest is a one-shot subscription.
-  // We filter the body so partial PUTs that don't carry `configPath`
-  // (e.g. P-0092 Phase 2 `auto-reset` patches that only flush the
-  // evaluation/objective fields) are skipped — the spec asserts a
-  // specific field, so the relevant PUT is the one whose body
-  // contains a value at that path.
+  //
+  // Body filter strategy:
+  //   - Skip PUTs that don't carry `configPath` (P-0092 Phase 2
+  //     auto-reset patches that flush only evaluation/objective).
+  //   - For fields whose default is included in every PUT body
+  //     (e.g. model.min_data_in_bin_ratio always lands at 0.01 even
+  //     when the user is editing some other field), `!== undefined`
+  //     is too permissive: a quiescence-tail PUT from the seed step
+  //     can match before the user's UI action lands. Tighten the
+  //     filter to require the body's value at configPath EQUAL the
+  //     spec.testValue. The matcher uses JSON-equality so nested
+  //     structures (e.g. model.feature_weights) round-trip cleanly.
+  //
+  // CI flake repro (PR #320 e2e-chromium 2026-04-30): with the loose
+  // `!== undefined` filter, 8/9 fixtures were flaky and
+  // model.min_data_in_bin_ratio failed both attempts because the
+  // helper grabbed a stale 0.01 PUT instead of the post-fill 0.05.
   const locator = spec.uiLocator(page);
   await expect(locator).toBeVisible();
+  const expectedValueJson = JSON.stringify(spec.testValue);
   const putPromise = nextPutConfigBody(
     page,
-    (body) => deepGet(body, spec.configPath) !== undefined,
+    (body) =>
+      JSON.stringify(deepGet(body, spec.configPath)) === expectedValueJson,
   );
   await spec.uiAction(locator, spec.testValue);
   const putBody = await putPromise;

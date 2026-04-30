@@ -123,15 +123,113 @@ const earlyStoppingRounds: FixtureEntry = {
   } as ConfigFieldSpec<unknown>,
 };
 
+const earlyStoppingEnabled: FixtureEntry = {
+  spec: {
+    name: "training.early_stopping.enabled via Enabled Switch",
+    configPath: "training.early_stopping.enabled",
+    // lizyml defaults endpoint sets training.early_stopping.enabled=true
+    // for binary tasks. Toggling it OFF locks the regression where the
+    // form's Switch flips but the wire body retains the prior value.
+    defaultValue: true,
+    testValue: false,
+    // "Enabled" is unique to training.early_stopping in the post-seed
+    // Fit form — calibration uses a different switch label.
+    uiLocator: (p): Locator => p.getByRole("switch", { name: "Enabled" }),
+    uiAction: async (locator) => {
+      await locator.click();
+    },
+  } as ConfigFieldSpec<unknown>,
+};
+
+const modelAutoNumLeaves: FixtureEntry = {
+  spec: {
+    name: "model.auto_num_leaves via Auto Num Leaves Switch",
+    configPath: "model.auto_num_leaves",
+    // lizyml defaults endpoint sets model.auto_num_leaves=true for
+    // binary tasks. Toggling OFF disables num_leaves_ratio in the
+    // UI but the Switch itself drives a clean wire write.
+    defaultValue: true,
+    testValue: false,
+    uiLocator: (p): Locator =>
+      p.getByRole("switch", { name: "Auto Num Leaves" }),
+    uiAction: async (locator) => {
+      await locator.click();
+    },
+  } as ConfigFieldSpec<unknown>,
+};
+
+const modelNumLeavesRatio: FixtureEntry = {
+  spec: {
+    name: "model.num_leaves_ratio via Num Leaves Ratio NumberInput",
+    configPath: "model.num_leaves_ratio",
+    // Default = 1 (per the rendered Smart Params section). NOTE:
+    // this control is enabled only while auto_num_leaves=true (the
+    // seed default). The auto_num_leaves fixture above runs in its
+    // own isolated workspace (beforeEach reset) so this fixture
+    // sees the seeded auto=true state.
+    //
+    // testValue stays inside the UI default_range of [0.5, 1.0]
+    // (lizyml_ui_schema.py default_range hint) — values outside
+    // that hint occasionally round-trip back to the default at the
+    // server boundary.
+    defaultValue: 1,
+    testValue: 0.7,
+    uiLocator: (p): Locator =>
+      p.getByRole("textbox", { name: "Num Leaves Ratio", exact: true }),
+    uiAction: async (locator, value) => {
+      await locator.fill(String(value));
+      await locator.blur();
+    },
+  } as ConfigFieldSpec<unknown>,
+};
+
+const modelMinDataInLeafRatio: FixtureEntry = {
+  spec: {
+    name: "model.min_data_in_leaf_ratio via Min Data In Leaf Ratio NumberInput",
+    configPath: "model.min_data_in_leaf_ratio",
+    // Default = 0.01 per the Smart Params block. The schema marks
+    // this nullable, but lizyml's defaults endpoint always emits
+    // a numeric value.
+    defaultValue: 0.01,
+    testValue: 0.05,
+    uiLocator: (p): Locator =>
+      p.getByRole("textbox", { name: "Min Data In Leaf Ratio", exact: true }),
+    uiAction: async (locator, value) => {
+      await locator.fill(String(value));
+      await locator.blur();
+    },
+  } as ConfigFieldSpec<unknown>,
+};
+
+const modelMinDataInBinRatio: FixtureEntry = {
+  spec: {
+    name: "model.min_data_in_bin_ratio via Min Data In Bin Ratio NumberInput",
+    configPath: "model.min_data_in_bin_ratio",
+    defaultValue: 0.01,
+    testValue: 0.05,
+    uiLocator: (p): Locator =>
+      p.getByRole("textbox", { name: "Min Data In Bin Ratio", exact: true }),
+    uiAction: async (locator, value) => {
+      await locator.fill(String(value));
+      await locator.blur();
+    },
+  } as ConfigFieldSpec<unknown>,
+};
+
 /**
- * Phase C wave 2: 4 fields covering NumberInput + Switch shapes
+ * Phase C wave 3: 9 fields covering NumberInput + Switch shapes
  * across 3 sections (split / model / training). Adding a fixture
  * row in the next PR is the unit of work for extending coverage
- * to all 32+ Config fields enumerated in gui-e2e-plan §A.
+ * to the remaining ~26 Config fields enumerated in gui-e2e-plan §A.
  */
 export const CONFIG_FIELD_FIXTURES: FixtureEntry[] = [
   splitNSplits,
   modelBalanced,
   trainingSeed,
   earlyStoppingRounds,
+  earlyStoppingEnabled,
+  modelAutoNumLeaves,
+  modelNumLeavesRatio,
+  modelMinDataInLeafRatio,
+  modelMinDataInBinRatio,
 ];
