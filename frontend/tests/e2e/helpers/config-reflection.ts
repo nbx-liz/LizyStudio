@@ -57,6 +57,39 @@ export async function readSavedConfig(
 }
 
 /**
+ * Poll GET /config until `predicate(config)` returns true, or throw a
+ * clear timeout error. Used to wait for `useConfigSync`'s cascading
+ * PUTs to settle after a UI seed step or a strategy switch — the hook
+ * re-runs on multiple state dependencies (target, task, cv, blocked)
+ * so a single click can produce a short burst of PUTs over ~150–500ms
+ * before reaching steady state. Polling the saved config directly
+ * sidesteps the brittleness of `page.waitForRequest` race-matching the
+ * "right" PUT in a burst.
+ *
+ * Returns the final config so callers can immediately assert against
+ * it without an extra round-trip.
+ */
+export async function waitForConfigSettle(
+  request: APIRequestContext,
+  predicate: (config: Record<string, unknown>) => boolean,
+  {
+    timeoutMs = 5000,
+    intervalMs = 100,
+  }: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<Record<string, unknown>> {
+  const start = Date.now();
+  let last: Record<string, unknown> = {};
+  while (Date.now() - start < timeoutMs) {
+    last = await readSavedConfig(request);
+    if (predicate(last)) return last;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  throw new Error(
+    `waitForConfigSettle timed out after ${timeoutMs}ms; last=${JSON.stringify(last).slice(0, 400)}`,
+  );
+}
+
+/**
  * Walk a dotted path through a JSON object. Returns `undefined` if any
  * segment is missing — callers compare against the expected value
  * directly, so a missing field surfaces as a clear `undefined !==
