@@ -77,11 +77,31 @@ export function WorkspacePage() {
   // snapshot. `getCachedConfig` is a getter (not a value) so the
   // funnel always reads the freshest cache entry at flush time, not
   // a stale closure capture from when the hook was registered.
+  //
+  // P-0092 Q-1 Phase 4: `updateConfig` returns ConfigUpdateResponse
+  // (`{config, errors, saved}`) — we must extract `.config` before
+  // writing to the cache. Otherwise the next funnel writer reads back
+  // the wrapper and PUTs `{config: {...}, errors: [...], saved: ...}`
+  // as the body, which the backend rejects with 500. This was a
+  // latent bug from Phase 2 (only useTargetSelection's `replace`
+  // ops fired through the funnel pre-Phase-4 and they happened to
+  // immediately overwrite the cache via setQueryData on the test
+  // path). Phase 4 routes user edits + undo/redo through the funnel,
+  // so the wrapper-shaped cache entry now leaks into the next PUT.
   const writeFunnel = useConfigWriteFunnel({
     getCachedConfig: () =>
       queryClient.getQueryData<Record<string, unknown>>(queryKeys.config()),
     onWriteCommitted: (saved) => {
-      queryClient.setQueryData(queryKeys.config(), saved);
+      const wrapper = saved as {
+        config?: Record<string, unknown>;
+        saved?: boolean;
+      };
+      // Only update cache when backend confirmed the save. saved=false
+      // means the body was rejected; the consumers' invalidateQueries
+      // already re-fetches, so a no-op here is correct.
+      if (wrapper && wrapper.saved !== false && wrapper.config) {
+        queryClient.setQueryData(queryKeys.config(), wrapper.config);
+      }
     },
   });
 

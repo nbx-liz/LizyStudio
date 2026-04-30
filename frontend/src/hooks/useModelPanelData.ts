@@ -28,6 +28,11 @@ import { updateConfig, uploadConfig, validateConfig } from "@/api/workspace";
 import { findEmptyChoiceKeys } from "@/components/workspace/search-space-utils";
 import { useConfigHistory } from "@/hooks/useConfigHistory";
 import { useConfigPresets } from "@/hooks/useConfigPresets";
+import type {
+  ConfigWriteFunnel,
+  WriteReason,
+} from "@/hooks/useConfigWriteFunnel";
+import { useConfigWriteFunnelOptional } from "@/hooks/useConfigWriteFunnelContext";
 
 const VALIDATION_DEBOUNCE_MS = 500;
 
@@ -35,17 +40,36 @@ export interface UseModelPanelDataParams {
   hasData: boolean;
   running?: boolean;
   activeTab?: "fit" | "tune";
+  /**
+   * P-0092 Q-1 Phase 4: write funnel injected by tests when they need
+   * to drive the hook outside a `ConfigWriteFunnelProvider`. Production
+   * code reads the funnel from context — leave this `undefined` and let
+   * `useConfigWriteFunnelOptional()` resolve it.
+   */
+  writeFunnel?: ConfigWriteFunnel | null;
 }
 
 export function useModelPanelData({
   hasData,
   running = false,
   activeTab = "fit",
+  writeFunnel: writeFunnelOverride,
 }: UseModelPanelDataParams) {
   const queryClient = useQueryClient();
   const history = useConfigHistory();
   const { presets, save: savePreset, load: loadPreset } = useConfigPresets();
   const [errors, setErrors] = useState<ConfigError[]>([]);
+
+  // P-0092 Q-1 Phase 4: pull the optional write funnel from the
+  // Workspace-level provider so handleConfigChange / handleUndo /
+  // handleRedo serialise behind in-flight target-select / cv-change
+  // writers. The hook still owns the saved=false / 409 / debounce
+  // observation logic — the funnel only owns the network call ordering.
+  // Tests inject `writeFunnel` directly via params; production reads
+  // from context.
+  const contextFunnel = useConfigWriteFunnelOptional();
+  const writeFunnel =
+    writeFunnelOverride !== undefined ? writeFunnelOverride : contextFunnel;
 
   // --------------------------------------------------------------------
   // Data
@@ -110,9 +134,42 @@ export function useModelPanelData({
       // do not silently swallow validation rejections. When saved=false
       // the backend kept the prior config, so the cache, history, and
       // errors state must reflect that — not the rejected payload.
+      //
+      // P-0092 Q-1 Phase 4: route through the write funnel when one is
+      // mounted so this user-edit PUT serialises behind any in-flight
+      // target-select / cv-change writer. The funnel's WriteResult
+      // carries the raw `ConfigUpdateResponse` in `saved` (success) or
+      // the original error in `details` (failure), so the existing
+      // saved=false / 409 observation logic stays right here.
       let response: Awaited<ReturnType<typeof updateConfig>>;
       try {
-        response = await updateConfig(newConfig);
+        if (writeFunnel) {
+          const result = await writeFunnel.enqueueWrite({
+            kind: "replace",
+            config: newConfig,
+            reason: "config-form-edit",
+          });
+          if (!result.ok) {
+            const err = result.details;
+            if (
+              err instanceof ApiError &&
+              err.status === 409 &&
+              isStudioError(err.body) &&
+              err.body.error.code === "WORKSPACE_LOCKED"
+            ) {
+              toast.info("Config is locked while a job is running");
+              queryClient.invalidateQueries({ queryKey: queryKeys.config() });
+              return;
+            }
+            toast.error("Failed to update config");
+            return;
+          }
+          response = result.saved as unknown as Awaited<
+            ReturnType<typeof updateConfig>
+          >;
+        } else {
+          response = await updateConfig(newConfig);
+        }
       } catch (err) {
         // P-0089 / Issue #279: 409 WORKSPACE_LOCKED means a fit/tune
         // job is running and the config is intentionally immutable.
@@ -159,7 +216,7 @@ export function useModelPanelData({
         }
       }, VALIDATION_DEBOUNCE_MS);
     },
-    [queryClient, running, history.push],
+    [queryClient, running, history.push, writeFunnel],
   );
 
   // --------------------------------------------------------------------
@@ -179,29 +236,59 @@ export function useModelPanelData({
     [queryClient],
   );
 
+  // P-0092 Q-1 Phase 4: undo/redo route through the funnel when one is
+  // mounted, mirroring handleConfigChange. Failures fall back to the
+  // legacy toast — the funnel's WriteResult.ok=false collapses both
+  // network errors and 409 lock into the same "Undo failed" path
+  // because undo is unlikely to race with a running job (the controls
+  // are disabled while running) and a redo of a legitimate prior state
+  // either re-saves or no-ops.
+  const sendThroughFunnelOrLegacy = useCallback(
+    async (
+      body: Record<string, unknown>,
+      reason: WriteReason,
+    ): Promise<boolean> => {
+      if (writeFunnel) {
+        const result = await writeFunnel.enqueueWrite({
+          kind: "replace",
+          config: body,
+          reason,
+        });
+        return result.ok;
+      }
+      try {
+        await updateConfig(body);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    [writeFunnel],
+  );
+
   const handleUndo = useCallback(async () => {
     const prev = history.undo();
     if (!prev) return;
-    try {
-      await updateConfig(prev);
+    const ok = await sendThroughFunnelOrLegacy(prev, "undo");
+    if (ok) {
       queryClient.setQueryData(queryKeys.config(), prev);
       toast.info("Config undone");
-    } catch {
+    } else {
       toast.error("Undo failed");
     }
-  }, [history, queryClient]);
+  }, [history, queryClient, sendThroughFunnelOrLegacy]);
 
   const handleRedo = useCallback(async () => {
     const next = history.redo();
     if (!next) return;
-    try {
-      await updateConfig(next);
+    const ok = await sendThroughFunnelOrLegacy(next, "redo");
+    if (ok) {
       queryClient.setQueryData(queryKeys.config(), next);
       toast.info("Config redone");
-    } catch {
+    } else {
       toast.error("Redo failed");
     }
-  }, [history, queryClient]);
+  }, [history, queryClient, sendThroughFunnelOrLegacy]);
 
   // --------------------------------------------------------------------
   // Preset handlers
