@@ -446,4 +446,189 @@ describe("useConfigWriteFunnel", () => {
       });
     }
   });
+
+  // ----------------------------------------------------------------------
+  // G-6 — putConfig error classification.
+  //
+  // Before this PR the funnel flattened every thrown error into
+  // `error: "network"`, leaving every caller (useConfigSync,
+  // useModelPanelData) to re-detect ApiError + WORKSPACE_LOCKED themselves.
+  // The classifier in flushOne now distinguishes locked / rejected / network
+  // so callers can branch on `error` directly.
+  // ----------------------------------------------------------------------
+  describe("error classification (G-6)", () => {
+    it("classifies 409 WORKSPACE_LOCKED as error=locked", async () => {
+      const { ApiError } = await import("@/api/client");
+      const err = new ApiError(409, {
+        error: {
+          code: "WORKSPACE_LOCKED",
+          message: "Config is locked while job xyz is running",
+          details: { job_id: "xyz" },
+        },
+      });
+      const putConfig = vi.fn().mockRejectedValue(err);
+      const { result } = renderHook(() =>
+        useConfigWriteFunnel({
+          getCachedConfig: () => undefined,
+          putConfig,
+        }),
+      );
+
+      const res = await result.current.enqueueWrite({
+        kind: "replace",
+        config: { task: "binary" },
+        reason: "config-form-edit",
+      });
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.error).toBe("locked");
+        // Original error stays in details so callers that want the
+        // structured body (job_id etc.) can reach it.
+        expect(res.details).toBe(err);
+      }
+    });
+
+    it("classifies 4xx ApiErrors that are NOT lock as error=rejected", async () => {
+      const { ApiError } = await import("@/api/client");
+      const err = new ApiError(422, {
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "Body validation failed",
+          details: {},
+        },
+      });
+      const putConfig = vi.fn().mockRejectedValue(err);
+      const { result } = renderHook(() =>
+        useConfigWriteFunnel({
+          getCachedConfig: () => undefined,
+          putConfig,
+        }),
+      );
+
+      const res = await result.current.enqueueWrite({
+        kind: "replace",
+        config: { task: "binary" },
+        reason: "config-form-edit",
+      });
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error).toBe("rejected");
+    });
+
+    it("classifies generic thrown errors as error=network", async () => {
+      const putConfig = vi.fn().mockRejectedValue(new Error("dns gone"));
+      const { result } = renderHook(() =>
+        useConfigWriteFunnel({
+          getCachedConfig: () => undefined,
+          putConfig,
+        }),
+      );
+
+      const res = await result.current.enqueueWrite({
+        kind: "replace",
+        config: { task: "binary" },
+        reason: "config-form-edit",
+      });
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error).toBe("network");
+    });
+
+    it("classifies 5xx ApiErrors as error=network (not rejected)", async () => {
+      const { ApiError } = await import("@/api/client");
+      const err = new ApiError(500, {
+        error: { code: "INTERNAL", message: "boom", details: {} },
+      });
+      const putConfig = vi.fn().mockRejectedValue(err);
+      const { result } = renderHook(() =>
+        useConfigWriteFunnel({
+          getCachedConfig: () => undefined,
+          putConfig,
+        }),
+      );
+
+      const res = await result.current.enqueueWrite({
+        kind: "replace",
+        config: { task: "binary" },
+        reason: "config-form-edit",
+      });
+      expect(res.ok).toBe(false);
+      // Server-side faults are not "rejected by validation" and not
+      // "locked". They fall through to the network bucket so callers
+      // surface the generic retry path.
+      if (!res.ok) expect(res.error).toBe("network");
+    });
+  });
+
+  // ----------------------------------------------------------------------
+  // G-8 — ConfigUpdateResponse wrapper passes through onWriteCommitted.
+  //
+  // Production putConfig is `updateConfig` from @/api/workspace, which
+  // returns `{config, errors, saved}` (not just the flat config). The
+  // funnel must NOT unwrap that itself — the wrapper stays the truth that
+  // WorkspacePage's onWriteCommitted reads from to set the cache and
+  // observe `saved=false`. Earlier wrapper-leak bugs (Phase 4 follow-up)
+  // came from a writer assuming the funnel flattened the body.
+  // ----------------------------------------------------------------------
+  describe("response shape pass-through (G-8)", () => {
+    it("forwards the full ConfigUpdateResponse wrapper to onWriteCommitted", async () => {
+      const wrapper = {
+        config: { task: "binary", split: { method: "kfold" } },
+        errors: [],
+        saved: true,
+      };
+      const putConfig = vi.fn().mockResolvedValue(wrapper);
+      const onWriteCommitted = vi.fn();
+
+      const { result } = renderHook(() =>
+        useConfigWriteFunnel({
+          getCachedConfig: () => undefined,
+          putConfig,
+          onWriteCommitted,
+        }),
+      );
+
+      const res = await result.current.enqueueWrite({
+        kind: "replace",
+        config: { task: "binary" },
+        reason: "target-select",
+      });
+
+      // The funnel must NOT flatten or peek inside `saved` — the
+      // wrapper goes through verbatim so the Page-level callback owns
+      // the saved=false branching.
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.saved).toBe(wrapper);
+      expect(onWriteCommitted).toHaveBeenCalledTimes(1);
+      expect(onWriteCommitted).toHaveBeenCalledWith(wrapper);
+    });
+
+    it("forwards a saved=false wrapper without throwing", async () => {
+      // Even a backend-rejected wrapper is still "ok" at the funnel
+      // layer (the HTTP call succeeded). The hook caller observes
+      // `saved=false` and surfaces the toast itself.
+      const wrapper = {
+        config: { task: "binary" },
+        errors: [{ path: "data", message: "Field required" }],
+        saved: false,
+      };
+      const putConfig = vi.fn().mockResolvedValue(wrapper);
+      const onWriteCommitted = vi.fn();
+
+      const { result } = renderHook(() =>
+        useConfigWriteFunnel({
+          getCachedConfig: () => undefined,
+          putConfig,
+          onWriteCommitted,
+        }),
+      );
+
+      const res = await result.current.enqueueWrite({
+        kind: "replace",
+        config: { task: "binary" },
+        reason: "config-form-edit",
+      });
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.saved).toBe(wrapper);
+      expect(onWriteCommitted).toHaveBeenCalledWith(wrapper);
+    });
+  });
 });
