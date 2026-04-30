@@ -309,4 +309,98 @@ test.describe("Inference flow", () => {
     const record = await recordRes.json();
     expect(record.row_count).toBe(100);
   });
+
+  /**
+   * B-2 (gui-e2e-plan §4.1) — History list click switches the result
+   * panel.
+   *
+   * The auto-select-latest flow is already covered by InferencePage's
+   * unit tests, but the round-trip "user clicks an older history
+   * entry → result panel re-renders against the older record" has no
+   * E2E coverage. The result panel keys on `selectedRecord.inf_id`,
+   * so a regression in:
+   *   - the ``onSelect`` wiring in HistoryList
+   *   - the ``selectedInfId`` derivation on InferencePage
+   *   - the ``key`` on Results* that forces a remount on switch
+   * would silently leave the panel pinned to whatever it auto-
+   * selected first. Unit tests with mocked records cannot detect a
+   * real backend mismatch (e.g., wrong job_id propagated to the
+   * predictions fetch) — only the integration path can.
+   *
+   * Invariants:
+   *
+   *   INV-1  Two inference runs land in history; the page auto-
+   *          selects the latest (#2) on job pick.
+   *   INV-2  Clicking the older "#1" history button switches the
+   *          right-panel heading to "Inf #1".
+   *   INV-3  Clicking back to "#2" restores the heading.
+   */
+  test("UI: clicking a history entry switches the inference result panel (B-2)", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(180_000);
+
+    const csvPath = createTestCsv(100);
+    const jobId = await setupAndFit(request, csvPath);
+    await waitForJobDone(request, jobId);
+
+    // Run inference twice with evaluate=true so both records have
+    // ground truth and render through ResultsWithGT (where the
+    // "Inf #N -- jobLabel" heading lives at line 72).
+    for (let i = 0; i < 2; i++) {
+      const res = await request.post(`${API}/inference/run`, {
+        data: {
+          job_id: jobId,
+          data: { source_type: "path", path: csvPath },
+          return_shap: false,
+          evaluate: true,
+        },
+      });
+      expect(res.status()).toBe(200);
+    }
+
+    await dismissOnboarding(page);
+    await page.goto("/inference");
+    await page.waitForLoadState("networkidle");
+
+    const modelCombo = page.getByRole("combobox", {
+      name: "Select completed job",
+    });
+    await expect(modelCombo).toBeEnabled({ timeout: 15_000 });
+    await modelCombo.click();
+    const openListbox = page.getByRole("listbox");
+    await openListbox.getByRole("option").first().click();
+
+    // INV-1: history list materialises with 2 entries; the latest
+    // (#2) is auto-selected. The heading "Inf #2 -- jobLabel" is
+    // unique to the right panel.
+    const hist2 = page.getByRole("button", { name: /^#2\s/ });
+    const hist1 = page.getByRole("button", { name: /^#1\s/ });
+    await expect(hist2).toBeVisible({ timeout: 10_000 });
+    await expect(hist1).toBeVisible();
+    await expect(
+      page.getByRole("heading").filter({ hasText: /Inf\s*#2/ }),
+    ).toBeVisible({ timeout: 10_000 });
+
+    // INV-2: click the older "#1" → heading switches to Inf #1.
+    await hist1.click();
+    await expect(
+      page.getByRole("heading").filter({ hasText: /Inf\s*#1/ }),
+    ).toBeVisible({ timeout: 10_000 });
+    // The newest heading must no longer be in the right panel — if
+    // both stayed mounted, the key on Results* would not be working.
+    await expect(
+      page.getByRole("heading").filter({ hasText: /Inf\s*#2/ }),
+    ).toHaveCount(0);
+
+    // INV-3: click back to the newest → heading restores.
+    await hist2.click();
+    await expect(
+      page.getByRole("heading").filter({ hasText: /Inf\s*#2/ }),
+    ).toBeVisible({ timeout: 10_000 });
+    await expect(
+      page.getByRole("heading").filter({ hasText: /Inf\s*#1/ }),
+    ).toHaveCount(0);
+  });
 });
