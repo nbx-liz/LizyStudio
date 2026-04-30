@@ -571,12 +571,70 @@ const calibrationNSplits: FixtureEntry = {
   precondition: enableCalibration,
 };
 
+const dataGroupCol: FixtureEntry = {
+  spec: {
+    name: "data.group_col (group_kfold) via Group column Select",
+    configPath: "data.group_col",
+    // After switching to group_kfold, applyCvDataFields injects
+    // data.group_col=null (because cv.groupCol is null until the
+    // user picks). Probed via tests/e2e:
+    // data = { path, target, time_col: null, group_col: null }.
+    defaultValue: null,
+    testValue: "gender",
+    // CvSection's Group column Select carries an explicit
+    // aria-label, so getByRole resolves it directly.
+    uiLocator: (p): Locator =>
+      p.getByRole("combobox", { name: "Group column", exact: true }),
+    uiAction: async (locator, value) => {
+      await locator.click();
+      await locator
+        .page()
+        .getByRole("option", { name: String(value), exact: true })
+        .click();
+    },
+  } as ConfigFieldSpec<unknown>,
+  precondition: async (page) => {
+    await page.getByRole("radio", { name: "GroupKFold", exact: true }).click();
+    // The Group column trigger materialises once the strategy
+    // reconciles into local state.
+    await page
+      .getByRole("combobox", { name: "Group column", exact: true })
+      .waitFor({ state: "visible", timeout: 5000 });
+  },
+};
+
+const dataTimeCol: FixtureEntry = {
+  spec: {
+    name: "data.time_col (time_series) via Time column Select",
+    configPath: "data.time_col",
+    defaultValue: null,
+    testValue: "age",
+    uiLocator: (p): Locator =>
+      p.getByRole("combobox", { name: "Time column", exact: true }),
+    uiAction: async (locator, value) => {
+      await locator.click();
+      await locator
+        .page()
+        .getByRole("option", { name: String(value), exact: true })
+        .click();
+    },
+  } as ConfigFieldSpec<unknown>,
+  precondition: async (page) => {
+    await page
+      .getByRole("radio", { name: "TimeSeriesSplit", exact: true })
+      .click();
+    await page
+      .getByRole("combobox", { name: "Time column", exact: true })
+      .waitFor({ state: "visible", timeout: 5000 });
+  },
+};
+
 /**
- * Phase C wave 7: 20 fields. Adds 4 nullable / conditional
- * fixtures: time-series train_size_max / test_size_max plus
- * calibration method / n_splits (both gated by the Calibration
- * Switch precondition). Introduces an `enableCalibration` helper
- * mirroring the `switchToCvStrategy` pattern.
+ * Phase C wave 8: 22 fields. Adds the two `data.*_col` Selects
+ * gated by their respective CV strategies (group_kfold for
+ * group_col, time_series for time_col). Both use defaultValue=null
+ * because applyCvDataFields injects null until the user picks a
+ * column from the dropdown.
  */
 export const CONFIG_FIELD_FIXTURES: FixtureEntry[] = [
   splitNSplits,
@@ -599,4 +657,6 @@ export const CONFIG_FIELD_FIXTURES: FixtureEntry[] = [
   splitTestSizeMax,
   calibrationMethod,
   calibrationNSplits,
+  dataGroupCol,
+  dataTimeCol,
 ];
