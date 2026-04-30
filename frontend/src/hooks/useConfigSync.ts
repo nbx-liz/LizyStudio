@@ -13,6 +13,7 @@ import {
 import type { BlockedGroupKFoldState } from "@/components/workspace/BlockedGroupKFoldEditor";
 import {
   type CvState,
+  pruneInnerValidForMethod,
   recommendedInnerValid,
 } from "@/components/workspace/cv-state";
 import { buildSyncedConfig } from "./buildSyncedConfig";
@@ -121,11 +122,29 @@ export function useConfigSync({
         (baseEarlyStopping.inner_valid as Record<string, unknown>) ?? {};
       if (prevCvStrategyRef.current !== cv.strategy) {
         const recommended = recommendedInnerValid(cv.strategy);
+        // P-0092 follow-up (2026-04-30): prune inner_valid fields to
+        // the new method's allowed schema and drop validation_ratio.
+        //
+        // Without the prune, fields like `stratify` carry over from
+        // holdout into group_holdout and get rejected with "Extra
+        // inputs are not permitted" because GroupHoldoutInnerValidConfig
+        // has extra="forbid".
+        //
+        // Without the validation_ratio drop, EarlyStoppingConfig's
+        // `_resolve_validation_ratio` model_validator rejects the body
+        // with "Specify either 'validation_ratio' or 'inner_valid',
+        // not both" — except for the holdout method where
+        // ratio==validation_ratio short-circuits to round-trip OK.
+        // group_holdout / time_holdout always trip the validator.
+        const {
+          validation_ratio: _validation_ratio,
+          ...earlyStoppingWithoutVr
+        } = baseEarlyStopping;
         merged.training = {
           ...baseTraining,
           early_stopping: {
-            ...baseEarlyStopping,
-            inner_valid: { ...innerValid, method: recommended },
+            ...earlyStoppingWithoutVr,
+            inner_valid: pruneInnerValidForMethod(innerValid, recommended),
           },
         };
         prevCvStrategyRef.current = cv.strategy;

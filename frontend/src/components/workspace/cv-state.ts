@@ -179,6 +179,51 @@ export function recommendedInnerValid(strategy: string): string {
   }
 }
 
+/**
+ * Inner-validation method ⇒ allowed config fields.
+ *
+ * Mirrors the lizyml Pydantic schema (extra="forbid") for InnerValidConfig:
+ *
+ *   - holdout:        method, ratio, stratify, random_state
+ *   - group_holdout:  method, ratio, random_state          (no stratify)
+ *   - time_holdout:   method, ratio                         (no stratify, no random_state)
+ *
+ * Used by `useConfigSync` when auto-switching inner_valid.method on
+ * cv-strategy change: cross-method fields (e.g. ``stratify`` carrying
+ * over from holdout into group_holdout) are filtered out so the PUT
+ * does not get rejected with "Extra inputs are not permitted".
+ */
+const INNER_VALID_FIELDS_BY_METHOD: Record<string, readonly string[]> = {
+  holdout: ["method", "ratio", "stratify", "random_state"],
+  group_holdout: ["method", "ratio", "random_state"],
+  time_holdout: ["method", "ratio"],
+};
+
+/**
+ * Project an existing inner_valid object onto the allowed fields for the
+ * given method, preserving any values the user already set on shared
+ * fields (e.g. ratio carries over across methods).
+ */
+export function pruneInnerValidForMethod(
+  current: Record<string, unknown>,
+  method: string,
+): Record<string, unknown> {
+  const allowed = INNER_VALID_FIELDS_BY_METHOD[method];
+  if (!allowed) {
+    // Unknown method — return unchanged so a future schema revision
+    // does not silently drop fields. Backend will surface the error.
+    return { ...current, method };
+  }
+  const result: Record<string, unknown> = { method };
+  for (const field of allowed) {
+    if (field === "method") continue;
+    if (current[field] !== undefined) {
+      result[field] = current[field];
+    }
+  }
+  return result;
+}
+
 /** Build a split config object containing only strategy-relevant fields.
  *
  * ``fields`` is the `UiSchema.capabilities.cv_strategy_fields[strategy]`
