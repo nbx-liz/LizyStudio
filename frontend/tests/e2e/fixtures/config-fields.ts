@@ -84,13 +84,54 @@ const modelBalanced: FixtureEntry = {
   } as ConfigFieldSpec<unknown>,
 };
 
+const trainingSeed: FixtureEntry = {
+  spec: {
+    name: "training.seed via Seed NumberInput",
+    configPath: "training.seed",
+    // lizyml defaults endpoint sets training.seed=42 for binary tasks.
+    defaultValue: 42,
+    testValue: 7,
+    // FormField wires <Label htmlFor> to the NumberInput's underlying
+    // <input>. The schema-rendered Training section produces a
+    // unique "Seed" label (no other "Seed" textbox is visible after
+    // seedUiWorkspace). Using getByRole+name avoids the deeply
+    // nested locator chain that would otherwise be required.
+    uiLocator: (p): Locator =>
+      p.getByRole("textbox", { name: "Seed", exact: true }),
+    uiAction: async (locator, value) => {
+      await locator.fill(String(value));
+      await locator.blur();
+    },
+  } as ConfigFieldSpec<unknown>,
+};
+
+const earlyStoppingRounds: FixtureEntry = {
+  spec: {
+    name: "training.early_stopping.rounds via Rounds NumberInput",
+    configPath: "training.early_stopping.rounds",
+    // lizyml defaults endpoint sets training.early_stopping.rounds=150
+    // for binary tasks.
+    defaultValue: 150,
+    testValue: 75,
+    // "Rounds" is unique to early_stopping in the post-seed Fit form.
+    uiLocator: (p): Locator =>
+      p.getByRole("textbox", { name: "Rounds", exact: true }),
+    uiAction: async (locator, value) => {
+      await locator.fill(String(value));
+      await locator.blur();
+    },
+  } as ConfigFieldSpec<unknown>,
+};
+
 /**
- * Initial Phase C wave: 2 fields covering NumberInput + Switch
- * shapes. Adding a fixture row in the next PR is the unit of work
- * for extending coverage to all 32+ Config fields enumerated in
- * gui-e2e-plan §A.
+ * Phase C wave 2: 4 fields covering NumberInput + Switch shapes
+ * across 3 sections (split / model / training). Adding a fixture
+ * row in the next PR is the unit of work for extending coverage
+ * to all 32+ Config fields enumerated in gui-e2e-plan §A.
  */
 export const CONFIG_FIELD_FIXTURES: FixtureEntry[] = [
   splitNSplits,
   modelBalanced,
+  trainingSeed,
+  earlyStoppingRounds,
 ];
