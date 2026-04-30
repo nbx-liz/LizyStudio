@@ -432,6 +432,8 @@ describe("DataPanel", () => {
   // Column grid rendering requires a complex async chain (load → fetchColumns
   // → fetchConfigDefaults → updateConfig) that is unreliable in headless DOM.
   // These paths are covered by E2E visual regression tests instead.
+  // Tracked under Issue #304 — restore as a passing component test or delete
+  // and lean on the E2E coverage explicitly.
   it.skip("renders column settings grid when data is loaded with target", async () => {
     mockLoadDataFromPath.mockResolvedValue({
       data_ref: { shape: [100, 5], path: "/data.csv" },
@@ -519,6 +521,9 @@ describe("DataPanel", () => {
     expect(catButtons.length).toBeGreaterThan(0);
   });
 
+  // Tracked under Issue #304 — same async-chain reliability problem
+  // as the column-grid test above; covered by E2E visual regression
+  // until restored or removed.
   it.skip("shows summary stats after data is loaded", async () => {
     mockLoadDataFromPath.mockResolvedValue({
       data_ref: { shape: [100, 4], path: "/data.csv" },
