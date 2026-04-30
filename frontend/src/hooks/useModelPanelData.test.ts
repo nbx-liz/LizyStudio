@@ -803,7 +803,7 @@ describe("useModelPanelData", () => {
         saved: { config: {}, errors: [], saved: true },
       }));
 
-      const { wrapper, queryClient } = makeWrapper();
+      const { wrapper } = makeWrapper();
       const { result } = renderHook(
         () =>
           useModelPanelData({
@@ -829,11 +829,14 @@ describe("useModelPanelData", () => {
         await result.current.handleUndo();
       });
 
-      const reasons = calls.map((c) => c.reason);
-      expect(reasons).toContain("undo");
-      expect(queryClient.getQueryData(queryKeys.config())).toEqual({
-        model: { name: "A" },
-      });
+      // H-3: the funnel path no longer writes to the cache locally —
+      // production wires `onWriteCommitted` to apply the backend's
+      // canonical (post-normalisation) snapshot, which the stub funnel
+      // here does not simulate. Assert that the undo enqueued with
+      // the right reason AND the right body (the prior history entry).
+      const undoCall = calls.find((c) => c.reason === "undo");
+      expect(undoCall).toBeDefined();
+      expect(undoCall?.config).toEqual({ model: { name: "A" } });
     });
 
     it("handleRedo routes through funnel with reason=redo", async () => {
@@ -842,7 +845,7 @@ describe("useModelPanelData", () => {
         saved: { config: {}, errors: [], saved: true },
       }));
 
-      const { wrapper, queryClient } = makeWrapper();
+      const { wrapper } = makeWrapper();
       const { result } = renderHook(
         () =>
           useModelPanelData({
@@ -868,11 +871,11 @@ describe("useModelPanelData", () => {
         await result.current.handleRedo();
       });
 
-      const reasons = calls.map((c) => c.reason);
-      expect(reasons).toContain("redo");
-      expect(queryClient.getQueryData(queryKeys.config())).toEqual({
-        model: { name: "B" },
-      });
+      // H-3: same rationale as the undo test above. Assert the redo
+      // enqueued with the right reason and the right history body.
+      const redoCall = calls.find((c) => c.reason === "redo");
+      expect(redoCall).toBeDefined();
+      expect(redoCall?.config).toEqual({ model: { name: "B" } });
     });
 
     it("handleUndo surfaces 'Undo failed' toast when funnel returns ok=false", async () => {

@@ -243,24 +243,32 @@ export function useModelPanelData({
   // because undo is unlikely to race with a running job (the controls
   // are disabled while running) and a redo of a legitimate prior state
   // either re-saves or no-ops.
+  //
+  // H-3: the funnel path returns `viaFunnel=true` so the caller can
+  // skip its explicit `setQueryData` — the funnel's `onWriteCommitted`
+  // already wrote the backend's *canonical* (post-normalisation)
+  // snapshot to the cache. Following up with the local history entry
+  // would silently undo whatever the backend normalised (e.g. inserted
+  // random_state defaults). The legacy path still needs the explicit
+  // setQueryData because no `onWriteCommitted` is wired there.
   const sendThroughFunnelOrLegacy = useCallback(
     async (
       body: Record<string, unknown>,
       reason: WriteReason,
-    ): Promise<boolean> => {
+    ): Promise<{ ok: boolean; viaFunnel: boolean }> => {
       if (writeFunnel) {
         const result = await writeFunnel.enqueueWrite({
           kind: "replace",
           config: body,
           reason,
         });
-        return result.ok;
+        return { ok: result.ok, viaFunnel: true };
       }
       try {
         await updateConfig(body);
-        return true;
+        return { ok: true, viaFunnel: false };
       } catch {
-        return false;
+        return { ok: false, viaFunnel: false };
       }
     },
     [writeFunnel],
@@ -269,9 +277,11 @@ export function useModelPanelData({
   const handleUndo = useCallback(async () => {
     const prev = history.undo();
     if (!prev) return;
-    const ok = await sendThroughFunnelOrLegacy(prev, "undo");
+    const { ok, viaFunnel } = await sendThroughFunnelOrLegacy(prev, "undo");
     if (ok) {
-      queryClient.setQueryData(queryKeys.config(), prev);
+      if (!viaFunnel) {
+        queryClient.setQueryData(queryKeys.config(), prev);
+      }
       toast.info("Config undone");
     } else {
       toast.error("Undo failed");
@@ -281,9 +291,11 @@ export function useModelPanelData({
   const handleRedo = useCallback(async () => {
     const next = history.redo();
     if (!next) return;
-    const ok = await sendThroughFunnelOrLegacy(next, "redo");
+    const { ok, viaFunnel } = await sendThroughFunnelOrLegacy(next, "redo");
     if (ok) {
-      queryClient.setQueryData(queryKeys.config(), next);
+      if (!viaFunnel) {
+        queryClient.setQueryData(queryKeys.config(), next);
+      }
       toast.info("Config redone");
     } else {
       toast.error("Redo failed");

@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import { ApiError } from "@/api/client";
+import { isStudioError } from "@/api/errors";
 import { updateConfig } from "@/api/workspace";
 
 /**
@@ -111,10 +113,41 @@ export function materializeOp(
  * Coalesce two queued ops that share a `reason`. The latest wins
  * outright — partial merging across patch + replace would re-introduce
  * the cross-snapshot race the funnel exists to eliminate.
+ *
+ * H-4: callers ALWAYS gate on `tail.reason === op.reason` before
+ * invoking this helper, so the function can simply return `next`.
+ * The argument list is preserved for documentation symmetry with
+ * other reducer-shaped helpers and to keep an obvious extension
+ * point should a future reason want partial-merge semantics.
  */
-export function coalesceByReason(queued: WriteOp, next: WriteOp): WriteOp {
-  if (queued.reason !== next.reason) return next;
+export function coalesceByReason(_queued: WriteOp, next: WriteOp): WriteOp {
   return next;
+}
+
+/**
+ * Classify a thrown error from the network layer into a discrete
+ * `WriteResult.error` tag so consumers can branch on the failure
+ * mode without rummaging through `details`. G-6: the funnel used
+ * to flatten everything into `"network"` and rely on every caller
+ * to re-detect 409 WORKSPACE_LOCKED itself.
+ */
+function classifyPutError(err: unknown): {
+  error: "locked" | "rejected" | "network";
+  details: unknown;
+} {
+  if (err instanceof ApiError) {
+    if (
+      err.status === 409 &&
+      isStudioError(err.body) &&
+      err.body.error.code === "WORKSPACE_LOCKED"
+    ) {
+      return { error: "locked", details: err };
+    }
+    if (err.status >= 400 && err.status < 500) {
+      return { error: "rejected", details: err };
+    }
+  }
+  return { error: "network", details: err };
 }
 
 interface FunnelState {
@@ -196,7 +229,8 @@ export function useConfigWriteFunnel(
       onWriteCommitted?.(saved);
       result = { ok: true, saved };
     } catch (err) {
-      result = { ok: false, error: "network", details: err };
+      const classified = classifyPutError(err);
+      result = { ok: false, ...classified };
     }
 
     // Resolve all op promises that point at this flush. After
