@@ -1,0 +1,449 @@
+import { renderHook } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import {
+  type ConfigSnapshot,
+  coalesceByReason,
+  materializeOp,
+  useConfigWriteFunnel,
+  type WriteOp,
+} from "./useConfigWriteFunnel";
+
+/**
+ * Phase 1 invariants for the write funnel (P-0092).
+ *
+ * The funnel is the substrate the rest of P-0092 builds on, so these
+ * tests deliberately stay at the level of "the queue does what it
+ * promises" — concrete writer migrations come in Phases 2..6 and
+ * grow their own integration tests then. Each `describe` block
+ * locks one invariant from the HISTORY.md plan.
+ */
+
+function flushMicrotasks() {
+  return new Promise((r) => setTimeout(r, 0));
+}
+
+describe("materializeOp", () => {
+  it("replace ops pass through verbatim", () => {
+    const op: WriteOp = {
+      kind: "replace",
+      config: { task: "binary", split: { method: "kfold" } },
+      reason: "cv-change",
+    };
+    const out = materializeOp(op, { task: "regression" });
+    expect(out).toEqual({ task: "binary", split: { method: "kfold" } });
+  });
+
+  it("patch ops merge onto the current cache snapshot", () => {
+    const current: ConfigSnapshot = {
+      task: "binary",
+      training: { early_stopping: { rounds: 100 } },
+    };
+    const op: WriteOp = {
+      kind: "patch",
+      path: ["training", "early_stopping", "rounds"],
+      value: 50,
+      reason: "config-form-edit",
+    };
+    const out = materializeOp(op, current);
+    expect(out).toEqual({
+      task: "binary",
+      training: { early_stopping: { rounds: 50 } },
+    });
+    // Original snapshot must not mutate — ConfigForm relies on
+    // referential equality to skip useEffect runs that have not
+    // observed real changes.
+    expect(current.training).toEqual({ early_stopping: { rounds: 100 } });
+  });
+
+  it("patch ops handle a cold cache by starting from an empty object", () => {
+    const op: WriteOp = {
+      kind: "patch",
+      path: ["split", "method"],
+      value: "kfold",
+      reason: "cv-change",
+    };
+    expect(materializeOp(op, undefined)).toEqual({
+      split: { method: "kfold" },
+    });
+  });
+});
+
+describe("coalesceByReason", () => {
+  it("collapses two same-reason ops to the latter (last write wins)", () => {
+    const a: WriteOp = {
+      kind: "replace",
+      config: { split: { method: "kfold" } },
+      reason: "cv-change",
+    };
+    const b: WriteOp = {
+      kind: "replace",
+      config: { split: { method: "stratified_kfold" } },
+      reason: "cv-change",
+    };
+    expect(coalesceByReason(a, b)).toBe(b);
+  });
+
+  it("keeps the new op when the reasons differ", () => {
+    const a: WriteOp = {
+      kind: "replace",
+      config: { split: { method: "kfold" } },
+      reason: "cv-change",
+    };
+    const b: WriteOp = {
+      kind: "replace",
+      config: { task: "binary" },
+      reason: "target-select",
+    };
+    expect(coalesceByReason(a, b)).toBe(b);
+  });
+});
+
+describe("useConfigWriteFunnel", () => {
+  it("flushes a single replace op via putConfig and resolves with the saved snapshot", async () => {
+    const putConfig = vi.fn().mockResolvedValue({
+      task: "binary",
+      split: { method: "kfold" },
+    });
+    const { result } = renderHook(() =>
+      useConfigWriteFunnel({
+        getCachedConfig: () => undefined,
+        putConfig,
+      }),
+    );
+
+    const promise = result.current.enqueueWrite({
+      kind: "replace",
+      config: { task: "binary", split: { method: "kfold" } },
+      reason: "cv-change",
+    });
+
+    const res = await promise;
+    expect(res).toEqual({
+      ok: true,
+      saved: { task: "binary", split: { method: "kfold" } },
+    });
+    expect(putConfig).toHaveBeenCalledTimes(1);
+    expect(putConfig).toHaveBeenCalledWith({
+      task: "binary",
+      split: { method: "kfold" },
+    });
+  });
+
+  it("invokes onWriteCommitted with the saved snapshot", async () => {
+    const onWriteCommitted = vi.fn();
+    const putConfig = vi
+      .fn()
+      .mockResolvedValue({ task: "binary", split: { method: "kfold" } });
+    const { result } = renderHook(() =>
+      useConfigWriteFunnel({
+        getCachedConfig: () => undefined,
+        putConfig,
+        onWriteCommitted,
+      }),
+    );
+
+    await result.current.enqueueWrite({
+      kind: "replace",
+      config: { task: "binary", split: { method: "kfold" } },
+      reason: "cv-change",
+    });
+
+    expect(onWriteCommitted).toHaveBeenCalledWith({
+      task: "binary",
+      split: { method: "kfold" },
+    });
+  });
+
+  it("coalesces a synchronous burst of same-reason replace ops into a single PUT", async () => {
+    // The exact race we are killing in Phase 5: a synchronous burst
+    // of cv-strategy clicks must not generate four PUTs whose
+    // ordering is racy. Because `drain` yields one microtask before
+    // the first flush, all enqueues posted before that microtask
+    // boundary collapse into one PUT carrying only the final
+    // selection. (A cross-microtask burst — e.g. user clicking again
+    // *after* the first PUT has started — produces a second flush;
+    // that case is covered by the next test.)
+    const putConfig = vi
+      .fn()
+      .mockImplementation((body: ConfigSnapshot) => Promise.resolve(body));
+
+    const { result } = renderHook(() =>
+      useConfigWriteFunnel({
+        getCachedConfig: () => undefined,
+        putConfig,
+      }),
+    );
+
+    const p1 = result.current.enqueueWrite({
+      kind: "replace",
+      config: { split: { method: "kfold" } },
+      reason: "cv-change",
+    });
+    const p2 = result.current.enqueueWrite({
+      kind: "replace",
+      config: { split: { method: "stratified_kfold" } },
+      reason: "cv-change",
+    });
+    const p3 = result.current.enqueueWrite({
+      kind: "replace",
+      config: { split: { method: "group_kfold" } },
+      reason: "cv-change",
+    });
+    const p4 = result.current.enqueueWrite({
+      kind: "replace",
+      config: { split: { method: "time_series" } },
+      reason: "cv-change",
+    });
+
+    const results = await Promise.all([p1, p2, p3, p4]);
+
+    // All four enqueues observe the same final body — coalesced.
+    for (const r of results) {
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.saved).toEqual({ split: { method: "time_series" } });
+    }
+    // Single PUT — the entire burst collapsed before flush started.
+    expect(putConfig).toHaveBeenCalledTimes(1);
+    expect(putConfig.mock.calls[0][0]).toEqual({
+      split: { method: "time_series" },
+    });
+  });
+
+  it("a second burst arriving after the first PUT starts produces a second coalesced flush", async () => {
+    // Cross-microtask burst: the first enqueue starts a flush, then
+    // a follow-up burst lands while that flush is in flight. The
+    // second burst must not overwrite the in-flight body, but must
+    // itself coalesce, and must run only after the first PUT clears.
+    let resolveFirst: (v: ConfigSnapshot) => void = () => {};
+    const putConfig = vi.fn().mockImplementation((body: ConfigSnapshot) => {
+      if (putConfig.mock.calls.length === 1) {
+        return new Promise<ConfigSnapshot>((res) => {
+          resolveFirst = res;
+        });
+      }
+      return Promise.resolve(body);
+    });
+
+    const { result } = renderHook(() =>
+      useConfigWriteFunnel({
+        getCachedConfig: () => undefined,
+        putConfig,
+      }),
+    );
+
+    const p1 = result.current.enqueueWrite({
+      kind: "replace",
+      config: { split: { method: "kfold" } },
+      reason: "cv-change",
+    });
+    // Let the drain microtask fire so the first PUT is actually in
+    // flight before the next burst arrives.
+    await flushMicrotasks();
+    expect(putConfig).toHaveBeenCalledTimes(1);
+
+    const p2 = result.current.enqueueWrite({
+      kind: "replace",
+      config: { split: { method: "stratified_kfold" } },
+      reason: "cv-change",
+    });
+    const p3 = result.current.enqueueWrite({
+      kind: "replace",
+      config: { split: { method: "time_series" } },
+      reason: "cv-change",
+    });
+
+    resolveFirst({ split: { method: "kfold" } });
+    await Promise.all([p1, p2, p3]);
+
+    expect(putConfig).toHaveBeenCalledTimes(2);
+    expect(putConfig.mock.calls[0][0]).toEqual({ split: { method: "kfold" } });
+    expect(putConfig.mock.calls[1][0]).toEqual({
+      split: { method: "time_series" },
+    });
+  });
+
+  it("serialises ops with different reasons (no two PUTs in flight)", async () => {
+    const inFlight: ConfigSnapshot[] = [];
+    let resolveFirst: (v: ConfigSnapshot) => void = () => {};
+    const putConfig = vi.fn().mockImplementation((body: ConfigSnapshot) => {
+      inFlight.push(body);
+      if (putConfig.mock.calls.length === 1) {
+        return new Promise<ConfigSnapshot>((res) => {
+          resolveFirst = res;
+        });
+      }
+      return Promise.resolve(body);
+    });
+
+    const { result } = renderHook(() =>
+      useConfigWriteFunnel({
+        getCachedConfig: () => undefined,
+        putConfig,
+      }),
+    );
+
+    const p1 = result.current.enqueueWrite({
+      kind: "replace",
+      config: { task: "binary" },
+      reason: "target-select",
+    });
+    const p2 = result.current.enqueueWrite({
+      kind: "replace",
+      config: { split: { method: "kfold" } },
+      reason: "cv-change",
+    });
+
+    await flushMicrotasks();
+    // Only the first op should be in flight while we hold its
+    // resolver — the funnel is serial, not parallel.
+    expect(inFlight).toHaveLength(1);
+    expect(inFlight[0]).toEqual({ task: "binary" });
+
+    resolveFirst({ task: "binary" });
+    await Promise.all([p1, p2]);
+
+    expect(putConfig).toHaveBeenCalledTimes(2);
+    expect(putConfig.mock.calls[1][0]).toEqual({ split: { method: "kfold" } });
+  });
+
+  it("isFlushing reflects in-flight state and clears after drain", async () => {
+    let resolve: (v: ConfigSnapshot) => void = () => {};
+    const putConfig = vi.fn().mockImplementation(
+      () =>
+        new Promise<ConfigSnapshot>((res) => {
+          resolve = res;
+        }),
+    );
+
+    const { result } = renderHook(() =>
+      useConfigWriteFunnel({
+        getCachedConfig: () => undefined,
+        putConfig,
+      }),
+    );
+
+    expect(result.current.isFlushing()).toBe(false);
+
+    const p = result.current.enqueueWrite({
+      kind: "replace",
+      config: { task: "binary" },
+      reason: "target-select",
+    });
+    await flushMicrotasks();
+    expect(result.current.isFlushing()).toBe(true);
+
+    resolve({ task: "binary" });
+    await p;
+    // Allow the drain loop to wind down before reading the flag.
+    await flushMicrotasks();
+    expect(result.current.isFlushing()).toBe(false);
+  });
+
+  it("converts a putConfig rejection into a network WriteResult without throwing", async () => {
+    const putConfig = vi.fn().mockRejectedValue(new Error("backend down"));
+    const { result } = renderHook(() =>
+      useConfigWriteFunnel({
+        getCachedConfig: () => undefined,
+        putConfig,
+      }),
+    );
+
+    const res = await result.current.enqueueWrite({
+      kind: "replace",
+      config: { task: "binary" },
+      reason: "target-select",
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toBe("network");
+      expect(res.details).toBeInstanceOf(Error);
+    }
+  });
+
+  it("aborts pending ops on unmount", async () => {
+    let resolve: (v: ConfigSnapshot) => void = () => {};
+    const putConfig = vi.fn().mockImplementation(
+      () =>
+        new Promise<ConfigSnapshot>((res) => {
+          resolve = res;
+        }),
+    );
+
+    const { result, unmount } = renderHook(() =>
+      useConfigWriteFunnel({
+        getCachedConfig: () => undefined,
+        putConfig,
+      }),
+    );
+
+    const p1 = result.current.enqueueWrite({
+      kind: "replace",
+      config: { task: "binary" },
+      reason: "target-select",
+    });
+    // Queue a second op behind the first in-flight one so unmount
+    // observes a pending resolver.
+    const p2 = result.current.enqueueWrite({
+      kind: "replace",
+      config: { split: { method: "kfold" } },
+      reason: "cv-change",
+    });
+
+    await flushMicrotasks();
+    unmount();
+
+    // The second op had not flushed yet, so its resolver was held by
+    // resolversRef. Unmount should drain it with `aborted` so callers
+    // do not leak a pending Promise.
+    const r2 = await p2;
+    expect(r2.ok).toBe(false);
+    if (!r2.ok) expect(r2.error).toBe("aborted");
+
+    // Resolve the in-flight call so the leftover putConfig promise
+    // does not leak past the test.
+    resolve({ task: "binary" });
+    await p1.catch(() => {});
+  });
+
+  it("materialises a patch op against the freshest cached config at flush time, not enqueue time", async () => {
+    // This is the closure-race fix from §P-0092 in miniature: the
+    // body sent to the server must be derived from the cache as it
+    // looks when the funnel is about to flush, not from a snapshot
+    // captured when the caller invoked enqueueWrite.
+    let cached: ConfigSnapshot = {
+      split: { method: "stratified_kfold", n_splits: 5 },
+    };
+    const putConfig = vi
+      .fn()
+      .mockImplementation((body: ConfigSnapshot) => Promise.resolve(body));
+
+    const { result } = renderHook(() =>
+      useConfigWriteFunnel({
+        getCachedConfig: () => cached,
+        putConfig,
+      }),
+    );
+
+    // Simulate an external writer landing a fresher cv-state into
+    // the cache between enqueue and flush.
+    const promise = result.current.enqueueWrite({
+      kind: "patch",
+      path: ["split", "n_splits"],
+      value: 7,
+      reason: "config-form-edit",
+    });
+    cached = {
+      split: { method: "group_kfold", n_splits: 5 },
+      data: { target: "y" },
+    };
+
+    const res = await promise;
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.saved).toEqual({
+        split: { method: "group_kfold", n_splits: 7 },
+        data: { target: "y" },
+      });
+    }
+  });
+});
