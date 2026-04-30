@@ -295,7 +295,10 @@ test.describe("Workspace Fit Flow", () => {
     if (isMobileProject(testInfo)) {
       // The mobile layout hides the Fit button behind the tab nav;
       // covered separately by ui-improvements specs.
-      test.skip(true, "Mobile layout path is covered elsewhere — see Issue #304");
+      test.skip(
+        true,
+        "Mobile happy-path Fit is covered by workspace-mobile.spec.ts (B-8)",
+      );
     }
 
     const csvPath = createTestCsv();
@@ -356,7 +359,10 @@ test.describe("Workspace Fit Flow", () => {
     // the 120s default in playwright.config.ts.
     test.setTimeout(180_000);
     if (isMobileProject(testInfo)) {
-      test.skip(true, "Mobile layout path is covered elsewhere — see Issue #304");
+      test.skip(
+        true,
+        "Mobile happy-path Fit is covered by workspace-mobile.spec.ts (B-8)",
+      );
     }
 
     const csvPath = createTestCsv();
@@ -451,7 +457,10 @@ test.describe("Workspace Fit Flow", () => {
   }, testInfo) => {
     test.setTimeout(60_000);
     if (isMobileProject(testInfo)) {
-      test.skip(true, "Mobile layout path is covered elsewhere — see Issue #304");
+      test.skip(
+        true,
+        "Mobile happy-path Fit is covered by workspace-mobile.spec.ts (B-8)",
+      );
     }
 
     const csvPath = createTestCsv();
