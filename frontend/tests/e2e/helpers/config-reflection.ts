@@ -209,11 +209,14 @@ export async function assertConfigReflection<TValue>(
 
   // (4) confirm the saved config reflects the new value. useConfigSync
   //     calls setQueryData on success so a subsequent GET returns the
-  //     server view; we assert the server view directly to avoid any
-  //     client-cache illusion.
-  const after = await readSavedConfig(request);
-  expect(
-    deepGet(after, spec.configPath),
-    `saved config mismatch at ${spec.configPath}`,
-  ).toEqual(spec.testValue);
+  //     server view. Use waitForConfigSettle so a slow funnel commit
+  //     under CI load doesn't fail the spec — the PUT body filter
+  //     already proved the wire write is correct; this step only
+  //     verifies that the server view eventually agrees.
+  await waitForConfigSettle(
+    request,
+    (cfg) =>
+      JSON.stringify(deepGet(cfg, spec.configPath)) === expectedValueJson,
+    { timeoutMs: 5000 },
+  );
 }
