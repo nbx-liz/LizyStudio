@@ -6,7 +6,7 @@
 - このファイルは **横串インデックス** であり、詳細はリンク先で確認すること。
 - 着手する際は HISTORY に Proposal を起票（変更ゲート対象の場合）→ PLAN にフェーズ追加 → 実装、の順で進める。
 
-最終更新: 2026-04-30
+最終更新: 2026-04-30（Phase D 全 spec 完了 / Phase C generator 起動）
 
 ---
 
@@ -142,15 +142,15 @@
 
 | ID | spec | 状態 | 規模 | ROI |
 |---|---|---|---|---|
-| **B-1** | `jobs-ui.spec.ts` — Jobs ページの click/フィルタ/Export ダイアログ/Delete 確認/Cancel | ❌ 未着手（既存 `jobs-flow.spec.ts` は API のみ） | 中 | 高 |
-| **B-2** | `inference-flow.spec.ts` 拡張 — History クリックで結果切替 | ❌ 既存 spec に未追加 | 小 | 中 |
+| **B-1** | `jobs-ui.spec.ts` — Jobs ページの click/フィルタ/Export ダイアログ/Delete 確認/Cancel | ✅ 完了（PR #316） | 中 | — |
+| **B-2** | `inference-flow.spec.ts` 拡張 — History クリックで結果切替 | ✅ 完了（PR #315） | 小 | — |
 | **B-3** | `workspace-cv.spec.ts` — 7 strategy 巡回 | ✅ 完了（PR #289） | — | — |
-| **B-3b** | BlockedGroupKFold エディタ専用 spec | ❌ 未着手（B-3 が deferred） | 中 | 中 |
-| **B-4** | `workspace-feature-weights.spec.ts` — FW エディタ操作 | ✅ 完了（test/e2e-feature-weights-b4） | 小 | — |
-| **B-5** | `workspace-columns.spec.ts` — Excl/Type 操作 | ❌ 未着手（`features.exclude` / `features.categorical` 無 E2E） | 小 | 高 |
-| **B-6** | `workspace-presets.spec.ts` — Preset Load → form 反映 | ⚠️ Save のみ既存（`workspace-model-panel.spec.ts:101`）、Load 反映未 assertion | 小 | 中 |
+| **B-3b** | BlockedGroupKFold エディタ専用 spec | 🔴 deferred — UI 経由で blocked_group_kfold へ切替えると discriminated union が partial wire body を 422 で拒否し、cache reconcile が cv.strategy を revert する funnel ループを踏む。Component test で代替（`BlockedGroupKFoldEditor.component.test.tsx`） | 中 | 中 |
+| **B-4** | `workspace-feature-weights.spec.ts` — FW エディタ操作 | ✅ 完了（PR #312） | 小 | — |
+| **B-5** | `workspace-columns.spec.ts` — Excl/Type 操作 | ✅ 完了（PR #313） | 小 | — |
+| **B-6** | `workspace-presets.spec.ts` — Preset Load → form 反映 | ✅ 完了（PR #314） | 小 | — |
 | **B-7** | `workspace-running-lock.spec.ts` — running lock UI mapping | ✅ 完了（PR #300） | — | — |
-| **B-8** | `workspace-mobile.spec.ts` — bottom-tab traversal | ❌ 未着手（Issue #304 と連動） | 中 | 低〜中 |
+| **B-8** | `workspace-mobile.spec.ts` — bottom-tab traversal | ✅ 完了（PR #318） | 中 | — |
 
 ### 4.2 Phase C: Config-reflection invariant generator
 
@@ -158,20 +158,19 @@
 |---|---|
 | Helper（`tests/e2e/helpers/config-reflection.ts`） | ✅ 既存（206 行、PR #288） |
 | Sample spec（`split.n_splits` のみ） | ✅ 既存 |
-| Fixture data（`tests/e2e/fixtures/config-fields.ts`） | ❌ 未作成 |
-| 32+ フィールドの自動 loop | ❌ 未着手 |
-
-着手すれば B-4/B-5/B-6 の一部を fixture 行追加だけで済ませられるため、**B-N より先に Phase C 起動を狙う方が ROI が高い可能性あり**。
+| Fixture data（`tests/e2e/fixtures/config-fields.ts`） | ✅ 完了（PR #317） |
+| Generator spec（`workspace-config-fields-loop.spec.ts`） | ✅ 完了（PR #317） |
+| 32+ フィールドの自動 loop | 🟡 wave 1（2 fields）完了。残り fixture 追加で増設 |
 
 ### 4.3 Phase D 段階プラン進捗
 
 | Phase | 内容 | 状態 |
 |---|---|---|
 | D-1 | Phase A helper + sample 1 件 | ✅ 完了（#288） |
-| D-2 | B-1（Jobs UI） + B-3（CV strategy） | 🟡 B-3 のみ完了。**B-1 未着手** |
-| D-3 | B-2 / B-4 / B-5 / B-6 | ❌ 全て未着手 |
-| D-4 | B-7 + B-8 | 🟡 B-7 完了。**B-8 未着手** |
-| D-5 | Phase C generator 起動 + 全フィールド loop | ❌ 未着手 |
+| D-2 | B-1（Jobs UI） + B-3（CV strategy） | ✅ 完了（B-3 #289 / B-1 #316） |
+| D-3 | B-2 / B-4 / B-5 / B-6 | ✅ 完了（#315 / #312 / #313 / #314） |
+| D-4 | B-7 + B-8 | ✅ 完了（#300 / #318） |
+| D-5 | Phase C generator 起動 + 全フィールド loop | 🟡 generator 起動済み（#317）、fixture 拡張継続中 |
 
 ---
 
@@ -183,7 +182,7 @@
 | **#28** | [Testing] Add offline/resume resilience tests | medium / tier-4 | `current_job_id` ライフサイクル契約決定が前提。post-completion deep-link は #143 でカバー済み、during-run reload が gap |
 | **#125** | chore(frontend): migrate Tailwind CSS v3 → v4 | medium / tier-4 | Owner status: `Button` で spike → 専用 sprint。即着手は推奨しない |
 | **#298** | Inner Validation user-driven path（H-2） | — | ✅ 完了（PR #308 でクローズ済み） |
-| **#304** | track skipped tests（DataPanel jsdom + mobile E2E） | low | DataPanel の 2 件と mobile 6 件を分割対応。Mobile 側は B-8 と一体で処理可 |
+| **#304** | track skipped tests（DataPanel jsdom + mobile E2E） | low | Mobile 6 件は B-8（PR #318）でクローズ済。DataPanel 2 件は jsdom + Radix Select の制約のため別 PR で対応 |
 
 ---
 
