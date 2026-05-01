@@ -246,7 +246,7 @@
 
 ## 7. 推奨 Next Action（ROI 順 / 1 PR 単位）
 
-> 旧 Tier 0 / Tier 1 / Tier 2 のアイテムは 2026-04-30〜2026-05-01 に解消済み（B-4/B-5/B-1/B-6 → PR #312-#315、Phase C generator + wave 1〜8 → PR #317-#325、#327/#328 → PR #329/#330）。残るは Tier 3 戦略課題と Tier 4 長期計画。
+> 旧 Tier 0 / Tier 1 / Tier 2 のアイテムは 2026-04-30〜2026-05-01 に解消済み（B-4/B-5/B-6/B-2 → PR #312-#315、B-1 → PR #316、Phase C generator + wave 1〜8 → PR #317-#325、B-8 → PR #318、#327/#328 → PR #329/#330）。残るは Tier 3 戦略課題と Tier 4 長期計画。
 
 ### Tier 3：戦略課題
 
