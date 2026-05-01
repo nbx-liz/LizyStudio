@@ -193,10 +193,26 @@ def _run_job_core(
         # Persist captured logs. OSError here must not propagate —
         # doing so would short-circuit the worker thread and leave a
         # zombie thread handle on the workspace.
+        #
+        # Issue #328: append (not overwrite) so any stdout/stderr that
+        # the parent's ``Popen`` captured into the same path stays
+        # intact. The child's stdout fd is closed by Python's stdio
+        # shutdown before this finally block runs, so the parent has
+        # finished its writes by the time we open in append mode here.
+        # When ``log_buffer`` is empty AND the file does not yet exist
+        # (in-process callers that do not go through the subprocess
+        # plumbing), touch an empty file so existing callers that
+        # assert the artifact path exists keep working.
         try:
+            captured = log_buffer.getvalue()
             log_path = job_store.path_for(job.job_id, "log")
             log_path.parent.mkdir(parents=True, exist_ok=True)
-            log_path.write_text(log_buffer.getvalue(), encoding="utf-8")
+            if captured:
+                with log_path.open("a", encoding="utf-8") as f:
+                    f.write("\n--- captured Python logger records ---\n")
+                    f.write(captured)
+            elif not log_path.exists():
+                log_path.touch()
         except OSError:
             _logger.warning(
                 "Failed to persist execution log for job %s",

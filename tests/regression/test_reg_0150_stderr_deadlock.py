@@ -1,164 +1,83 @@
 """Regression test for subprocess stderr pipe deadlock (Issue #150).
 
-The parent previously set ``stderr=subprocess.PIPE`` on the child
-subprocess but never drained it concurrently. Once the child wrote
-more than the OS pipe buffer (~64 KiB on Linux), ``write(2)`` in the
-child blocked forever and the subprocess poll loop stalled.
+## Status: superseded by Issue #328 (2026-05-01)
 
-## Invariants
+The original tests in this file exercised the ``_StderrDrainer`` class,
+which existed to drain ``stderr=subprocess.PIPE`` concurrently and
+prevent the child from blocking on ``write(2)`` once the OS pipe buffer
+(~64 KiB on Linux) was full. Issue #328 retired ``_StderrDrainer``
+entirely: ``run_job_in_subprocess`` now passes a parent-owned file
+descriptor as the child's ``stdout`` and merges ``stderr`` into it via
+``subprocess.STDOUT``. There is no pipe, so the deadlock that
+motivated #150 is **structurally impossible** in the new implementation.
 
-- INV-1: The child MUST never block on write(stderr) regardless of how
-  many bytes it emits. Verified by running a child that writes a
-  large, fixed amount of stderr in one burst and asserting clean exit
-  within a generous timeout.
-- INV-2: For every ``subprocess.Popen`` created by
-  ``run_job_in_subprocess``, ``proc.stderr`` (if present) is closed
-  exactly once before the function returns. Verified indirectly by
-  the drainer's own ``close`` contract — no FD leak across N runs.
+The invariant pinned by this file (a child that writes more than the
+pipe buffer must still exit cleanly) is preserved by
+``tests/regression/test_reg_0328_execution_log.py``::
+
+    TestLargeOutputDoesNotDeadlock::
+        test_large_stdout_redirected_to_file_no_deadlock
+
+That test parametrises 64 KiB / 256 KiB / 1 MiB stdout + stderr writes
+through the same ``stdout=<file fd>, stderr=STDOUT`` plumbing the
+production code uses, and asserts the child exits within 5 s.
+
+The original tests are kept in this file as ``pytest.skip`` placeholders
+(per CLAUDE.md §"Never delete existing tests to make a suite pass") so
+the regression history of #150 stays discoverable. They cannot be
+re-enabled in their original form because ``_StderrDrainer`` is gone;
+restoring them would require re-introducing the pipe path that #328
+deliberately removed.
 """
 
 from __future__ import annotations
 
-import subprocess
-import sys
-import time
-
 import pytest
-
-from lizystudio.services.subprocess_runner import _StderrDrainer
 
 pytestmark = pytest.mark.unit
 
-
-def _spawn_writer(n_bytes: int) -> subprocess.Popen[bytes]:
-    """Launch a minimal Python child that writes *n_bytes* of stderr."""
-    script = (
-        "import sys; "
-        f"sys.stderr.buffer.write(b'x' * {n_bytes}); "
-        "sys.stderr.flush(); "
-        "sys.exit(0)"
-    )
-    return subprocess.Popen(
-        [sys.executable, "-c", script],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-    )
+_SUPERSEDED_REASON = (
+    "Superseded by #328 (P-0093 / 2026-05-01): _StderrDrainer was "
+    "retired when run_job_in_subprocess switched to a file-fd "
+    "redirect. INV preserved by tests/regression/"
+    "test_reg_0328_execution_log.py::TestLargeOutputDoesNotDeadlock."
+)
 
 
+@pytest.mark.skip(reason=_SUPERSEDED_REASON)
 def test_large_stderr_does_not_deadlock_child() -> None:
-    """INV-1: child writing 500 KiB exits cleanly when stderr is drained.
-
-    Without draining, the child blocks on write(2) after ~64 KiB on
-    Linux (the pipe buffer is full and the parent never reads).
-    """
-    n_bytes = 500_000
-    proc = _spawn_writer(n_bytes)
-    assert proc.stderr is not None
-    drainer = _StderrDrainer(proc.stderr)
-    drainer.start()
-    try:
-        try:
-            proc.wait(timeout=5.0)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=2.0)
-            pytest.fail(
-                f"child blocked on stderr write of {n_bytes} bytes "
-                "(drainer did not drain the pipe)"
-            )
-        assert proc.returncode == 0
-    finally:
-        drainer.join(timeout=2.0)
+    """Original INV-1: child writing 500 KiB exits cleanly."""
 
 
-@pytest.mark.parametrize("n_bytes", [64 * 1024, 256 * 1024, 1_024 * 1024])
-def test_parametrized_stderr_sizes(n_bytes: int) -> None:
-    """INV-1: holds across pipe-buffer, 4x, 16x capacity."""
-    proc = _spawn_writer(n_bytes)
-    assert proc.stderr is not None
-    drainer = _StderrDrainer(proc.stderr)
-    drainer.start()
-    try:
-        proc.wait(timeout=5.0)
-        assert proc.returncode == 0
-    finally:
-        drainer.join(timeout=2.0)
+@pytest.mark.skip(reason=_SUPERSEDED_REASON)
+def test_parametrized_stderr_sizes() -> None:
+    """Original INV-1 parametrised across pipe-buffer / 4x / 16x."""
 
 
+@pytest.mark.skip(reason=_SUPERSEDED_REASON)
 def test_drainer_captures_tail_bytes() -> None:
-    """The drainer retains the trailing bytes so error reporting
-    preserves the final diagnostic lines of a verbose child.
+    """Original: drainer retained tail for failure logging.
+
+    Replaced by ``_read_log_tail`` reading directly from the captured
+    log file; covered in test_reg_0328_execution_log.py::TestReadLogTail.
     """
-    n_bytes = 200_000
-    proc = _spawn_writer(n_bytes)
-    assert proc.stderr is not None
-    drainer = _StderrDrainer(proc.stderr)
-    drainer.start()
-    try:
-        proc.wait(timeout=5.0)
-    finally:
-        drainer.join(timeout=2.0)
-    tail = drainer.tail_bytes()
-    # Bounded: the drainer caps the retained buffer; exact cap is an
-    # implementation detail, but it must be non-empty and not larger
-    # than the total written.
-    assert tail, "expected non-empty tail from drainer"
-    assert len(tail) <= n_bytes
 
 
+@pytest.mark.skip(reason=_SUPERSEDED_REASON)
 def test_drainer_join_releases_handle() -> None:
-    """INV-2: after join(), the drainer has closed its stderr handle."""
-    proc = _spawn_writer(1024)
-    assert proc.stderr is not None
-    drainer = _StderrDrainer(proc.stderr)
-    drainer.start()
-    proc.wait(timeout=5.0)
-    drainer.join(timeout=2.0)
-    # The underlying stream should be closed; read from a closed stream
-    # raises ValueError.
-    assert proc.stderr.closed
+    """Original INV-2: drainer closed its stderr handle on join."""
 
 
+@pytest.mark.skip(reason=_SUPERSEDED_REASON)
 def test_no_fd_leak_over_sequential_runs() -> None:
-    """INV-2 (FD release): running many drained subprocesses in
-    sequence does not accumulate open FDs in the parent.
+    """Original INV-2 (FD release): no FD accumulation across runs.
+
+    The new implementation closes its single file fd in the outer
+    ``finally`` block of run_job_in_subprocess, guaranteed by the
+    ``log_fp.close()`` line. No pipe handles are involved.
     """
-    import os
-
-    if not sys.platform.startswith("linux"):
-        pytest.skip("FD-count assertion is Linux-only")
-
-    def count_fds() -> int:
-        return len(os.listdir(f"/proc/{os.getpid()}/fd"))
-
-    baseline = count_fds()
-    for _ in range(10):
-        proc = _spawn_writer(4096)
-        assert proc.stderr is not None
-        drainer = _StderrDrainer(proc.stderr)
-        drainer.start()
-        proc.wait(timeout=5.0)
-        drainer.join(timeout=2.0)
-    # Allow a small slack (test infrastructure may open a few FDs) but
-    # catch the old behaviour of leaking one FD per run.
-    assert count_fds() - baseline < 5, f"FD leak: baseline={baseline}, after=10 runs"
 
 
+@pytest.mark.skip(reason=_SUPERSEDED_REASON)
 def test_drainer_survives_child_that_writes_nothing() -> None:
-    """Child exits without writing to stderr — drainer must not hang."""
-    proc = subprocess.Popen(
-        [sys.executable, "-c", "import sys; sys.exit(0)"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-    )
-    assert proc.stderr is not None
-    drainer = _StderrDrainer(proc.stderr)
-    drainer.start()
-    try:
-        proc.wait(timeout=5.0)
-    finally:
-        start = time.monotonic()
-        drainer.join(timeout=2.0)
-        elapsed = time.monotonic() - start
-        assert elapsed < 2.0, f"drainer hung on empty stderr ({elapsed:.2f}s)"
-    assert drainer.tail_bytes() == b""
+    """Original: drainer did not hang on empty stderr."""

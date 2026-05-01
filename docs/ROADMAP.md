@@ -225,7 +225,7 @@
 | Issue | タイトル | priority | 推奨アクション |
 |---|---|---|---|
 | **#327** | WebSocket "completed" race — results not visible after fast Fit | **high** | 🟢 実装完了。PR 作成 → CI green 待ち（branch `fix/issue-327-ws-terminal-replay`、P-0093 / v3-15） |
-| **#328** | execution.log empty — subprocess stdout discarded | medium | subprocess_runner.py で stdout を log file にリダイレクト + size bound + regression test |
+| **#328** | execution.log empty — subprocess stdout discarded | medium | 🟢 実装完了（branch `fix/issue-328-execution-log-redirect`）。`subprocess_runner.py` で stdout/stderr を `execution.log` にリダイレクト + 10 MiB head-drop cap + `_StderrDrainer` 退役 |
 | **#27** | [Testing] Add load and concurrency tests | medium / tier-4 | (a) `pytest-benchmark` 100k-row microbench を tier-3 で先行マージ可 / (b) 並行 fit stress harness は tier-4 |
 | **#28** | [Testing] Add offline/resume resilience tests | medium / tier-4 | `current_job_id` ライフサイクル契約決定が前提。post-completion deep-link は #143 でカバー済み、during-run reload が gap |
 | **#125** | chore(frontend): migrate Tailwind CSS v3 → v4 | medium / tier-4 | Owner status: `Button` で spike → 専用 sprint。即着手は推奨しない |
