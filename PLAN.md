@@ -1154,7 +1154,7 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 
 ---
 
-## Phase v3-14: GUI E2E カバレッジ強化（gui-e2e-plan.md Phase D 残）🟡
+## Phase v3-14: GUI E2E カバレッジ強化（gui-e2e-plan.md Phase D 残）✅
 
 **動機:** Phase A の Config field × E2E カバレッジが約 18% にとどまる。残 80% のフィールド（B-1/B-2/B-4/B-5/B-6/B-8 + Phase C generator）を計画的に埋める。
 
@@ -1162,22 +1162,22 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 
 **サブフェーズ:** 規模が大きいため、各 PR 単位で独立に進めて OK（HISTORY.md の Proposal は不要、ROADMAP.md §3 で進捗追跡）
 
-| サブフェーズ | 内容 | 状態 |
-|---|---|---|
-| v3-14a | B-4 Feature Weights editor spec | ❌ |
-| v3-14b | B-5 Column Settings spec | ❌ |
-| v3-14c | B-1 Jobs UI spec | ❌ |
-| v3-14d | B-6 Preset Load reflection 拡張 | ❌ |
-| v3-14e | Phase C fixture loop 起動（5〜10 フィールド） | ❌ |
-| v3-14f | B-8 mobile spec + Issue #304 完全クローズ | ❌ |
-| v3-14g | B-2 Inference history click 拡張 | ❌ |
-| v3-14h | B-3b BlockedGroupKFold 専用 spec | ❌ |
+| サブフェーズ | 内容 | 状態 | PR |
+|---|---|---|---|
+| v3-14a | B-4 Feature Weights editor spec | ✅ | #312 |
+| v3-14b | B-5 Column Settings spec | ✅ | #313 |
+| v3-14c | B-1 Jobs UI spec | ✅ | #316 |
+| v3-14d | B-6 Preset Load reflection 拡張 | ✅ | #314 |
+| v3-14e | Phase C fixture loop 起動（22 フィールド） | ✅ | #317〜#325 |
+| v3-14f | B-8 mobile spec + Issue #304 完全クローズ | ✅ | #318 + Issue #304 closed 2026-04-30 |
+| v3-14g | B-2 Inference history click 拡張 | ✅ | #315 |
+| v3-14h | B-3b BlockedGroupKFold 専用 spec | 🔴 deferred | funnel state 問題で当面 component test 経由（`docs/ROADMAP.md` §4.1 参照） |
 
 **DoD:**
-- [ ] Phase A マトリクスのカバレッジが 80% 以上
-- [ ] Issue #304 の DataPanel skip / mobile skip がすべて整理（restore / delete / 適切なリンク）
-- [ ] Phase C generator が fixture 行追加だけで新規フィールド E2E をカバーできる状態
-- [ ] CI の e2e-chromium が安定して green
+- [x] Phase A マトリクスの主要 22/40 field をカバー（残り 18 は UI 露出無し / 隠しフィールド / 複合 UI のため対象外、`docs/ROADMAP.md` §4.2 末尾「カバー困難」表参照）
+- [x] Issue #304 の DataPanel skip / mobile skip がすべて整理（DataPanel 2 件は削除 + 代替カバー記載、mobile 6 件は B-8 へのポインタ付き）
+- [x] Phase C generator が fixture 行追加だけで新規フィールド E2E をカバーできる状態
+- [x] CI の e2e-chromium が安定して green
 
 ---
 

@@ -6,7 +6,7 @@
 - このファイルは **横串インデックス** であり、詳細はリンク先で確認すること。
 - 着手する際は HISTORY に Proposal を起票（変更ゲート対象の場合）→ PLAN にフェーズ追加 → 実装、の順で進める。
 
-最終更新: 2026-05-01（P-0093 WS terminal-replay 起票 + Phase C wave 1〜8 完了：22/40+ field カバー）
+最終更新: 2026-05-01（P-0093 WS terminal-replay 完了 + #328 execution.log fix 完了 + §5/§7 ドリフト是正：closed 済み Issue 除去 + Tier 0/1/2 を完了済みアイテムから整理）
 
 ---
 
@@ -222,15 +222,13 @@
 
 ## 5. アクティブ：Open Issues
 
+直近 4 件（#327 / #328 / #298 / #304）はすべて closed 済み。Tier 4 戦略課題のみ残存。
+
 | Issue | タイトル | priority | 推奨アクション |
 |---|---|---|---|
-| **#327** | WebSocket "completed" race — results not visible after fast Fit | **high** | 🟢 実装完了。PR 作成 → CI green 待ち（branch `fix/issue-327-ws-terminal-replay`、P-0093 / v3-15） |
-| **#328** | execution.log empty — subprocess stdout discarded | medium | 🟢 実装完了（branch `fix/issue-328-execution-log-redirect`）。`subprocess_runner.py` で stdout/stderr を `execution.log` にリダイレクト + 10 MiB head-drop cap + `_StderrDrainer` 退役 |
 | **#27** | [Testing] Add load and concurrency tests | medium / tier-4 | (a) `pytest-benchmark` 100k-row microbench を tier-3 で先行マージ可 / (b) 並行 fit stress harness は tier-4 |
 | **#28** | [Testing] Add offline/resume resilience tests | medium / tier-4 | `current_job_id` ライフサイクル契約決定が前提。post-completion deep-link は #143 でカバー済み、during-run reload が gap |
 | **#125** | chore(frontend): migrate Tailwind CSS v3 → v4 | medium / tier-4 | Owner status: `Button` で spike → 専用 sprint。即着手は推奨しない |
-| **#298** | Inner Validation user-driven path（H-2） | — | ✅ 完了（PR #308 でクローズ済み） |
-| **#304** | track skipped tests（DataPanel jsdom + mobile E2E） | low | Mobile 6 件は B-8（PR #318）でクローズ済。DataPanel 2 件は jsdom + Radix Select の制約のため別 PR で対応 |
 
 ---
 
@@ -238,50 +236,36 @@
 
 | 対象 | 最終更新 | リスク | 対応 |
 |---|---|---|---|
-| `docs/architecture.md` / `api.md` / `adapter-guide.md` | 2026-04-10 | services/training/jobs が 18 commits/each で refactor された期間中に未更新。Adapter 契約の記載が古い可能性 | 棚卸しタスクとして別 PR で着手 |
-| `PLAN.md` | v3-12 で停止 | P-0086〜P-0092 ＋ Phase D が反映されていない | **本 PR で v3-13 を追加** |
-| `HISTORY.md` P-0092 | Decision 後の H-1〜H-4 / G-1〜G-8 / Issue #298 fix が無記載 | 「Closes §P-0092」と実態の齟齬 | **本 PR で follow-up セクションを追記** |
-| `MEMORY.md` 古いノート | `project_coupling_refactor_progress` が「C-6/C-9/B-9-Part2 残り」と誤情報 | Claude が誤前提で計画する | **本 PR で更新** |
-| `analysis/` 削除済み | 2026-04 期間 | `python-analyst` ↔ `lizystudio-analyst` パイプライン成果物の置き場が無い | 意図的削除か要確認、別 issue 検討 |
+| `docs/architecture.md` / `api.md` / `adapter-guide.md` | 2026-04-10 | services/training/jobs が 2026-04-22 以降も continually refactor（B/C シリーズ + P-0086〜P-0093）。Adapter 契約の記載が古い可能性 | 🟡 未着手（§7 Tier 3 #1） |
+| `PLAN.md` v3-13/14/15 | ✅ 反映済み（2026-04-30, 2026-05-01） | — | — |
+| `HISTORY.md` P-0092 follow-ups | ✅ 反映済み（2026-04-30、PR #303 周辺で追記） | — | — |
+| `MEMORY.md` 古いノート | ✅ 直近セッションで更新（`project_coupling_refactor_progress` 等は post-#271 / P-0092 完了以降に上書き済み） | — | — |
+| `analysis/` 削除済み | 2026-04 期間 | `python-analyst` ↔ `lizystudio-analyst` パイプライン成果物の置き場が無い | 🟡 意図的削除か要確認、別 issue 検討 |
 
 ---
 
 ## 7. 推奨 Next Action（ROI 順 / 1 PR 単位）
 
-### Tier 0：即効・低リスク
-
-1. **本 PR**：本 ROADMAP + PLAN/HISTORY/MEMORY ドリフト是正
-2. **Issue #304 DataPanel 分**：jsdom skip 2 件を再挑戦 or 削除
-
-### Tier 1：高 ROI E2E 強化
-
-3. **B-4** Feature Weights editor spec — 最高 ROI、リグレッション死角解消
-4. **B-5** Column Settings spec — Phase A の `features.exclude`/`features.categorical` 同時カバー
-5. **B-1** Jobs UI spec — UI 全面ノーカバー領域の埋め
-6. **B-6** Preset Load reflection — 既存 spec に Load 反映 assertion 追加
-
-### Tier 2：構造的改善
-
-7. **Phase C generator 起動** — fixture loop で 5〜10 フィールド一気に追加
-8. **B-8 mobile spec + Issue #304 完全クローズ**
+> 旧 Tier 0 / Tier 1 / Tier 2 のアイテムは 2026-04-30〜2026-05-01 に解消済み（B-4/B-5/B-6/B-2 → PR #312-#315、B-1 → PR #316、Phase C generator + wave 1〜8 → PR #317-#325、B-8 → PR #318、#327/#328 → PR #329/#330）。残るは Tier 3 戦略課題と Tier 4 長期計画。
 
 ### Tier 3：戦略課題
 
-9. `docs/architecture.md` 等のドリフト是正棚卸し
-10. **P-0093** として P-0087 Phase 3 を Proposal 化（lizyml 側調整）
-11. **#28** offline/resume：`current_job_id` ライフサイクル契約決め
-12. **#27** (a) pytest-benchmark microbench
+1. **`docs/architecture.md` / `api.md` / `adapter-guide.md` ドリフト是正棚卸し** — 2026-04-10 から未更新、その間 services/training/jobs が refactor 多数（B/C シリーズ + P-0086〜P-0093）。BLUEPRINT を真として Tier 3 を追従
+2. **P-0094 として P-0087 Phase 3 を Proposal 化**（`cv_strategy_fields` の Pydantic 自動派生）— lizyml 側で構造化フィールドメタデータ export が前提のためリポジトリ間調整必要
+3. **#28** offline/resume resilience tests — `current_job_id` ライフサイクル契約決定が前提
+4. **#27 (a)** `pytest-benchmark` 100k-row microbench — 先行マージ可能、stress harness は tier-4
 
 ### Tier 4：要長期計画
 
-13. **#125** Tailwind v4 — Button spike → 専用 sprint
-14. ML Backend 2nd 実装による Adapter 抽象検証
+5. **#27 (b)** 並行 fit stress harness — 実機マシン要件あり
+6. **#125** Tailwind v4 — Button で spike → 専用 sprint
+7. ML Backend 2nd 実装による Adapter 抽象検証 — 候補 backend 選定が未決
 
 ---
 
 ## 8. 運用メモ
 
-- 新規 Proposal を起票するときは **P-0093 から採番**。`H-XXXX` 採番は終了。
+- 新規 Proposal を起票するときは **P-0094 から採番**（P-0093 = WS terminal-replay は 2026-05-01 に消化）。`H-XXXX` 採番は終了。
 - E2E 単独追加（仕様変更なし）は HISTORY 起票不要、本 ROADMAP の §3 を更新するだけで OK。
 - 本 ROADMAP はステータス変更時に都度更新。タスク完了時は §1 へ移動、新規着手時は §2/§3/§4 へ追加する。
 - 古い ID（B-N coupling、A.M Phase A など）は履歴参照のためそのまま残す。検索性のため改名はしない。
