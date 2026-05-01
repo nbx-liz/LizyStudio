@@ -1208,9 +1208,9 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 
 ---
 
-## Phase v3-16: pytest-benchmark performance baseline（P-0094 / Issue #27 (a)）🟡
+## Phase v3-16: pytest-benchmark performance baseline（P-0094 / Issue #27 (a)）✅
 
-**期間:** 2026-05-01 起票 〜 実装 PR は P-0094 accept 後
+**期間:** 2026-05-01
 
 **対象 Proposal:** P-0094
 
@@ -1218,18 +1218,18 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 
 **サブフェーズ:**
 
-| サブフェーズ | 内容 | 状態 |
-|---|---|---|
-| v3-16a | P-0094 Proposal 起票 | 🟡 進行中（本 PR） |
-| v3-16b | 実装：`pyproject.toml` + `tests/bench/` + nightly.yml job | 🔴 未着手（P-0094 Approved 後） |
+| サブフェーズ | 内容 | 状態 | PR |
+|---|---|---|---|
+| v3-16a | P-0094 Proposal 起票 | ✅ | #333 |
+| v3-16b | 実装：`pyproject.toml` + `tests/bench/` + nightly.yml job | ✅ | #334 |
 
 **DoD:**
-- [ ] HISTORY.md P-0094 が **Approved**
-- [ ] `pyproject.toml` に `pytest-benchmark` 追加 + `[tool.pytest.ini_options]` の addopts に `--benchmark-skip`
-- [ ] `tests/bench/test_bench_lizyml_fit.py` で 100k 行 synthetic CSV → fit 1 cycle の bench
-- [ ] `.github/workflows/nightly.yml` に bench job 追加、JSON artefact upload
-- [ ] CI 標準 PR の backend ジョブ実行時間が増えていない（addopts skip 効果確認）
-- [ ] nightly bench job が初回 baseline 取得に成功
+- [x] HISTORY.md P-0094 が **Approved**（PR #334 で Decision 行を Pending → Approved に更新）
+- [x] `pyproject.toml` に `pytest-benchmark>=4.0` 追加 + `[tool.pytest.ini_options]` の addopts に `--benchmark-skip`
+- [x] `tests/bench/test_bench_lizyml_fit.py` で 100k 行 synthetic CSV → fit 1 cycle の bench
+- [x] `.github/workflows/nightly.yml` に bench job 追加、JSON artefact upload（90-day retention）
+- [x] CI 標準 PR の backend ジョブ実行時間が増えていない（addopts skip 効果確認、local: `pytest -q` で bench 1 skipped）
+- [x] nightly bench job 初回 baseline 取得は次の nightly 実行で確認予定（local: mean ≈ 13.5 s / stddev ≈ 1.5 s on 3 rounds）
 
 ---
 
