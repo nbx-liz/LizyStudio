@@ -6,7 +6,7 @@
 - このファイルは **横串インデックス** であり、詳細はリンク先で確認すること。
 - 着手する際は HISTORY に Proposal を起票（変更ゲート対象の場合）→ PLAN にフェーズ追加 → 実装、の順で進める。
 
-最終更新: 2026-05-01（P-0094 pytest-benchmark Proposal 起票 + 直近 PR #329-#332 反映）
+最終更新: 2026-05-01（直近 PR #329-#335 反映完了：P-0093 / #328 / cleanup / Tier 3 docs / P-0094 Proposal+impl / BLUEPRINT audit）
 
 ---
 
@@ -103,6 +103,9 @@
 
 | 完了日 | ID | タイトル | 主要 PR |
 |---|---|---|---|
+| 2026-05-01 | BLUEPRINT audit | P-0086..P-0094 の Decisions を BLUEPRINT.md §3.3/§3.4/§5.2/§5.5/§6.1/§8.1 に反映 | #335 |
+| 2026-05-01 | P-0094 (impl) | pytest-benchmark perf baseline (`tests/bench/` + nightly job) | #334 |
+| 2026-05-01 | P-0094 (proposal) | pytest-benchmark introduction Proposal-only | #333 |
 | 2026-05-01 | Tier 3 docs sync | architecture / api / adapter-guide drift 是正 + drift gate | #332 |
 | 2026-05-01 | ROADMAP/PLAN cleanup | post-P-0093 drift 整理 (Issue #304 close ほか) | #331 |
 | 2026-05-01 | #328 | execution.log redirect | #330 |
@@ -121,14 +124,10 @@
 
 ## 3. アクティブ：仕様変更を伴う Proposal
 
-### 3.0 P-0094：pytest-benchmark performance baseline（Issue #27 (a)）
+### 3.0 P-0094 (済)：pytest-benchmark performance baseline（Issue #27 (a)）
 
-- **状態**: 🟡 Proposal-only PR 進行中（branch `docs/p-0094-pytest-benchmark`）。実装は accept 後に別ブランチで提出
-- **動機**: B/C coupling refactor 後の services/training/jobs に perf regression 検知装置がない。LizyML adapter の fit 1 cycle のベースライン (mean / stddev) を測定する基盤を導入
-- **対象 Issue**: #27 (a)（stress harness (b) は tier-4 で別 Proposal）
-- **PLAN フェーズ**: v3-16（PLAN.md 参照）
-- **change-gate**: 外部依存追加（`pytest-benchmark`）→ 対象、本 Proposal で起票
-- **次アクション**: 本 PR review → accept → 実装 PR
+- **状態**: ✅ 完了（Proposal #333 + 実装 #334 ともに merged 2026-05-01）— `tests/bench/test_bench_lizyml_fit.py` で 100k 行 fit を nightly 計測、JSON artefact upload。LizyML fit baseline mean ≈ 13.5 s / stddev ≈ 1.5 s（local 3 rounds, n_estimators=50）
+- **後続候補**: regression auto-detection（`--benchmark-compare`）、stress harness (Issue #27 (b))、frontend perf benches。いずれも別 Proposal で起票
 
 ### 3.1 P-0093 (済)：WebSocket terminal-message replay for late subscribers（Issue #327）
 
