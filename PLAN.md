@@ -1208,8 +1208,33 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 
 ---
 
-## 採番ガイダンス（v3-16 以降）
+## Phase v3-16: pytest-benchmark performance baseline（P-0094 / Issue #27 (a)）🟡
 
-- 新規 Proposal は **P-0094** 以降を起票。
-- 仕様変更を伴う作業は HISTORY.md に Proposal → 本 PLAN.md にフェーズ追加（`v3-16`...）の順で進める。
+**期間:** 2026-05-01 起票 〜 実装 PR は P-0094 accept 後
+
+**対象 Proposal:** P-0094
+
+**動機:** B/C coupling refactor 後の services/training/jobs に perf regression 検知装置がない。LizyML adapter の fit 1 cycle のベースライン (mean / stddev) を継続測定する。
+
+**サブフェーズ:**
+
+| サブフェーズ | 内容 | 状態 |
+|---|---|---|
+| v3-16a | P-0094 Proposal 起票 | 🟡 進行中（本 PR） |
+| v3-16b | 実装：`pyproject.toml` + `tests/bench/` + nightly.yml job | 🔴 未着手（P-0094 Approved 後） |
+
+**DoD:**
+- [ ] HISTORY.md P-0094 が **Approved**
+- [ ] `pyproject.toml` に `pytest-benchmark` 追加 + `[tool.pytest.ini_options]` の addopts に `--benchmark-skip`
+- [ ] `tests/bench/test_bench_lizyml_fit.py` で 100k 行 synthetic CSV → fit 1 cycle の bench
+- [ ] `.github/workflows/nightly.yml` に bench job 追加、JSON artefact upload
+- [ ] CI 標準 PR の backend ジョブ実行時間が増えていない（addopts skip 効果確認）
+- [ ] nightly bench job が初回 baseline 取得に成功
+
+---
+
+## 採番ガイダンス（v3-17 以降）
+
+- 新規 Proposal は **P-0095** 以降を起票（P-0094 = 2026-05-01 pytest-benchmark）。
+- 仕様変更を伴う作業は HISTORY.md に Proposal → 本 PLAN.md にフェーズ追加（`v3-17`...）の順で進める。
 - 詳細な未着手バックログは `docs/ROADMAP.md` を参照。

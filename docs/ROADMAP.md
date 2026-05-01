@@ -6,7 +6,7 @@
 - このファイルは **横串インデックス** であり、詳細はリンク先で確認すること。
 - 着手する際は HISTORY に Proposal を起票（変更ゲート対象の場合）→ PLAN にフェーズ追加 → 実装、の順で進める。
 
-最終更新: 2026-05-01（P-0093 WS terminal-replay 完了 + #328 execution.log fix 完了 + §5/§7 ドリフト是正：closed 済み Issue 除去 + Tier 0/1/2 を完了済みアイテムから整理）
+最終更新: 2026-05-01（P-0094 pytest-benchmark Proposal 起票 + 直近 PR #329-#332 反映）
 
 ---
 
@@ -103,7 +103,10 @@
 
 | 完了日 | ID | タイトル | 主要 PR |
 |---|---|---|---|
-| 2026-05-01 | P-0093 (impl) | WebSocket terminal-replay（Issue #327） | branch `fix/issue-327-ws-terminal-replay` (PR 作成待ち) |
+| 2026-05-01 | Tier 3 docs sync | architecture / api / adapter-guide drift 是正 + drift gate | #332 |
+| 2026-05-01 | ROADMAP/PLAN cleanup | post-P-0093 drift 整理 (Issue #304 close ほか) | #331 |
+| 2026-05-01 | #328 | execution.log redirect | #330 |
+| 2026-05-01 | P-0093 | WebSocket terminal-replay（Issue #327） | #329 |
 | 2026-04-30 | **P-0092** | ConfigForm cross-hook write funnel（6 phase） | #290〜#295, #289（B-3 spec） |
 | 2026-04-30 | P-0092 follow-up | H-1〜H-4 / G-1〜G-8 / Issue #298 修正 | #300, #303, #306〜#310 |
 | 2026-04-22 | Coupling refactor A+B+C | 26 項目（API queries/Job lineage/format_version 等） | 多数。`docs/coupling-analysis.md:11` |
@@ -118,24 +121,28 @@
 
 ## 3. アクティブ：仕様変更を伴う Proposal
 
-### 3.0 P-0093：WebSocket terminal-message replay for late subscribers（Issue #327）
+### 3.0 P-0094：pytest-benchmark performance baseline（Issue #27 (a)）
 
-- **状態**: 🟢 実装完了（PR レビュー待ち）— branch `fix/issue-327-ws-terminal-replay`
-- **動機**: 高速 Fit (< 3 秒) で `ProgressBroadcaster.send()` が subscribe 前 message を破棄。UI の terminal-detection が 2〜4 秒遅延し、運用ログでユーザーが再 Fit する行動が観測された
-- **対象 Issue**: #327（同根の副症状 #328 は別 PR で対応）
-- **PLAN フェーズ**: v3-15（PLAN.md 参照）
-- **invariant test**: `tests/test_progress.py::TestTerminalReplay` 7 ケース
-- **次アクション**: PR 作成 → CI 全 green → develop マージ
+- **状態**: 🟡 Proposal-only PR 進行中（branch `docs/p-0094-pytest-benchmark`）。実装は accept 後に別ブランチで提出
+- **動機**: B/C coupling refactor 後の services/training/jobs に perf regression 検知装置がない。LizyML adapter の fit 1 cycle のベースライン (mean / stddev) を測定する基盤を導入
+- **対象 Issue**: #27 (a)（stress harness (b) は tier-4 で別 Proposal）
+- **PLAN フェーズ**: v3-16（PLAN.md 参照）
+- **change-gate**: 外部依存追加（`pytest-benchmark`）→ 対象、本 Proposal で起票
+- **次アクション**: 本 PR review → accept → 実装 PR
 
-### 3.1 P-0087 Phase 3：`cv_strategy_fields` を Pydantic から自動派生
+### 3.1 P-0093 (済)：WebSocket terminal-message replay for late subscribers（Issue #327）
+
+- **状態**: ✅ 完了（PR #329 merged 2026-05-01）— `tests/test_progress.py::TestTerminalReplay` 7 ケース緑、`lizystudio_progress_terminal_replayed_total` メトリクスで運用観察可能
+
+### 3.2 P-0087 Phase 3：`cv_strategy_fields` を Pydantic から自動派生
 
 - **状態**: 🟡 未着手（HISTORY.md:2418 で「Phase 3 PR で別途検討」と記載）
 - **動機**: 現在 `lizystudio/backends/lizyml_ui_schema.py` で hand-coded。lizyml 側の Pydantic model から生成すれば drift が原理的に消える
 - **ブロッカー**: lizyml 側に構造化フィールドメタデータの export を頼む必要あり（リポジトリ間調整）
 - **優先度**: 中（P-0087 Phase 1+2 で contract test が drift を検出可能なので、緊急ではないが残課題）
-- **着手手順**: HISTORY に P-0093 として Proposal 起票 → lizyml 側調整 → PLAN.md に `v3-13` として登録 → 実装
+- **着手手順**: HISTORY に P-0095 として Proposal 起票（P-0094 は本 PR で消化）→ lizyml 側調整 → PLAN.md に `v3-17` 以降として登録 → 実装
 
-### 3.2 ML Backend 抽象の 2nd 実装による検証
+### 3.3 ML Backend 抽象の 2nd 実装による検証
 
 - **状態**: 🟡 未着手（`docs/coupling-analysis.md:283` に flag、Issue 未起票）
 - **動機**: A-1〜A-6 で `BackendAdapter` Protocol を整備したが、実装が lizyml 1 件のみ。第 2 実装で抽象の妥当性を検証したい
@@ -250,9 +257,9 @@
 
 ### Tier 3：戦略課題
 
-1. **P-0094 として P-0087 Phase 3 を Proposal 化**（`cv_strategy_fields` の Pydantic 自動派生）— lizyml 側で構造化フィールドメタデータ export が前提のためリポジトリ間調整必要
-2. **#28** offline/resume resilience tests — `current_job_id` ライフサイクル契約決定が前提
-3. **#27 (a)** `pytest-benchmark` 100k-row microbench — 先行マージ可能、stress harness は tier-4
+1. **P-0094 implementation**: pytest-benchmark microbench — Proposal accept 後の実装 PR（`feat/pytest-benchmark-baseline-p0094` で着手予定）
+2. **P-0095 として P-0087 Phase 3 を Proposal 化**（`cv_strategy_fields` の Pydantic 自動派生）— lizyml 側で構造化フィールドメタデータ export が前提のためリポジトリ間調整必要
+3. **#28** offline/resume resilience tests — `current_job_id` ライフサイクル契約決定が前提
 
 ### Tier 4：要長期計画
 
@@ -264,7 +271,7 @@
 
 ## 8. 運用メモ
 
-- 新規 Proposal を起票するときは **P-0094 から採番**（P-0093 = WS terminal-replay は 2026-05-01 に消化）。`H-XXXX` 採番は終了。
+- 新規 Proposal を起票するときは **P-0095 から採番**（P-0094 = pytest-benchmark Proposal 起票は 2026-05-01 に消化）。`H-XXXX` 採番は終了。
 - E2E 単独追加（仕様変更なし）は HISTORY 起票不要、本 ROADMAP の §3 を更新するだけで OK。
 - 本 ROADMAP はステータス変更時に都度更新。タスク完了時は §1 へ移動、新規着手時は §2/§3/§4 へ追加する。
 - 古い ID（B-N coupling、A.M Phase A など）は履歴参照のためそのまま残す。検索性のため改名はしない。

@@ -2875,3 +2875,58 @@ terminal メッセージ（completed / error）が subscribe タイミングに�
 - 2026-05-01 **Approved** — Invariants 明示 + テスト先行。実装サイズ約 +60 行（progress.py）+ +10 行（metrics.py）+ +130 行（tests）で十分にコントロール可能。
 - 実装後の運用観察: `lizystudio_progress_terminal_replayed_total` の発生率を Prometheus で追跡し、定常レートが 0 でなければ subscribe-vs-send race が production でも発火していた裏付けになる。
 
+### P-0094: pytest-benchmark introduction for performance baseline（Issue #27 (a)）
+
+- **Date:** 2026-05-01 起票
+- **Related:** Issue #27 (a)、ROADMAP §5 / §7 Tier 3 #3、coupling refactor (B/C シリーズ) 後の baseline 確立
+
+#### Motivation
+
+直近の B/C coupling refactor（A-1〜A-10, B-1〜B-10, C-1〜C-12）で services/training/jobs のレイヤ分離が大きく動いた。各 PR で機能テストは緑だが、**性能 regression の検知装置がない**。LizyML adapter の fit 1 cycle が 5% 遅くなっても、緑の CI を通り抜けて develop に landing する状態。ROADMAP §5 で Issue #27 を 2 段階に分けたうち、(a) microbench 部分は「先行マージ可能 (tier-3)」と明記されている。本 Proposal は (a) のスコープに限定し、(b) stress harness は別 Proposal とする。
+
+#### Purpose
+
+- LizyML fit のベースライン性能（mean / stddev）を継続的に測定する基盤を導入
+- 将来の refactor / 依存ライブラリ更新で perf regression が起きた場合、測定した上で気づける状態にする
+
+#### Impact
+
+- 新規 dev dependency: `pytest-benchmark`（pytest 公式 plugin、活発にメンテ）
+- 新規ディレクトリ: `tests/bench/`（既存 `tests/regression/` などと同じ階層）
+- pytest 既定動作変更: `[tool.pytest.ini_options]` の addopts に `--benchmark-skip` を追記 → 通常の `uv run pytest` で bench は自動スキップ。CI 標準パスのコストは増えない
+- `.github/workflows/nightly.yml` に opt-in job を追加（`--benchmark-only`）
+
+#### Compatibility
+
+- 既存テスト挙動には影響なし（addopts skip により bench は除外）
+- runtime 依存ではないので production bundle / PyPI ホイール size 変化なし
+- Python バージョン要件は `pytest-benchmark>=4.0` で既存 CI matrix (3.10/3.11) と整合
+
+#### Alternatives considered
+
+- **(a) `asv` (airspeed velocity)** — Scientific Python 標準だが、独自 history DB と専用 worker を要する。LizyStudio の規模には重い
+- **(b) `pyperf` (CPython 公式)** — 単発計測には強いが pytest 統合のための自前 wrapper が必要。pytest-benchmark は同等を fixtures 経由で素直に使える
+- **(c) 自前で `time.perf_counter()` ラッパー** — outlier 除去 / mean / stddev 計算の再実装コストに見合わない
+
+→ pytest-benchmark を選択。理由: (1) pytest 既存テストと同居、(2) 学習コスト低、(3) outlier 除去機構あり、(4) 本タスクの想定規模に十分
+
+#### Acceptance criteria（実装 PR で達成）
+
+- [ ] `pyproject.toml` に `pytest-benchmark` を `[dependency-groups.dev]` に追加（uv.lock 更新含む）
+- [ ] `[tool.pytest.ini_options]` の addopts に `--benchmark-skip` を追記
+- [ ] `tests/bench/test_bench_lizyml_fit.py`（新規）— 100k 行の synthetic CSV を pytest tmpdir で生成、LizyMLAdapter で 1 fit cycle、`benchmark` fixture で測定
+- [ ] `tests/bench/conftest.py` で synthetic data generator を fixture 化
+- [ ] `.github/workflows/nightly.yml` に bench job 追加（`uv run pytest tests/bench/ --benchmark-only --benchmark-json=...`、artefact upload）
+- [ ] CI 標準 PR の `backend (3.10)` / `backend (3.11)` ジョブの実行時間が **増えない**（addopts skip が効いている確認）
+- [ ] nightly bench job が成功し、JSON artefact が upload される
+
+#### Out of scope（follow-up Proposal）
+
+- **regression 検知の自動化** — `--benchmark-compare` で previous run と比較する仕組みは別 Proposal で追加。最初は baseline JSON を蓄積するだけで OK
+- **stress harness** — 並行 fit の負荷テストは Issue #27 (b) で別 tier-4 タスク
+- **frontend 性能ベンチ** — 別 Proposal
+
+#### Decision
+
+- 2026-05-01 **Pending** — 本 Proposal-only PR で approach を review してもらい、accept された段階で本 Decision 行を **Approved** に書き換え、実装 PR の番号を追記
+
