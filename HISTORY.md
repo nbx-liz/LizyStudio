@@ -2928,5 +2928,5 @@ terminal メッセージ（completed / error）が subscribe タイミングに�
 
 #### Decision
 
-- 2026-05-01 **Pending** — 本 Proposal-only PR で approach を review してもらい、accept された段階で本 Decision 行を **Approved** に書き換え、実装 PR の番号を追記
+- 2026-05-01 **Approved** — Proposal-only PR #333 が merge されたことで Proposal 自体は accept。実装は #334 で landing 予定（PR が merge されたら本記録の通り close）。実装 PR には Acceptance criteria 全項目の verify ログを記載済み（local: bench mean ≈ 13.5 s / stddev ≈ 1.5 s on 3 rounds, skip via addopts effective, mypy / ruff / format clean）
 
