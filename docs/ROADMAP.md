@@ -243,6 +243,7 @@
 
 | 対象 | 最終更新 | リスク | 対応 |
 |---|---|---|---|
+| `BLUEPRINT.md` | ✅ 2026-05-01 reconciled | — | P-0086 / P-0088 / P-0089 / P-0093 / `JOB_CONFLICT` / `preflight_checkpoint_dir` / P-0094 perf bench の drift を反映済み |
 | `docs/architecture.md` / `api.md` / `adapter-guide.md` | ✅ 2026-05-01 reconciled | — | 棚卸し完了。`tests/contract/test_adapter_guide_method_names.py` で adapter-guide.md ↔ Protocol の drift を gating |
 | `PLAN.md` v3-13/14/15 | ✅ 反映済み（2026-04-30, 2026-05-01） | — | — |
 | `HISTORY.md` P-0092 follow-ups | ✅ 反映済み（2026-04-30、PR #303 周辺で追記） | — | — |
