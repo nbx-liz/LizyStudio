@@ -6,7 +6,7 @@
 - このファイルは **横串インデックス** であり、詳細はリンク先で確認すること。
 - 着手する際は HISTORY に Proposal を起票（変更ゲート対象の場合）→ PLAN にフェーズ追加 → 実装、の順で進める。
 
-最終更新: 2026-05-01（Phase C wave 1〜8 完了：22/40+ field カバー）
+最終更新: 2026-05-01（P-0093 WS terminal-replay 起票 + Phase C wave 1〜8 完了：22/40+ field カバー）
 
 ---
 
@@ -103,6 +103,7 @@
 
 | 完了日 | ID | タイトル | 主要 PR |
 |---|---|---|---|
+| 2026-05-01 | P-0093 (impl) | WebSocket terminal-replay（Issue #327） | branch `fix/issue-327-ws-terminal-replay` (PR 作成待ち) |
 | 2026-04-30 | **P-0092** | ConfigForm cross-hook write funnel（6 phase） | #290〜#295, #289（B-3 spec） |
 | 2026-04-30 | P-0092 follow-up | H-1〜H-4 / G-1〜G-8 / Issue #298 修正 | #300, #303, #306〜#310 |
 | 2026-04-22 | Coupling refactor A+B+C | 26 項目（API queries/Job lineage/format_version 等） | 多数。`docs/coupling-analysis.md:11` |
@@ -116,6 +117,15 @@
 ---
 
 ## 3. アクティブ：仕様変更を伴う Proposal
+
+### 3.0 P-0093：WebSocket terminal-message replay for late subscribers（Issue #327）
+
+- **状態**: 🟢 実装完了（PR レビュー待ち）— branch `fix/issue-327-ws-terminal-replay`
+- **動機**: 高速 Fit (< 3 秒) で `ProgressBroadcaster.send()` が subscribe 前 message を破棄。UI の terminal-detection が 2〜4 秒遅延し、運用ログでユーザーが再 Fit する行動が観測された
+- **対象 Issue**: #327（同根の副症状 #328 は別 PR で対応）
+- **PLAN フェーズ**: v3-15（PLAN.md 参照）
+- **invariant test**: `tests/test_progress.py::TestTerminalReplay` 7 ケース
+- **次アクション**: PR 作成 → CI 全 green → develop マージ
 
 ### 3.1 P-0087 Phase 3：`cv_strategy_fields` を Pydantic から自動派生
 
@@ -214,6 +224,8 @@
 
 | Issue | タイトル | priority | 推奨アクション |
 |---|---|---|---|
+| **#327** | WebSocket "completed" race — results not visible after fast Fit | **high** | 🟢 実装完了。PR 作成 → CI green 待ち（branch `fix/issue-327-ws-terminal-replay`、P-0093 / v3-15） |
+| **#328** | execution.log empty — subprocess stdout discarded | medium | subprocess_runner.py で stdout を log file にリダイレクト + size bound + regression test |
 | **#27** | [Testing] Add load and concurrency tests | medium / tier-4 | (a) `pytest-benchmark` 100k-row microbench を tier-3 で先行マージ可 / (b) 並行 fit stress harness は tier-4 |
 | **#28** | [Testing] Add offline/resume resilience tests | medium / tier-4 | `current_job_id` ライフサイクル契約決定が前提。post-completion deep-link は #143 でカバー済み、during-run reload が gap |
 | **#125** | chore(frontend): migrate Tailwind CSS v3 → v4 | medium / tier-4 | Owner status: `Button` で spike → 専用 sprint。即着手は推奨しない |

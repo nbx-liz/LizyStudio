@@ -2804,3 +2804,74 @@ A code-review + test-coverage audit run immediately after the §P-0092 Resolved 
 
 PRs were initially opened against `main` (the repo's default base for `gh pr create`) and merged 5 of 8 before the deviation was caught. main was rolled back to `cd1c51e` and all 8 PRs re-created against develop. Branch-guard hook (`.claude/hooks/branch-guard.sh`) extended to require explicit `--base develop` on `gh pr create` to prevent recurrence.
 
+### P-0093: WebSocket terminal-message replay for late subscribers（Issue #327）
+
+- **Date:** 2026-05-01 起票
+- **Related:** Issue #327、`src/lizystudio/ws/progress.py`、H-0035（WS exponential backoff）、H-0058 / H-0069（ping/keepalive）、Issue #151（queue overflow policy）
+
+#### Symptom（観察事実）
+
+直近の Workspace 運用ログに、同一 config・8 秒間隔の **連続 Fit（同一データセット、再 Fit）** が観測された。両ジョブとも `meta.json` で `status="completed"`, `error=null`、`fit_result.json` (3889 byte) も同一内容で正しく書かれており、**バックエンドは健全**。フロントエンドの terminal-detection が遅延／欠落して、ユーザーが「結果が見えない」と再 Fit したと推定される。
+
+| 時刻 (UTC) | Job ID | duration | 観察 |
+|---|---|---|---|
+| 04:50:44 | job_7c3c1f5b | 3.5s | strategy 切替 (group_kfold) |
+| 04:50:52 | job_b44d9de7 | 2.2s | **同一 config の再 Fit（8 秒後）** |
+
+#### Root cause
+
+`ProgressBroadcaster.send()` は subscribe 前に送信されたメッセージを **subscriber 不在として丸ごと破棄** する設計だった（旧実装）。高速 Fit (< 3 秒) では：
+
+1. `POST /fit` がスレッドを起動して即時 return（`start_fit_async`、`training.py:236-273`）
+2. クライアント: `setCurrentJobId` → React render → `connectJobProgress` → WS handshake
+3. **同時に** subprocess が短時間で完走 → `broadcaster.send_completed()`
+4. WS handshake → `broadcaster.subscribe()` の **前に** completed が送られると `_queues[job_id]` が空 → メッセージ drop
+5. WS handler は subscribe 後に空キューを 30 秒待ち、ping のみ流れる
+6. 復旧パスは `useJob` の HTTP polling fallback (2s 間隔)。最終的に completed を検出するが **2〜4 秒の遅延** が発生し、ユーザーが再試行する余地がある
+
+#### Purpose
+
+terminal メッセージ（completed / error）が subscribe タイミングに依存せず、各 jobId に対して subscriber に **少なくとも一度** 届くことを保証する。
+
+#### Impact
+
+- `lizystudio.ws.progress.ProgressBroadcaster` のみ変更。**wire format 変更なし**、クライアント側の `connectJobProgress` ハンドラそのまま流用可能。
+- `MetricsRegistry` に `lizystudio_progress_terminal_replayed_total` Counter を追加（observability）。
+- 環境変数 `LIZYSTUDIO_WS_TERMINAL_TTL_S` で TTL 上書き可能（default 300 秒 = 5 分）。
+
+#### Compatibility
+
+- 既存テスト 30 件（progress.py 23 + 新規 7）すべて green。
+- 無症状ジョブ（subscribe が間に合った通常フロー）は live broadcast 経路のままで挙動変化なし。
+- メトリクス購読側の Prometheus scrape ターゲットに新カウンター名が増えるが、ラベル無しなので破壊的変更ではない。
+
+#### Alternatives considered
+
+- (a) WS handler 側で subscribe 直後に明示的に `broadcaster.replay_terminal(job_id, queue)` を呼ぶ実装。Broadcaster 内蔵と機能的に等価だが、INV-1 を「Broadcaster の責務」としてセマンティックに局所化したい目的で却下。
+- (b) クライアント側 polling 強化のみ（`useJob.refetchInterval` を拡張）。2〜4 秒の遅延が残るためユーザー体験を直接改善しない。Issue #327 の補強策として将来検討可能。
+- (c) `POST /fit` ハンドラ側で synchronous に最初の `running` ステータスを書き込んでから return → `useJob` の最初の fetch を必ず非完了状態にする。バックエンドの thread spawn 順序を改変するため副作用が大きく、根本対策にならない（subscribe 時点で既に completed のケースが残る）。
+
+#### Invariants
+
+- **INV-1**: 各 jobId について、terminal メッセージ（completed / error）は subscribe タイミングに関わらず subscriber に **少なくとも一度** 届く。
+- **INV-2**: 同一 jobId の同一 terminal は同一 subscriber に **高々一度** 配信される。live broadcast 経路と replay 経路は subscribe が `_queues` に登録されるタイミングを境に **disjoint**。
+- **INV-3**: `_last_terminal` cache は `_terminal_ttl_s` 秒で expire し、subscribe 時の lazy GC で除去される。
+
+実装上の保証：
+- INV-2 は `send()` の lock 内で `qs = list(self._queues.get(job_id, []))` のスナップショットを取った瞬間に決定する。subscribe より前にスナップショットが取られた subscriber → live のみ。subscribe より後の新しい subscriber → cache から replay のみ。両者が同時に発生する race は lock で排他されている。
+
+#### Acceptance criteria
+
+- [x] `ProgressBroadcaster._last_terminal` cache を導入、TTL で GC される
+- [x] `subscribe` がキャッシュされた terminal を first message として queue に注入
+- [x] `tests/test_progress.py::TestTerminalReplay` 7 ケース（INV-1 / INV-2 / INV-3 / metric / TTL env）追加
+- [x] 既存 `tests/test_progress.py` 23 ケース全 green
+- [x] `MetricsRegistry.progress_terminal_replayed_total` 追加
+- [x] mypy / ruff / ruff format 全 green
+- [x] HISTORY.md に Proposal 起票（concurrency / ownership change-gate 対応）
+
+#### Decision
+
+- 2026-05-01 **Approved** — Invariants 明示 + テスト先行。実装サイズ約 +60 行（progress.py）+ +10 行（metrics.py）+ +130 行（tests）で十分にコントロール可能。
+- 実装後の運用観察: `lizystudio_progress_terminal_replayed_total` の発生率を Prometheus で追跡し、定常レートが 0 でなければ subscribe-vs-send race が production でも発火していた裏付けになる。
+

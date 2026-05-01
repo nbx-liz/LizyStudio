@@ -1181,8 +1181,35 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 
 ---
 
-## 採番ガイダンス（v3-15 以降）
+## Phase v3-15: WebSocket terminal-replay（P-0093 / Issue #327）✅
 
-- 新規 Proposal は **P-0093** 以降を起票。
-- 仕様変更を伴う作業は HISTORY.md に Proposal → 本 PLAN.md にフェーズ追加（`v3-15`...）の順で進める。
+**期間:** 2026-05-01
+
+**対象 Proposal:** P-0093
+
+**動機:** 高速 Fit (< 3 秒) で `ProgressBroadcaster.send()` が subscribe 前 message を破棄し、UI の terminal-detection が 2〜4 秒遅延（`useJob` polling fallback 経由）。直近 Workspace 運用ログで「同一 config・8 秒間隔の連続 Fit」が観測され、ユーザーの再試行行動を裏付けた。
+
+**成果物:**
+- `ProgressBroadcaster._last_terminal` per-jobId cache + TTL ベース lazy GC
+- `subscribe()` が cache 内 terminal を queue の first message として注入
+- `MetricsRegistry.progress_terminal_replayed_total` Counter 追加
+- 環境変数 `LIZYSTUDIO_WS_TERMINAL_TTL_S` で TTL 上書き（default 300 秒）
+- `tests/test_progress.py::TestTerminalReplay` 7 ケース（INV-1 / INV-2 / INV-3 / metric / TTL env）
+
+**主要 PR:** TBD（fix/issue-327-ws-terminal-replay）
+
+**DoD:**
+- [x] `tests/test_progress.py` 全 30 件 green（既存 23 + 新規 7）
+- [x] `tests/test_metrics_registry.py` / `tests/test_metrics_api.py` 全 green
+- [x] mypy / ruff / ruff format 全 green
+- [x] HISTORY.md P-0093 Proposal が Approved
+- [x] BLUEPRINT 変更不要（wire format 変更なし、内部実装のみ）
+- [ ] CI（develop ブランチ）で e2e 含む全 gate green（PR 作成後に確認）
+
+---
+
+## 採番ガイダンス（v3-16 以降）
+
+- 新規 Proposal は **P-0094** 以降を起票。
+- 仕様変更を伴う作業は HISTORY.md に Proposal → 本 PLAN.md にフェーズ追加（`v3-16`...）の順で進める。
 - 詳細な未着手バックログは `docs/ROADMAP.md` を参照。

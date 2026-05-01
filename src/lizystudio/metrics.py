@@ -62,6 +62,7 @@ class MetricsRegistry:
     active_jobs: Gauge = field(init=False)
     jobs_duration: Histogram = field(init=False)
     progress_dropped_total: Counter = field(init=False)
+    progress_terminal_replayed_total: Counter = field(init=False)
 
     def __post_init__(self) -> None:
         # HTTP request counter. Labels:
@@ -116,6 +117,18 @@ class MetricsRegistry:
         self.progress_dropped_total = Counter(
             "lizystudio_progress_dropped_total",
             "Progress messages dropped due to a full subscriber queue",
+            registry=self.registry,
+        )
+
+        # Issue #327 / P-0093: counts terminal messages (completed / error)
+        # that were delivered via the per-jobId terminal cache to a
+        # subscriber that joined AFTER the message was sent. A non-zero
+        # rate signals the subscribe-before-send race actually fires in
+        # production; sustained growth suggests either very fast jobs or
+        # a slow client connect path.
+        self.progress_terminal_replayed_total = Counter(
+            "lizystudio_progress_terminal_replayed_total",
+            "Terminal messages replayed to late WebSocket subscribers",
             registry=self.registry,
         )
 
