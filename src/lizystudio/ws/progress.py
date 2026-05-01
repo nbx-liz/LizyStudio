@@ -378,7 +378,15 @@ async def websocket_progress(
                     ping = WsPing(type="ping", job_id=job_id)
                     await websocket.send_text(ping.model_dump_json(exclude_none=True))
                 continue
-            await websocket.send_text(json.dumps(msg))
+            try:
+                await websocket.send_text(json.dumps(msg))
+            except RuntimeError:
+                # Starlette raises ``RuntimeError("Cannot call \"send\"
+                # once a close message has been sent.")`` when the
+                # client disconnects between accept() and the next
+                # send. Treat it the same as WebSocketDisconnect so the
+                # loop exits cleanly via the finally block (Issue #338).
+                break
             if msg.get("type") in ("completed", "error"):
                 break
     except WebSocketDisconnect:
