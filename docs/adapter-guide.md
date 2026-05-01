@@ -94,6 +94,9 @@ def importance(self, model: Any, kind: str = "split") -> dict[str, float]:
 def importance_kinds(self, model: Any) -> list[str]:
     """Return available importance types (e.g. ['split', 'gain', 'shap'])."""
 
+def learning_curve_metrics(self, model: Any) -> list[str]:
+    """Return eval metric names available for the learning-curve plot."""
+
 def confusion_matrix(self, model: Any, threshold: float = 0.5) -> dict[str, Any]:
     """Return confusion matrix (classification only)."""
 
@@ -118,6 +121,39 @@ def load_model(self, path: str) -> Any:
 
 def model_info(self, model: Any) -> dict[str, Any]:
     """Return model metadata (feature count, training date, etc.)."""
+```
+
+### Re-tune checkpoints (H-0062)
+
+These methods enable the Re-tune / Resume flow that lets users add more
+trials to a completed tune, or continue a failed tune from where it
+stopped. A backend that does not support multi-round tuning may raise
+``NotImplementedError`` here; the routes return a clear 4xx in that case.
+
+```python
+def save_checkpoint(self, model: Any, path: Any) -> None:
+    """Persist the live tuner state (Optuna study, RNG, etc.) under path."""
+
+def load_checkpoint(self, path: Any, *, allowed_root: Any | None = None) -> Any:
+    """Restore the tuner state previously saved via save_checkpoint.
+
+    ``allowed_root`` constrains where unpickling may read from
+    (defense-in-depth against arbitrary-path pickle attacks).
+    """
+
+def verify_checkpoint_compatibility(self, job_dir: Any) -> None:
+    """Raise on pickle schema mismatch or library-major-version skew.
+
+    Issued before resume / re-tune so the user sees a clear
+    PICKLE_INCOMPATIBLE error instead of a deserialisation crash.
+    """
+
+def preflight_checkpoint_dir(self, job_dir: Any) -> None:
+    """Verify writability + picklable model state before tune starts.
+
+    Catches config issues that would otherwise only surface after the
+    first trial finishes and the checkpoint write fails.
+    """
 ```
 
 ## Common types
@@ -230,10 +266,16 @@ for the change gate requirements.
 
 ## Reference implementation
 
-The LizyML adapter (`src/lizystudio/backends/lizyml.py`) is the reference
-implementation. Study it for patterns on:
+The LizyML adapter (`src/lizystudio/backends/lizyml/` — split across
+several modules per H-0070) is the reference implementation. Study it
+for patterns on:
 
 - Converting between native and common types
 - Implementing progress callbacks
 - Handling edge cases (empty data, missing features, etc.)
 - Splitting complex logic into helper modules
+
+---
+
+_Last reconciled: 2026-05-01 against develop (post-PR #331). The Protocol surface lives in `src/lizystudio/backends/base.py` (split into BackendCore / BackendEvaluation / etc. via H-0068; `BackendAdapter` is the union alias). Drift between this guide and the Protocol is policed by `tests/contract/test_adapter_guide_method_names.py`._
+

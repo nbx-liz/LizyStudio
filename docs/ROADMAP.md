@@ -236,7 +236,7 @@
 
 | 対象 | 最終更新 | リスク | 対応 |
 |---|---|---|---|
-| `docs/architecture.md` / `api.md` / `adapter-guide.md` | 2026-04-10 | services/training/jobs が 2026-04-22 以降も continually refactor（B/C シリーズ + P-0086〜P-0093）。Adapter 契約の記載が古い可能性 | 🟡 未着手（§7 Tier 3 #1） |
+| `docs/architecture.md` / `api.md` / `adapter-guide.md` | ✅ 2026-05-01 reconciled | — | 棚卸し完了。`tests/contract/test_adapter_guide_method_names.py` で adapter-guide.md ↔ Protocol の drift を gating |
 | `PLAN.md` v3-13/14/15 | ✅ 反映済み（2026-04-30, 2026-05-01） | — | — |
 | `HISTORY.md` P-0092 follow-ups | ✅ 反映済み（2026-04-30、PR #303 周辺で追記） | — | — |
 | `MEMORY.md` 古いノート | ✅ 直近セッションで更新（`project_coupling_refactor_progress` 等は post-#271 / P-0092 完了以降に上書き済み） | — | — |
@@ -250,10 +250,9 @@
 
 ### Tier 3：戦略課題
 
-1. **`docs/architecture.md` / `api.md` / `adapter-guide.md` ドリフト是正棚卸し** — 2026-04-10 から未更新、その間 services/training/jobs が refactor 多数（B/C シリーズ + P-0086〜P-0093）。BLUEPRINT を真として Tier 3 を追従
-2. **P-0094 として P-0087 Phase 3 を Proposal 化**（`cv_strategy_fields` の Pydantic 自動派生）— lizyml 側で構造化フィールドメタデータ export が前提のためリポジトリ間調整必要
-3. **#28** offline/resume resilience tests — `current_job_id` ライフサイクル契約決定が前提
-4. **#27 (a)** `pytest-benchmark` 100k-row microbench — 先行マージ可能、stress harness は tier-4
+1. **P-0094 として P-0087 Phase 3 を Proposal 化**（`cv_strategy_fields` の Pydantic 自動派生）— lizyml 側で構造化フィールドメタデータ export が前提のためリポジトリ間調整必要
+2. **#28** offline/resume resilience tests — `current_job_id` ライフサイクル契約決定が前提
+3. **#27 (a)** `pytest-benchmark` 100k-row microbench — 先行マージ可能、stress harness は tier-4
 
 ### Tier 4：要長期計画
 

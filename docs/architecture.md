@@ -71,13 +71,15 @@ The **Workspace** holds the current session state:
 ```
 User configures form  →  PUT /api/workspace/config
 User uploads data     →  POST /api/workspace/data/upload
-User clicks Fit       →  POST /api/workspace/fit
+User clicks Fit       →  POST /api/workspace/fit  (optional body { config } overrides ws.config atomically — P-0086)
                           │
-                          ├── Service creates Job (pending)
+                          ├── Service claims the active-job slot (P-0089)
+                          │     └── Subsequent PUT/PATCH /config return 409 WORKSPACE_LOCKED until release
+                          ├── Service creates Job (pending) and writes meta.json
                           ├── Adapter.create_model()
                           ├── Adapter.fit() with progress callback
-                          │     └── WebSocket: progress updates
-                          ├── Job status → completed
+                          │     └── WebSocket: progress updates + terminal completed/error (cached for ~5 min so late subscribers still see it — P-0093)
+                          ├── Job status → completed / failed / cancelled, slot released
                           └── Response: { job_id }
 ```
 
@@ -121,3 +123,8 @@ code changes** — the form updates automatically.
 - [BLUEPRINT.md](../BLUEPRINT.md) — full specification
 - [Adapter Guide](adapter-guide.md) — how to implement a new ML backend
 - [API Reference](api.md) — REST API endpoints
+
+---
+
+_Last reconciled: 2026-05-01 against develop (post-PR #331). High-level layout unchanged since the previous sync; only the Fit/Tune workflow box was updated to reflect P-0086 (config body) / P-0089 (active-job lock) / P-0093 (terminal-message replay)._
+
