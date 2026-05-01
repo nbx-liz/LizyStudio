@@ -29,6 +29,38 @@ jobs:
       # Nightly uses the same flaky-retry policy as CI (Issue #29).
       - run: uv run pytest --cov=src/lizystudio --cov-report=term-missing --cov-fail-under=80 --reruns 2 --reruns-delay 1 -q
 
+  bench:
+    # Issue #27 (a) / P-0094: capture a perf baseline (mean / stddev) for
+    # the LizyML adapter fit cycle on a 100k-row synthetic CSV. The bench
+    # is excluded from PR CI by ``--benchmark-skip`` in pyproject.toml's
+    # addopts; this job overrides with ``--benchmark-only`` so only the
+    # bench file runs. The JSON output is uploaded as an artefact for
+    # manual inspection. A future Proposal can add automatic regression
+    # detection by comparing across runs.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: develop
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.11"
+      - run: uv sync
+      - name: Run benchmark
+        run: |
+          uv run pytest tests/bench/ \
+            --benchmark-only \
+            --benchmark-json=bench-result.json
+      - name: Upload benchmark JSON
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-result-${{ github.run_id }}
+          path: bench-result.json
+          retention-days: 90
+          if-no-files-found: error
+
   plotly-cdn:
     name: Plotly CDN reachability & SRI freshness
     runs-on: ubuntu-latest
