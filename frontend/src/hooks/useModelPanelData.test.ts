@@ -520,6 +520,11 @@ describe("useModelPanelData", () => {
       expect(invalidateSpy).toHaveBeenCalledWith({
         queryKey: queryKeys.config(),
       });
+      // Post-#339 budget assertion — exactly one invalidate from the 409
+      // catch path. A future cascade adding a second invalidate (e.g.
+      // an extra ``invalidateQueries(jobs())`` to refresh the lock owner
+      // job list) would fail this guard before it could ship.
+      expect(invalidateSpy).toHaveBeenCalledTimes(1);
       // Rejected write must not land on history.
       expect(result.current.history.canUndo).toBe(undoBefore);
     });
@@ -626,6 +631,8 @@ describe("useModelPanelData", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: queryKeys.config(),
     });
+    // Post-#339 budget assertion — single invalidate of config().
+    expect(invalidateSpy).toHaveBeenCalledTimes(1);
   });
 
   it("handleImport surfaces errors from the server response", async () => {
@@ -754,6 +761,8 @@ describe("useModelPanelData", () => {
       expect(invalidateSpy).toHaveBeenCalledWith({
         queryKey: queryKeys.config(),
       });
+      // Post-#339 budget assertion — single invalidate from saved=false path.
+      expect(invalidateSpy).toHaveBeenCalledTimes(1);
       // Rejected change must not have been recorded in history.
       expect(result.current.history.canUndo).toBe(false);
     });
@@ -794,6 +803,8 @@ describe("useModelPanelData", () => {
       expect(invalidateSpy).toHaveBeenCalledWith({
         queryKey: queryKeys.config(),
       });
+      // Post-#339 budget assertion — single invalidate from funnel-410 path.
+      expect(invalidateSpy).toHaveBeenCalledTimes(1);
       expect(result.current.history.canUndo).toBe(false);
     });
 
