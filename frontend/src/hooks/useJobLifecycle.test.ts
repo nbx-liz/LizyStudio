@@ -132,4 +132,61 @@ describe("useJobLifecycle", () => {
 
     expect(clearA).toBe(clearB);
   });
+
+  // --------------------------------------------------------------------
+  // Post-#339 budget assertion — cancel must invalidate exactly twice
+  // --------------------------------------------------------------------
+  it("cancel invalidates exactly the job + jobs queries (no extras)", async () => {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+    const customWrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: qc }, children);
+
+    const { result } = renderHook(() => useJobLifecycle({ jobId: "j1" }), {
+      wrapper: customWrapper,
+    });
+    await waitFor(() => expect(result.current.job?.status).toBe("running"));
+    invalidateSpy.mockClear();
+
+    await act(async () => {
+      await result.current.cancel();
+    });
+
+    // Two invalidates from the cancel finally-block: job(jobId) + jobs().
+    // Any extra invalidate signals an unintended cascade (e.g. a future
+    // change adding a third invalidateQueries call without auditing the
+    // count) and would fail this guard immediately.
+    expect(invalidateSpy).toHaveBeenCalledTimes(2);
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["job", "j1"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["jobs"] });
+  });
+
+  it("cancel rejection still invalidates exactly twice (Issue #237 + budget)", async () => {
+    (cancelJob as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("500"),
+    );
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+    const customWrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: qc }, children);
+
+    const { result } = renderHook(() => useJobLifecycle({ jobId: "j1" }), {
+      wrapper: customWrapper,
+    });
+    await waitFor(() => expect(result.current.job?.status).toBe("running"));
+    invalidateSpy.mockClear();
+
+    await act(async () => {
+      await result.current.cancel();
+    });
+
+    // Even on cancel API failure the finally-block still fires both
+    // invalidates exactly once each — matches the Issue #237 contract
+    // (UI must not stay stuck in "Cancelling...") with no double-fire.
+    expect(invalidateSpy).toHaveBeenCalledTimes(2);
+  });
 });

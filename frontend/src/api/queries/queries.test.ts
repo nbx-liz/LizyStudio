@@ -157,6 +157,9 @@ describe("useRetuneJob", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: queryKeys.job("j1"),
     });
+    // Post-#339 budget assertion: exactly the two invalidates declared
+    // in onSuccess — no future cascade silently adds a third.
+    expect(invalidateSpy).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -182,6 +185,8 @@ describe("useResumeJob", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: queryKeys.job("j1"),
     });
+    // Post-#339 budget assertion: matches useRetuneJob — exactly two.
+    expect(invalidateSpy).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -208,5 +213,21 @@ describe("useRunInference", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: queryKeys.infHistoryAll(),
     });
+    // Post-#339 budget assertion: single invalidate (infHistoryAll).
+    expect(invalidateSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Post-#339 budget assertion — invalidator helper fires exactly once
+// ---------------------------------------------------------------------------
+
+describe("useJobsInvalidator — budget", () => {
+  it("invokes invalidateQueries exactly once per call", () => {
+    const { wrapper, qc } = makeWrapper();
+    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+    const { result } = renderHook(() => useJobsInvalidator(), { wrapper });
+    result.current();
+    expect(invalidateSpy).toHaveBeenCalledTimes(1);
   });
 });
