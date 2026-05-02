@@ -171,12 +171,24 @@ export function SearchSpaceTable({
       setExpandedRows((prev) => new Set([...prev, key]));
     } else if (mode === "choice") {
       const param = fullCatalog.find((p) => p.key === key);
-      // Use default_choices from catalog, boolean fallback, or empty
+      // Initialize choices in priority order:
+      //   1. catalog default_choices (curated presets like max_bin)
+      //   2. boolean fallback (auto_num_leaves etc.)
+      //   3. current Fixed value from modelParams (Issue #337) — array
+      //      values preserved as-is, scalars wrapped in a singleton
+      //      so switching `objective` Fixed -> Choice does not strand
+      //      the user with an empty choices list.
+      //   4. empty array (no Fixed value yet -> user must add one)
+      const currentFixed = modelParams[key];
       const initChoices = param?.defaultChoices
         ? param.defaultChoices.map(String)
         : param?.paramType === "boolean"
           ? ["true", "false"]
-          : [];
+          : Array.isArray(currentFixed)
+            ? currentFixed.map(String)
+            : currentFixed != null
+              ? [String(currentFixed)]
+              : [];
       const entry: SpaceEntry = {
         type: "categorical",
         choices: initChoices,

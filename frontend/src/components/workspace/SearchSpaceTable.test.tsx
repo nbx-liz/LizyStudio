@@ -731,7 +731,103 @@ describe("SearchSpaceTable", () => {
       expect(onChange).toHaveBeenCalled();
       const spaceArg = onChange.mock.calls[0][0];
       expect(spaceArg.objective.type).toBe("categorical");
+      // No current Fixed value -> choices stays empty (the only path
+      // that still produces `[]`; user must add at least one choice).
       expect(spaceArg.objective.choices).toEqual([]);
+    });
+
+    it("seeds choices with the current scalar Fixed value (Issue #337)", () => {
+      // Repro for #337: switching `objective` Fixed -> Choice while
+      // `model.params.objective = "binary"` must seed
+      // `choices: ["binary"]` so the Tune button stays enabled and no
+      // "Choice mode with no choices" validation alert appears.
+      const choiceCatalog: SearchSpaceCatalogEntry[] = [
+        {
+          key: "objective",
+          title: "Objective",
+          paramType: "string",
+          modes: ["fixed", "choice"],
+          group: "model_params",
+        },
+      ];
+      const onChange = vi.fn();
+      render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{ objective: "binary" }}
+          onChange={onChange}
+          catalog={choiceCatalog}
+        />,
+      );
+      fireEvent.click(screen.getByRole("radio", { name: /choice/i }));
+
+      const spaceArg = onChange.mock.calls[0][0];
+      expect(spaceArg.objective.type).toBe("categorical");
+      expect(spaceArg.objective.choices).toEqual(["binary"]);
+    });
+
+    it("seeds choices with array Fixed value as-is (Issue #337)", () => {
+      // For multi-value params like `metric` whose Fixed value is
+      // already an array, Choice mode must preserve every element so
+      // the user does not silently lose metrics on mode toggle.
+      const choiceCatalog: SearchSpaceCatalogEntry[] = [
+        {
+          key: "metric",
+          title: "Metric",
+          paramType: "string",
+          modes: ["fixed", "choice"],
+          group: "model_params",
+        },
+      ];
+      const onChange = vi.fn();
+      render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{ metric: ["auc", "binary_logloss"] }}
+          onChange={onChange}
+          catalog={choiceCatalog}
+        />,
+      );
+      fireEvent.click(screen.getByRole("radio", { name: /choice/i }));
+
+      const spaceArg = onChange.mock.calls[0][0];
+      expect(spaceArg.metric.choices).toEqual(["auc", "binary_logloss"]);
+    });
+
+    it("defaultChoices from catalog still wins over Fixed value seed", () => {
+      // Catalog-provided `default_choices` (e.g. max_bin presets) must
+      // continue to take precedence over the Issue #337 fallback so
+      // the curated preset list keeps showing up.
+      const choiceCatalog: SearchSpaceCatalogEntry[] = [
+        {
+          key: "max_bin",
+          title: "Max Bin",
+          paramType: "integer",
+          modes: ["fixed", "choice"],
+          group: "model_params",
+          default_choices: [15, 63, 127, 255, 511, 1023],
+        },
+      ];
+      const onChange = vi.fn();
+      render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{ max_bin: 511 }}
+          onChange={onChange}
+          catalog={choiceCatalog}
+        />,
+      );
+      fireEvent.click(screen.getByRole("radio", { name: /choice/i }));
+
+      const spaceArg = onChange.mock.calls[0][0];
+      expect(spaceArg.max_bin.choices).toEqual([
+        "15",
+        "63",
+        "127",
+        "255",
+        "511",
+        "1023",
+      ]);
     });
 
     it("initializes boolean params with ['true','false'] choices in choice mode", () => {
