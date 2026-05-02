@@ -54,12 +54,34 @@ describe("pivotMetrics", () => {
     expect(Object.keys(result)).toHaveLength(0);
   });
 
-  it("does not unwrap when multiple top-level keys exist", () => {
+  it("does not unwrap when multiple top-level keys exist (no 'raw' subkey)", () => {
     const raw = {
       if_mean: { acc: 0.9 },
       oof: { acc: 0.8 },
     };
     const result = pivotMetrics(raw);
     expect(result.acc).toEqual({ is: 0.9, oos: 0.8, oos_std: Number.NaN });
+  });
+
+  // Regression: when calibration is enabled the backend returns
+  // ``{raw: {...}, calibrated: {...}}`` (TWO top-level keys), and the
+  // earlier ``keys.length === 1`` guard refused to unwrap — every
+  // metric came back as NaN and the Score / Metric panel rendered
+  // empty. The frontend prefers the ``raw`` sub-tree when present.
+  it("unwraps the 'raw' subtree when calibrated is also present", () => {
+    const raw = {
+      raw: {
+        if_mean: { auc: 0.95, logloss: 0.2 },
+        oof: { auc: 0.88, logloss: 0.35 },
+        oof_std: { auc: 0.01, logloss: 0.02 },
+      },
+      calibrated: {
+        if_mean: { auc: 0.97 },
+        oof: { auc: 0.9 },
+      },
+    };
+    const result = pivotMetrics(raw);
+    expect(result.auc).toEqual({ is: 0.95, oos: 0.88, oos_std: 0.01 });
+    expect(result.logloss).toEqual({ is: 0.2, oos: 0.35, oos_std: 0.02 });
   });
 });
