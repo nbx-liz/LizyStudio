@@ -1,0 +1,250 @@
+{
+  "format_version": 1,
+  "metrics": {
+    "raw": {
+      "oof": {
+        "auc": 0.6102344677483181,
+        "accuracy": 0.6363636363636364,
+        "auc_pr": 0.4442105930641843,
+        "brier": 0.22999278265674164,
+        "ece": 0.006233302951459574,
+        "f1": 0.0,
+        "logloss": 0.6524526698433276,
+        "precision_at_k": 0.5121951219512195
+      },
+      "oof_per_fold": [
+        {
+          "auc": 0.6549382716049382,
+          "accuracy": 0.6428571428571429,
+          "auc_pr": 0.464052252855681,
+          "brier": 0.2269235282178123,
+          "ece": 0.018022822607043354,
+          "f1": 0.0,
+          "logloss": 0.6460261146057573,
+          "precision_at_k": 0.5
+        },
+        {
+          "auc": 0.6241631162507608,
+          "accuracy": 0.6309523809523809,
+          "auc_pr": 0.4489348398026952,
+          "brier": 0.2323091384110738,
+          "ece": 0.003340593916638601,
+          "f1": 0.0,
+          "logloss": 0.6572745313821284,
+          "precision_at_k": 0.375
+        },
+        {
+          "auc": 0.6512477175897747,
+          "accuracy": 0.6309523809523809,
+          "auc_pr": 0.4929164072243555,
+          "brier": 0.23269335110965525,
+          "ece": 0.005346330390390175,
+          "f1": 0.0,
+          "logloss": 0.6581051590046911,
+          "precision_at_k": 0.625
+        },
+        {
+          "auc": 0.5729559748427673,
+          "accuracy": 0.6385542168674698,
+          "auc_pr": 0.4826646937669269,
+          "brier": 0.22956406684728783,
+          "ece": 0.012840168956145703,
+          "f1": 0.0,
+          "logloss": 0.6516083001887732,
+          "precision_at_k": 0.5
+        },
+        {
+          "auc": 0.6581761006289308,
+          "accuracy": 0.6385542168674698,
+          "auc_pr": 0.47919518440805986,
+          "brier": 0.22845036279705608,
+          "ece": 0.009103266905406915,
+          "f1": 0.0,
+          "logloss": 0.6492004754152566,
+          "precision_at_k": 0.5
+        }
+      ],
+      "if_mean": {
+        "auc": 0.8141233476916027,
+        "accuracy": 0.6363642863526678,
+        "auc_pr": 0.7011518545197164,
+        "brier": 0.22711801891431288,
+        "ece": 0.009672568311758837,
+        "f1": 0.0,
+        "logloss": 0.6463145444685034,
+        "precision_at_k": 0.8424242424242424
+      },
+      "if_per_fold": [
+        {
+          "auc": 0.8365488710176306,
+          "accuracy": 0.6347305389221557,
+          "auc_pr": 0.7371446641122514,
+          "brier": 0.22574573786686702,
+          "ece": 0.012255834354764227,
+          "f1": 0.0,
+          "logloss": 0.6433636221532147,
+          "precision_at_k": 0.8787878787878788
+        },
+        {
+          "auc": 0.7931556279827728,
+          "accuracy": 0.6377245508982036,
+          "auc_pr": 0.6771284906170115,
+          "brier": 0.22934107412006025,
+          "ece": 0.003417634346466858,
+          "f1": 0.0,
+          "logloss": 0.6510719745007996,
+          "precision_at_k": 0.8181818181818182
+        },
+        {
+          "auc": 0.7537345283824157,
+          "accuracy": 0.6377245508982036,
+          "auc_pr": 0.6120391396927941,
+          "brier": 0.23074307382990833,
+          "ece": 0.001405935382158996,
+          "f1": 0.0,
+          "logloss": 0.6540921152052749,
+          "precision_at_k": 0.7575757575757576
+        },
+        {
+          "auc": 0.8357961979527437,
+          "accuracy": 0.6358208955223881,
+          "auc_pr": 0.7269680741748611,
+          "brier": 0.22422323883628775,
+          "ece": 0.023143398417161985,
+          "f1": 0.0,
+          "logloss": 0.6401198736726758,
+          "precision_at_k": 0.8787878787878788
+        },
+        {
+          "auc": 0.8513815131224506,
+          "accuracy": 0.6358208955223881,
+          "auc_pr": 0.7524789040016642,
+          "brier": 0.2255369699184412,
+          "ece": 0.008140039058242121,
+          "f1": 0.0,
+          "logloss": 0.642925136810552,
+          "precision_at_k": 0.8787878787878788
+        }
+      ],
+      "oof_coverage": 1.0
+    }
+  },
+  "fold_count": 5,
+  "params": [
+    {
+      "parameter": "auto_num_leaves",
+      "value": true
+    },
+    {
+      "parameter": "num_leaves_ratio",
+      "value": 1.0
+    },
+    {
+      "parameter": "min_data_in_leaf_ratio",
+      "value": 0.01
+    },
+    {
+      "parameter": "min_data_in_bin_ratio",
+      "value": 0.01
+    },
+    {
+      "parameter": "feature_weights",
+      "value": null
+    },
+    {
+      "parameter": "balanced",
+      "value": null
+    },
+    {
+      "parameter": "objective",
+      "value": "binary"
+    },
+    {
+      "parameter": "metric",
+      "value": [
+        "auc",
+        "binary_logloss"
+      ]
+    },
+    {
+      "parameter": "learning_rate",
+      "value": 0.001
+    },
+    {
+      "parameter": "max_depth",
+      "value": 5
+    },
+    {
+      "parameter": "num_leaves",
+      "value": 32
+    },
+    {
+      "parameter": "min_data_in_leaf",
+      "value": 3
+    },
+    {
+      "parameter": "min_data_in_bin",
+      "value": 3
+    },
+    {
+      "parameter": "max_bin",
+      "value": 511
+    },
+    {
+      "parameter": "feature_fraction",
+      "value": 0.7
+    },
+    {
+      "parameter": "bagging_fraction",
+      "value": 0.7
+    },
+    {
+      "parameter": "bagging_freq",
+      "value": 10
+    },
+    {
+      "parameter": "lambda_l1",
+      "value": 0.0
+    },
+    {
+      "parameter": "lambda_l2",
+      "value": 1e-06
+    },
+    {
+      "parameter": "num_iterations",
+      "value": 1500
+    },
+    {
+      "parameter": "scale_pos_weight",
+      "value": 1.75
+    },
+    {
+      "parameter": "early_stopping_rounds",
+      "value": 150
+    },
+    {
+      "parameter": "validation_ratio",
+      "value": 0.1
+    },
+    {
+      "parameter": "best_iteration_0",
+      "value": 69
+    },
+    {
+      "parameter": "best_iteration_1",
+      "value": 19
+    },
+    {
+      "parameter": "best_iteration_2",
+      "value": 3
+    },
+    {
+      "parameter": "best_iteration_3",
+      "value": 75
+    },
+    {
+      "parameter": "best_iteration_4",
+      "value": 60
+    }
+  ]
+}

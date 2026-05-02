@@ -1,0 +1,69 @@
+{
+  "config_version": 1,
+  "task": "regression",
+  "data": {
+    "path": "/path/to/data.csv",
+    "target": "target",
+    "time_col": null,
+    "group_col": null
+  },
+  "features": {
+    "exclude": [
+      "feature_x1",
+      "feature_x2"
+    ],
+    "auto_categorical": true,
+    "categorical": [
+      "category"
+    ]
+  },
+  "split": {
+    "method": "kfold",
+    "n_splits": 5,
+    "random_state": 42,
+    "shuffle": true
+  },
+  "model": {
+    "name": "lgbm",
+    "params": {
+      "metric": [
+        "huber",
+        "mape"
+      ],
+      "objective": "huber"
+    },
+    "auto_num_leaves": true,
+    "num_leaves_ratio": 1,
+    "min_data_in_leaf_ratio": 0.01,
+    "min_data_in_bin_ratio": 0.01,
+    "feature_weights": null,
+    "balanced": null
+  },
+  "training": {
+    "seed": 42,
+    "early_stopping": {
+      "enabled": true,
+      "rounds": 150,
+      "inner_valid": {
+        "method": "holdout",
+        "ratio": 0.1,
+        "stratify": false,
+        "random_state": 42
+      },
+      "validation_ratio": 0.1
+    }
+  },
+  "tuning": null,
+  "evaluation": {
+    "metrics": [
+      "rmse",
+      "huber",
+      "mae",
+      "mape",
+      "r2",
+      "rmsle"
+    ]
+  },
+  "calibration": null,
+  "output_dir": null
+}

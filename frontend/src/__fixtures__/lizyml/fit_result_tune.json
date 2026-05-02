@@ -1,0 +1,247 @@
+{
+  "format_version": 1,
+  "metrics": {
+    "raw": {
+      "oof": {
+        "auc": 0.5047186609686609,
+        "accuracy": 0.5266666666666666,
+        "auc_pr": 0.541990579301791,
+        "brier": 0.24943355578715345,
+        "ece": 0.004283213158041745,
+        "f1": 0.6816143497757847,
+        "logloss": 0.6920121509650204,
+        "precision_at_k": 0.4666666666666667
+      },
+      "oof_per_fold": [
+        {
+          "auc": 0.43333333333333324,
+          "accuracy": 0.5,
+          "auc_pr": 0.4678787878787879,
+          "brier": 0.25080307311558614,
+          "ece": 0.027704079629448652,
+          "f1": 0.6666666666666666,
+          "logloss": 0.6947559091183048,
+          "precision_at_k": 0.3333333333333333
+        },
+        {
+          "auc": 0.4666666666666667,
+          "accuracy": 0.5,
+          "auc_pr": 0.48409876543209873,
+          "brier": 0.2507874423323894,
+          "ece": 0.027752018707116854,
+          "f1": 0.6666666666666666,
+          "logloss": 0.694724548214193,
+          "precision_at_k": 0.6666666666666666
+        },
+        {
+          "auc": 0.5758928571428571,
+          "accuracy": 0.5666666666666667,
+          "auc_pr": 0.6771261787421011,
+          "brier": 0.24737275310279114,
+          "ece": 0.04733482893985524,
+          "f1": 0.6829268292682927,
+          "logloss": 0.6878782697376725,
+          "precision_at_k": 1.0
+        },
+        {
+          "auc": 0.46651785714285715,
+          "accuracy": 0.5333333333333333,
+          "auc_pr": 0.5188186813186813,
+          "brier": 0.2491122855270785,
+          "ece": 0.014721780940333162,
+          "f1": 0.6956521739130435,
+          "logloss": 0.6913711058572388,
+          "precision_at_k": 0.3333333333333333
+        },
+        {
+          "auc": 0.5290178571428571,
+          "accuracy": 0.5333333333333333,
+          "auc_pr": 0.6204040750915751,
+          "brier": 0.24909222485792204,
+          "ece": 0.01481555424658576,
+          "f1": 0.6956521739130435,
+          "logloss": 0.6913309218976934,
+          "precision_at_k": 1.0
+        }
+      ],
+      "if_mean": {
+        "auc": 0.7057042402074895,
+        "accuracy": 0.5549999999999999,
+        "auc_pr": 0.6870139555583028,
+        "brier": 0.247047344751865,
+        "ece": 0.03581625785549233,
+        "f1": 0.7019745756737917,
+        "logloss": 0.6872289495076835,
+        "precision_at_k": 0.8166666666666668
+      },
+      "if_per_fold": [
+        {
+          "auc": 0.6712614870509607,
+          "accuracy": 0.525,
+          "auc_pr": 0.6797185784590892,
+          "brier": 0.24930152457402605,
+          "ece": 0.0027652615092873534,
+          "f1": 0.6885245901639344,
+          "logloss": 0.6917492488294169,
+          "precision_at_k": 0.9166666666666666
+        },
+        {
+          "auc": 0.6411862990810359,
+          "accuracy": 0.525,
+          "auc_pr": 0.6270265584247648,
+          "brier": 0.24930760626604426,
+          "ece": 0.002805399795423713,
+          "f1": 0.6885245901639344,
+          "logloss": 0.69176145052374,
+          "precision_at_k": 0.8333333333333334
+        },
+        {
+          "auc": 0.853448275862069,
+          "accuracy": 0.6916666666666667,
+          "auc_pr": 0.8354974359102856,
+          "brier": 0.23735209220239847,
+          "ece": 0.16976316261181518,
+          "f1": 0.7701863354037267,
+          "logloss": 0.6677893559848405,
+          "precision_at_k": 0.8333333333333334
+        },
+        {
+          "auc": 0.6782536151279199,
+          "accuracy": 0.5166666666666667,
+          "auc_pr": 0.645687695761091,
+          "brier": 0.24963657663527156,
+          "ece": 0.001932524369533617,
+          "f1": 0.6813186813186813,
+          "logloss": 0.6924199939131663,
+          "precision_at_k": 0.75
+        },
+        {
+          "auc": 0.6843715239154616,
+          "accuracy": 0.5166666666666667,
+          "auc_pr": 0.6471395092362834,
+          "brier": 0.2496389240815845,
+          "ece": 0.0018149409914017811,
+          "f1": 0.6813186813186813,
+          "logloss": 0.6924246982872541,
+          "precision_at_k": 0.75
+        }
+      ],
+      "oof_coverage": 1.0
+    }
+  },
+  "fold_count": 5,
+  "params": [
+    {
+      "parameter": "auto_num_leaves",
+      "value": true
+    },
+    {
+      "parameter": "num_leaves_ratio",
+      "value": 1.0
+    },
+    {
+      "parameter": "min_data_in_leaf_ratio",
+      "value": 0.01
+    },
+    {
+      "parameter": "min_data_in_bin_ratio",
+      "value": 0.01
+    },
+    {
+      "parameter": "feature_weights",
+      "value": null
+    },
+    {
+      "parameter": "balanced",
+      "value": null
+    },
+    {
+      "parameter": "objective",
+      "value": "binary"
+    },
+    {
+      "parameter": "metric",
+      "value": ["auc", "binary_logloss"]
+    },
+    {
+      "parameter": "learning_rate",
+      "value": 0.0009833181933644897
+    },
+    {
+      "parameter": "max_depth",
+      "value": 3
+    },
+    {
+      "parameter": "num_leaves",
+      "value": 8
+    },
+    {
+      "parameter": "min_data_in_leaf",
+      "value": 2
+    },
+    {
+      "parameter": "min_data_in_bin",
+      "value": 2
+    },
+    {
+      "parameter": "max_bin",
+      "value": 511
+    },
+    {
+      "parameter": "feature_fraction",
+      "value": 0.6554911608578311
+    },
+    {
+      "parameter": "bagging_fraction",
+      "value": 0.6625916610133735
+    },
+    {
+      "parameter": "bagging_freq",
+      "value": 10
+    },
+    {
+      "parameter": "lambda_l1",
+      "value": 0.0
+    },
+    {
+      "parameter": "lambda_l2",
+      "value": 1e-6
+    },
+    {
+      "parameter": "num_iterations",
+      "value": 1784
+    },
+    {
+      "parameter": "scale_pos_weight",
+      "value": 0.9230769230769231
+    },
+    {
+      "parameter": "early_stopping_rounds",
+      "value": 150
+    },
+    {
+      "parameter": "validation_ratio",
+      "value": 0.1
+    },
+    {
+      "parameter": "best_iteration_0",
+      "value": 1
+    },
+    {
+      "parameter": "best_iteration_1",
+      "value": 1
+    },
+    {
+      "parameter": "best_iteration_2",
+      "value": 197
+    },
+    {
+      "parameter": "best_iteration_3",
+      "value": 1
+    },
+    {
+      "parameter": "best_iteration_4",
+      "value": 1
+    }
+  ]
+}

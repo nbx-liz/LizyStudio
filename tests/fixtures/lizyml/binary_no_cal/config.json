@@ -1,0 +1,76 @@
+{
+  "config_version": 1,
+  "task": "binary",
+  "data": {
+    "path": "/path/to/data.csv",
+    "target": "Survived",
+    "time_col": null,
+    "group_col": null
+  },
+  "features": {
+    "exclude": [
+      "PassengerId",
+      "Name",
+      "Sex"
+    ],
+    "auto_categorical": true,
+    "categorical": [
+      "Pclass",
+      "SibSp",
+      "Parch",
+      "Ticket",
+      "Cabin",
+      "Embarked"
+    ]
+  },
+  "split": {
+    "method": "stratified_kfold",
+    "n_splits": 5,
+    "random_state": 42
+  },
+  "model": {
+    "name": "lgbm",
+    "params": {
+      "metric": [
+        "auc",
+        "binary_logloss"
+      ],
+      "objective": "binary"
+    },
+    "auto_num_leaves": true,
+    "num_leaves_ratio": 1,
+    "min_data_in_leaf_ratio": 0.01,
+    "min_data_in_bin_ratio": 0.01,
+    "feature_weights": null,
+    "balanced": null
+  },
+  "training": {
+    "seed": 42,
+    "early_stopping": {
+      "enabled": true,
+      "rounds": 150,
+      "inner_valid": {
+        "method": "holdout",
+        "ratio": 0.1,
+        "stratify": false,
+        "random_state": 42
+      },
+      "validation_ratio": 0.1
+    }
+  },
+  "tuning": null,
+  "evaluation": {
+    "metrics": [
+      "auc",
+      "accuracy",
+      "auc_pr",
+      "brier",
+      "ece",
+      "f1",
+      "logloss",
+      "precision_at_k"
+    ]
+  },
+  "calibration": null,
+  "output_dir": null
+}
