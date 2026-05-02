@@ -77,6 +77,18 @@ export function useJobProgress({
   // ------------------------------------------------------------------
   // WebSocket subscription
   // ------------------------------------------------------------------
+  // Issue #339: once a terminal message has been observed for ``jobId``
+  // we MUST NOT re-subscribe — the server's PR #329 replay would deliver
+  // the cached terminal again and invalidateQueries below would fire a
+  // second time per re-render cascade caused by unstable parent
+  // callbacks (notify / handleJobDone / onTerminal). The
+  // ``terminalFiredRef`` is shared with the polling-fallback effect so
+  // either path can flip it. ``terminalInvalidatedRef`` separately guards
+  // ``invalidateQueries`` so a duplicate WS terminal (live + replay race
+  // for a still-running ``job?.status`` window) never fires the cache
+  // refresh twice.
+  const terminalInvalidatedRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!jobId) return;
     // Optimistically subscribe even while the job is still undefined
@@ -84,6 +96,17 @@ export function useJobProgress({
     // without this a fast-completing re-tune child could drop its
     // events. If we already know the job is terminal, skip.
     if (job?.status && _isTerminal(job.status)) return;
+    // Issue #339: skip if we have already observed terminal for this
+    // jobId in this hook instance, even when the parent re-render
+    // cascade flips ``fireTerminal`` / ``onWsError`` references.
+    if (terminalFiredRef.current === jobId) return;
+
+    const invalidateOnce = () => {
+      if (terminalInvalidatedRef.current === jobId) return;
+      terminalInvalidatedRef.current = jobId;
+      queryClient.invalidateQueries({ queryKey: queryKeys.job(jobId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.jobs() });
+    };
 
     const disconnect = connectJobProgress(jobId, {
       onProgress: (msg) => {
@@ -99,16 +122,14 @@ export function useJobProgress({
       onCompleted: () => {
         setProgress(null);
         if (trackFoldLog) setFoldLog([]);
-        queryClient.invalidateQueries({ queryKey: queryKeys.job(jobId) });
-        queryClient.invalidateQueries({ queryKey: queryKeys.jobs() });
+        invalidateOnce();
         fireTerminal();
       },
       onError: (msg) => {
         setProgress(null);
         if (trackFoldLog) setFoldLog([]);
         onWsError?.(msg.message);
-        queryClient.invalidateQueries({ queryKey: queryKeys.job(jobId) });
-        queryClient.invalidateQueries({ queryKey: queryKeys.jobs() });
+        invalidateOnce();
         fireTerminal();
       },
     });
@@ -131,6 +152,7 @@ export function useJobProgress({
       prevJobIdRef.current = jobId;
       prevStatusRef.current = undefined;
       terminalFiredRef.current = null;
+      terminalInvalidatedRef.current = null;
     }
     const prev = prevStatusRef.current;
     prevStatusRef.current = job?.status;
