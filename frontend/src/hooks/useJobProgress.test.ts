@@ -3,6 +3,7 @@ import { act, renderHook } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { JobDetail } from "@/api/types";
+import { connectJobProgress } from "@/api/websocket";
 import { useJobProgress } from "./useJobProgress";
 
 // Capture the callbacks passed to connectJobProgress so tests can
@@ -318,5 +319,85 @@ describe("useJobProgress — polling fallback", () => {
       job: runningJob({ job_id: "j2", status: "completed" }),
     });
     expect(onTerminal).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("useJobProgress — Issue #339 polling-storm guards", () => {
+  it("does NOT re-subscribe WS when onTerminal reference changes after terminal observed", () => {
+    // Repro of Issue #339: an unstable parent callback (e.g.
+    // ``useBackgroundNotification`` returning a fresh function each
+    // render before its useCallback fix) re-runs the WS effect AFTER
+    // ``onCompleted`` has fired but BEFORE ``job?.status`` has been
+    // refetched to "completed". Without the fix, the new subscribe
+    // receives the server's PR #329 cached terminal replay and fires
+    // onCompleted a second (or third, fourth...) time per cascade,
+    // each firing two ``invalidateQueries`` calls — the polling storm.
+    const { rerender } = renderHook(
+      ({ onTerminal }: { onTerminal: () => void }) =>
+        useJobProgress({ jobId: "j1", job: runningJob(), onTerminal }),
+      { wrapper, initialProps: { onTerminal: () => {} } },
+    );
+    expect(connectJobProgress).toHaveBeenCalledTimes(1);
+
+    // WS receives terminal — invalidate + fireTerminal both run.
+    act(() => {
+      lastCallbacks?.onCompleted?.(completedMsg);
+    });
+
+    // Parent re-renders with a NEW onTerminal reference WHILE
+    // ``job?.status`` is still "running" (refetch in flight). Before
+    // the fix this re-ran the effect and called connectJobProgress
+    // again.
+    rerender({ onTerminal: () => {} });
+
+    expect(connectJobProgress).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidateQueries fires at most twice per terminal observation (job + jobs)", () => {
+    // Even if the WS subscribe loop somehow opens a second connection
+    // (e.g. cleanup between renders allowed a brief window), the
+    // ``terminalInvalidatedRef`` guard ensures the cache is refreshed
+    // exactly once per jobId mount lifecycle.
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+    const customWrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: qc }, children);
+
+    renderHook(() => useJobProgress({ jobId: "j1", job: runningJob() }), {
+      wrapper: customWrapper,
+    });
+
+    // Simulate two onCompleted firings (live + replay race).
+    act(() => {
+      lastCallbacks?.onCompleted?.(completedMsg);
+    });
+    act(() => {
+      lastCallbacks?.onCompleted?.(completedMsg);
+    });
+
+    // Only the FIRST onCompleted's invalidate calls should land:
+    // 1 for queryKeys.job(jobId), 1 for queryKeys.jobs() = 2 total.
+    expect(invalidateSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-subscribes for a fresh jobId after terminal was observed for a different jobId", () => {
+    // The terminalFiredRef guard is per-jobId. Switching to a NEW
+    // jobId must allow a fresh subscribe even if the previous jobId
+    // had already terminal-fired.
+    const { rerender } = renderHook(
+      ({ id }: { id: string }) =>
+        useJobProgress({ jobId: id, job: runningJob({ job_id: id }) }),
+      { wrapper, initialProps: { id: "j1" } },
+    );
+    expect(connectJobProgress).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      lastCallbacks?.onCompleted?.(completedMsg);
+    });
+
+    rerender({ id: "j2" });
+    expect(connectJobProgress).toHaveBeenCalledTimes(2);
   });
 });
