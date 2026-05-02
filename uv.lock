@@ -560,7 +560,7 @@ wheels = [
 
 [[package]]
 name = "lizyml"
-version = "0.9.0"
+version = "0.9.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "joblib" },
@@ -574,9 +574,9 @@ dependencies = [
     { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/79/74/3a4275bb82da96109e881496dc9929eb37ab298209d35027d7a22151bb90/lizyml-0.9.0.tar.gz", hash = "sha256:11648172e0e9ec7b96eb2837159ef58a9c8265b085d934c91e8dc0842b448eda", size = 633317, upload-time = "2026-04-11T15:58:33.52Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/69/8a/9fba48ad82db1c75d5b62aa6c218ed64542dbb19906c829f6ee684a76498/lizyml-0.9.1.tar.gz", hash = "sha256:a72c41e8cadac8f1eb7d1d0f4ef1918aab3b9a08b16d1d0d29a06649884c4e7d", size = 639370, upload-time = "2026-05-02T11:16:06.823Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ea/ac/07abdfa6b62bf132b60398ec42fe8d7ff553c7ec9011bd3cc17659731ff0/lizyml-0.9.0-py3-none-any.whl", hash = "sha256:e8eaacde5efd50b3a7c10f7431f69edbd378bd725117cd24b2454abf8ec9f49a", size = 151674, upload-time = "2026-04-11T15:58:31.921Z" },
+    { url = "https://files.pythonhosted.org/packages/66/82/df816fc0413974a8a8bd233f2585b0b2230d5c56a75fa0c66229ebe00357/lizyml-0.9.1-py3-none-any.whl", hash = "sha256:c7977ed789575a9b8b3f1360d56efcf02f22bb25b46d77927965f60e7726e987", size = 152420, upload-time = "2026-05-02T11:16:05.487Z" },
 ]
 
 [package.optional-dependencies]
