@@ -55,6 +55,19 @@ interface DataPanelProps {
  */
 export interface DataPanelHandle {
   getSubmitConfig: () => Promise<Record<string, unknown>>;
+  /**
+   * Issue #363: rehydrate the Data Panel from a server-persisted
+   * Workspace snapshot. WorkspacePage calls this once on mount when
+   * `/api/workspace/status` reports `has_data === true` so the UI
+   * doesn't force the user to re-enter the CSV path on every browser
+   * reload.
+   */
+  hydrateFromServer: (params: {
+    path: string;
+    shape: [number, number];
+    target: string | null;
+    task: TaskType | null;
+  }) => Promise<void>;
 }
 
 export const DataPanel = forwardRef<DataPanelHandle, DataPanelProps>(
@@ -92,6 +105,7 @@ export const DataPanel = forwardRef<DataPanelHandle, DataPanelProps>(
       handleExcludeToggle,
       handleTypeChange,
       handleColumnExpand,
+      hydrateFromServer,
     } = useDataPanel({ onDataChanged, onTaskChanged, uiSchema });
 
     // P-0086: expose a builder that returns the merged config the Fit/Tune
@@ -118,8 +132,18 @@ export const DataPanel = forwardRef<DataPanelHandle, DataPanelProps>(
             strategyFields,
           });
         },
+        hydrateFromServer,
       }),
-      [dataPath, target, task, overrides, cv, blocked, strategyFields],
+      [
+        dataPath,
+        target,
+        task,
+        overrides,
+        cv,
+        blocked,
+        strategyFields,
+        hydrateFromServer,
+      ],
     );
 
     return (

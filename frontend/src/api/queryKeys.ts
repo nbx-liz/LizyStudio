@@ -73,4 +73,5 @@ export const queryKeys = {
   backends: () => ["backends"] as const,
   columns: () => ["columns"] as const,
   files: (path: string) => ["files", path] as const,
+  workspaceStatus: () => ["workspace-status"] as const,
 } as const;
