@@ -11,6 +11,7 @@ import {
   fetchConfig,
   fetchConfigSchema,
   fetchUiSchema,
+  fetchWorkspaceStatus,
 } from "@/api/workspace";
 import { queryKeys } from "../queryKeys";
 
@@ -54,5 +55,20 @@ export function useColumns(options?: { enabled?: boolean }) {
     queryKey: queryKeys.columns(),
     queryFn: () => fetchColumns(),
     enabled: options?.enabled !== false,
+  });
+}
+
+/**
+ * Issue #363: WorkspacePage uses this on mount to discover whether
+ * the server already holds data + config from a previous session, so
+ * the UI can rehydrate instead of forcing the user to re-enter the
+ * CSV path on every reload.
+ */
+export function useWorkspaceStatus(options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: queryKeys.workspaceStatus(),
+    queryFn: fetchWorkspaceStatus,
+    enabled: options?.enabled !== false,
+    retry: false,
   });
 }

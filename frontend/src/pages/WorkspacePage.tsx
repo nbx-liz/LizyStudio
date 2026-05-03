@@ -1,9 +1,9 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { BarChart3, Database, SlidersHorizontal } from "lucide-react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { getErrorMessage } from "@/api/errors";
-import { useConfig, useUiSchema } from "@/api/queries";
+import { useConfig, useUiSchema, useWorkspaceStatus } from "@/api/queries";
 import { queryKeys } from "@/api/queryKeys";
 import { runFit, runTune } from "@/api/workspace";
 import {
@@ -67,7 +67,17 @@ export function WorkspacePage() {
   const notify = useBackgroundNotification();
 
   const { data: uiSchema } = useUiSchema();
-  const { data: config } = useConfig({ enabled: hasData, retry: false });
+  // Issue #363: probe the server on mount so the UI knows whether a
+  // previous session left data + config persisted. When ``has_data``
+  // is true, we flip the local ``hasData`` flag (via the same
+  // ``handleDataChanged`` callback the manual load path uses) and
+  // hand the snapshot to ``DataPanel.hydrateFromServer`` so the Path
+  // textbox / Target combobox / Column Settings / etc. all repopulate.
+  const { data: workspaceStatus } = useWorkspaceStatus();
+  const { data: config } = useConfig({
+    enabled: hasData || workspaceStatus?.has_data === true,
+    retry: false,
+  });
 
   // P-0092 Q-1 Phase 2: instantiate the write funnel for the entire
   // Workspace tree. ConfigForm's auto-reset effects route through
@@ -109,6 +119,48 @@ export function WorkspacePage() {
     setHasData(true);
     queryClient.invalidateQueries({ queryKey: queryKeys.config() });
   }, [queryClient]);
+
+  // Issue #363: rehydrate the Data Panel exactly once after a reload
+  // when the server reports a persisted snapshot. Subsequent runs are
+  // gated by ``hydratedRef`` so this never re-fires (e.g. on cache
+  // refetch or when the user later loads a different CSV manually).
+  const hydratedRef = useRef(false);
+  useEffect(() => {
+    if (hydratedRef.current) return;
+    if (
+      !workspaceStatus?.has_data ||
+      !workspaceStatus.data_ref ||
+      !config ||
+      !dataPanelRef.current
+    ) {
+      return;
+    }
+    const cfgData = (config as { data?: Record<string, unknown> }).data;
+    const cfgPath = (cfgData?.path as string | undefined) ?? "";
+    const cfgTarget = (cfgData?.target as string | undefined) ?? null;
+    const cfgTask =
+      ((config as { task?: string }).task as
+        | "binary"
+        | "multiclass"
+        | "regression"
+        | undefined) ?? null;
+    if (!cfgPath) return;
+    hydratedRef.current = true;
+    const shape = workspaceStatus.data_ref.shape;
+    dataPanelRef.current
+      .hydrateFromServer({
+        path: cfgPath,
+        shape: [shape[0] ?? 0, shape[1] ?? 0],
+        target: cfgTarget,
+        task: cfgTask,
+      })
+      .catch((err) => {
+        // Guard: if hydration fails (e.g. CSV moved on disk), reset
+        // the latch so a subsequent successful refetch can retry.
+        hydratedRef.current = false;
+        console.warn("Workspace rehydration failed:", err);
+      });
+  }, [workspaceStatus, config]);
 
   const handleTaskChanged = useCallback((t: string | null) => {
     setTask(t);

@@ -1,4 +1,4 @@
-import { act, cleanup, screen } from "@testing-library/react";
+import { act, cleanup, screen, waitFor } from "@testing-library/react";
 import { forwardRef, useImperativeHandle } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/test/helpers";
@@ -25,13 +25,28 @@ const {
   },
 }));
 
-const { mockFetchConfig } = vi.hoisted(() => ({
+const { mockFetchConfig, mockFetchWorkspaceStatus } = vi.hoisted(() => ({
   mockFetchConfig: vi.fn().mockResolvedValue({ model: { name: "lgbm" } }),
+  mockFetchWorkspaceStatus: vi.fn().mockResolvedValue({
+    has_data: false,
+    has_config: false,
+    has_result: false,
+    data_ref: null,
+    current_job_id: null,
+    files_root: "/home/rem",
+  }),
 }));
 
 vi.mock("@/api/workspace", () => ({
   fetchConfig: (...args: unknown[]) => mockFetchConfig(...args),
   fetchUiSchema: (...args: unknown[]) => mockFetchUiSchema(...args),
+  // Issue #363: WorkspacePage now probes /api/workspace/status on
+  // mount to drive rehydration. Default to ``has_data: false`` so
+  // existing tests keep their pre-#363 behaviour (Workspace stays in
+  // its empty default state); individual rehydration tests override
+  // by calling ``mockFetchWorkspaceStatus.mockResolvedValueOnce(...)``.
+  fetchWorkspaceStatus: (...args: unknown[]) =>
+    mockFetchWorkspaceStatus(...args),
   runFit: (...args: unknown[]) => mockRunFit(...args),
   runTune: (...args: unknown[]) => mockRunTune(...args),
   updateConfig: (...args: unknown[]) => mockUpdateConfig(...args),
@@ -64,10 +79,22 @@ let capturedResultsPanelProps: Record<string, unknown> = {};
 // is created via ``vi.hoisted`` because vi.mock factories execute before
 // module-scope ``const`` initializers, and because a mutable ref is the
 // idiomatic way to let individual tests swap the value seen by the mock.
-const { submitConfigRef, submitConfigErrorRef } = vi.hoisted(() => ({
-  submitConfigRef: { current: null as Record<string, unknown> | null },
-  submitConfigErrorRef: { current: null as Error | null },
-}));
+const { submitConfigRef, submitConfigErrorRef, hydrateCallsRef } = vi.hoisted(
+  () => ({
+    submitConfigRef: { current: null as Record<string, unknown> | null },
+    submitConfigErrorRef: { current: null as Error | null },
+    // Issue #363: capture every ``hydrateFromServer`` call from the
+    // WorkspacePage effect so individual tests can assert payload + count.
+    hydrateCallsRef: {
+      current: [] as Array<{
+        path: string;
+        shape: [number, number];
+        target: string | null;
+        task: string | null;
+      }>,
+    },
+  }),
+);
 
 vi.mock("@/components/workspace/DataPanel", () => ({
   DataPanel: forwardRef(
@@ -75,6 +102,12 @@ vi.mock("@/components/workspace/DataPanel", () => ({
       props: Record<string, unknown>,
       ref: React.Ref<{
         getSubmitConfig: () => Promise<Record<string, unknown>>;
+        hydrateFromServer: (params: {
+          path: string;
+          shape: [number, number];
+          target: string | null;
+          task: string | null;
+        }) => Promise<void>;
       }>,
     ) => {
       capturedDataPanelProps = props;
@@ -86,6 +119,9 @@ vi.mock("@/components/workspace/DataPanel", () => ({
               throw submitConfigErrorRef.current;
             }
             return submitConfigRef.current ?? ({} as Record<string, unknown>);
+          },
+          hydrateFromServer: async (params) => {
+            hydrateCallsRef.current.push(params);
           },
         }),
         [],
@@ -117,6 +153,17 @@ describe("WorkspacePage", () => {
     capturedResultsPanelProps = {};
     submitConfigRef.current = null;
     submitConfigErrorRef.current = null;
+    hydrateCallsRef.current = [];
+    // Reset rehydration mock to the empty default; tests that need a
+    // populated server snapshot opt in via mockResolvedValueOnce.
+    mockFetchWorkspaceStatus.mockResolvedValue({
+      has_data: false,
+      has_config: false,
+      has_result: false,
+      data_ref: null,
+      current_job_id: null,
+      files_root: "/home/rem",
+    });
 
     Object.defineProperty(window, "matchMedia", {
       writable: true,
@@ -391,6 +438,96 @@ describe("WorkspacePage", () => {
     expect(mockToast.error).toHaveBeenCalledWith(
       "Tune failed: plain string error",
     );
+  });
+
+  // -----------------------------------------------------------------
+  // Issue #363: rehydrate the Workspace from server-persisted state
+  // on mount, so a browser reload no longer forces the user to
+  // re-enter the CSV path / re-pick the target / re-configure CV.
+  // -----------------------------------------------------------------
+  describe("workspace rehydration from server (Issue #363)", () => {
+    it("calls DataPanel.hydrateFromServer when status reports has_data=true", async () => {
+      mockFetchWorkspaceStatus.mockResolvedValue({
+        has_data: true,
+        has_config: true,
+        has_result: false,
+        data_ref: { filename: "data.csv", shape: [418, 13] },
+        current_job_id: null,
+        files_root: "/home/rem",
+      });
+      mockFetchConfig.mockResolvedValue({
+        task: "binary",
+        data: { path: "/home/rem/data/x.csv", target: "Survived" },
+      });
+
+      renderWithProviders(<WorkspacePage />);
+      // status + config are async — wait for the rehydration effect.
+      await waitFor(() => {
+        expect(hydrateCallsRef.current).toHaveLength(1);
+      });
+      expect(hydrateCallsRef.current[0]).toEqual({
+        path: "/home/rem/data/x.csv",
+        shape: [418, 13],
+        target: "Survived",
+        task: "binary",
+      });
+    });
+
+    it("does not call hydrateFromServer when status reports has_data=false", async () => {
+      // mockFetchWorkspaceStatus default already returns has_data=false.
+      renderWithProviders(<WorkspacePage />);
+      // Give the component time to settle; the hydration effect must
+      // remain dormant when the server has no persisted data.
+      await new Promise((r) => setTimeout(r, 50));
+      expect(hydrateCallsRef.current).toHaveLength(0);
+    });
+
+    it("does not re-call hydrateFromServer when status/config refetches with the same payload (latched once)", async () => {
+      mockFetchWorkspaceStatus.mockResolvedValue({
+        has_data: true,
+        has_config: true,
+        has_result: false,
+        data_ref: { filename: "data.csv", shape: [10, 2] },
+        current_job_id: null,
+        files_root: "/home/rem",
+      });
+      mockFetchConfig.mockResolvedValue({
+        task: "regression",
+        data: { path: "/p.csv", target: "y" },
+      });
+
+      renderWithProviders(<WorkspacePage />);
+      await waitFor(() => {
+        expect(hydrateCallsRef.current).toHaveLength(1);
+      });
+      // Trigger a re-render path that the rehydration effect's deps
+      // (workspaceStatus, config) would normally retrigger on. Even
+      // when the queries' identities flip, ``hydratedRef`` must keep
+      // the effect dormant.
+      const onDataChanged = capturedDataPanelProps.onDataChanged as () => void;
+      act(() => onDataChanged());
+      await new Promise((r) => setTimeout(r, 30));
+      expect(hydrateCallsRef.current).toHaveLength(1);
+    });
+
+    it("skips rehydration when config.data.path is missing", async () => {
+      mockFetchWorkspaceStatus.mockResolvedValue({
+        has_data: true,
+        has_config: false,
+        has_result: false,
+        data_ref: { filename: "data.csv", shape: [10, 2] },
+        current_job_id: null,
+        files_root: "/home/rem",
+      });
+      mockFetchConfig.mockResolvedValue({
+        task: null,
+        data: { target: null }, // no path
+      });
+
+      renderWithProviders(<WorkspacePage />);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(hydrateCallsRef.current).toHaveLength(0);
+    });
   });
 
   // -----------------------------------------------------------------
