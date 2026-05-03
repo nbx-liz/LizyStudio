@@ -263,12 +263,14 @@ describe("InferencePage", () => {
     // Trigger inference run
     const onRunInference = capturedSetupProps.onRunInference as (params: {
       dataPath: string;
+      sourceType: "path" | "upload";
       evaluate: boolean;
       returnShap: boolean;
     }) => void;
     await act(async () =>
       onRunInference({
         dataPath: "/data/test.csv",
+        sourceType: "path",
         evaluate: false,
         returnShap: false,
       }),
@@ -285,6 +287,53 @@ describe("InferencePage", () => {
 
     await waitFor(() => {
       expect(mockToast.success).toHaveBeenCalledWith("Inference completed");
+    });
+  });
+
+  // Issue #374: Upload mode previously dropped sourceType somewhere
+  // between SetupPanel and InferencePage so the request always carried
+  // ``source_type: "path"``. The backend then rejected the upload
+  // tempfile (under /tmp) against the home-rooted ALLOWED_FILES_ROOT.
+  it("forwards source_type='upload' to /api/inference/run (Issue #374)", async () => {
+    const job = makeJob({ job_id: "job-1" });
+    mockFetchJobs.mockResolvedValue([job]);
+    mockRunInference.mockResolvedValue({
+      inf_id: "inf-up",
+      job_id: "job-1",
+    });
+
+    renderWithProviders(<InferencePage />);
+
+    await waitFor(() => {
+      const jobs = capturedSetupProps.completedJobs as unknown[];
+      expect(jobs).toHaveLength(1);
+    });
+
+    const onSelectJob = capturedSetupProps.onSelectJob as (id: string) => void;
+    act(() => onSelectJob("job-1"));
+
+    const onRunInference = capturedSetupProps.onRunInference as (params: {
+      dataPath: string;
+      sourceType: "path" | "upload";
+      evaluate: boolean;
+      returnShap: boolean;
+    }) => void;
+    await act(async () =>
+      onRunInference({
+        dataPath: "/tmp/lizystudio_abc.csv",
+        sourceType: "upload",
+        evaluate: true,
+        returnShap: false,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(mockRunInference).toHaveBeenCalledWith({
+        job_id: "job-1",
+        data: { source_type: "upload", path: "/tmp/lizystudio_abc.csv" },
+        return_shap: false,
+        evaluate: true,
+      });
     });
   });
 
@@ -305,12 +354,14 @@ describe("InferencePage", () => {
 
     const onRunInference = capturedSetupProps.onRunInference as (params: {
       dataPath: string;
+      sourceType: "path" | "upload";
       evaluate: boolean;
       returnShap: boolean;
     }) => void;
     await act(async () =>
       onRunInference({
         dataPath: "/data/test.csv",
+        sourceType: "path",
         evaluate: false,
         returnShap: false,
       }),
@@ -342,12 +393,14 @@ describe("InferencePage", () => {
 
     const onRunInference = capturedSetupProps.onRunInference as (params: {
       dataPath: string;
+      sourceType: "path" | "upload";
       evaluate: boolean;
       returnShap: boolean;
     }) => void;
     act(() =>
       onRunInference({
         dataPath: "/data/test.csv",
+        sourceType: "path",
         evaluate: false,
         returnShap: false,
       }),

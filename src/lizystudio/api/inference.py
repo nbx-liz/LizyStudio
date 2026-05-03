@@ -90,12 +90,32 @@ def inference_run(
     job_store: JobStore = Depends(get_job_store),
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, str]:
-    """Run inference with a path to data (H-0009)."""
-    # Validate data path is within allowed root
-    try:
-        validate_path_within(Path(body.data.path), security.ALLOWED_FILES_ROOT)
-    except ValueError as exc:
-        raise PathNotFoundError(str(exc)) from exc
+    """Run inference with a path to data (H-0009).
+
+    Path validation is split by ``source_type``:
+
+    * ``"path"`` — a user-supplied filesystem path. Must resolve to a
+      location under ``ALLOWED_FILES_ROOT`` (default: the user's home
+      directory) so the backend never reads files the operator did not
+      intend to expose.
+    * ``"upload"`` — a server-staged tempfile produced by
+      ``POST /api/inference/upload``. The path lives under the OS temp
+      dir (typically ``/tmp``), which is outside ``ALLOWED_FILES_ROOT``
+      by design. We instead verify the path is tracked in
+      ``WorkspaceState._temp_files``, ensuring the request cannot be
+      forged with ``source_type="upload"`` against an arbitrary system
+      file (Issue #374).
+    """
+    if body.data.source_type == "upload":
+        if not ws.is_tracked_temp_file(body.data.path):
+            raise PathNotFoundError(
+                f"Upload path is not a server-staged tempfile: {body.data.path}"
+            )
+    else:
+        try:
+            validate_path_within(Path(body.data.path), security.ALLOWED_FILES_ROOT)
+        except ValueError as exc:
+            raise PathNotFoundError(str(exc)) from exc
     job = _get_job_or_404(body.job_id, job_store)
     try:
         record = run_inference(
