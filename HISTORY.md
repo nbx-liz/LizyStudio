@@ -2991,3 +2991,89 @@ PR #348/#349/#350/#351 (Phase A + B) で `fit_result.json` の shape regression 
 
 - 2026-05-03 **Proposed** — 実装 PR と同じ PR 内に Proposal commit を含めて起票。Acceptance criteria 全項目の verify ログを実装コミットメッセージ / PR description に記載予定
 
+### P-0096: 業務利用 (business-use) 定義の確定と v0.4 Exit Criteria への反映
+
+- **Date:** 2026-05-03 起票
+- **Related:** [`docs/business-use-definition.md`](docs/business-use-definition.md) v0.2 / [`docs/v0.4-business-readiness-plan.md`](docs/v0.4-business-readiness-plan.md) v0.1 / Issue #358 (BlockedGroup race) / Issue #359 (job-num drift) / Issue #360 (Tune resume) / Issue #361 (Wide DataFrame UI)
+
+#### Motivation
+
+v0.3 (PyPI MVP) のリリース準備中に、次の v0.4 を「業務利用可能」レベルにする計画提案を行ったが、**「業務利用」の中身が言語化されないまま** Phase 別の作業項目を提案してしまった。
+
+過剰スペック / 不足の両方向に振れるリスクがあったため、「誰が」「どこで」「どのデータで」「どんな期待で」使うかを **先に合意** することにした。`docs/business-use-definition.md` v0.2 をユーザ承認の上で確定させ、その内容を v0.4 計画 (Phase R-1〜R-5) と Exit Criteria に反映する。
+
+#### Purpose
+
+- 業務利用の定義 (利用シナリオ / データ規模 / 同時利用人数 / 機密度 / デプロイ / 失敗許容度 / KPI) を Tier 4 ドキュメントとして固定する
+- 確定された定義に基づき、v0.4 で必要十分な作業項目を Phase R-1〜R-5 に整理する
+- v0.4 Exit Criteria を測定可能な形で文書化する
+
+#### Impact
+
+**確定された業務利用定義** (詳細は `business-use-definition.md` v0.2):
+
+| 項目 | 確定内容 |
+|---|---|
+| 利用シナリオ | 単独データサイエンティストが個人 PC で繰り返し使う |
+| 同時利用人数 | **1 名** |
+| データ規模 (上限) | 1000万行 × 1万列 × 100GB |
+| データ規模 (典型) | 100万行未満 × 数百〜数千列 |
+| デプロイ | 個人PC / 社内 Linux サーバ / Docker / クラウド |
+| 機密度 | 社外秘 (ユーザ環境側で担保、LizyStudio は補助しない) |
+| 自動化 | インタラクティブのみ (scheduler / 通知 不要) |
+| 失敗許容度 | **24h Tune が中断されても resume できること** |
+| 互換性 | format_version 後方互換、Pickle は同 minor 版内のみ保証 |
+| 商用サポート | なし |
+| 顧客提供予定 | なし |
+| 業務利用 KPI | 問題なくモデル開発を行い、Export Code ができている |
+
+**v0.4 計画への反映** (詳細は `v0.4-business-readiness-plan.md` v0.1):
+
+- **Phase R-1 拡張**: 既存の slot release invariant 検証に加え、**Tune long-run resumability (24h+, all termination paths)** を必須化 (Issue #360)。state machine に `paused` 状態を追加 (本 Proposal で確定)
+- **Phase R-2 縮小**: 同時利用 1 名前提のため、マルチタブ衝突検出 / ETag 409 / 「他タブで変更されました」UI を **削除**。WS reconnect とリロード復元のみに集中
+- **Phase R-5 新設**: **Wide DataFrame UI (10k 列対応)** + Large CSV scaling (1GB SLO + 10GB / 100GB feasibility)。BYO RAM 戦略 (Issue #361)
+- **既存 Issue 取り込み**: #358 (BlockedGroup race), #359 (job-num drift) を v0.4 R-1 phase に統合
+- **Out of scope の明文化**: 監査ログ / 認証 / マルチユーザ並行制御 / DB connector / streaming inference / モバイル / SaaS は v0.4-v0.5 で扱わない
+
+**State machine 変更** (Change Gate 対象):
+
+- Tune ジョブに `paused` 状態を追加: `running` → `paused` (interruption) → `resuming` → `running`
+- 完了済 trial の永続化 / dedup 規則を新設 (`completed_trials` の単調増加保証)
+- `job_num` を不変 ID として API レベルで永続化 (Issue #359 の修正、frontend 計算を廃止)
+
+#### Compatibility
+
+- 既存の format_version 1 workspace は引き続き読める (P-0095 の round-trip CI gate で保証)
+- 既存ジョブの再現性: Tune resume 機構は新規ジョブのみに適用 (旧ジョブは現状の挙動を維持)
+- 既存 API 契約: `/api/jobs/` レスポンスに `job_num` フィールドを追加 (additive、既存 client は無視できる)
+- 業務利用定義 §15 で **PyTorch backend** と **LLM 統合** は将来余地として明記したが、v0.4-v0.5 では着手しない (BackendAdapter Protocol の互換性は維持)
+
+#### Alternatives considered
+
+- **(a) 業務利用定義を文書化せず、v0.4 計画を作業ベースで進める** — 拒否。スコープ判断に主観が入り、過剰スペック / 不足の両方向にぶれるリスクが大きい。実際、本 Proposal 起票前に提示した v0.4 計画はマルチユーザ前提で過剰だった
+- **(b) 業務利用定義のみ確定し、計画は別 Proposal で扱う** — 拒否。定義と計画は不可分 (KPI から逆算して Phase 構成が決まる)。1 つの Proposal で両方を Decision に乗せる方が透明性が高い
+- **(c) Tune resume を v0.5 に送る** — 拒否。`business-use-definition.md` §8 で「24h Tune が消えるのは業務利用 NG」と確定。これを v0.4 で満たさないと「業務利用可能」と言えない
+- **(d) Wide DataFrame を v0.5 に送る** — 拒否。10k 列で UI 破綻するなら業務利用が成立しない (KPI Q9 の「問題なくモデル開発を行える」を満たさない)
+
+→ 業務利用定義 + v0.4 計画 (R-1〜R-5) を 1 つの Decision として確定する
+
+#### Acceptance criteria（実装は v0.4 リリースまでに達成）
+
+- [ ] `docs/business-use-definition.md` v0.2 が確定状態でリポジトリに残り、 §0 Decision Sheet が真実
+- [ ] `docs/v0.4-business-readiness-plan.md` v0.1 が確定状態でリポジトリに残る
+- [ ] `PLAN.md` に v0.4-N セクションを追加し、Phase R-1〜R-5 を反映
+- [ ] `ROADMAP.md` Tier 2 INDEX に v0.4 計画と Issue #358-#361 を登録
+- [ ] Issue #358 / #359 / #360 / #361 が v0.4 milestone に紐付け
+- [ ] v0.4 リリース時点で Exit Criteria (`v0.4-business-readiness-plan.md` §7 の 9 項目) すべて GREEN
+
+#### Out of scope（follow-up Proposal）
+
+- **PyTorch backend Adapter** — lizyml 側で PyTorch サポートが提供された後に、別 Proposal で追加
+- **LLM 統合** — 要件 (fine-tune backend / 結果解釈 / feature extraction / AutoML 補助 / text data 処理) が明確化された段階で別 Proposal
+- **DB connector** — 業務シナリオでニーズが多くなった段階で v1.0 以降の Proposal
+- **商用サポート tier** — v1.0 リリース時に検討
+
+#### Decision
+
+- 2026-05-03 **Proposed** — `docs/business-use-definition.md` v0.2 と `docs/v0.4-business-readiness-plan.md` v0.1 をリポジトリに先行コミットし、本 Proposal を Change Gate として起票。**ユーザ承認済**。Phase R-1 から実装着手する
+
