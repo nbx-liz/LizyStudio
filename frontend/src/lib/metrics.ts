@@ -15,7 +15,22 @@
  * panel reads the same uncalibrated numbers users see during a
  * non-calibrated fit, regardless of whether ``calibrated`` is also
  * emitted alongside.
+ *
+ * Issue #364: recent lizyml versions ship per-fold scores under
+ * ``oof_per_fold`` instead of an aggregated ``oof_std``. When
+ * ``oof_std`` is missing, derive the per-metric population standard
+ * deviation from ``oof_per_fold`` so the Std column shows real numbers
+ * rather than NaN.
  */
+function foldStd(values: number[]): number {
+  const finite = values.filter((v) => Number.isFinite(v));
+  if (finite.length < 2) return Number.NaN;
+  const mean = finite.reduce((s, v) => s + v, 0) / finite.length;
+  const variance =
+    finite.reduce((s, v) => s + (v - mean) ** 2, 0) / finite.length;
+  return Math.sqrt(variance);
+}
+
 export function pivotMetrics(
   raw: Record<string, unknown>,
 ): Record<string, Record<string, number>> {
@@ -33,6 +48,9 @@ export function pivotMetrics(
     string,
     number
   >;
+  const oofPerFold = Array.isArray(nested.oof_per_fold)
+    ? (nested.oof_per_fold as Array<Record<string, number>>)
+    : [];
 
   const metricNames = new Set([
     ...Object.keys(ifMean),
@@ -42,10 +60,14 @@ export function pivotMetrics(
 
   const result: Record<string, Record<string, number>> = {};
   for (const name of metricNames) {
+    let stdVal = oofStd[name] ?? Number.NaN;
+    if (!Number.isFinite(stdVal) && oofPerFold.length >= 2) {
+      stdVal = foldStd(oofPerFold.map((fold) => fold[name] ?? Number.NaN));
+    }
     result[name] = {
       is: ifMean[name] ?? Number.NaN,
       oos: oof[name] ?? Number.NaN,
-      oos_std: oofStd[name] ?? Number.NaN,
+      oos_std: stdVal,
     };
   }
   return result;
