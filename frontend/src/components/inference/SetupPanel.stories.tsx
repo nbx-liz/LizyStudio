@@ -36,6 +36,7 @@ function makeJob(overrides: Partial<JobSummary>): JobSummary {
 export const NoModels: Story = {
   args: {
     completedJobs: [],
+    allJobs: [],
     selectedJobId: null,
     history: [],
     selectedInfId: null,
@@ -49,6 +50,10 @@ export const ModelSelected: Story = {
       makeJob({ job_id: "job-1", model_name: "LGBMClassifier" }),
       makeJob({ job_id: "job-2", model_name: "LGBMRegressor" }),
     ],
+    allJobs: [
+      makeJob({ job_id: "job-1", model_name: "LGBMClassifier" }),
+      makeJob({ job_id: "job-2", model_name: "LGBMRegressor" }),
+    ],
     selectedJobId: "job-1",
     history: [],
     selectedInfId: null,
@@ -59,6 +64,7 @@ export const ModelSelected: Story = {
 export const Running: Story = {
   args: {
     completedJobs: [makeJob({ job_id: "job-1" })],
+    allJobs: [makeJob({ job_id: "job-1" })],
     selectedJobId: "job-1",
     history: [],
     selectedInfId: null,
