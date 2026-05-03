@@ -811,6 +811,20 @@ export interface paths {
         /**
          * Inference Run
          * @description Run inference with a path to data (H-0009).
+         *
+         *     Path validation is split by ``source_type``:
+         *
+         *     * ``"path"`` — a user-supplied filesystem path. Must resolve to a
+         *       location under ``ALLOWED_FILES_ROOT`` (default: the user's home
+         *       directory) so the backend never reads files the operator did not
+         *       intend to expose.
+         *     * ``"upload"`` — a server-staged tempfile produced by
+         *       ``POST /api/inference/upload``. The path lives under the OS temp
+         *       dir (typically ``/tmp``), which is outside ``ALLOWED_FILES_ROOT``
+         *       by design. We instead verify the path is tracked in
+         *       ``WorkspaceState._temp_files``, ensuring the request cannot be
+         *       forged with ``source_type="upload"`` against an arbitrary system
+         *       file (Issue #374).
          */
         post: operations["inference_run_api_inference_run_post"];
         delete?: never;
