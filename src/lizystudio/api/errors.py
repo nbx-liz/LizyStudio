@@ -126,6 +126,26 @@ class InferenceNotFoundError(StudioError):
         super().__init__("INFERENCE_NOT_FOUND", f"Inference not found: {inf_id}", 404)
 
 
+class PlotNotAvailableError(StudioError):
+    """HTTP 404 envelope for an unsupported plot type (Issue #355).
+
+    Translated from
+    :class:`lizystudio.backends.exceptions.PlotNotAvailableError` by
+    the inference and jobs plot endpoints. The structured ``details``
+    payload lets the client recover (e.g. fall back to a different
+    plot, or hide the accordion) instead of treating this like a
+    real backend failure.
+    """
+
+    def __init__(self, plot_type: str, available: list[str]) -> None:
+        super().__init__(
+            "PLOT_NOT_AVAILABLE",
+            f"Plot type {plot_type!r} is not available (available: {available})",
+            404,
+            details={"plot_type": plot_type, "available": list(available)},
+        )
+
+
 class ConfigBuildError(StudioError):
     """Config assembly failed (e.g. missing required fields) (H-0041)."""
 

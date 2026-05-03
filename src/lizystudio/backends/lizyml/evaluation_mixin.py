@@ -8,6 +8,7 @@ from typing import Any
 
 import pandas as pd
 
+from lizystudio.backends.exceptions import PlotNotAvailableError
 from lizystudio.backends.types import PlotData, PredictionSummary
 
 logger = logging.getLogger(__name__)
@@ -94,8 +95,10 @@ class EvaluationMixin:
     def plot(self, model: Any, plot_type: str, **kwargs: Any) -> PlotData:
         method_name = self._PLOT_DISPATCH.get(plot_type)
         if method_name is None:
-            msg = f"Unknown plot type: {plot_type!r}"
-            raise ValueError(msg)
+            # Issue #355: typed error so the API layer can map this to
+            # HTTP 404 (client asked for an unsupported plot) instead
+            # of letting a bare ValueError bubble up as a 500.
+            raise PlotNotAvailableError(plot_type, list(self._PLOT_DISPATCH))
         call_kwargs: dict[str, Any] = {}
         if plot_type == "learning-curve" and "metrics" in kwargs:
             call_kwargs["metrics"] = kwargs["metrics"]

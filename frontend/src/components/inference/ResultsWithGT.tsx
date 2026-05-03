@@ -182,9 +182,20 @@ function PredDistributionPlot({
   return <PlotlyChart plotlyJson={data.plotly_json} />;
 }
 
-/** SHAP summary accordion item — renders only when SHAP data is available. */
+/** SHAP summary accordion item — renders only when SHAP data is available.
+ *
+ * Issue #355: gate the SHAP fetch on the backend's ``available_plots``
+ * so we never request ``shap-summary`` from a backend that does not
+ * advertise it. Without this gate the lizyml backend returns 404 on
+ * every Inference run, polluting the browser console.
+ */
 function ShapAccordionItem({ infId, jobId }: { infId: string; jobId: string }) {
-  const { data, isLoading } = useInferenceShap(infId, jobId, { retry: false });
+  const { data: availablePlots } = useJobPlots(jobId);
+  const shapAvailable = availablePlots?.includes("shap-summary") ?? false;
+  const { data, isLoading } = useInferenceShap(infId, jobId, {
+    retry: false,
+    enabled: shapAvailable,
+  });
 
   if (!data && !isLoading) return null;
 

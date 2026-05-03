@@ -24,6 +24,7 @@ from lizystudio.api.errors import (
     JobNotCompletedError,
     JobNotFoundError,
     PathNotFoundError,
+    PlotNotAvailableError,
 )
 from lizystudio.api.models import (
     ComparisonStatsResponse,
@@ -33,6 +34,9 @@ from lizystudio.api.models import (
     InferenceUploadResponse,
     PlotResponseModel,
     PredictionsResponse,
+)
+from lizystudio.backends.exceptions import (
+    PlotNotAvailableError as _BackendPlotNotAvailable,
 )
 from lizystudio.security import read_upload_checked, validate_path_within
 from lizystudio.services.inference import (
@@ -221,6 +225,10 @@ def inference_plot(
     try:
         plot_data = get_inference_plot(job, ws.backend, plot_type)
         return {"plotly_json": plot_data.plotly_json}
+    except _BackendPlotNotAvailable as exc:
+        # Issue #355: 404 (client asked for an unsupported plot)
+        # rather than 500 (genuine backend failure).
+        raise PlotNotAvailableError(exc.plot_type, exc.available) from exc
     except Exception as exc:
         raise BackendError(exc) from exc
 

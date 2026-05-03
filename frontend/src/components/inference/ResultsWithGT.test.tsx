@@ -369,6 +369,9 @@ describe("ResultsWithGT", () => {
 
   // Lines 191-214: ShapAccordionItem renders when shap data is available
   it("renders SHAP Summary accordion when shap data resolves", async () => {
+    // Issue #355: SHAP fetch is gated on available_plots; test must
+    // surface "shap-summary" through fetchJobPlots for the gate to open.
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce(["shap-summary"]);
     vi.mocked(fetchInferenceShapPlot).mockResolvedValueOnce({
       plotly_json: '{"data":[]}',
     } as never);
@@ -410,6 +413,8 @@ describe("ResultsWithGT", () => {
 
   // Lines 204-206: ShapAccordionItem shows loading text while fetching
   it("renders SHAP Summary loading state while shap is pending", async () => {
+    // Issue #355: gate must be open for the SHAP fetch to fire.
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce(["shap-summary"]);
     let resolveShap: (v: unknown) => void;
     const pendingShap = new Promise((res) => {
       resolveShap = res;
