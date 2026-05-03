@@ -6,17 +6,23 @@
  * handlers come from useModelPanelData via props.
  */
 
-import { Download, FileText, FileUp, Redo2, Save, Undo2 } from "lucide-react";
-import { useRef } from "react";
+import {
+  ChevronDown,
+  Download,
+  FileText,
+  FileUp,
+  Redo2,
+  Save,
+  Undo2,
+} from "lucide-react";
+import { useRef, useState } from "react";
 import { getConfigDownloadUrl } from "@/api/workspace";
 import { Button } from "@/components/ui/button";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Tooltip,
   TooltipContent,
@@ -135,21 +141,7 @@ export function ModelPanelActions({
           Save Preset
         </Button>
         {presets.length > 0 && (
-          <Select onValueChange={onLoadPreset}>
-            <SelectTrigger
-              aria-label="Load preset"
-              className="h-8 w-36 text-xs"
-            >
-              <SelectValue placeholder="Load Preset" />
-            </SelectTrigger>
-            <SelectContent>
-              {presets.map((p) => (
-                <SelectItem key={p.name} value={p.name}>
-                  {p.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <LoadPresetMenu presets={presets} onLoadPreset={onLoadPreset} />
         )}
         <RawConfigDialog
           config={config}
@@ -162,5 +154,57 @@ export function ModelPanelActions({
         />
       </div>
     </div>
+  );
+}
+
+/**
+ * Load Preset menu. Issue #369.
+ *
+ * The pre-fix component used a Radix ``Select``, which does not fire
+ * ``onValueChange`` when the user picks the same option that is
+ * already "selected" — making it impossible to re-apply a preset
+ * after the config drifted. Replace the action-shaped flow with a
+ * Popover-driven menu where each preset is a button that always
+ * fires ``onLoadPreset`` on click.
+ */
+function LoadPresetMenu({
+  presets,
+  onLoadPreset,
+}: {
+  presets: ConfigPreset[];
+  onLoadPreset: (name: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label="Load preset"
+          aria-haspopup="menu"
+          className="h-8 w-36 justify-between text-xs"
+        >
+          <span>Load Preset</span>
+          <ChevronDown className="ml-1 h-3 w-3 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-48 p-1" align="start" role="menu">
+        {presets.map((p) => (
+          <button
+            key={p.name}
+            type="button"
+            role="menuitem"
+            className="w-full rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
+            onClick={() => {
+              onLoadPreset(p.name);
+              setOpen(false);
+            }}
+          >
+            {p.name}
+          </button>
+        ))}
+      </PopoverContent>
+    </Popover>
   );
 }

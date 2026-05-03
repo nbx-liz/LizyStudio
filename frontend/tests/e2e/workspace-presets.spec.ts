@@ -96,8 +96,11 @@ test.describe("Workspace preset Save → Load reflection (B-6)", () => {
       page.getByText(`Preset "${PRESET_NAME}" saved`),
     ).toBeVisible({ timeout: 5000 });
 
-    // The Load Preset dropdown should now appear with the saved name.
-    const loadPresetTrigger = page.getByRole("combobox", {
+    // The Load Preset menu trigger should now appear. Issue #369:
+    // the trigger used to be a Select combobox whose ``onValueChange``
+    // suppressed re-applies of the same preset; the menu replacement
+    // exposes a button whose menu items always fire on click.
+    const loadPresetTrigger = page.getByRole("button", {
       name: "Load preset",
     });
     await expect(loadPresetTrigger).toBeVisible({ timeout: 3000 });
@@ -131,7 +134,9 @@ test.describe("Workspace preset Save → Load reflection (B-6)", () => {
       (body) => deepGet(body, "split.n_splits") === 5,
     );
     await loadPresetTrigger.click();
-    await page.getByRole("option", { name: PRESET_NAME, exact: true }).click();
+    await page
+      .getByRole("menuitem", { name: PRESET_NAME, exact: true })
+      .click();
     const loadBody = await loadPut;
     expect(deepGet(loadBody, "split.n_splits")).toBe(5);
     // Issue #276 guard: preset merges with current data section so
