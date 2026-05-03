@@ -81,6 +81,27 @@ export async function fetchColumnStats(
   ) as unknown as ColumnStatsResponse;
 }
 
+/**
+ * Workspace status snapshot — used for UI rehydration on reload
+ * (Issue #363).
+ */
+export interface WorkspaceStatus {
+  has_data: boolean;
+  has_config: boolean;
+  has_result: boolean;
+  data_ref: { filename: string; shape: number[] } | null;
+  current_job_id: string | null;
+  files_root: string;
+}
+
+export async function fetchWorkspaceStatus(): Promise<WorkspaceStatus> {
+  const { data } = await apiClient.GET("/api/workspace/status", {});
+  // SSOT-EXEMPT: the generated WorkspaceStatusResponse type uses
+  // optional fields where the runtime value is null; the local
+  // interface normalises them to ``X | null`` for ergonomics.
+  return unwrap(data, "/api/workspace/status") as unknown as WorkspaceStatus;
+}
+
 export async function fetchSplitPreview(): Promise<SplitPreviewResponse> {
   const { data } = await apiClient.GET("/api/workspace/data/split-preview", {});
   return unwrap(

@@ -34,4 +34,5 @@ export {
   useConfig,
   useConfigSchema,
   useUiSchema,
+  useWorkspaceStatus,
 } from "./useWorkspace";
