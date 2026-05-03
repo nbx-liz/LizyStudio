@@ -171,6 +171,30 @@ describe("useInferenceShap", () => {
       expect(fetchInferenceShapPlot).toHaveBeenCalledWith("inf1", "j1"),
     );
   });
+
+  it("does not fetch when enabled is false (Issue #355)", async () => {
+    // Pre-fix the SHAP query fired unconditionally on every render and
+    // the backend returned 500 for unsupported plot types. The fix
+    // requires the caller to gate the query on the backend's
+    // ``available_plots`` so we never request a plot the backend
+    // cannot render.
+    const { wrapper } = makeWrapper();
+    renderHook(() => useInferenceShap("inf1", "j1", { enabled: false }), {
+      wrapper,
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fetchInferenceShapPlot).not.toHaveBeenCalled();
+  });
+
+  it("fires when enabled is explicitly true", async () => {
+    const { wrapper } = makeWrapper();
+    renderHook(() => useInferenceShap("inf1", "j1", { enabled: true }), {
+      wrapper,
+    });
+    await waitFor(() =>
+      expect(fetchInferenceShapPlot).toHaveBeenCalledWith("inf1", "j1"),
+    );
+  });
 });
 
 describe("useInferenceComparison", () => {

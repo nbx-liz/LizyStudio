@@ -4,6 +4,7 @@ import {
   useInferenceComparison,
   useInferencePlot,
   useInferenceShap,
+  useJobPlots,
 } from "@/api/queries";
 import {
   Accordion,
@@ -206,10 +207,15 @@ function ShapAndWarningsAccordion({
   jobId: string;
   warnings: string[];
 }) {
+  // Issue #355: gate SHAP fetch on the backend's available_plots so
+  // we never request a plot the backend cannot render (which would
+  // log a 404 in the browser console on every Inference run).
+  const { data: availablePlots } = useJobPlots(jobId);
+  const shapAvailable = availablePlots?.includes("shap-summary") ?? false;
   const { data: shapData, isLoading: shapLoading } = useInferenceShap(
     infId,
     jobId,
-    { retry: false },
+    { retry: false, enabled: shapAvailable },
   );
 
   const hasShap = shapData != null || shapLoading;

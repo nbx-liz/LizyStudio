@@ -11,6 +11,13 @@ vi.mock("@/api/inference", () => ({
   fetchInferenceShapPlot: vi.fn().mockResolvedValue(null),
 }));
 
+// Issue #355: SHAP fetch is gated on the available_plots returned by
+// /api/jobs/{id}/plots. The mock defaults to "no SHAP available" so
+// the gate stays closed; SHAP-positive tests opt in below.
+vi.mock("@/api/jobs", () => ({
+  fetchJobPlots: vi.fn().mockResolvedValue([]),
+}));
+
 vi.mock("./PredictionsTable", () => ({
   PredictionsTable: ({ infId, jobId }: { infId: string; jobId: string }) => (
     <div data-testid="predictions-table">
@@ -31,6 +38,7 @@ import {
   fetchInferenceShapPlot,
   type InferenceRecord,
 } from "@/api/inference";
+import { fetchJobPlots } from "@/api/jobs";
 import { ResultsPredOnly } from "./ResultsPredOnly";
 
 function makeRecord(overrides: Partial<InferenceRecord> = {}): InferenceRecord {
@@ -61,6 +69,7 @@ beforeEach(() => {
     current: {},
     other: {},
   });
+  vi.mocked(fetchJobPlots).mockResolvedValue([]);
 });
 
 describe("ResultsPredOnly", () => {
@@ -333,6 +342,7 @@ describe("ResultsPredOnly", () => {
   // --- ShapAndWarningsAccordion coverage (lines 199-250) ---
 
   it("renders SHAP Summary accordion when shap data is available", async () => {
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce(["shap-summary"]);
     vi.mocked(fetchInferenceShapPlot).mockResolvedValueOnce({
       plotly_json: '{"data":[]}',
     });
@@ -353,6 +363,7 @@ describe("ResultsPredOnly", () => {
   });
 
   it("renders SHAP Summary accordion trigger while loading", async () => {
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce(["shap-summary"]);
     // Use a never-resolving promise to hold the loading state
     vi.mocked(fetchInferenceShapPlot).mockReturnValueOnce(
       new Promise(() => {}),
@@ -375,6 +386,7 @@ describe("ResultsPredOnly", () => {
   });
 
   it("renders both SHAP Summary and Warnings accordions together", async () => {
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce(["shap-summary"]);
     vi.mocked(fetchInferenceShapPlot).mockResolvedValueOnce({
       plotly_json: '{"data":[]}',
     });

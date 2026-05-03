@@ -85,19 +85,27 @@ export function useInferencePlot(
   });
 }
 
-/** SHAP summary plot. Pass ``retry: false`` when the caller treats
- * a missing plot as "no SHAP for this job" instead of a transient
- * error (the pre-refactor default at every call site).
+/** SHAP summary plot.
+ *
+ * Issue #355: callers MUST pass ``enabled: false`` when the backend
+ * does not advertise SHAP in its available-plots list, otherwise the
+ * unconditional fetch produces a 500/404 in the browser console on
+ * every Inference run. ``enabled`` defaults to ``true`` for callers
+ * that already know the plot is supported.
+ *
+ * ``retry: false`` remains the recommended setting: a missing SHAP
+ * plot is "no SHAP for this job", not a transient failure.
  */
 export function useInferenceShap(
   infId: string,
   jobId: string,
-  options?: { retry?: boolean },
+  options?: { retry?: boolean; enabled?: boolean },
 ) {
   return useQuery({
     queryKey: queryKeys.infShap(infId, jobId),
     queryFn: () => fetchInferenceShapPlot(infId, jobId),
     retry: options?.retry,
+    enabled: options?.enabled,
   });
 }
 

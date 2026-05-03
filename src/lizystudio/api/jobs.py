@@ -21,6 +21,7 @@ from lizystudio.api.errors import (
     JobNotFoundError,
     JobRunningError,
     ParentHasActiveChildrenError,
+    PlotNotAvailableError,
     StudioError,
 )
 from lizystudio.api.models import (
@@ -32,6 +33,9 @@ from lizystudio.api.models import (
     JobLogResponse,
     JobSummaryResponse,
     PlotResponseModel,
+)
+from lizystudio.backends.exceptions import (
+    PlotNotAvailableError as _BackendPlotNotAvailable,
 )
 from lizystudio.services.export import export_code_as_zip, export_model, export_report
 from lizystudio.services.jobs import (
@@ -354,6 +358,10 @@ def get_job_plot_endpoint(
             job, ws.backend, job_store.model_cache, plot_type, **kwargs
         )
         return {"plotly_json": plot_data.plotly_json}
+    except _BackendPlotNotAvailable as exc:
+        # Issue #355: 404 (client asked for an unsupported plot)
+        # rather than 500 (genuine backend failure).
+        raise PlotNotAvailableError(exc.plot_type, exc.available) from exc
     except Exception as exc:
         raise BackendError(exc) from exc
 

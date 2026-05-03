@@ -1466,14 +1466,26 @@ def test_plot_known_type_returns_plot_data() -> None:
     assert result.plotly_json == '{"data": []}'
 
 
-def test_plot_unknown_type_raises_value_error() -> None:
-    """plot() raises ValueError for unrecognised plot type."""
+def test_plot_unknown_type_raises_plot_not_available() -> None:
+    """plot() raises PlotNotAvailableError for unrecognised plot type
+    so the API layer can map it to HTTP 404 (Issue #355).
+
+    Bare ``ValueError`` was too coarse — the API funneled it through
+    ``except Exception: raise BackendError`` and returned 500, hiding
+    a 4xx-shaped condition behind a server-error envelope.
+    """
     import pytest
+
+    from lizystudio.backends.exceptions import PlotNotAvailableError
 
     adapter = LizyMLAdapter()
     mock_model = MagicMock()
-    with pytest.raises(ValueError, match="Unknown plot type"):
+    with pytest.raises(PlotNotAvailableError) as exc_info:
         adapter.plot(mock_model, "nonexistent-plot")
+
+    err = exc_info.value
+    assert err.plot_type == "nonexistent-plot"
+    assert "learning-curve" in err.available  # known supported plot
 
 
 def test_plot_all_dispatch_keys() -> None:

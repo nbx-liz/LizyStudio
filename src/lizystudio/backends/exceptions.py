@@ -64,9 +64,35 @@ class IncompatibleFormatVersionError(Exception):
     """
 
 
+class PlotNotAvailableError(Exception):
+    """Raised when a plot type is not in the backend's dispatch table
+    (Issue #355).
+
+    The lizyml ``EvaluationMixin`` dispatch is a closed enumeration;
+    any request for a plot type the backend does not advertise is a
+    client-side mistake (or a frontend that has not yet been told the
+    backend's capabilities). The API layer translates this to HTTP
+    404 with code ``PLOT_NOT_AVAILABLE``, so the caller can recover
+    gracefully without seeing a server-error envelope.
+
+    Pre-fix the backend raised a bare ``ValueError`` here, which the
+    API funnelled through ``except Exception: raise BackendError`` and
+    emitted as a 500 — that hid every Inference run's SHAP fan-out
+    behind a scary console error during the v0.3.0 release rehearsal.
+    """
+
+    def __init__(self, plot_type: str, available: list[str]) -> None:
+        super().__init__(
+            f"Plot type {plot_type!r} is not available (available: {available})"
+        )
+        self.plot_type = plot_type
+        self.available = available
+
+
 __all__ = [
     "CancelledError",
     "CheckpointIncompatibleError",
     "CheckpointPreflightError",
     "IncompatibleFormatVersionError",
+    "PlotNotAvailableError",
 ]
