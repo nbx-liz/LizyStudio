@@ -371,6 +371,58 @@ describe("SetupPanel", () => {
 
     expect(baseProps.onRunInference).toHaveBeenCalledWith({
       dataPath: "/data/test.csv",
+      sourceType: "path",
+      evaluate: true,
+      returnShap: false,
+    });
+  });
+
+  // Issue #374: Upload mode previously dropped the ``sourceType``
+  // between SetupPanel and the API call, so the run request always
+  // carried ``source_type: "path"``. The backend then validated the
+  // upload tempfile against ALLOWED_FILES_ROOT and rejected it.
+  it("forwards sourceType='upload' to onRunInference after upload (Issue #374)", async () => {
+    mockUpload.mockResolvedValue({
+      upload_path: "/tmp/lizystudio_test.csv",
+      filename: "uploaded.csv",
+    });
+    const job = {
+      job_id: "j1",
+      job_type: "fit",
+      status: "completed",
+      backend_name: "lizyml",
+      model_name: "lgbm",
+      created_at: "2025-01-01T00:00:00Z",
+      completed_at: "2025-01-01T00:01:00Z",
+      error: null,
+      primary_score: 0.9,
+      parent_job_id: null,
+    } as JobSummary;
+    const onRunInference = vi.fn();
+
+    const user = userEvent.setup();
+    render(
+      <SetupPanel
+        {...baseProps}
+        onRunInference={onRunInference}
+        completedJobs={[job]}
+        selectedJobId="j1"
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Upload" }));
+    const file = new File(["a,b\n1,2"], "uploaded.csv", { type: "text/csv" });
+    const input = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [file] } });
+    await waitFor(() => expect(mockUpload).toHaveBeenCalled());
+
+    await user.click(screen.getByRole("button", { name: /run inference/i }));
+
+    expect(onRunInference).toHaveBeenCalledWith({
+      dataPath: "/tmp/lizystudio_test.csv",
+      sourceType: "upload",
       evaluate: true,
       returnShap: false,
     });

@@ -72,6 +72,21 @@ class WorkspaceState:
         Path(path).unlink(missing_ok=True)
         return True
 
+    def is_tracked_temp_file(self, path: str) -> bool:
+        """Return ``True`` when *path* is a server-staged upload tempfile.
+
+        Used by ``/api/inference/run`` to authorise ``source_type=upload``
+        paths without sending them through the user-facing
+        ``ALLOWED_FILES_ROOT`` validation: server tempfiles live under
+        the OS temp dir (typically ``/tmp``), which is intentionally
+        outside the user's home root. Verifying membership in
+        ``_temp_files`` (populated only by ``/api/*/upload`` endpoints)
+        prevents an attacker from bypassing path validation by
+        declaring ``source_type=upload`` with an arbitrary system path.
+        """
+        with self._lock:
+            return path in self._temp_files
+
     def set_data(self, dataframe: pd.DataFrame, data_ref: DataRef) -> None:
         """Load data into the workspace."""
         with self._lock:

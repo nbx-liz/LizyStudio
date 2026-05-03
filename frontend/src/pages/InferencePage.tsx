@@ -57,12 +57,17 @@ export function InferencePage() {
   // Run inference mutation
   const mutation = useRunInference();
   const runInferenceAction = useCallback(
-    (params: { dataPath: string; evaluate: boolean; returnShap: boolean }) => {
+    (params: {
+      dataPath: string;
+      sourceType: "path" | "upload";
+      evaluate: boolean;
+      returnShap: boolean;
+    }) => {
       if (!selectedJobId) return;
       mutation.mutate(
         {
           job_id: selectedJobId,
-          data: { source_type: "path", path: params.dataPath },
+          data: { source_type: params.sourceType, path: params.dataPath },
           return_shap: params.returnShap,
           evaluate: params.evaluate,
         },

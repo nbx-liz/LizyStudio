@@ -35,6 +35,7 @@ interface SetupPanelProps {
   onSelectInf: (infId: string) => void;
   onRunInference: (params: {
     dataPath: string;
+    sourceType: SourceType;
     evaluate: boolean;
     returnShap: boolean;
   }) => void;
@@ -85,6 +86,7 @@ export function SetupPanel({
   const handleRun = () => {
     onRunInference({
       dataPath,
+      sourceType,
       evaluate,
       returnShap,
     });
