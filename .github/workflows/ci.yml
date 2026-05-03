@@ -23,7 +23,9 @@ jobs:
       # Local runs do NOT retry so flakiness stays visible. Quarantined
       # tests are excluded from this blocking job (default addopts in
       # pyproject.toml) and run separately in `backend-quarantine`.
-      - run: uv run pytest --cov=src/lizystudio --cov-report=term-missing --cov-fail-under=80 --reruns 2 --reruns-delay 1 -q
+      # Integration tests (P-0095) live in their own job; ignore the
+      # directory here so we do not double-run a 14s suite on every PR.
+      - run: uv run pytest --ignore=tests/integration --cov=src/lizystudio --cov-report=term-missing --cov-fail-under=80 --reruns 2 --reruns-delay 1 -q
 
   # Non-blocking quarantine job — captures signal on tests marked
   # `@pytest.mark.quarantine` without failing the PR. Skip cleanly when
@@ -50,6 +52,23 @@ jobs:
           # Intentionally swallow non-zero exit — continue-on-error
           # already tolerates failure, but the job status will still be
           # marked green in GitHub UI via continue-on-error.
+
+  # Backend fit -> save -> load round-trip integration tests (P-0095 /
+  # Issue #346 Phase C). Real LizyMLAdapter is exercised end-to-end
+  # against the captured fixture configs so shape-evolution bugs of
+  # the Issue #345 class are caught before merge. Runs in its own job
+  # so the ~14s suite parallelises with `backend (3.10)/(3.11)` and
+  # does not inflate their wall time. Required check (configure in
+  # GitHub branch protection alongside backend / frontend / e2e).
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync
+      - run: uv run pytest tests/integration -v --reruns 2 --reruns-delay 1
 
   frontend:
     runs-on: ubuntu-latest
