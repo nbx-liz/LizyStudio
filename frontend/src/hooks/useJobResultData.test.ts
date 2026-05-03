@@ -15,7 +15,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { JobDetail, MetricEntry } from "@/api/types";
+import binaryIsotonicFit from "@/__fixtures__/lizyml/fit_result_binary_isotonic.json";
+import binaryNoCalFit from "@/__fixtures__/lizyml/fit_result_binary_no_cal.json";
+import regressionFit from "@/__fixtures__/lizyml/fit_result_regression.json";
+import tuneFit from "@/__fixtures__/lizyml/fit_result_tune.json";
+import type { FitResult, JobDetail, MetricEntry } from "@/api/types";
 import { useJobResultData } from "./useJobResultData";
 
 vi.mock("@/api/jobs", () => ({
@@ -328,5 +332,118 @@ describe("useJobResultData", () => {
       { wrapper },
     );
     expect(result.current.hasFolds).toBe(false);
+  });
+});
+
+// Production-artifact regression coverage at the hook layer (Issue #346
+// Phase B 2/3). The previous block locks pivotMetrics in isolation; these
+// tests prove that ``useJobResultData`` correctly forwards a real
+// ``fit_result.json`` through ``pivotMetrics`` and exposes the derived
+// metrics + hasFolds that the Score / Metric panels consume.
+const BINARY_METRIC_NAMES = [
+  "auc",
+  "accuracy",
+  "auc_pr",
+  "brier",
+  "ece",
+  "f1",
+  "logloss",
+  "precision_at_k",
+] as const;
+const REGRESSION_METRIC_NAMES = [
+  "huber",
+  "mae",
+  "mape",
+  "r2",
+  "rmse",
+  "rmsle",
+] as const;
+
+function jobWithFixture(fixture: unknown): JobDetail {
+  return makeJob({ fit_result: fixture as FitResult });
+}
+
+describe("useJobResultData with real fit_result fixtures", () => {
+  it("derives 8 finite binary metrics from a real no-calibration fit", async () => {
+    const job = jobWithFixture(binaryNoCalFit);
+    const { result } = renderHook(
+      () => useJobResultData({ job, selectedPlot: "" }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.metrics).toBeDefined());
+    const metrics = result.current.metrics;
+    expect(metrics).toBeDefined();
+    if (!metrics) throw new Error("metrics undefined");
+    for (const name of BINARY_METRIC_NAMES) {
+      expect(metrics[name], `metric ${name} missing`).toBeDefined();
+      expect(Number.isFinite(metrics[name].is)).toBe(true);
+      expect(Number.isFinite(metrics[name].oos)).toBe(true);
+    }
+    expect(metrics.auc.is).toBe(binaryNoCalFit.metrics.raw.if_mean.auc);
+    expect(metrics.auc.oos).toBe(binaryNoCalFit.metrics.raw.oof.auc);
+    expect(result.current.hasFolds).toBe(true);
+  });
+
+  // Locks PR #344 regression at the hook layer: when the backend emits
+  // ``metrics: {raw: {...}, calibrated: {...}}`` the hook must surface
+  // metrics from the canonical ``raw`` subtree (NOT calibrated). Prior
+  // to PR #344 this would have left every metric NaN for the consumer.
+  it("surfaces raw metrics on a real calibrated fit, not calibrated", async () => {
+    const job = jobWithFixture(binaryIsotonicFit);
+    const { result } = renderHook(
+      () => useJobResultData({ job, selectedPlot: "" }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.metrics).toBeDefined());
+    const metrics = result.current.metrics;
+    if (!metrics) throw new Error("metrics undefined");
+    for (const name of BINARY_METRIC_NAMES) {
+      expect(metrics[name], `metric ${name} missing`).toBeDefined();
+      expect(Number.isFinite(metrics[name].is)).toBe(true);
+      expect(Number.isFinite(metrics[name].oos)).toBe(true);
+    }
+    const rawOofAuc = binaryIsotonicFit.metrics.raw.oof.auc;
+    const calOofAuc = binaryIsotonicFit.metrics.calibrated.oof.auc;
+    expect(rawOofAuc).not.toBe(calOofAuc);
+    expect(metrics.auc.oos).toBe(rawOofAuc);
+    expect(metrics.auc.is).toBe(binaryIsotonicFit.metrics.raw.if_mean.auc);
+  });
+
+  it("derives 6 finite regression metrics from a real regression fit", async () => {
+    const job = jobWithFixture(regressionFit);
+    const { result } = renderHook(
+      () => useJobResultData({ job, selectedPlot: "" }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.metrics).toBeDefined());
+    const metrics = result.current.metrics;
+    if (!metrics) throw new Error("metrics undefined");
+    for (const name of REGRESSION_METRIC_NAMES) {
+      expect(metrics[name], `metric ${name} missing`).toBeDefined();
+      expect(Number.isFinite(metrics[name].is)).toBe(true);
+      expect(Number.isFinite(metrics[name].oos)).toBe(true);
+    }
+    expect(metrics.rmse.is).toBe(regressionFit.metrics.raw.if_mean.rmse);
+    expect(metrics.r2.oos).toBe(regressionFit.metrics.raw.oof.r2);
+  });
+
+  it("derives binary metrics from a real tune fit's best-params fit_result", async () => {
+    const job = makeJob({
+      job_type: "tune",
+      fit_result: tuneFit as FitResult,
+    });
+    const { result } = renderHook(
+      () => useJobResultData({ job, selectedPlot: "" }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.metrics).toBeDefined());
+    const metrics = result.current.metrics;
+    if (!metrics) throw new Error("metrics undefined");
+    for (const name of BINARY_METRIC_NAMES) {
+      expect(metrics[name], `metric ${name} missing`).toBeDefined();
+      expect(Number.isFinite(metrics[name].is)).toBe(true);
+      expect(Number.isFinite(metrics[name].oos)).toBe(true);
+    }
+    expect(result.current.hasFolds).toBe(true);
   });
 });
