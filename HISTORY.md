@@ -2930,3 +2930,64 @@ terminal メッセージ（completed / error）が subscribe タイミングに�
 
 - 2026-05-01 **Approved** — Proposal-only PR #333 が merge されたことで Proposal 自体は accept。実装は #334 で landing 予定（PR が merge されたら本記録の通り close）。実装 PR には Acceptance criteria 全項目の verify ログを記載済み（local: bench mean ≈ 13.5 s / stddev ≈ 1.5 s on 3 rounds, skip via addopts effective, mypy / ruff / format clean）
 
+### P-0095: Backend fit→load round-trip integration test as a required CI gate（Issue #346 Phase C）
+
+- **Date:** 2026-05-03 起票
+- **Related:** Issue #346 Phase C / PR #348 (Phase A fixtures) / PR #349-#351 (Phase B 3 layers) / Issue #345 (Plot 500 / lizyml inner_valid round-trip)、ROADMAP §7
+
+#### Motivation
+
+Issue #345 は GUI に shipping して初めて発覚した: `LizyMLAdapter.fit()` で作ったモデルを `Model.load` で読み戻すと `inner_valid: group_holdout` 系の config が reject されていた。**ユニットテストは fit を in-memory で検証するだけで、file system 経由の save → load round-trip を一度も exercise していなかった**ので、CI を擦り抜けた。同じクラスの shape-evolution バグを今後 CI で捕捉する仕組みが必要。
+
+PR #348/#349/#350/#351 (Phase A + B) で `fit_result.json` の shape regression は 3 層 (pivot / hook / component) で lock 済み。残るは **モデル本体 (`.pkl` + `metadata.json`) を save → load する round-trip** の領域。
+
+#### Purpose
+
+- 各 fixture シナリオで `create_model → fit → export_model → load_model → get_available_plots` を end-to-end で実行し、例外が出ないことと plot リストが非空であることを CI で継続的に検証する
+- 将来 lizyml が minor bump して metadata schema が変わったら CI が即座に fail する状態にする
+
+#### Impact
+
+- 新規ディレクトリ: `tests/integration/`（既存 `tests/regression/`, `tests/bench/`, `tests/contract/` と同じ階層）
+- 新規ファイル: `tests/integration/test_fit_load_round_trip.py`（~120 LOC）
+- 新規 CI job: `integration` を `.github/workflows/ci.yml` に追加（**required check**、`pull_request` トリガー）
+- 既存 `backend (3.10)/(3.11)` job が `tests/integration/` を二重実行しないよう `--ignore=tests/integration` を追加
+- pytest 既定動作変更なし: integration tests は default `uv run pytest` でも回る (fixture 小さいので 30s 程度) が、CI 上は `backend` job と分離して並列実行
+- runtime 依存変更なし
+
+#### Compatibility
+
+- 既存 backend / runtime コードに変更なし
+- Phase A の fixtures (`tests/fixtures/lizyml/*/data.csv` + `config.json`) を再利用するので追加データ不要
+- CI 標準 PR の `backend (3.10)/(3.11)` ジョブの実行時間は不変（`--ignore` により integration は別 job のみ）
+
+#### Alternatives considered
+
+- **(a) 既存 `backend (3.10)/(3.11)` ジョブに含める** — 拒否。並列実行できなくなり PR feedback が遅くなる。integration の slowness が unit test の retries に巻き込まれるのも避けたい
+- **(b) Nightly に置く** — 拒否。merge gate でないと regression が develop に入ってから初めて気付く（Issue #345 で既に経験）
+- **(c) lizyml 側にこのテストを置く** — 拒否。LizyStudio の Adapter / Service 経由の round-trip が壊れる可能性は LizyStudio 側でしか captured できない
+
+→ LizyStudio 側に新 required CI check として追加する
+
+#### Acceptance criteria（実装 PR で達成）
+
+- [ ] `tests/integration/test_fit_load_round_trip.py` 新規作成
+  - `binary_no_cal` / `binary_isotonic` / `regression` の 3 シナリオを parametrize
+  - 各シナリオで `data.csv` + `config.json` を読み込み → `LizyMLAdapter.create_model()` → `fit()` → `export_model()` → `ModelCache.load()` → `get_available_plots()` を順に実行し、例外なく plot リストが非空であることを assert
+- [ ] `tune` シナリオは Out of scope（`tune_result.json` round-trip は別 surface）
+- [ ] `.github/workflows/ci.yml` に `integration` job を追加（required check 設定は GitHub 側で別途有効化する手順を PR description に明記）
+- [ ] 既存 `backend (3.10)/(3.11)` job が `--ignore=tests/integration` を含み、二重実行しない
+- [ ] CI 標準パスの `backend (3.10)/(3.11)` 実行時間が増えない
+- [ ] Local: `uv run pytest tests/integration/ -v` で 3/3 pass、所要時間 < 60s
+- [ ] mypy / ruff / format clean
+
+#### Out of scope（follow-up Proposal）
+
+- **tune scenario の round-trip** — `tune_result.json` の shape lock + best-params re-fit の round-trip は別 Proposal で追加
+- **Plot data shape contract test** — `get_available_plots` の戻り値 (string list) だけでなく `backend.plot()` の戻り値の shape 契約は別 Proposal
+- **Multi-backend integration** — 第 2 backend の round-trip は backend 選定後に別 Proposal
+
+#### Decision
+
+- 2026-05-03 **Proposed** — 実装 PR と同じ PR 内に Proposal commit を含めて起票。Acceptance criteria 全項目の verify ログを実装コミットメッセージ / PR description に記載予定
+
