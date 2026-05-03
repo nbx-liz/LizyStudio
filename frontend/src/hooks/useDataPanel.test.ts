@@ -428,6 +428,101 @@ describe("useDataPanel", () => {
       expect(result.current.cv.folds).toBe(4);
     });
 
+    // Issue #358: BlockedGroup CV strategy click never sticks because a
+    // concurrent stale cache write re-fires the reconcile effect and
+    // reverts ``cv.strategy`` to the previously-cached value before the
+    // user-driven PUT lands. The fix latches the user's chosen strategy
+    // so reconcile bails on cache writes that disagree with it, and
+    // clears the latch once the cache catches up.
+    it("does not revert cv.strategy when a stale cache update fires after setCvFromUser", async () => {
+      const { wrapper, queryClient } = createWrapper();
+      const { result } = renderHook(
+        () => useDataPanel({ onDataChanged: vi.fn() }),
+        { wrapper },
+      );
+
+      // Seed the cache with the strategy the user is about to switch
+      // away from. This is the "previous" value that, without the fix,
+      // a stale subscriber callback would push back into local state.
+      act(() => {
+        queryClient.setQueryData(queryKeys.config(), {
+          config_version: 1,
+          task: "binary",
+          split: { method: "stratified_kfold", n_splits: 5 },
+        });
+      });
+      await waitFor(() =>
+        expect(result.current.cv.strategy).toBe("stratified_kfold"),
+      );
+
+      // User picks BlockedGroup via the segment buttons (CvSection
+      // wires this to ``setCvFromUser``).
+      act(() => {
+        result.current.setCvFromUser({
+          ...result.current.cv,
+          strategy: "blocked_group_kfold",
+        });
+      });
+      expect(result.current.cv.strategy).toBe("blocked_group_kfold");
+
+      // Simulate the stale cache update that arrives while the user-
+      // driven PUT is still in flight. Without the latch this would
+      // trigger reconcile to setCv back to ``stratified_kfold``.
+      act(() => {
+        queryClient.setQueryData(queryKeys.config(), {
+          config_version: 1,
+          task: "binary",
+          split: { method: "stratified_kfold", n_splits: 5 },
+        });
+      });
+      // Give the subscriber callback time to fire.
+      await new Promise((r) => setTimeout(r, 30));
+
+      // Local state stays at the user's choice — NOT reverted.
+      expect(result.current.cv.strategy).toBe("blocked_group_kfold");
+    });
+
+    it("clears the latch and resumes back-sync once the cache catches up to the user's choice", async () => {
+      const { wrapper, queryClient } = createWrapper();
+      const { result } = renderHook(
+        () => useDataPanel({ onDataChanged: vi.fn() }),
+        { wrapper },
+      );
+
+      // User picks BlockedGroup.
+      act(() => {
+        result.current.setCvFromUser({
+          ...result.current.cv,
+          strategy: "blocked_group_kfold",
+        });
+      });
+      expect(result.current.cv.strategy).toBe("blocked_group_kfold");
+
+      // PUT lands; cache catches up to the user's choice.
+      act(() => {
+        queryClient.setQueryData(queryKeys.config(), {
+          config_version: 1,
+          task: "binary",
+          split: { method: "blocked_group_kfold", n_splits: 5 },
+        });
+      });
+      await new Promise((r) => setTimeout(r, 30));
+      expect(result.current.cv.strategy).toBe("blocked_group_kfold");
+
+      // After the latch clears, a legitimate external write (e.g.
+      // Load Preset) must still drive local state.
+      act(() => {
+        queryClient.setQueryData(queryKeys.config(), {
+          config_version: 1,
+          task: "regression",
+          split: { method: "time_series", n_splits: 4 },
+        });
+      });
+      await waitFor(() =>
+        expect(result.current.cv.strategy).toBe("time_series"),
+      );
+    });
+
     it("does not write back to the cache when reconciling from external state", async () => {
       const { wrapper, queryClient } = createWrapper();
       renderHook(() => useDataPanel({ onDataChanged: vi.fn() }), { wrapper });

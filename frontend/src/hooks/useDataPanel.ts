@@ -93,6 +93,17 @@ export function useDataPanel({
   // a provider (test paths, the few story setups).
   const writeFunnel = useConfigWriteFunnelOptional();
 
+  // Issue #358: latch the strategy the user just picked so a stale
+  // cache update (cache subscriber firing while the user-driven PUT
+  // is still in flight) cannot revert it. Cleared once the cache
+  // catches up to the latched value, after which legitimate external
+  // writes (Load Preset, undo/redo) resume their normal back-sync.
+  const lastUserStrategyRef = useRef<string | null>(null);
+  const setCvFromUser = useCallback((nextCv: CvState) => {
+    lastUserStrategyRef.current = nextCv.strategy;
+    setCv(nextCv);
+  }, []);
+
   const { handleTargetChange } = useTargetSelection({
     task,
     cv,
@@ -101,7 +112,11 @@ export function useDataPanel({
     uiSchema,
     setTarget,
     setTask,
-    setCv,
+    // Issue #358: target-select also resets cv via the suggested-task
+    // path; route it through the user-driven setter so the latch is
+    // marked and any stale cache update during the in-flight PUT is
+    // ignored.
+    setCv: setCvFromUser,
     setColumns,
     setOverrides: columnOverrides.setOverrides,
     setSyncSuppressed: configSync.setSyncSuppressed,
@@ -122,9 +137,9 @@ export function useDataPanel({
     (newTask: TaskType) => {
       setTask(newTask);
       onTaskChanged?.(newTask);
-      setCv(resetCvState(getEffectiveCvStrategy(newTask, uiSchema)));
+      setCvFromUser(resetCvState(getEffectiveCvStrategy(newTask, uiSchema)));
     },
-    [onTaskChanged, uiSchema],
+    [onTaskChanged, uiSchema, setCvFromUser],
   );
 
   // P-0090 / Issue #278 residual: subscribe to the cached config and
@@ -153,6 +168,22 @@ export function useDataPanel({
       const data = cached.data as Record<string, unknown> | undefined;
       const parsed = parseSplitToCv(split, data);
       if (Object.keys(parsed).length === 0) return;
+      // Issue #358: bail when the cache disagrees with the user's
+      // just-applied strategy. The latch holds until the cache catches
+      // up, at which point we clear it and resume normal back-sync.
+      if (
+        lastUserStrategyRef.current !== null &&
+        typeof parsed.strategy === "string" &&
+        parsed.strategy !== lastUserStrategyRef.current
+      ) {
+        return;
+      }
+      if (
+        lastUserStrategyRef.current !== null &&
+        parsed.strategy === lastUserStrategyRef.current
+      ) {
+        lastUserStrategyRef.current = null;
+      }
       const current = cvRef.current as unknown as Record<string, unknown>;
       // Only update fields that actually differ — bail if everything
       // matches so we never trigger an unnecessary render.
@@ -191,6 +222,7 @@ export function useDataPanel({
     overrides: columnOverrides.overrides,
     cv,
     setCv,
+    setCvFromUser,
     blocked,
     setBlocked,
     loading: dataLoad.loading,
