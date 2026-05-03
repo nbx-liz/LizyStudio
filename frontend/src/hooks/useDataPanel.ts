@@ -98,10 +98,39 @@ export function useDataPanel({
   // is still in flight) cannot revert it. Cleared once the cache
   // catches up to the latched value, after which legitimate external
   // writes (Load Preset, undo/redo) resume their normal back-sync.
+  //
+  // The latch also auto-expires after ``LATCH_TTL_MS`` so that a
+  // backend rejection (PUT returns ``saved=false`` and the cache
+  // never catches up) doesn't permanently lock out subsequent
+  // external writes such as Load Preset. The TTL is comfortably
+  // larger than the worst-case in-flight PUT (~500 ms) and small
+  // enough that a user perceives no UI lag if they trigger Load
+  // Preset right after a failed user-driven CV change.
+  const LATCH_TTL_MS = 2000;
   const lastUserStrategyRef = useRef<string | null>(null);
+  const latchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const setCvFromUser = useCallback((nextCv: CvState) => {
     lastUserStrategyRef.current = nextCv.strategy;
+    if (latchTimeoutRef.current !== null) {
+      clearTimeout(latchTimeoutRef.current);
+    }
+    latchTimeoutRef.current = setTimeout(() => {
+      // Only clear if the latched strategy is still ours — a later
+      // ``setCvFromUser`` that swapped the latch will run its own
+      // timeout and own the clear.
+      if (lastUserStrategyRef.current === nextCv.strategy) {
+        lastUserStrategyRef.current = null;
+      }
+      latchTimeoutRef.current = null;
+    }, LATCH_TTL_MS);
     setCv(nextCv);
+  }, []);
+  useEffect(() => {
+    return () => {
+      if (latchTimeoutRef.current !== null) {
+        clearTimeout(latchTimeoutRef.current);
+      }
+    };
   }, []);
 
   const { handleTargetChange } = useTargetSelection({

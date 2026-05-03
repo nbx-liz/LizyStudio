@@ -523,6 +523,56 @@ describe("useDataPanel", () => {
       );
     });
 
+    // Issue #358 follow-up: the latch must auto-expire so that a
+    // backend rejection (PUT returns ``saved=false`` and the cache
+    // never catches up to the latched strategy) does not
+    // permanently lock out subsequent external writes such as Load
+    // Preset. Discovered during Round 3 Step 3 when Load Preset
+    // failed to switch from kfold (user-clicked, PUT rejected) to
+    // the preset's time_series.
+    it("auto-expires the latch so Load Preset still works after a rejected user-driven PUT", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const { wrapper, queryClient } = createWrapper();
+        const { result } = renderHook(
+          () => useDataPanel({ onDataChanged: vi.fn() }),
+          { wrapper },
+        );
+
+        // User picks KFold; the PUT is rejected so the cache never
+        // catches up. Without auto-expire, ``lastUserStrategyRef``
+        // would stay pinned to "kfold" indefinitely.
+        act(() => {
+          result.current.setCvFromUser({
+            ...result.current.cv,
+            strategy: "kfold",
+          });
+        });
+        expect(result.current.cv.strategy).toBe("kfold");
+
+        // Advance past the TTL so the latch self-clears.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2100);
+        });
+
+        // Now Load Preset writes a different strategy to the cache.
+        // Reconcile must apply it (latch expired = no longer guards).
+        act(() => {
+          queryClient.setQueryData(queryKeys.config(), {
+            config_version: 1,
+            task: "regression",
+            split: { method: "time_series", n_splits: 4 },
+          });
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(50);
+        });
+        expect(result.current.cv.strategy).toBe("time_series");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("does not write back to the cache when reconciling from external state", async () => {
       const { wrapper, queryClient } = createWrapper();
       renderHook(() => useDataPanel({ onDataChanged: vi.fn() }), { wrapper });
