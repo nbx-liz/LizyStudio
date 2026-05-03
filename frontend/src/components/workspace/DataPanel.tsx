@@ -75,7 +75,7 @@ export const DataPanel = forwardRef<DataPanelHandle, DataPanelProps>(
       columns,
       overrides,
       cv,
-      setCv,
+      setCvFromUser,
       blocked,
       setBlocked,
       loading,
@@ -240,7 +240,7 @@ export const DataPanel = forwardRef<DataPanelHandle, DataPanelProps>(
                 <div className="pl-4 space-y-3">
                   <CvSection
                     cv={cv}
-                    onChange={setCv}
+                    onChange={setCvFromUser}
                     uiSchema={uiSchema}
                     nonExcludedCols={nonExcludedCols}
                     blocked={blocked}
