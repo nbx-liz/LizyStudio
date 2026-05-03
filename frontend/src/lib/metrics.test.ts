@@ -61,6 +61,51 @@ describe("pivotMetrics", () => {
     expect(result.auc.oos_std).toBeNaN();
   });
 
+  // Issue #364: when the backend omits ``oof_std`` (the canonical shape from
+  // recent lizyml versions only includes ``oof_per_fold``), pivotMetrics must
+  // derive the per-fold standard deviation from ``oof_per_fold`` rather than
+  // returning NaN. Otherwise the metric panel renders ``Std: NaN`` for every
+  // metric on every Tune/Fit, even though the data is right there.
+  it("derives oos_std from oof_per_fold when oof_std is absent", () => {
+    const raw = {
+      raw: {
+        if_mean: { auc: 0.95 },
+        oof: { auc: 0.7 },
+        oof_per_fold: [{ auc: 0.6 }, { auc: 0.7 }, { auc: 0.8 }],
+      },
+    };
+    const result = pivotMetrics(raw);
+    expect(result.auc.is).toBe(0.95);
+    expect(result.auc.oos).toBe(0.7);
+    // population std of [0.6, 0.7, 0.8] ≈ 0.0816497
+    expect(result.auc.oos_std).toBeCloseTo(0.0816497, 5);
+  });
+
+  it("prefers an explicit oof_std over deriving from oof_per_fold", () => {
+    const raw = {
+      raw: {
+        if_mean: { auc: 0.95 },
+        oof: { auc: 0.7 },
+        oof_std: { auc: 0.0123 }, // explicit, must win
+        oof_per_fold: [{ auc: 0.6 }, { auc: 0.7 }, { auc: 0.8 }],
+      },
+    };
+    const result = pivotMetrics(raw);
+    expect(result.auc.oos_std).toBe(0.0123);
+  });
+
+  it("returns NaN for oos_std when fewer than two folds are available", () => {
+    const raw = {
+      raw: {
+        if_mean: { auc: 0.95 },
+        oof: { auc: 0.7 },
+        oof_per_fold: [{ auc: 0.7 }],
+      },
+    };
+    const result = pivotMetrics(raw);
+    expect(result.auc.oos_std).toBeNaN();
+  });
+
   it("handles alternative key names (is/oos/oos_std)", () => {
     const raw = {
       is: { f1: 0.8 },
@@ -130,6 +175,12 @@ describe("pivotMetrics with real fit_result fixtures", () => {
       expect(result[name], `metric ${name} missing`).toBeDefined();
       expect(Number.isFinite(result[name].is)).toBe(true);
       expect(Number.isFinite(result[name].oos)).toBe(true);
+      // Issue #364: per-fold std must be derived from oof_per_fold even
+      // though the production shape no longer ships an explicit oof_std.
+      expect(
+        Number.isFinite(result[name].oos_std),
+        `metric ${name} oos_std should be finite (Issue #364)`,
+      ).toBe(true);
     }
     // is/oos values must come from the only top-level "raw" subtree.
     expect(result.auc.is).toBe(binaryNoCalFit.metrics.raw.if_mean.auc);
@@ -147,6 +198,10 @@ describe("pivotMetrics with real fit_result fixtures", () => {
       expect(result[name], `metric ${name} missing`).toBeDefined();
       expect(Number.isFinite(result[name].is)).toBe(true);
       expect(Number.isFinite(result[name].oos)).toBe(true);
+      expect(
+        Number.isFinite(result[name].oos_std),
+        `metric ${name} oos_std should be finite (Issue #364)`,
+      ).toBe(true);
     }
     // Anti-confusion: is/oos must come from raw, NOT calibrated. The
     // fixture's calibrated.oof.auc differs from raw.oof.auc, so a
@@ -165,6 +220,10 @@ describe("pivotMetrics with real fit_result fixtures", () => {
       expect(result[name], `metric ${name} missing`).toBeDefined();
       expect(Number.isFinite(result[name].is)).toBe(true);
       expect(Number.isFinite(result[name].oos)).toBe(true);
+      expect(
+        Number.isFinite(result[name].oos_std),
+        `metric ${name} oos_std should be finite (Issue #364)`,
+      ).toBe(true);
     }
     expect(result.rmse.is).toBe(regressionFit.metrics.raw.if_mean.rmse);
     expect(result.r2.oos).toBe(regressionFit.metrics.raw.oof.r2);
@@ -176,6 +235,10 @@ describe("pivotMetrics with real fit_result fixtures", () => {
       expect(result[name], `metric ${name} missing`).toBeDefined();
       expect(Number.isFinite(result[name].is)).toBe(true);
       expect(Number.isFinite(result[name].oos)).toBe(true);
+      expect(
+        Number.isFinite(result[name].oos_std),
+        `metric ${name} oos_std should be finite (Issue #364)`,
+      ).toBe(true);
     }
   });
 });

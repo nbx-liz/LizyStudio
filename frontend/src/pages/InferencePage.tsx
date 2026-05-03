@@ -13,6 +13,7 @@ import { ResultsWithGT } from "@/components/inference/ResultsWithGT";
 import { SetupPanel } from "@/components/inference/SetupPanel";
 import { useJobIdParam } from "@/hooks/useJobIdParam";
 import { getTargetColumn } from "@/lib/job-config";
+import { getJobNumber } from "@/lib/job-number";
 
 export function InferencePage() {
   const [selectedInfId, setSelectedInfId] = useState<string | null>(null);
@@ -105,13 +106,15 @@ export function InferencePage() {
     return idx >= 0 ? history.length - idx : 0;
   }, [selectedInfId, history]);
 
-  // Compute job label
+  // Compute job label.
+  // Issue #359: derive the ``#N`` against the full all-jobs list (not
+  // ``completedJobs``) so the label matches what JobsPage shows.
   const jobLabel = useMemo(() => {
     const job = completedJobs.find((j) => j.job_id === selectedJobId);
     if (!job) return "";
-    const num = completedJobs.length - completedJobs.indexOf(job);
+    const num = getJobNumber(job, allJobs);
     return `Job #${num} ${job.model_name}`;
-  }, [selectedJobId, completedJobs]);
+  }, [selectedJobId, completedJobs, allJobs]);
 
   // Fetch job detail to get config.data.target for ground-truth detection
   const { data: jobDetail } = useJob(selectedJobId);
@@ -124,6 +127,7 @@ export function InferencePage() {
       <div className="w-[360px] shrink-0 border-r">
         <SetupPanel
           completedJobs={completedJobs}
+          allJobs={allJobs}
           selectedJobId={selectedJobId}
           onSelectJob={handleSelectJob}
           history={history}

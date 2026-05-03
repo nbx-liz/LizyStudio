@@ -16,6 +16,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { getJobNumber } from "@/lib/job-number";
 import { cn } from "@/lib/utils";
 
 type StatusFilter = "all" | "completed" | "running" | "failed";
@@ -72,12 +73,6 @@ function getJobScore(job: JobSummary): string {
   if (job.status === "failed" || job.status === "cancelled") return "\u2014";
   if (job.primary_score != null) return job.primary_score.toFixed(3);
   return "\u2014";
-}
-
-function getJobNumber(job: JobSummary, allJobs: JobSummary[]): number {
-  // Jobs are sorted newest first; job number = total - index
-  const idx = allJobs.findIndex((j) => j.job_id === job.job_id);
-  return allJobs.length - idx;
 }
 
 function formatTimeAgo(dateStr: string): string {
