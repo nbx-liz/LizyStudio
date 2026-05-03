@@ -124,14 +124,17 @@ export function ResultsWithGT({
         </section>
       )}
 
-      {/* Accordion sections */}
+      {/* Accordion sections.
+          Issue #370: ``PredDistributionAccordion`` reads the
+          backend's available-plots list and only renders the section
+          when the matching plot type exists, so a regression fit (or
+          any task without ``probability-histogram``) no longer shows
+          an empty accordion or fires a 404. */}
       <Accordion type="multiple">
-        <AccordionItem value="pred-distribution">
-          <AccordionTrigger>Prediction Distribution</AccordionTrigger>
-          <AccordionContent>
-            <PredDistributionPlot infId={record.inf_id} jobId={record.job_id} />
-          </AccordionContent>
-        </AccordionItem>
+        <PredDistributionAccordion
+          infId={record.inf_id}
+          jobId={record.job_id}
+        />
 
         <AccordionItem value="predictions">
           <AccordionTrigger>Predictions</AccordionTrigger>
@@ -159,27 +162,47 @@ export function ResultsWithGT({
   );
 }
 
-/** Prediction distribution plot loaded lazily inside an accordion. */
-function PredDistributionPlot({
+/**
+ * Prediction distribution accordion section. Issue #370.
+ *
+ * Gates on the backend's available-plots list — same pattern as
+ * the SHAP gate from Issue #355. Binary classification exposes
+ * ``probability-histogram``; regression has no equivalent today,
+ * so the entire accordion item is omitted instead of rendering an
+ * empty body and a 404 in DevTools.
+ */
+function PredDistributionAccordion({
   infId,
   jobId,
 }: {
   infId: string;
   jobId: string;
 }) {
+  const { data: availablePlots } = useJobPlots(jobId);
+  const distributionPlotType = availablePlots?.includes("probability-histogram")
+    ? "probability-histogram"
+    : null;
   const { data, isLoading } = useInferencePlot(
     infId,
     jobId,
-    "prediction-distribution",
+    distributionPlotType ?? "",
+    { retry: false, enabled: distributionPlotType != null },
   );
-
-  if (isLoading) {
-    return (
-      <p className="text-xs text-muted-foreground">Loading distribution...</p>
-    );
-  }
-  if (!data) return null;
-  return <PlotlyChart plotlyJson={data.plotly_json} />;
+  if (distributionPlotType == null) return null;
+  return (
+    <AccordionItem value="pred-distribution">
+      <AccordionTrigger>Prediction Distribution</AccordionTrigger>
+      <AccordionContent>
+        {isLoading ? (
+          <p className="text-xs text-muted-foreground">
+            Loading distribution...
+          </p>
+        ) : data ? (
+          <PlotlyChart plotlyJson={data.plotly_json} />
+        ) : null}
+      </AccordionContent>
+    </AccordionItem>
+  );
 }
 
 /** SHAP summary accordion item — renders only when SHAP data is available.

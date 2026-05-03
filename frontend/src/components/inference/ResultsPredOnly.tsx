@@ -79,11 +79,14 @@ export function ResultsPredOnly({
         <PredictionsTable infId={record.inf_id} jobId={record.job_id} />
       </section>
 
-      {/* Prediction Distribution */}
-      <section className="mb-6">
-        <h4 className="mb-2 text-sm font-medium">Prediction Distribution</h4>
-        <PredDistributionPlot infId={record.inf_id} jobId={record.job_id} />
-      </section>
+      {/* Prediction Distribution.
+          Issue #370: gate the section on the backend's available plot
+          list so the panel only renders when the underlying plot type
+          actually exists (binary => ``probability-histogram``;
+          regression has no equivalent today). Without the gate the
+          frontend used to request the non-existent
+          ``prediction-distribution`` and emit a 404 on every record. */}
+      <PredDistributionSection infId={record.inf_id} jobId={record.job_id} />
 
       {/* Comparison */}
       {otherRecords.length > 0 && (
@@ -173,28 +176,50 @@ function formatStatName(key: string): string {
   return key.charAt(0).toUpperCase() + key.slice(1);
 }
 
-/** Prediction distribution plot section. */
-function PredDistributionPlot({
+/**
+ * Inference distribution section. Issue #370.
+ *
+ * The frontend used to hardcode ``prediction-distribution`` as the
+ * plot type, but the backend's ``LizyMLAdapter._PLOT_DISPATCH``
+ * registers binary classification's distribution under
+ * ``probability-histogram`` (and regression has no equivalent at all).
+ * The mismatch produced a 404 on every Inference render plus a stale
+ * "Prediction Distribution" heading with no plot underneath.
+ *
+ * The section now gates on the backend's available-plots list (same
+ * pattern as the SHAP gate added for Issue #355) so:
+ *   - binary fits => render the histogram from ``probability-histogram``
+ *   - regression / unsupported => hide the entire section, no 404, no
+ *     empty heading.
+ */
+function PredDistributionSection({
   infId,
   jobId,
 }: {
   infId: string;
   jobId: string;
 }) {
+  const { data: availablePlots } = useJobPlots(jobId);
+  const distributionPlotType = availablePlots?.includes("probability-histogram")
+    ? "probability-histogram"
+    : null;
   const { data, isLoading } = useInferencePlot(
     infId,
     jobId,
-    "prediction-distribution",
-    { retry: false },
+    distributionPlotType ?? "",
+    { retry: false, enabled: distributionPlotType != null },
   );
-
-  if (isLoading) {
-    return (
-      <p className="text-xs text-muted-foreground">Loading distribution...</p>
-    );
-  }
-  if (!data) return null;
-  return <PlotlyChart plotlyJson={data.plotly_json} />;
+  if (distributionPlotType == null) return null;
+  return (
+    <section className="mb-6">
+      <h4 className="mb-2 text-sm font-medium">Prediction Distribution</h4>
+      {isLoading ? (
+        <p className="text-xs text-muted-foreground">Loading distribution...</p>
+      ) : data ? (
+        <PlotlyChart plotlyJson={data.plotly_json} />
+      ) : null}
+    </section>
+  );
 }
 
 /** SHAP summary + warnings as accordion sections. */

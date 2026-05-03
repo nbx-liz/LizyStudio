@@ -92,7 +92,11 @@ describe("ResultsWithGT", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders Prediction Distribution accordion trigger", () => {
+  // Issue #370: the accordion item is now gated on the backend's
+  // ``probability-histogram`` availability. Tests that exercise the
+  // section MUST advertise that plot via ``fetchJobPlots``.
+  it("renders Prediction Distribution accordion trigger when probability-histogram is available", async () => {
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce(["probability-histogram"]);
     const record = makeRecord();
     renderWithQuery(
       <ResultsWithGT
@@ -103,7 +107,35 @@ describe("ResultsWithGT", () => {
       />,
     );
 
-    expect(screen.getByText("Prediction Distribution")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Prediction Distribution")).toBeInTheDocument();
+    });
+  });
+
+  it("hides Prediction Distribution accordion when probability-histogram is unavailable (e.g. regression)", async () => {
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce([
+      "learning-curve",
+      "residuals",
+    ]);
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsWithGT
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        targetCol="target"
+      />,
+    );
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(
+      screen.queryByText("Prediction Distribution"),
+    ).not.toBeInTheDocument();
+    expect(fetchInferencePlot).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      "prediction-distribution",
+    );
   });
 
   it("renders Predictions accordion trigger", () => {
@@ -315,13 +347,15 @@ describe("ResultsWithGT", () => {
 
   // Lines 169-187: PredDistributionPlot shows loading then chart
   it("renders prediction distribution loading state initially", async () => {
-    // Keep fetchInferencePlot pending so isLoading stays true briefly
+    // Issue #370: the accordion is gated on probability-histogram
+    // availability and the inference plot fetch now uses that key.
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce(["probability-histogram"]);
     let resolve: (v: unknown) => void;
     const pending = new Promise((res) => {
       resolve = res;
     });
     vi.mocked(fetchInferencePlot).mockImplementation((_, __, plotName) => {
-      if (plotName === "prediction-distribution") return pending as never;
+      if (plotName === "probability-histogram") return pending as never;
       return Promise.resolve(null) as never;
     });
 
@@ -335,10 +369,12 @@ describe("ResultsWithGT", () => {
       />,
     );
 
-    // The accordion is collapsed by default; PredDistributionPlot still mounts
-    // and issues the query. Since the promise is pending, isLoading is true.
-    // We verify the component renders without crashing here.
-    expect(screen.getByText("Prediction Distribution")).toBeInTheDocument();
+    // The accordion is collapsed by default; PredDistributionAccordion still
+    // mounts and issues the query. Since the promise is pending, isLoading is
+    // true. We verify the component renders without crashing here.
+    await waitFor(() => {
+      expect(screen.getByText("Prediction Distribution")).toBeInTheDocument();
+    });
 
     // Resolve to avoid hanging
     resolve!(null);
@@ -440,15 +476,17 @@ describe("ResultsWithGT", () => {
     resolveShap!(null);
   });
 
-  // Lines 176-187: PredDistributionPlot — open accordion to trigger content render
+  // Issue #370: PredDistributionAccordion — open accordion to trigger content render.
+  // Backend now exposes the binary distribution under ``probability-histogram``.
   it("renders loading text in prediction distribution while query is pending", async () => {
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce(["probability-histogram"]);
     const user = userEvent.setup();
     let resolveDist: (v: unknown) => void;
     const pendingDist = new Promise((res) => {
       resolveDist = res;
     });
     vi.mocked(fetchInferencePlot).mockImplementation((_, __, plotName) => {
-      if (plotName === "prediction-distribution") return pendingDist as never;
+      if (plotName === "probability-histogram") return pendingDist as never;
       return Promise.resolve(null) as never;
     });
 
@@ -463,6 +501,9 @@ describe("ResultsWithGT", () => {
     );
 
     // Open the Prediction Distribution accordion
+    await waitFor(() => {
+      expect(screen.getByText("Prediction Distribution")).toBeInTheDocument();
+    });
     await user.click(screen.getByText("Prediction Distribution"));
 
     await waitFor(() => {
@@ -473,10 +514,18 @@ describe("ResultsWithGT", () => {
   });
 
   it("renders PlotlyChart in prediction distribution after data resolves", async () => {
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce(["probability-histogram"]);
     const user = userEvent.setup();
-    vi.mocked(fetchInferencePlot).mockResolvedValue({
-      plotly_json: '{"data":[]}',
-    } as never);
+    // Resolve only the probability-histogram fetch — leave other plot
+    // types as the default null so we don't accidentally render
+    // multiple plotly charts in the same panel and trip the
+    // "Found multiple elements" assertion.
+    vi.mocked(fetchInferencePlot).mockImplementation((_, __, plotName) => {
+      if (plotName === "probability-histogram") {
+        return Promise.resolve({ plotly_json: '{"data":[]}' }) as never;
+      }
+      return Promise.resolve(null) as never;
+    });
 
     const record = makeRecord();
     renderWithQuery(
@@ -488,11 +537,24 @@ describe("ResultsWithGT", () => {
       />,
     );
 
-    // Open the Prediction Distribution accordion to mount PredDistributionPlot content
+    // Open the Prediction Distribution accordion to mount the content.
+    await waitFor(() => {
+      expect(screen.getByText("Prediction Distribution")).toBeInTheDocument();
+    });
     await user.click(screen.getByText("Prediction Distribution"));
 
+    // When probability-histogram is the only available plot, the top
+    // "Plots" section auto-selects it AND the accordion renders it,
+    // producing two plotly-chart instances. We assert at-least-one
+    // for resilience.
     await waitFor(() => {
-      expect(screen.getByTestId("plotly-chart")).toBeInTheDocument();
+      expect(screen.getAllByTestId("plotly-chart").length).toBeGreaterThan(0);
     });
+    // Issue #370 invariant: the request goes to ``probability-histogram``.
+    expect(fetchInferencePlot).toHaveBeenCalledWith(
+      record.inf_id,
+      record.job_id,
+      "probability-histogram",
+    );
   });
 });
