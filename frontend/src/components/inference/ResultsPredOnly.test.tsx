@@ -116,7 +116,10 @@ describe("ResultsPredOnly", () => {
     expect(screen.getByTestId("predictions-table")).toBeInTheDocument();
   });
 
-  it("renders Prediction Distribution heading", () => {
+  // Issue #370: the section is gated on the backend's available plot
+  // list — only renders when ``probability-histogram`` is advertised.
+  it("renders Prediction Distribution heading when probability-histogram is available", async () => {
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce(["probability-histogram"]);
     const record = makeRecord();
     renderWithQuery(
       <ResultsPredOnly
@@ -127,7 +130,44 @@ describe("ResultsPredOnly", () => {
       />,
     );
 
-    expect(screen.getByText("Prediction Distribution")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Prediction Distribution")).toBeInTheDocument();
+    });
+  });
+
+  it("hides Prediction Distribution heading when probability-histogram is unavailable (e.g. regression)", async () => {
+    vi.mocked(fetchInferencePlot).mockClear();
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce([
+      "learning-curve",
+      "residuals",
+    ]);
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsPredOnly
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        history={[record]}
+      />,
+    );
+
+    // Give react-query time to settle the available-plots fetch.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(
+      screen.queryByText("Prediction Distribution"),
+    ).not.toBeInTheDocument();
+    // The frontend MUST NOT have requested the distribution plot
+    // (no ``prediction-distribution`` 404 in DevTools).
+    expect(fetchInferencePlot).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      "probability-histogram",
+    );
+    expect(fetchInferencePlot).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      "prediction-distribution",
+    );
   });
 
   it("does not render Comparison section when no other records exist", () => {
@@ -304,6 +344,10 @@ describe("ResultsPredOnly", () => {
   // --- PredDistributionPlot conditional branches (lines 194-195) ---
 
   it("renders PlotlyChart inside PredDistributionPlot when data is available", async () => {
+    // Issue #370: section now gates on the backend's available plot
+    // list, so the test must advertise ``probability-histogram``
+    // before the inference plot fetch fires.
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce(["probability-histogram"]);
     vi.mocked(fetchInferencePlot).mockResolvedValueOnce({
       plotly_json: '{"data":[]}',
     });
@@ -321,6 +365,13 @@ describe("ResultsPredOnly", () => {
     await waitFor(() => {
       expect(screen.getByTestId("plotly-chart")).toBeInTheDocument();
     });
+    // Issue #370: the request MUST go to ``probability-histogram``,
+    // not the legacy non-existent ``prediction-distribution`` key.
+    expect(fetchInferencePlot).toHaveBeenCalledWith(
+      record.inf_id,
+      record.job_id,
+      "probability-histogram",
+    );
   });
 
   it("renders nothing for PredDistributionPlot when data is null", () => {
