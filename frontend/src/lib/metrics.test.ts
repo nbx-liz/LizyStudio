@@ -77,7 +77,17 @@ describe("pivotMetrics", () => {
     expect(Object.keys(result)).toHaveLength(0);
   });
 
-  it("does not unwrap when multiple top-level keys exist (no 'raw' subkey)", () => {
+  // Renamed from "does not unwrap when multiple top-level keys exist (no 'raw'
+  // subkey)" during the Issue #346 Phase D negative-invariant audit. The
+  // earlier name described what the function *avoids* (unwrapping); the
+  // actual user-facing behavior is reading metrics from the top level when
+  // no ``raw`` subtree is present. Keeping the negative framing on this
+  // case is what made PR #344 ship the calibrated-shape bug — pivotMetrics
+  // had a "does not unwrap when multiple top-level keys" guard that the
+  // calibrated shape ``{raw, calibrated}`` triggered, and the test name
+  // implied that was the canonical behavior. Always describe the positive
+  // invariant.
+  it("reads metrics from the top level when no 'raw' subtree is present (flat shape)", () => {
     const raw = {
       if_mean: { acc: 0.9 },
       oof: { acc: 0.8 },
