@@ -198,6 +198,93 @@ describe("useDataLoad", () => {
     expect(mocks.uploadData).not.toHaveBeenCalled();
   });
 
+  // Issue #363: hydrateFromServer mirrors server-side state into the
+  // local Data Panel without re-POSTing the data, so a browser reload
+  // doesn't force the user to re-enter the CSV path.
+  describe("hydrateFromServer (Issue #363)", () => {
+    it("populates path / sourceType / shape / preview / columns from a server snapshot", async () => {
+      mocks.fetchColumns.mockResolvedValue(COLS_OK);
+      mocks.fetchPreview.mockResolvedValue({
+        columns: ["a"],
+        data: [{ a: 1 }],
+      });
+
+      const { wrapper } = createWrapper();
+      const { result } = renderHook(() => useDataLoad(defaultParams), {
+        wrapper,
+      });
+
+      await act(async () => {
+        await result.current.hydrateFromServer(
+          "/data/x.csv",
+          [418, 13],
+          "Survived",
+        );
+      });
+
+      expect(result.current.sourceType).toBe("path");
+      expect(result.current.dataPath).toBe("/data/x.csv");
+      expect(result.current.shape).toEqual([418, 13]);
+      expect(result.current.preview).toEqual({
+        columns: ["a"],
+        data: [{ a: 1 }],
+      });
+      expect(defaultParams.onColumnsLoaded).toHaveBeenCalledWith(
+        COLS_OK.columns,
+        ["a"],
+      );
+      expect(defaultParams.onDataChanged).toHaveBeenCalled();
+      // ``onReset`` would clear target/task — must NOT fire during
+      // hydration since target is exactly what we're trying to keep.
+      expect(defaultParams.onReset).not.toHaveBeenCalled();
+      // No POST /workspace/data/path round-trip — server already has
+      // the data, hydration is a pure mirror operation.
+      expect(mocks.loadDataFromPath).not.toHaveBeenCalled();
+      // No toast — hydration is a silent restore, not a user action.
+      expect(mocks.toastSuccess).not.toHaveBeenCalled();
+    });
+
+    it("skips empty path silently", async () => {
+      const { wrapper } = createWrapper();
+      const { result } = renderHook(() => useDataLoad(defaultParams), {
+        wrapper,
+      });
+
+      await act(async () => {
+        await result.current.hydrateFromServer("", [0, 0], null);
+      });
+
+      expect(mocks.fetchPreview).not.toHaveBeenCalled();
+      expect(mocks.fetchColumns).not.toHaveBeenCalled();
+      expect(result.current.sourceType).toBe("upload");
+    });
+
+    it("falls back gracefully when fetchPreview fails (no toast)", async () => {
+      mocks.fetchPreview.mockRejectedValue(new Error("preview broken"));
+
+      const { wrapper } = createWrapper();
+      const { result } = renderHook(() => useDataLoad(defaultParams), {
+        wrapper,
+      });
+
+      await act(async () => {
+        await result.current.hydrateFromServer(
+          "/data/x.csv",
+          [418, 13],
+          "Survived",
+        );
+      });
+
+      // Path / shape were applied before the failed fetchPreview, so
+      // the user at least sees that hydration was attempted.
+      expect(result.current.sourceType).toBe("path");
+      expect(result.current.dataPath).toBe("/data/x.csv");
+      expect(result.current.shape).toEqual([418, 13]);
+      // Hydration is silent — failures must not surface a toast.
+      expect(mocks.toastError).not.toHaveBeenCalled();
+    });
+  });
+
   it("initial state is correct", () => {
     const { wrapper } = createWrapper();
     const { result } = renderHook(() => useDataLoad(defaultParams), {

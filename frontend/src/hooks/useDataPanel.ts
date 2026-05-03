@@ -177,6 +177,33 @@ export function useDataPanel({
     return unsubscribe;
   }, [queryClient]);
 
+  /**
+   * Issue #363: rehydrate Data Panel state from a server-persisted
+   * Workspace snapshot. Called once on mount when the server reports
+   * ``has_data === true`` so the UI doesn't force the user to re-enter
+   * the CSV path on every browser reload. ``data_ref.shape`` comes
+   * from /api/workspace/status; the path / target / task come from
+   * the cached /api/workspace/config response.
+   */
+  const hydrateFromServer = useCallback(
+    async (params: {
+      path: string;
+      shape: [number, number];
+      target: string | null;
+      task: TaskType | null;
+    }) => {
+      await dataLoad.hydrateFromServer(
+        params.path,
+        params.shape,
+        params.target,
+      );
+      setTarget(params.target);
+      setTask(params.task);
+      onTaskChanged?.(params.task);
+    },
+    [dataLoad, onTaskChanged],
+  );
+
   return {
     sourceType: dataLoad.sourceType,
     setSourceType: dataLoad.setSourceType,
@@ -188,6 +215,7 @@ export function useDataPanel({
     task,
     allColumnNames,
     columns,
+    hydrateFromServer,
     overrides: columnOverrides.overrides,
     cv,
     setCv,
