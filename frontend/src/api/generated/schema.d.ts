@@ -153,6 +153,11 @@ export interface paths {
         /**
          * Data Preview
          * @description Return first N rows of loaded data.
+         *
+         *     ``max_cols`` (P-0097) caps the per-row column count so the wide-
+         *     DataFrame UI (Issue #361) does not have to ship 10k+ columns to the
+         *     browser on every preview call. ``total_cols`` in the response still
+         *     reflects the ground-truth column count.
          */
         get: operations["data_preview_api_workspace_data_preview_get"];
         put?: never;
@@ -602,6 +607,13 @@ export interface paths {
         /**
          * Get Job Importance Endpoint
          * @description Get feature importance.
+         *
+         *     ``top_n`` (P-0097) lets the SPA opt in to a value-desc-sorted
+         *     projection without an extra round-trip. When the unbounded payload
+         *     would exceed :data:`IMPORTANCE_PAYLOAD_LIMIT`, the route falls back
+         *     to a server-side top-N projection sized to fit and surfaces the
+         *     truncation via the ``X-Truncated-By`` response header so the SPA
+         *     can render an honest "showing top N of M" notice.
          */
         get: operations["get_job_importance_endpoint_api_jobs__job_id__importance_get"];
         put?: never;
@@ -1128,6 +1140,31 @@ export interface paths {
          *     Authentication-free, mirroring the probe philosophy of `/api/health`.
          */
         get: operations["metrics_api_metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/diagnostic/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Diagnostic Export
+         * @description Return a sanitised diagnostic snapshot for ``job_id``.
+         *
+         *     Echoes the user-supplied config + data_ref so the support team can
+         *     reproduce a bug without asking for extra files. Internal JobStore
+         *     paths and the on-disk model_path are NOT included — they are
+         *     user-laptop-specific and add no diagnostic value.
+         */
+        get: operations["diagnostic_export_api_diagnostic_export_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2208,6 +2245,7 @@ export interface operations {
         parameters: {
             query?: {
                 rows?: number;
+                max_cols?: number | null;
             };
             header?: never;
             path?: never;
@@ -2906,6 +2944,7 @@ export interface operations {
         parameters: {
             query?: {
                 kind?: string;
+                top_n?: number | null;
             };
             header?: never;
             path: {
@@ -3663,6 +3702,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    diagnostic_export_api_diagnostic_export_get: {
+        parameters: {
+            query: {
+                job_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

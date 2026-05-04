@@ -45,14 +45,37 @@ def make_data_ref(
     )
 
 
-def get_preview(df: pd.DataFrame, rows: int = 50) -> dict[str, Any]:
-    """Return first N rows as JSON-serializable dict."""
-    preview = df.head(rows)
+def get_preview(
+    df: pd.DataFrame,
+    rows: int = 50,
+    max_cols: int | None = None,
+) -> dict[str, Any]:
+    """Return first N rows as a JSON-serialisable dict.
+
+    Parameters
+    ----------
+    df:
+        Source DataFrame.
+    rows:
+        Number of leading rows to include.
+    max_cols:
+        Optional column cap (P-0097). When provided, only the first
+        ``max_cols`` columns are emitted in ``columns`` and ``data``;
+        ``total_cols`` always reports the ground-truth column count so
+        the SPA can show "showing N of M" without an extra round-trip.
+        ``None`` preserves the pre-P-0097 behaviour of returning every
+        column.
+    """
+    total_cols = len(df.columns)
+    if max_cols is not None and max_cols < total_cols:
+        preview = df.iloc[:rows, :max_cols]
+    else:
+        preview = df.head(rows)
     return {
         "columns": list(preview.columns),
         "data": preview.fillna("").to_dict("records"),
         "total_rows": len(df),
-        "total_cols": len(df.columns),
+        "total_cols": total_cols,
     }
 
 

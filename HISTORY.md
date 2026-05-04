@@ -3077,3 +3077,66 @@ v0.3 (PyPI MVP) のリリース準備中に、次の v0.4 を「業務利用可�
 
 - 2026-05-03 **Proposed** — `docs/business-use-definition.md` v0.2 と `docs/v0.4-business-readiness-plan.md` v0.1 をリポジトリに先行コミットし、本 Proposal を Change Gate として起票。**ユーザ承認済**。Phase R-1 から実装着手する
 
+### P-0097: Wide DataFrame data/preview + importance payload caps（Issue #361 / Phase R-5.1 基盤）
+
+- **Date:** 2026-05-04 起票
+- **Related:** Issue #361 (Wide DataFrame UI), `docs/v0.4-business-readiness-plan.md` §6 (Phase R-5), [P-0094](https://github.com/nbx-liz/LizyStudio/blob/main/HISTORY.md#p-0094) (perf baseline), v0.4 Exit Criteria (10k 列で UI が破綻しない)
+
+#### Motivation
+
+業務利用シナリオは「列数 max 10k」を確定 (`business-use-definition.md` v0.2 §4)。現状の `GET /api/workspace/data/preview` と `GET /api/jobs/{id}/importance` は **全列を JSON で返す** ため、10k 列では:
+
+- preview: 1 行 × 10k 列 = ~50KB / 行 × 50 行 = 2.5MB の JSON、parse + render が遅い
+- importance: 10k 列の split / gain / SHAP を全部返すと payload が 5MB+、ブラウザ JIT も悲鳴
+
+frontend で virtualization / top-N を入れても、転送する payload 自体が太いと初期描画コストが下がらない。**API 側で「上限を持って返す」契約を Change Gate として確定**してから frontend を実装する。
+
+#### Purpose
+
+- `GET /api/workspace/data/preview?max_cols=N` を追加: クエリで列数を絞れる (デフォルト動作は変えない)
+- `GET /api/jobs/{id}/importance?top_n=N` を追加: 重要度上位 N 列のみ返す (デフォルト動作は変えない)
+- importance payload は **5MB 上限** を server-side でハードキャップ。超えたら自動的に top-N をフォールバック適用し、レスポンス header `X-Truncated-By` で通知
+
+#### Impact
+
+- 新規 OpenAPI フィールド (両エンドポイント): `max_cols: int | None` / `top_n: int | None`
+  - 省略時は従来通り「全列」(後方互換)
+- 新規 response header: `X-Truncated-By: top_n=200` (ハードキャップ発動時のみ)
+- frontend は openapi-typescript 経由で query 型を取得、SSOT 維持
+- breaking change ではない (既存 client は省略 = 全列のまま動く)
+
+#### Compatibility
+
+- 既存 client (省略形): 全列レスポンス継続。N=10 程度の小規模データセットへの影響なし
+- 既存 fixtures (binary_no_cal etc.): 13 列なので max_cols=200 デフォルトでも全列返却、テスト挙動不変
+- format_version (H-0081): 永続データに変更なし、JSON シリアライズの形は同じ
+
+#### Acceptance criteria
+
+- [ ] `tests/contract/test_preview_max_cols.py`: `max_cols` 省略 / 指定 / 0 / 負数 / 超過の境界テスト
+- [ ] `tests/contract/test_importance_top_n.py`: `top_n` 省略 / 指定 / 5MB 上限ガード / `X-Truncated-By` header
+- [ ] `tests/regression/test_reg_0361_wide_preview.py`: 10k 列フィクスチャで preview が `max_cols=200` で 2KB 以内に収まる
+- [ ] OpenAPI 型生成 (`pnpm generate:api`) が新フィールドを含む
+- [ ] BLUEPRINT.md §5 (API 仕様) に新クエリパラメータ + truncation 仕様を反映
+- [ ] 既存 e2e (`workspace-presets.spec.ts` 等) が回帰なし
+
+#### Alternatives considered
+
+- **(a) クライアント側で全列受け取って top-N 表示**: 拒否。転送量問題を解決できない、初期描画 jank が消えない
+- **(b) WebSocket streaming で分割送信**: 拒否。preview / importance は read-only のためコネクション oriented にする利点なし、複雑度のみ増す
+- **(c) 別エンドポイント `/data/preview/wide` 等を新設**: 拒否。endpoint 増殖、SSOT 崩れ。同じエンドポイントの query 拡張で十分
+- **(d) `data.preview_max_cols` を config に持たせる**: 拒否。preview は per-request で top-N が変わる UX のため config 永続化は過剰
+
+→ 採用は (e) **既存エンドポイントに optional query を追加**。最小契約変更で UX を改善
+
+#### Out of scope（follow-up）
+
+- Importance plot top-N の **frontend 実装** — 本 Proposal は API 契約のみ確定。実装は PR-B2 で続けて行う
+- Column Settings の virtualization — frontend のみ、Change Gate 外
+- Diagnostic export endpoint — R-3.4 で別途追加 (本 PR で skeleton のみ)
+
+#### Decision
+
+- 2026-05-04 **Proposed** — Phase B (v0.4.0) 起点として起票。Acceptance criteria を満たす実装は同 PR に含める。**ユーザ承認済** (auto mode で Phase B 実装着手)
+
+
