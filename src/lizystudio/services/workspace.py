@@ -162,7 +162,15 @@ def get_default_config(ws: WorkspaceState, task: str, target: str) -> dict[str, 
 def validate_config(ws: WorkspaceState, config: dict[str, Any]) -> list[dict[str, Any]]:
     """Validate a config dict against the backend.
 
-    Normalizes Pydantic v2 error dicts to ``{path, message}`` for the frontend.
+    PR-B4 / R-3.4: each error dict now carries ``severity`` and
+    ``suggested_fix`` fields in addition to the legacy ``path`` and
+    ``message``. Backend Pydantic errors default to
+    ``severity="error"`` and ``suggested_fix=None`` because the schema
+    has no canned repair text; workspace-aware validators
+    (``_workspace_split_errors``) supply both fields directly.
+
+    Normalizes Pydantic v2 error dicts to
+    ``{path, message, severity, suggested_fix}`` for the frontend.
     """
     raw_errors = ws.backend.validate_config(config)
     normalized: list[dict[str, Any]] = []
@@ -171,7 +179,14 @@ def validate_config(ws: WorkspaceState, config: dict[str, Any]) -> list[dict[str
         path = ".".join(str(p) for p in loc) if loc else err.get("path", "")
         message = err.get("msg", err.get("message", ""))
         if path or message:
-            normalized.append({"path": path, "message": message})
+            normalized.append(
+                {
+                    "path": path,
+                    "message": message,
+                    "severity": "error",
+                    "suggested_fix": None,
+                }
+            )
     # Issue #268: workspace-aware validation. n_splits > n_rows is
     # accepted by Pydantic (no row-count knowledge inside the schema)
     # but explodes ~5s after Fit with sklearn's
@@ -212,6 +227,8 @@ def _workspace_split_errors(
                 f"samples in the loaded dataset (n_rows={n_rows}). "
                 f"Reduce Folds to at most {n_rows}."
             ),
+            "severity": "error",
+            "suggested_fix": (f"Set Folds (split.n_splits) to {n_rows} or fewer."),
         }
     ]
 

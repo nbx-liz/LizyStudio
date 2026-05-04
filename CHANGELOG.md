@@ -62,6 +62,24 @@ Foundation PR for Issue #361.
   picker is not the right interaction model at that scale; the guard
   surfaces the limit instead of silently breaking the UI.
 
+### Backend (PR-B4 — Plot symmetric audit + Validate API enhancement)
+
+- **Validate API now carries `severity` + `suggested_fix` (R-3.4)** —
+  `POST /api/workspace/config/validate` and the inline validation in
+  `PUT /api/workspace/config` now return error dicts with two new
+  fields: `severity` (`"error" | "warning" | "info"`) and
+  `suggested_fix` (string or `null`). Backend Pydantic errors default
+  to `severity="error"` and `suggested_fix=null`; the workspace-aware
+  `n_splits > n_rows` validator surfaces a concrete fix string
+  (e.g. `"Set Folds (split.n_splits) to 100 or fewer."`). The legacy
+  `path` and `message` fields are unchanged so older frontend builds
+  continue to work.
+- **Plot symmetric audit (R-3.3)** — added `docs/plot-matrix.md`, the
+  single source of truth for the plot inventory across the LizyML
+  adapter, the API, and the frontend. The audit caught `shap-summary`
+  missing from `PLOT_LABELS` (rendered as raw kebab-case in the tab
+  strip); fixed in this PR with the symmetry rule pinned in the doc.
+
 ### Backend (PR-B3 — Large CSV scaling + #383 stress tests)
 
 - **Chunked CSV load with fail-fast memory guard (P-0098)** —
