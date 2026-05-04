@@ -170,6 +170,70 @@ describe("FeatureWeightsEditor", () => {
     });
   });
 
+  describe("wide-DataFrame guard (PR-B2 / P-0097)", () => {
+    // When the non-excluded column count exceeds 1000, the per-feature
+    // weight UI becomes unusable: the dropdown would render thousands
+    // of <SelectItem>s and the "Add feature..." picker is no longer the
+    // right interaction model. Guard the toggle with an explanatory
+    // tooltip instead, mirroring the wide-DataFrame UX path.
+    function manyCols(n: number): string[] {
+      return Array.from(
+        { length: n },
+        (_, i) => `f_${i.toString().padStart(5, "0")}`,
+      );
+    }
+
+    it("disables the Switch when column count exceeds 1000", () => {
+      renderEditor({
+        weights: null,
+        columns: manyCols(1001),
+        onChange: vi.fn(),
+      });
+      const switchEl = screen.getByRole("switch");
+      expect(switchEl).toBeDisabled();
+    });
+
+    it("does not disable the Switch at exactly 1000 columns", () => {
+      renderEditor({
+        weights: null,
+        columns: manyCols(1000),
+        onChange: vi.fn(),
+      });
+      const switchEl = screen.getByRole("switch");
+      expect(switchEl).not.toBeDisabled();
+    });
+
+    it("exposes a guard message via aria-describedby when guarded", () => {
+      renderEditor({
+        weights: null,
+        columns: manyCols(1500),
+        onChange: vi.fn(),
+      });
+      const switchEl = screen.getByRole("switch");
+      const describedBy = switchEl.getAttribute("aria-describedby");
+      expect(describedBy).toBeTruthy();
+      const msg = document.getElementById(describedBy as string);
+      expect(msg?.textContent).toMatch(/1000/);
+    });
+
+    it("renders the guard message inline so it is queryable in the DOM", () => {
+      renderEditor({
+        weights: null,
+        columns: manyCols(1500),
+        onChange: vi.fn(),
+      });
+      // Use a flexible matcher because the copy combines numbers and prose.
+      expect(screen.getByText(/disabled.*1000.*columns/i)).toBeInTheDocument();
+    });
+
+    it("ignores user clicks on the disabled Switch", () => {
+      const onChange = vi.fn();
+      renderEditor({ weights: null, columns: manyCols(1500), onChange });
+      fireEvent.click(screen.getByRole("switch"));
+      expect(onChange).not.toHaveBeenCalled();
+    });
+  });
+
   describe("weight change via NumberInput (handleWeightChange — lines 46-51, 79)", () => {
     it("incrementing weight calls onChange with updated value", () => {
       const onChange = vi.fn();

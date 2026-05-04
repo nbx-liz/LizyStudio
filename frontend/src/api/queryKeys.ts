@@ -32,8 +32,8 @@ export const queryKeys = {
   jobPlotImportance: (jobId: string, kind: string) =>
     ["job-plot", jobId, "importance", kind] as const,
   jobPlotTuning: (jobId: string) => ["job-plot", jobId, "tuning"] as const,
-  jobImportance: (jobId: string, kind: string) =>
-    ["job-importance", jobId, kind] as const,
+  jobImportance: (jobId: string, kind: string, topN: number | null = null) =>
+    ["job-importance", jobId, kind, topN] as const,
   jobImportanceKinds: (jobId: string) =>
     ["job-importance-kinds", jobId] as const,
   jobLearningCurveMetrics: (jobId: string) =>

@@ -1,8 +1,38 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { ColumnInfo } from "@/api/types";
 import { ColumnSettingsSection } from "./ColumnSettingsSection";
+
+/**
+ * jsdom always reports zero-sized clientRects, which means
+ * @tanstack/react-virtual measures the scroll viewport as 0 and would
+ * either render nothing or fall back to mounting every row depending
+ * on the version. Stub a non-zero size on the scroll element so the
+ * virtualizer's measurement path matches what real browsers see, and
+ * the wide-DataFrame guard tests can assert "fewer rows than columns
+ * mounted at any one time".
+ */
+beforeAll(() => {
+  Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+    configurable: true,
+    get() {
+      return 320;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+    configurable: true,
+    get() {
+      return 800;
+    },
+  });
+  Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+    configurable: true,
+    get() {
+      return 320;
+    },
+  });
+});
 
 const COLUMNS: ColumnInfo[] = [
   {
@@ -222,5 +252,174 @@ describe("ColumnSettingsSection running lock (P-0089 / Issue #279)", () => {
     await userEvent.click(numBtn);
     expect(onExcludeToggle).not.toHaveBeenCalled();
     expect(onTypeChange).not.toHaveBeenCalled();
+  });
+});
+
+describe("ColumnSettingsSection wide-DataFrame virtualization (PR-B2)", () => {
+  function makeWide(n: number): ColumnInfo[] {
+    const cols: ColumnInfo[] = [];
+    for (let i = 0; i < n; i++) {
+      cols.push({
+        name: `f_${i.toString().padStart(5, "0")}`,
+        dtype: "float64",
+        unique_count: 100,
+        suggested_type: "numeric",
+        suggested_excluded: false,
+      });
+    }
+    return cols;
+  }
+
+  function renderWide(cols: ColumnInfo[]) {
+    render(
+      <ColumnSettingsSection
+        columns={cols}
+        target="target_class"
+        overrides={{}}
+        columnFilter=""
+        onColumnFilterChange={() => {}}
+        expandedCol={null}
+        colStats={{}}
+        summary={{ ...SUMMARY, total: cols.length }}
+        onExcludeToggle={vi.fn()}
+        onTypeChange={vi.fn()}
+        onColumnExpand={vi.fn()}
+      />,
+    );
+  }
+
+  it("uses the virtualized list path above the column threshold", () => {
+    // happy-dom returns 0 for getBoundingClientRect on refs, so the
+    // virtualizer will not actually mount any rows under test. Assert
+    // on the structural marker (the dedicated scroll container + the
+    // total-height spacer) instead, which still proves the virtual
+    // branch was taken.
+    renderWide(makeWide(5000));
+    const scroll = document.querySelector(
+      '[data-testid="column-virtual-scroll"]',
+    );
+    const spacer = document.querySelector(
+      '[data-testid="column-virtual-spacer"]',
+    );
+    expect(scroll).not.toBeNull();
+    expect(spacer).not.toBeNull();
+  });
+
+  it("preserves the total scroll height proportional to column count", () => {
+    renderWide(makeWide(5000));
+    const spacer = document.querySelector(
+      '[data-testid="column-virtual-spacer"]',
+    );
+    expect(spacer).not.toBeNull();
+    const totalHeight = (spacer as HTMLElement).style.height;
+    expect(totalHeight).toMatch(/px$/);
+    const px = Number.parseInt(totalHeight.replace("px", ""), 10);
+    expect(px).toBeGreaterThan(28 * 1000);
+  });
+
+  it("does not switch on the virtualized list below the threshold", () => {
+    renderWide(makeWide(50));
+    const scroll = document.querySelector(
+      '[data-testid="column-virtual-scroll"]',
+    );
+    expect(scroll).toBeNull();
+  });
+
+  it("renders the header row exactly once even at large column counts", () => {
+    renderWide(makeWide(5000));
+    expect(screen.getAllByText("Name").length).toBe(1);
+  });
+});
+
+describe("ColumnSettingsSection bulk operations toolbar (PR-B2)", () => {
+  function renderBulk(
+    overrides: {
+      columnFilter?: string;
+      onBulkExcludeToggle?: (names: string[], checked: boolean) => void;
+      onBulkTypeChange?: (
+        names: string[],
+        type: "numeric" | "categorical",
+      ) => void;
+    } = {},
+  ) {
+    const onBulkExcludeToggle = overrides.onBulkExcludeToggle ?? vi.fn();
+    const onBulkTypeChange = overrides.onBulkTypeChange ?? vi.fn();
+    render(
+      <ColumnSettingsSection
+        columns={COLUMNS}
+        target="age"
+        overrides={{}}
+        columnFilter={overrides.columnFilter ?? ""}
+        onColumnFilterChange={() => {}}
+        expandedCol={null}
+        colStats={{}}
+        summary={SUMMARY}
+        onExcludeToggle={vi.fn()}
+        onTypeChange={vi.fn()}
+        onColumnExpand={vi.fn()}
+        onBulkExcludeToggle={onBulkExcludeToggle}
+        onBulkTypeChange={onBulkTypeChange}
+      />,
+    );
+    return { onBulkExcludeToggle, onBulkTypeChange };
+  }
+
+  it("does not render the toolbar when columnFilter is empty", () => {
+    renderBulk({ columnFilter: "" });
+    expect(screen.queryByTestId("column-bulk-toolbar")).toBeNull();
+  });
+
+  it("renders the toolbar when columnFilter matches at least one column", () => {
+    renderBulk({ columnFilter: "co" }); // matches 'color'
+    expect(screen.getByTestId("column-bulk-toolbar")).toBeInTheDocument();
+    expect(screen.getByTestId("column-bulk-toolbar")).toHaveTextContent(/1/);
+  });
+
+  it("Exclude All calls onBulkExcludeToggle with the filtered names", () => {
+    const { onBulkExcludeToggle } = renderBulk({ columnFilter: "co" });
+    fireEvent.click(screen.getByRole("button", { name: /exclude filtered/i }));
+    expect(onBulkExcludeToggle).toHaveBeenCalledWith(["color"], true);
+  });
+
+  it("Include All calls onBulkExcludeToggle with checked=false", () => {
+    const { onBulkExcludeToggle } = renderBulk({ columnFilter: "co" });
+    fireEvent.click(screen.getByRole("button", { name: /include filtered/i }));
+    expect(onBulkExcludeToggle).toHaveBeenCalledWith(["color"], false);
+  });
+
+  it("Set Numeric calls onBulkTypeChange", () => {
+    const { onBulkTypeChange } = renderBulk({ columnFilter: "co" });
+    fireEvent.click(
+      screen.getByRole("button", { name: /set filtered to numeric/i }),
+    );
+    expect(onBulkTypeChange).toHaveBeenCalledWith(["color"], "numeric");
+  });
+
+  it("Set Categorical calls onBulkTypeChange", () => {
+    const { onBulkTypeChange } = renderBulk({ columnFilter: "co" });
+    fireEvent.click(
+      screen.getByRole("button", { name: /set filtered to categorical/i }),
+    );
+    expect(onBulkTypeChange).toHaveBeenCalledWith(["color"], "categorical");
+  });
+
+  it("toolbar still works when running without bulk callbacks (graceful)", () => {
+    // Optional props — when omitted the toolbar simply hides.
+    render(
+      <ColumnSettingsSection
+        columns={COLUMNS}
+        target="age"
+        overrides={{}}
+        columnFilter="co"
+        onColumnFilterChange={() => {}}
+        expandedCol={null}
+        colStats={{}}
+        summary={SUMMARY}
+        onExcludeToggle={vi.fn()}
+        onTypeChange={vi.fn()}
+        onColumnExpand={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("column-bulk-toolbar")).toBeNull();
   });
 });

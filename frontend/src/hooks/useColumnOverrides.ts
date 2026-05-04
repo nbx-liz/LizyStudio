@@ -40,6 +40,42 @@ export function useColumnOverrides({
     }));
   };
 
+  /**
+   * PR-B2 / P-0097: bulk Exclude / Include for the wide-DataFrame UX.
+   * Calling `handleExcludeToggle` once per column triggers N React
+   * state updates and N PUT-coalesce events; this variant collapses
+   * all of them into a single `setOverrides` call so the funnel sees
+   * one change. Empty input is a no-op (returns the same reference)
+   * to keep the toolbar idempotent when the filter matches nothing.
+   */
+  const handleBulkExcludeToggle = useCallback(
+    (colNames: readonly string[], checked: boolean) => {
+      if (colNames.length === 0) return;
+      setOverrides((prev) => {
+        const next = { ...prev };
+        for (const name of colNames) {
+          next[name] = { ...prev[name], excluded: checked };
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
+  const handleBulkTypeChange = useCallback(
+    (colNames: readonly string[], type: "numeric" | "categorical") => {
+      if (colNames.length === 0) return;
+      setOverrides((prev) => {
+        const next = { ...prev };
+        for (const name of colNames) {
+          next[name] = { ...prev[name], type };
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
   const handleColumnExpand = useCallback(
     async (colName: string) => {
       if (expandedCol === colName) {
@@ -106,6 +142,8 @@ export function useColumnOverrides({
     nonExcludedCols,
     handleExcludeToggle,
     handleTypeChange,
+    handleBulkExcludeToggle,
+    handleBulkTypeChange,
     handleColumnExpand,
   };
 }
