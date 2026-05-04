@@ -27,7 +27,21 @@ class EvaluationMixin:
         result = model.predict(data, return_shap=return_shap)
         df = pd.DataFrame({"idx": range(len(result.pred)), "pred": result.pred})
         if result.proba is not None:
-            df["proba"] = result.proba
+            proba = result.proba
+            # Binary classifiers return a 1-D probability vector for the
+            # positive class. Multiclass classifiers (lizyml >= 0.10.0
+            # with auto-encoded targets) return a 2-D matrix shaped
+            # ``(n_samples, n_classes)`` — flatten it into per-class
+            # columns so the DataFrame stays 2-D and parquet-friendly.
+            if hasattr(proba, "ndim") and proba.ndim == 2:
+                target_encoder = getattr(model.fit_result, "target_encoder", None)
+                classes = list(getattr(target_encoder, "classes_", ())) or [
+                    str(i) for i in range(proba.shape[1])
+                ]
+                for i, cls in enumerate(classes):
+                    df[f"proba_{cls}"] = proba[:, i]
+            else:
+                df["proba"] = proba
         return PredictionSummary(predictions=df, warnings=list(result.warnings))
 
     def evaluate_table(self, model: Any) -> list[dict[str, Any]]:

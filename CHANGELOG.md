@@ -17,8 +17,11 @@ performance baseline harness (P-0094), on-disk `format_version`
 migration chain (H-0081), atomic versioned JSON writes (H-0082), and
 the openapi-fetch frontend client migration (H-0080).
 
-No breaking changes for end users. Workspace state and persisted jobs
-from v0.3.0 continue to load via the new migration chain.
+No breaking changes for end users. Workspace state from v0.3.0
+continues to load via the new migration chain. Note: model `pickle`
+artefacts saved by lizyml 0.9.x are intentionally rejected on load
+under the new lizyml 0.10.0 major.minor — re-fit existing jobs to
+regenerate a 0.10.0 artefact.
 
 ### Added
 
@@ -70,6 +73,15 @@ from v0.3.0 continue to load via the new migration chain.
 
 ### Changed
 
+- **`lizyml` bumped to `>=0.10.0,<0.11.0`** — picks up the
+  TargetEncoder feature (lizyml H-0070 / Issue [#98](https://github.com/nbx-liz/LizyML/issues/98))
+  so non-numeric classification targets (e.g. `species: str` in the
+  penguins dataset) now fit successfully. `Model.predict()` returns
+  predictions in the **original label dtype** (str → str), so
+  `LizyMLAdapter.predict` is updated to split the multiclass 2-D
+  `proba` matrix into per-class `proba_<class>` columns and propagates
+  the original-label `pred` straight through to the inference
+  DataFrame. Existing numeric-target jobs are unchanged.
 - **Tailwind CSS v3 → v4 migration (Issue #125, PR #378)** —
   `tailwindcss@^4.2.4` with `@tailwindcss/vite` plugin; `@theme`
   block migrated; build remains on Vite. PostCSS pipeline simplified.
