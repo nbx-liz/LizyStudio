@@ -26,7 +26,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "lizyml[plots,tuning,calibration,explain]>=0.9.0,<0.10.0",
+    "lizyml[plots,tuning,calibration,explain]>=0.10.0,<0.11.0",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
     "python-multipart>=0.0.18",
