@@ -17,12 +17,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { FileBrowser } from "@/components/workspace/FileBrowser";
+import { getJobNumber } from "@/lib/job-number";
 import { HistoryList } from "./HistoryList";
 
 type SourceType = "path" | "upload";
 
 interface SetupPanelProps {
   completedJobs: JobSummary[];
+  // Issue #359: dropdown numbering must be derived against the full
+  // all-jobs list, not the filtered ``completedJobs``, otherwise
+  // ``#N`` drifts from the JobsPage label.
+  allJobs: JobSummary[];
   selectedJobId: string | null;
   onSelectJob: (jobId: string) => void;
   history: InferenceRecord[];
@@ -30,6 +35,7 @@ interface SetupPanelProps {
   onSelectInf: (infId: string) => void;
   onRunInference: (params: {
     dataPath: string;
+    sourceType: SourceType;
     evaluate: boolean;
     returnShap: boolean;
   }) => void;
@@ -39,6 +45,7 @@ interface SetupPanelProps {
 
 export function SetupPanel({
   completedJobs,
+  allJobs,
   selectedJobId,
   onSelectJob,
   history,
@@ -79,6 +86,7 @@ export function SetupPanel({
   const handleRun = () => {
     onRunInference({
       dataPath,
+      sourceType,
       evaluate,
       returnShap,
     });
@@ -100,8 +108,8 @@ export function SetupPanel({
             <SelectValue placeholder="Select a completed job" />
           </SelectTrigger>
           <SelectContent>
-            {completedJobs.map((job, idx) => {
-              const num = completedJobs.length - idx;
+            {completedJobs.map((job) => {
+              const num = getJobNumber(job, allJobs);
               const modelName = extractModelName(job);
               return (
                 <SelectItem key={job.job_id} value={job.job_id}>
@@ -185,7 +193,7 @@ export function SetupPanel({
         <Label className="mb-1.5 block text-sm font-medium">Evaluation</Label>
         {targetCol ? (
           <div className="space-y-2">
-            <p className="text-xs text-green-600">
+            <p className="text-xs text-success-fg">
               ✓ Target &apos;{String(targetCol)}&apos; detected
             </p>
             <div className="flex items-center gap-2">

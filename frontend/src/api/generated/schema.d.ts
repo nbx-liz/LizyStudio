@@ -40,6 +40,56 @@ export interface paths {
         /**
          * Workspace Reset
          * @description Reset all workspace state.
+         *
+         *     H-0063 / Issue #99: if a fit / tune is still running in the
+         *     background, reset must also cancel it and release the JobStore
+         *     active slot. Otherwise the next Fit / Tune click gets a
+         *     JOB_CONFLICT 409, directly contradicting the user's expectation
+         *     that "reset" yields a clean slate.
+         *
+         *     The cancel path mirrors the existing ``POST /jobs/{id}/cancel``
+         *     endpoint: we call ``request_cancel`` and rely on the runner (either
+         *     the in-process thread via ``_run_job_core``'s cancel-aware callback
+         *     or the subprocess via ``_poll_progress``'s cancel polling) to
+         *     transition the job to ``cancelled`` and release the slot from its
+         *     finally block. We then wait briefly for the slot to become free
+         *     so the caller can immediately start a new Fit / Tune without
+         *     racing the cancel.
+         *
+         *     Degraded paths we explicitly tolerate:
+         *
+         *     1. **Terminal holder (crashed runner finally)** — if the slot is
+         *        held but the job's on-disk status is already terminal, no one
+         *        will ever call ``release_active`` for it. We short-circuit by
+         *        calling ``force_release_active_if`` directly.
+         *     2. **No live runner (orphan slot)** — the slot may have been
+         *        claimed by a previous process / test / client that died
+         *        without draining the slot. The cancel flag lands in memory but
+         *        no runner observes it, so the wait loop would time out. In
+         *        that case we **force-release the slot** from reset itself.
+         *        Rationale: the user clicked reset expressly to clear state;
+         *        returning 200 with the slot still held would reintroduce the
+         *        exact ``JOB_CONFLICT`` regression this fix is trying to remove.
+         *        The wait budget (``_RESET_WAIT_TIMEOUT``) is deliberately set
+         *        longer than ``subprocess_runner._WAIT_TIMEOUT`` so that a
+         *        legitimate subprocess runner has time to finish its
+         *        ``proc.terminate`` / ``proc.wait`` cycle and call
+         *        ``release_active`` from its own finally, before we fall
+         *        through to the force-release branch. If we still time out,
+         *        the most plausible explanation is an orphaned slot with no
+         *        runner behind it, and force-releasing is strictly better than
+         *        leaving the user with a broken reset button.
+         *
+         *     The force-release uses ``force_release_active_if`` which is
+         *     atomic under ``JobStore._active_lock``: the slot is released only
+         *     if it still holds the exact id we observed, so a racy
+         *     ``create_and_claim_active`` from another thread between the
+         *     observation and the release cannot accidentally clear the new
+         *     owner's slot.
+         *
+         *     Workspace state is cleared AFTER the cancel + slot wait so the
+         *     shutting-down runner thread still sees live ``ws.dataframe`` /
+         *     ``ws.model`` references during its finally path.
          */
         post: operations["workspace_reset_api_workspace_reset_post"];
         delete?: never;
@@ -60,6 +110,11 @@ export interface paths {
         /**
          * Data Load Path
          * @description Load data from a local file path.
+         *
+         *     Uses the resolved path from ``validate_path_within`` for the
+         *     subsequent exists / read operations so a symlink swap between the
+         *     allow-list check and the actual load cannot redirect to a file
+         *     outside ``ALLOWED_FILES_ROOT``.
          */
         post: operations["data_load_path_api_workspace_data_path_post"];
         delete?: never;
@@ -247,6 +302,16 @@ export interface paths {
         /**
          * Config Update
          * @description Update config with validation.
+         *
+         *     P-0089 / Issue #279: while a fit/tune job is actively running, the
+         *     config it was created with must be immutable. Cross-hook competing
+         *     writes (CV strategy radio, Folds NumberInput, target/task
+         *     RadioGroup) used to land mid-run and silently corrupt the config
+         *     the job's checkpoint and ``meta.json`` were based on. Reject such
+         *     writes with 409 ``WORKSPACE_LOCKED`` so the frontend can surface a
+         *     clear toast and re-sync. See ``_check_workspace_lock`` for the
+         *     terminal-status carve-out that lets the post-fit re-fit flow
+         *     proceed without racing against the runner's slot release.
          */
         put: operations["config_update_api_workspace_config_put"];
         post?: never;
@@ -256,6 +321,10 @@ export interface paths {
         /**
          * Config Patch
          * @description Partially update config via patch operations (H-0037).
+         *
+         *     P-0089 / Issue #279: same running-lock semantics as
+         *     ``config_update``. Patches against a locked workspace return 409
+         *     so the frontend can drop the in-flight edit and re-fetch.
          */
         patch: operations["config_patch_api_workspace_config_patch"];
         trace?: never;
@@ -334,6 +403,14 @@ export interface paths {
         /**
          * Workspace Fit
          * @description Create a fit job (thread managed by Service layer).
+         *
+         *     P-0086 (Issue #251): ``body.config`` may be provided to atomically
+         *     overwrite ``ws.config`` at fit time, closing the race window between
+         *     a pending ``PUT /config`` and the ``POST /fit`` call. The body is
+         *     declared with a ``WorkspaceFitRequest()`` default (rather than
+         *     ``| None``) because ``from __future__ import annotations`` together
+         *     with ``Optional`` + ``Depends`` breaks FastAPI's body detection,
+         *     causing the parameter to be parsed as a query string.
          */
         post: operations["workspace_fit_api_workspace_fit_post"];
         delete?: never;
@@ -354,6 +431,10 @@ export interface paths {
         /**
          * Workspace Tune
          * @description Create a tune job (thread managed by Service layer).
+         *
+         *     P-0086 (Issue #251): ``body.config`` may be provided to atomically
+         *     overwrite ``ws.config`` at tune time. See ``workspace_fit`` above
+         *     for the rationale behind the ``WorkspaceTuneRequest()`` default.
          */
         post: operations["workspace_tune_api_workspace_tune_post"];
         delete?: never;
@@ -399,6 +480,11 @@ export interface paths {
         /**
          * Delete Job
          * @description Delete a job. Running jobs cannot be deleted (v2-13 task 2).
+         *
+         *     Pass ``?cascade=true`` to remove the entire descendant subtree
+         *     created by Re-tune / Resume children (H-0062). When children are
+         *     currently pending or running, cascade is required; otherwise the
+         *     request is rejected with ``PARENT_HAS_ACTIVE_CHILDREN``.
          */
         delete: operations["delete_job_api_jobs__job_id__delete"];
         options?: never;
@@ -546,6 +632,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/learning-curve/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job Learning Curve Metrics Endpoint
+         * @description Get the metric names recorded in the learning curve history.
+         *
+         *     These are the values accepted by the learning-curve plot's ``metrics``
+         *     filter. Sourced from the actual training eval history — they may
+         *     differ from the user's configured evaluation metrics.
+         */
+        get: operations["get_job_learning_curve_metrics_endpoint_api_jobs__job_id__learning_curve_metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/plot/{plot_type}": {
         parameters: {
             query?: never;
@@ -629,6 +739,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/retune": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retune Job
+         * @description Start a Re-tune child job from a completed parent Tune (H-0062).
+         */
+        post: operations["retune_job_api_jobs__job_id__retune_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resume Job
+         * @description Resume a failed Tune Job from its last saved checkpoint (H-0062).
+         */
+        post: operations["resume_job_api_jobs__job_id__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/lineage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Job Lineage
+         * @description Return the lineage subtree rooted at *job_id* (H-0062).
+         */
+        get: operations["get_job_lineage_api_jobs__job_id__lineage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/inference/run": {
         parameters: {
             query?: never;
@@ -641,6 +811,20 @@ export interface paths {
         /**
          * Inference Run
          * @description Run inference with a path to data (H-0009).
+         *
+         *     Path validation is split by ``source_type``:
+         *
+         *     * ``"path"`` — a user-supplied filesystem path. Must resolve to a
+         *       location under ``ALLOWED_FILES_ROOT`` (default: the user's home
+         *       directory) so the backend never reads files the operator did not
+         *       intend to expose.
+         *     * ``"upload"`` — a server-staged tempfile produced by
+         *       ``POST /api/inference/upload``. The path lives under the OS temp
+         *       dir (typically ``/tmp``), which is outside ``ALLOWED_FILES_ROOT``
+         *       by design. We instead verify the path is tracked in
+         *       ``WorkspaceState._temp_files``, ensuring the request cannot be
+         *       forged with ``source_type="upload"`` against an arbitrary system
+         *       file (Issue #374).
          */
         post: operations["inference_run_api_inference_run_post"];
         delete?: never;
@@ -839,6 +1023,11 @@ export interface paths {
         /**
          * Get Ui Schema
          * @description Return UI metadata for the current backend (H-0026).
+         *
+         *     ``response_model=UiSchemaResponse`` (C-5) drives OpenAPI schema
+         *     generation so ``frontend/src/api/types.ts`` can re-export the
+         *     ``UiSchema`` type from ``schema.d.ts`` instead of declaring it by
+         *     hand.
          */
         get: operations["get_ui_schema_api_backends_ui_schema_get"];
         put?: never;
@@ -859,6 +1048,14 @@ export interface paths {
         /**
          * List Directory
          * @description List directory contents, filtered to supported data file types.
+         *
+         *     Issue #157: rejected requests (out-of-root traversal, missing
+         *     directory, permission denied) do NOT echo the server-side
+         *     resolved path back to the caller. Successful requests still
+         *     return the resolved path/parent so the frontend can render
+         *     breadcrumb navigation. The error-path response shape is kept
+         *     (200 + empty entries + parent=None) for backward compatibility;
+         *     only the leaked server path is sanitised.
          */
         get: operations["list_directory_api_files_get"];
         put?: never;
@@ -869,7 +1066,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/{full_path}": {
+    "/api/health": {
         parameters: {
             query?: never;
             header?: never;
@@ -877,10 +1074,60 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Serve Spa
-         * @description Serve the SPA — all non-API/WS routes return index.html.
+         * Liveness
+         * @description Liveness probe — always 200 while the ASGI app can serve requests.
+         *
+         *     Must not touch app.state or any adapter; a flaky backend must not
+         *     make k8s restart the whole pod.
          */
-        get: operations["serve_spa__full_path__get"];
+        get: operations["liveness_api_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/health/ready": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Readiness
+         * @description Readiness probe — 200 when the app is ready to accept traffic.
+         *
+         *     Checks the two heavyweight startup-time resources: the backend
+         *     adapter (must expose `info.name`) and the JobStore base directory
+         *     (must exist on disk). Returns 503 otherwise so upstream load
+         *     balancers stop sending traffic.
+         */
+        get: operations["readiness_api_health_ready_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Metrics
+         * @description Return all registered Prometheus metrics in text format.
+         *
+         *     Authentication-free, mirroring the probe philosophy of `/api/health`.
+         */
+        get: operations["metrics_api_metrics_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -915,6 +1162,14 @@ export interface components {
             /** File */
             file: string;
         };
+        /**
+         * CancelJobResponse
+         * @description POST /api/jobs/{job_id}/cancel.
+         */
+        CancelJobResponse: {
+            /** Status */
+            status: string;
+        };
         /** ColumnInfoResponse */
         ColumnInfoResponse: {
             /** Name */
@@ -941,6 +1196,40 @@ export interface components {
             suggested_task?: ("binary" | "multiclass" | "regression") | null;
             /** Columns */
             columns: components["schemas"]["ColumnInfoResponse"][];
+        };
+        /**
+         * ComparisonGroupStats
+         * @description Summary statistics for one inference run in a comparison.
+         *
+         *     Optional keys (``median`` for regression, ``positive_pct`` for
+         *     binary classification) appear only when the task warrants them —
+         *     ``extra='allow'`` lets them flow through without validation errors.
+         */
+        ComparisonGroupStats: {
+            /** Mean */
+            mean: number;
+            /** Std */
+            std: number;
+            /** Min */
+            min: number;
+            /** Max */
+            max: number;
+            /** Count */
+            count: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ComparisonStatsResponse
+         * @description Response from ``GET /api/inference/{inf_id}/comparison/{other_inf_id}``.
+         */
+        ComparisonStatsResponse: {
+            current: components["schemas"]["ComparisonGroupStats"];
+            other: components["schemas"]["ComparisonGroupStats"];
+            current_proba?: components["schemas"]["ComparisonGroupStats"] | null;
+            other_proba?: components["schemas"]["ComparisonGroupStats"] | null;
+        } & {
+            [key: string]: unknown;
         };
         /** ConfigPatchResponse */
         ConfigPatchResponse: {
@@ -1005,6 +1294,16 @@ export interface components {
             /** Path */
             path: string;
         };
+        /**
+         * DeleteJobResponse
+         * @description DELETE /api/jobs/{job_id}.
+         */
+        DeleteJobResponse: {
+            /** Status */
+            status: string;
+            /** Removed Job Ids */
+            removed_job_ids?: string[] | null;
+        };
         /** DirectoryListing */
         DirectoryListing: {
             /** Path */
@@ -1013,6 +1312,26 @@ export interface components {
             parent: string | null;
             /** Entries */
             entries: components["schemas"]["FileEntry"][];
+        };
+        /**
+         * ExportCodeResponse
+         * @description GET /api/jobs/{job_id}/export-code.
+         */
+        ExportCodeResponse: {
+            /** Code */
+            code: string;
+            /** Filename */
+            filename: string;
+        };
+        /**
+         * ExportJobResponse
+         * @description POST /api/jobs/{job_id}/export.
+         */
+        ExportJobResponse: {
+            /** Exported Path */
+            exported_path: string;
+            /** Export Type */
+            export_type: string;
         };
         /** ExportRequest */
         ExportRequest: {
@@ -1035,6 +1354,28 @@ export interface components {
             /** Extension */
             extension: string | null;
         };
+        /**
+         * FitResultResponse
+         * @description Training result summary (mirror of :class:`FitSummary`).
+         *
+         *     ``metrics`` is a backend-dependent nested mapping (e.g. LizyML emits
+         *     ``{"raw": {"oof": {...}}, "formatted": [...]}``). ``extra='allow'``
+         *     keeps forward-compatibility for additional backend-specific keys.
+         */
+        FitResultResponse: {
+            /** Metrics */
+            metrics: {
+                [key: string]: unknown;
+            };
+            /** Fold Count */
+            fold_count: number;
+            /** Params */
+            params: {
+                [key: string]: unknown;
+            }[];
+        } & {
+            [key: string]: unknown;
+        };
         /** FoldInfoResponse */
         FoldInfoResponse: {
             /** Fold */
@@ -1049,7 +1390,102 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
-        /** JobDetailResponse */
+        /**
+         * InferenceDataRefResponse
+         * @description DataRef embedded inside :class:`InferenceRecordResponse`.
+         *
+         *     Uses ``extra='allow'`` so fields like ``mtime`` that the backend
+         *     may record on uploads still round-trip without validation errors.
+         */
+        InferenceDataRefResponse: {
+            /**
+             * Source Type
+             * @enum {string}
+             */
+            source_type: "path" | "upload";
+            /** Path */
+            path: string;
+            /** Filename */
+            filename: string;
+            /** Fingerprint */
+            fingerprint: string;
+            /** Shape */
+            shape: number[];
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * InferenceMetricsResponse
+         * @description Inference metrics — regression vs. classification share one shape.
+         *
+         *     The exact metric set is backend- and task-dependent. The known keys
+         *     emitted by :func:`lizystudio.services.inference.evaluate_predictions`
+         *     are declared here so the generated TypeScript type exposes concrete
+         *     fields, while ``extra='allow'`` keeps forward-compatibility when a
+         *     backend adds a new metric (e.g. ``f1`` for multiclass).  All fields
+         *     are optional because no single task emits every one of them.
+         */
+        InferenceMetricsResponse: {
+            /** Mae */
+            mae?: number | null;
+            /** Rmse */
+            rmse?: number | null;
+            /** Accuracy */
+            accuracy?: number | null;
+            /** Auc */
+            auc?: number | null;
+            /** Logloss */
+            logloss?: number | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * InferenceRecordResponse
+         * @description Persisted inference record (history entry / GET by id).
+         */
+        InferenceRecordResponse: {
+            /** Inf Id */
+            inf_id: string;
+            /** Job Id */
+            job_id: string;
+            data_ref: components["schemas"]["InferenceDataRefResponse"];
+            /** Has Ground Truth */
+            has_ground_truth: boolean;
+            /** Created At */
+            created_at: string;
+            /** Row Count */
+            row_count: number;
+            /** Warnings */
+            warnings: string[];
+        };
+        /**
+         * InferenceRunResponse
+         * @description Response from ``POST /api/inference/run``.
+         */
+        InferenceRunResponse: {
+            /** Inf Id */
+            inf_id: string;
+            /** Job Id */
+            job_id: string;
+        };
+        /**
+         * InferenceUploadResponse
+         * @description Response from ``POST /api/inference/upload``.
+         */
+        InferenceUploadResponse: {
+            /** Upload Path */
+            upload_path: string;
+            /** Filename */
+            filename: string;
+        };
+        /**
+         * JobDetailResponse
+         * @description Full job payload returned by ``GET /api/jobs/{job_id}``.
+         *
+         *     ``fit_result`` / ``tune_result`` use concrete Pydantic models so the
+         *     generated TS types declare ``metrics``, ``fold_count``, ``best_params``
+         *     etc. instead of :code:`Record<string, unknown>`.
+         */
         JobDetailResponse: {
             /** Job Id */
             job_id: string;
@@ -1071,31 +1507,44 @@ export interface components {
             completed_at?: string | null;
             /** Error */
             error?: string | null;
-            /** Model Name */
-            model_name?: string | null;
+            /**
+             * Model Name
+             * @default
+             */
+            model_name: string;
             /** Primary Score */
             primary_score?: number | null;
-            /** Fit Result */
-            fit_result?: {
-                [key: string]: unknown;
-            } | null;
-            /** Tune Result */
-            tune_result?: {
-                [key: string]: unknown;
-            } | null;
+            /** Parent Job Id */
+            parent_job_id?: string | null;
             /** Config */
             config?: {
                 [key: string]: unknown;
             } | null;
-        } & {
-            [key: string]: unknown;
+            fit_result?: components["schemas"]["FitResultResponse"] | null;
+            tune_result?: components["schemas"]["TuneResultResponse"] | null;
+        };
+        /**
+         * JobLogResponse
+         * @description GET /api/jobs/{job_id}/log.
+         */
+        JobLogResponse: {
+            /** Log */
+            log: string;
         };
         /** JobStartResponse */
         JobStartResponse: {
             /** Job Id */
             job_id: string;
         };
-        /** JobSummaryResponse */
+        /**
+         * JobSummaryResponse
+         * @description Metadata row returned by ``GET /api/jobs``.
+         *
+         *     All optional fields are declared ``X | None = None`` (required with a
+         *     null default) so generated TypeScript types expose them as
+         *     ``key: T | null`` rather than ``key?: T | null``, matching the actual
+         *     response shape — :func:`_job_summary` always populates every key.
+         */
         JobSummaryResponse: {
             /** Job Id */
             job_id: string;
@@ -1117,10 +1566,62 @@ export interface components {
             completed_at?: string | null;
             /** Error */
             error?: string | null;
-            /** Model Name */
-            model_name?: string | null;
+            /**
+             * Model Name
+             * @default
+             */
+            model_name: string;
             /** Primary Score */
             primary_score?: number | null;
+            /** Parent Job Id */
+            parent_job_id?: string | null;
+        };
+        /**
+         * LineageNodeResponse
+         * @description Node in the lineage tree (H-0062). Self-referential — children
+         *     are declared via ``model_rebuild`` below because BaseModel forward-
+         *     references within the same module need an explicit rebuild call in
+         *     Python versions pydantic targets.
+         */
+        LineageNodeResponse: {
+            /** Job Id */
+            job_id: string;
+            /** Status */
+            status: string;
+            /** Job Type */
+            job_type: string;
+            /** Children */
+            children: components["schemas"]["LineageNodeResponse"][];
+            /** Truncated */
+            truncated?: boolean | null;
+        };
+        /**
+         * LineageResponse
+         * @description GET /api/jobs/{job_id}/lineage.
+         */
+        LineageResponse: {
+            tree: components["schemas"]["LineageNodeResponse"];
+        };
+        /**
+         * ParameterHintResponse
+         * @description Label/step/default metadata for a single config parameter.
+         *
+         *     ``default`` is backend-dependent — scalar, list, or task-keyed dict —
+         *     so it is typed as ``Any`` rather than narrowed.
+         */
+        ParameterHintResponse: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Kind */
+            kind: string;
+            /** Step */
+            step?: number | null;
+            /** Default */
+            default?: unknown | null;
+            /** Description */
+            description?: string | null;
         } & {
             [key: string]: unknown;
         };
@@ -1128,6 +1629,20 @@ export interface components {
         PlotResponseModel: {
             /** Plotly Json */
             plotly_json: string;
+        };
+        /**
+         * PredictionsResponse
+         * @description Paginated predictions table returned by ``/predictions``.
+         */
+        PredictionsResponse: {
+            /** Columns */
+            columns: string[];
+            /** Data */
+            data: {
+                [key: string]: unknown;
+            }[];
+            /** Total Rows */
+            total_rows: number;
         };
         /** PreviewResponseModel */
         PreviewResponseModel: {
@@ -1141,6 +1656,41 @@ export interface components {
             total_rows: number;
             /** Total Cols */
             total_cols: number;
+        };
+        /**
+         * ResumeRequest
+         * @description Body of ``POST /api/jobs/{id}/resume``.
+         */
+        ResumeRequest: {
+            /** N Trials */
+            n_trials?: number | null;
+        };
+        /**
+         * RetuneJobResponse
+         * @description POST /api/jobs/{job_id}/retune and /resume.
+         *
+         *     Both endpoints return the child job id and its parent reference.
+         */
+        RetuneJobResponse: {
+            /** Job Id */
+            job_id: string;
+            /** Parent Job Id */
+            parent_job_id: string;
+        };
+        /**
+         * RetuneRequest
+         * @description Body of ``POST /api/jobs/{id}/retune``.
+         *
+         *     Uses ``extra='forbid'`` so unknown fields are rejected rather than
+         *     silently dropped (CLAUDE.md Python security rule, H-0062 review).
+         */
+        RetuneRequest: {
+            /** N Trials */
+            n_trials: number;
+            /** Expand Boundary */
+            expand_boundary?: boolean | null;
+            /** Boundary Threshold */
+            boundary_threshold?: number | null;
         };
         /** RunRequest */
         RunRequest: {
@@ -1157,6 +1707,46 @@ export interface components {
              * @default true
              */
             evaluate: boolean;
+        };
+        /**
+         * SearchSpaceCatalogEntryResponse
+         * @description One entry in ``search_space_catalog`` — a tunable parameter.
+         *
+         *     ``default``/``default_choices`` are heterogeneous (boolean, number,
+         *     string) so they stay typed as ``Any``.
+         */
+        SearchSpaceCatalogEntryResponse: {
+            /** Key */
+            key: string;
+            /** Title */
+            title: string;
+            /** Paramtype */
+            paramType: string;
+            /** Modes */
+            modes: string[];
+            /** Group */
+            group?: string | null;
+            /** Default */
+            default?: unknown | null;
+            /** Default Mode */
+            default_mode?: ("fixed" | "range" | "choice") | null;
+            default_range?: components["schemas"]["SearchSpaceRangeDefault"] | null;
+            /** Default Choices */
+            default_choices?: unknown[] | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * SearchSpaceRangeDefault
+         * @description Default ``range`` mode values for a tunable parameter.
+         */
+        SearchSpaceRangeDefault: {
+            /** Low */
+            low: number;
+            /** High */
+            high: number;
+            /** Log */
+            log: boolean;
         };
         /** SplitPreviewResponseModel */
         SplitPreviewResponseModel: {
@@ -1176,6 +1766,140 @@ export interface components {
             filename: string;
             /** Shape */
             shape: number[];
+        };
+        /**
+         * TuneResultResponse
+         * @description Hyperparameter tuning summary (mirror of :class:`TuningSummary`).
+         *
+         *     The multi-round re-tune path (H-0061) populates ``rounds`` and
+         *     ``boundary_report``; legacy single-round tuning leaves them ``None``.
+         */
+        TuneResultResponse: {
+            /** Best Params */
+            best_params: {
+                [key: string]: unknown;
+            };
+            /** Best Score */
+            best_score: number;
+            /** Trials */
+            trials: {
+                [key: string]: unknown;
+            }[];
+            /** Metric Name */
+            metric_name: string;
+            /** Direction */
+            direction: string;
+            /** Rounds */
+            rounds?: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Boundary Report */
+            boundary_report?: {
+                [key: string]: unknown;
+            } | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * UiCapabilities
+         * @description Backend-declared capabilities consumed by the Workspace UI.
+         */
+        UiCapabilities: {
+            /** Cv Strategies */
+            cv_strategies: string[];
+            tune: components["schemas"]["UiCapabilitiesTune"];
+            /** Cv Strategy Fields */
+            cv_strategy_fields?: {
+                [key: string]: string[];
+            } | null;
+            /** Cv Defaults */
+            cv_defaults?: {
+                [key: string]: unknown;
+            } | null;
+            /** Cv Default Strategy */
+            cv_default_strategy?: {
+                [key: string]: string;
+            } | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * UiCapabilitiesTune
+         * @description Backend capability flags for the Tune tab.
+         */
+        UiCapabilitiesTune: {
+            /** Allow Empty Space */
+            allow_empty_space: boolean;
+        };
+        /**
+         * UiSchemaResponse
+         * @description Response from ``GET /api/backends/ui-schema`` (H-0026).
+         *
+         *     Mirrors the dict produced by :func:`build_ui_schema` in
+         *     ``backends/lizyml_ui_schema.py``. Frontend re-exports this type via
+         *     the generated ``schema.d.ts`` so the 3-way drift between backend
+         *     dict / OpenAPI / ``frontend/src/api/types.ts`` is eliminated (C-5).
+         */
+        UiSchemaResponse: {
+            /** Sections */
+            sections: components["schemas"]["UiSection"][];
+            /** Option Sets */
+            option_sets: {
+                [key: string]: {
+                    [key: string]: string[];
+                };
+            };
+            /** Metric Direction */
+            metric_direction?: {
+                [key: string]: {
+                    [key: string]: string;
+                };
+            } | null;
+            /** Parameter Hints */
+            parameter_hints: components["schemas"]["ParameterHintResponse"][];
+            /** Search Space Catalog */
+            search_space_catalog: components["schemas"]["SearchSpaceCatalogEntryResponse"][];
+            /** Step Map */
+            step_map: {
+                [key: string]: number;
+            };
+            /** Conditional Visibility */
+            conditional_visibility: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
+            };
+            /** Defaults */
+            defaults: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
+            };
+            /** Inner Valid Options */
+            inner_valid_options: string[];
+            /** N Trials Presets */
+            n_trials_presets?: number[] | null;
+            capabilities?: components["schemas"]["UiCapabilities"] | null;
+            /** Calibration Methods */
+            calibration_methods?: string[] | null;
+            /** Additional Params */
+            additional_params?: string[] | null;
+            /** Special Search Space Fields */
+            special_search_space_fields?: {
+                [key: string]: string;
+            } | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * UiSection
+         * @description Top-level section in the config editor (Model / Training / ...).
+         */
+        UiSection: {
+            /** Key */
+            key: string;
+            /** Title */
+            title: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -1199,6 +1923,26 @@ export interface components {
                 [key: string]: unknown;
             }[];
         };
+        /**
+         * WorkspaceFitRequest
+         * @description Request body for ``POST /api/workspace/fit`` (P-0086, Issue #251).
+         *
+         *     When ``config`` is provided it overwrites ``ws.config`` atomically at
+         *     fit time, closing the race window between an in-flight ``PUT /config``
+         *     and the subsequent ``POST /fit``. The UI sends the latest merged
+         *     config here so user edits (e.g. an Exclude toggle) are guaranteed to
+         *     be reflected in the fitted model regardless of PUT timing.
+         *
+         *     When omitted, the endpoint falls back to the current ``ws.config``
+         *     for backward compatibility with callers that still use the old
+         *     PUT-then-POST flow (curl, external clients, legacy E2E).
+         */
+        WorkspaceFitRequest: {
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            } | null;
+        };
         /** WorkspaceStatusResponse */
         WorkspaceStatusResponse: {
             /** Has Data */
@@ -1210,7 +1954,139 @@ export interface components {
             data_ref?: components["schemas"]["StatusDataRef"] | null;
             /** Current Job Id */
             current_job_id?: string | null;
+            /** Files Root */
+            files_root: string;
         };
+        /**
+         * WorkspaceTuneRequest
+         * @description Request body for ``POST /api/workspace/tune`` (P-0086, Issue #251).
+         *
+         *     Mirrors :class:`WorkspaceFitRequest`. Tuning-specific defaults are
+         *     still injected inside the endpoint after the body.config is applied.
+         */
+        WorkspaceTuneRequest: {
+            /** Config */
+            config?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /**
+         * WsCompleted
+         * @description Terminal success message — closes the WS connection client-side.
+         */
+        WsCompleted: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "completed";
+            /** Job Id */
+            job_id: string;
+            /**
+             * Message
+             * @default Completed.
+             */
+            message: string;
+        };
+        /**
+         * WsError
+         * @description Terminal failure message — closes the WS connection client-side.
+         */
+        WsError: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "error";
+            /** Job Id */
+            job_id: string;
+            /** Message */
+            message: string;
+            /**
+             * Code
+             * @default BACKEND_ERROR
+             */
+            code: string;
+        };
+        /**
+         * WsFoldResult
+         * @description One cross-validation fold result emitted inside ``WsProgress`` (H-0047).
+         *
+         *     Only ``fold`` (the 0-based index) is fixed.  Per-metric values flow
+         *     through as ``extra='allow'`` because the set of metric keys is
+         *     task-dependent: a regression run emits ``rmse`` / ``r2`` / ``mae``,
+         *     a binary classification run emits ``auc`` / ``logloss`` / ``accuracy``,
+         *     etc.  Hard-coding the shape would force every metric name into the
+         *     contract and couple the schema to a single backend.
+         */
+        WsFoldResult: {
+            /** Fold */
+            fold: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * WsPing
+         * @description 30-second keepalive ping (H-0058).
+         *
+         *     Carries no payload beyond the discriminator and the job id — clients
+         *     may ignore it.
+         */
+        WsPing: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "ping";
+            /** Job Id */
+            job_id: string;
+        };
+        /**
+         * WsProgress
+         * @description Live training / tuning progress (H-0047 fold_results, H-0055 trial_results).
+         */
+        WsProgress: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "progress";
+            /** Job Id */
+            job_id: string;
+            /** Current */
+            current: number;
+            /** Total */
+            total: number;
+            /** Message */
+            message: string;
+            /**
+             * Fold Results
+             * @default null
+             */
+            fold_results: components["schemas"]["WsFoldResult"][] | null;
+            /**
+             * Trial Results
+             * @default null
+             */
+            trial_results: components["schemas"]["WsTrialResult"][] | null;
+        };
+        /**
+         * WsTrialResult
+         * @description One Optuna trial result emitted inside ``WsProgress`` (H-0055).
+         */
+        WsTrialResult: {
+            /** Number */
+            number: number;
+            /** Score */
+            score: number | null;
+            /** State */
+            state: string;
+            /** Best Score */
+            best_score: number | null;
+        } & {
+            [key: string]: unknown;
+        };
+        WsMessage: components["schemas"]["WsProgress"] | components["schemas"]["WsCompleted"] | components["schemas"]["WsError"] | components["schemas"]["WsPing"];
     };
     responses: never;
     parameters: never;
@@ -1710,7 +2586,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceFitRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -1719,6 +2599,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobStartResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -1730,7 +2619,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceTuneRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -1739,6 +2632,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobStartResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -1808,7 +2710,9 @@ export interface operations {
     };
     delete_job_api_jobs__job_id__delete: {
         parameters: {
-            query?: never;
+            query?: {
+                cascade?: boolean;
+            };
             header?: never;
             path: {
                 job_id: string;
@@ -1823,9 +2727,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["DeleteJobResponse"];
                 };
             };
             /** @description Validation Error */
@@ -1856,9 +2758,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["JobLogResponse"];
                 };
             };
             /** @description Validation Error */
@@ -1922,9 +2822,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["CancelJobResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2070,6 +2968,37 @@ export interface operations {
             };
         };
     };
+    get_job_learning_curve_metrics_endpoint_api_jobs__job_id__learning_curve_metrics_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_job_plot_endpoint_api_jobs__job_id__plot__plot_type__get: {
         parameters: {
             query?: {
@@ -2157,9 +3086,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["ExportJobResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2190,7 +3117,108 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ExportCodeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retune_job_api_jobs__job_id__retune_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetuneRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetuneJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resume_job_api_jobs__job_id__resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResumeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetuneJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_job_lineage_api_jobs__job_id__lineage_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LineageResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2223,9 +3251,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["InferenceRunResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2258,9 +3284,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["InferenceUploadResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2291,9 +3315,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": components["schemas"]["InferenceRecordResponse"][];
                 };
             };
             /** @description Validation Error */
@@ -2326,9 +3348,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["InferenceRecordResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2363,9 +3383,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["PredictionsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2398,9 +3416,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["InferenceMetricsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2434,9 +3450,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string;
-                    };
+                    "application/json": components["schemas"]["PlotResponseModel"];
                 };
             };
             /** @description Validation Error */
@@ -2463,13 +3477,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description Predictions CSV download (streaming). */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "text/csv": unknown;
                 };
             };
             /** @description Validation Error */
@@ -2503,9 +3517,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ComparisonStatsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2554,9 +3566,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["UiSchemaResponse"];
                 };
             };
         };
@@ -2593,13 +3603,55 @@ export interface operations {
             };
         };
     };
-    serve_spa__full_path__get: {
+    liveness_api_health_get: {
         parameters: {
             query?: never;
             header?: never;
-            path: {
-                full_path: string;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
+                };
             };
+        };
+    };
+    readiness_api_health_ready_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    metrics_api_metrics_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
@@ -2611,15 +3663,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

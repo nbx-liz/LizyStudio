@@ -1,12 +1,11 @@
-import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import type { InferenceRecord } from "@/api/inference";
 import {
-  fetchInferenceMetrics,
-  fetchInferencePlot,
-  fetchInferenceShapPlot,
-  type InferenceRecord,
-} from "@/api/inference";
-import { fetchJobPlots } from "@/api/jobs";
+  useInferenceMetrics,
+  useInferencePlot,
+  useInferenceShap,
+  useJobPlots,
+} from "@/api/queries";
 import {
   Accordion,
   AccordionContent,
@@ -39,22 +38,14 @@ export function ResultsWithGT({
 }: ResultsWithGTProps) {
   const [selectedPlot, setSelectedPlot] = useState("");
 
-  const { data: metrics } = useQuery({
-    queryKey: ["inf-metrics", record.inf_id, record.job_id],
-    queryFn: () => fetchInferenceMetrics(record.inf_id, record.job_id),
-  });
-
-  const { data: plots } = useQuery({
-    queryKey: ["job-plots", record.job_id],
-    queryFn: () => fetchJobPlots(record.job_id),
-  });
-
-  const { data: plotData } = useQuery({
-    queryKey: ["inf-plot", record.inf_id, record.job_id, selectedPlot],
-    queryFn: () =>
-      fetchInferencePlot(record.inf_id, record.job_id, selectedPlot),
-    enabled: !!selectedPlot,
-  });
+  const { data: metrics } = useInferenceMetrics(record.inf_id, record.job_id);
+  const { data: plots } = useJobPlots(record.job_id);
+  const { data: plotData } = useInferencePlot(
+    record.inf_id,
+    record.job_id,
+    selectedPlot,
+    { enabled: !!selectedPlot },
+  );
 
   // Auto-select first plot
   useEffect(() => {
@@ -133,14 +124,17 @@ export function ResultsWithGT({
         </section>
       )}
 
-      {/* Accordion sections */}
+      {/* Accordion sections.
+          Issue #370: ``PredDistributionAccordion`` reads the
+          backend's available-plots list and only renders the section
+          when the matching plot type exists, so a regression fit (or
+          any task without ``probability-histogram``) no longer shows
+          an empty accordion or fires a 404. */}
       <Accordion type="multiple">
-        <AccordionItem value="pred-distribution">
-          <AccordionTrigger>Prediction Distribution</AccordionTrigger>
-          <AccordionContent>
-            <PredDistributionPlot infId={record.inf_id} jobId={record.job_id} />
-          </AccordionContent>
-        </AccordionItem>
+        <PredDistributionAccordion
+          infId={record.inf_id}
+          jobId={record.job_id}
+        />
 
         <AccordionItem value="predictions">
           <AccordionTrigger>Predictions</AccordionTrigger>
@@ -155,7 +149,7 @@ export function ResultsWithGT({
           <AccordionItem value="warnings">
             <AccordionTrigger>Warnings</AccordionTrigger>
             <AccordionContent>
-              <ul className="list-disc pl-4 text-sm text-orange-600">
+              <ul className="list-disc pl-4 text-sm text-degraded-fg">
                 {record.warnings.map((w, i) => (
                   <li key={`warn-${i}`}>{w}</li>
                 ))}
@@ -168,34 +162,62 @@ export function ResultsWithGT({
   );
 }
 
-/** Prediction distribution plot loaded lazily inside an accordion. */
-function PredDistributionPlot({
+/**
+ * Prediction distribution accordion section. Issue #370.
+ *
+ * Gates on the backend's available-plots list — same pattern as
+ * the SHAP gate from Issue #355. Binary classification exposes
+ * ``probability-histogram``; regression has no equivalent today,
+ * so the entire accordion item is omitted instead of rendering an
+ * empty body and a 404 in DevTools.
+ */
+function PredDistributionAccordion({
   infId,
   jobId,
 }: {
   infId: string;
   jobId: string;
 }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ["inf-plot", infId, jobId, "prediction-distribution"],
-    queryFn: () => fetchInferencePlot(infId, jobId, "prediction-distribution"),
-  });
-
-  if (isLoading) {
-    return (
-      <p className="text-xs text-muted-foreground">Loading distribution...</p>
-    );
-  }
-  if (!data) return null;
-  return <PlotlyChart plotlyJson={data.plotly_json} />;
+  const { data: availablePlots } = useJobPlots(jobId);
+  const distributionPlotType = availablePlots?.includes("probability-histogram")
+    ? "probability-histogram"
+    : null;
+  const { data, isLoading } = useInferencePlot(
+    infId,
+    jobId,
+    distributionPlotType ?? "",
+    { retry: false, enabled: distributionPlotType != null },
+  );
+  if (distributionPlotType == null) return null;
+  return (
+    <AccordionItem value="pred-distribution">
+      <AccordionTrigger>Prediction Distribution</AccordionTrigger>
+      <AccordionContent>
+        {isLoading ? (
+          <p className="text-xs text-muted-foreground">
+            Loading distribution...
+          </p>
+        ) : data ? (
+          <PlotlyChart plotlyJson={data.plotly_json} />
+        ) : null}
+      </AccordionContent>
+    </AccordionItem>
+  );
 }
 
-/** SHAP summary accordion item — renders only when SHAP data is available. */
+/** SHAP summary accordion item — renders only when SHAP data is available.
+ *
+ * Issue #355: gate the SHAP fetch on the backend's ``available_plots``
+ * so we never request ``shap-summary`` from a backend that does not
+ * advertise it. Without this gate the lizyml backend returns 404 on
+ * every Inference run, polluting the browser console.
+ */
 function ShapAccordionItem({ infId, jobId }: { infId: string; jobId: string }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ["inf-shap", infId, jobId],
-    queryFn: () => fetchInferenceShapPlot(infId, jobId),
+  const { data: availablePlots } = useJobPlots(jobId);
+  const shapAvailable = availablePlots?.includes("shap-summary") ?? false;
+  const { data, isLoading } = useInferenceShap(infId, jobId, {
     retry: false,
+    enabled: shapAvailable,
   });
 
   if (!data && !isLoading) return null;

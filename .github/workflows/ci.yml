@@ -23,7 +23,9 @@ jobs:
       # Local runs do NOT retry so flakiness stays visible. Quarantined
       # tests are excluded from this blocking job (default addopts in
       # pyproject.toml) and run separately in `backend-quarantine`.
-      - run: uv run pytest --cov=src/lizystudio --cov-report=term-missing --cov-fail-under=80 --reruns 2 --reruns-delay 1 -q
+      # Integration tests (P-0095) live in their own job; ignore the
+      # directory here so we do not double-run a 14s suite on every PR.
+      - run: uv run pytest --ignore=tests/integration --cov=src/lizystudio --cov-report=term-missing --cov-fail-under=80 --reruns 2 --reruns-delay 1 -q
 
   # Non-blocking quarantine job — captures signal on tests marked
   # `@pytest.mark.quarantine` without failing the PR. Skip cleanly when
@@ -51,6 +53,23 @@ jobs:
           # already tolerates failure, but the job status will still be
           # marked green in GitHub UI via continue-on-error.
 
+  # Backend fit -> save -> load round-trip integration tests (P-0095 /
+  # Issue #346 Phase C). Real LizyMLAdapter is exercised end-to-end
+  # against the captured fixture configs so shape-evolution bugs of
+  # the Issue #345 class are caught before merge. Runs in its own job
+  # so the ~14s suite parallelises with `backend (3.10)/(3.11)` and
+  # does not inflate their wall time. Required check (configure in
+  # GitHub branch protection alongside backend / frontend / e2e).
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync
+      - run: uv run pytest tests/integration -v --reruns 2 --reruns-delay 1
+
   frontend:
     runs-on: ubuntu-latest
     defaults:
@@ -70,3 +89,142 @@ jobs:
       - run: pnpm check
       - run: pnpm build
       - run: pnpm vitest run --coverage
+
+  # Post-Refactor E2E Gate (CLAUDE.md common/development-workflow.md §3.5).
+  # Runs the functional Playwright suite on every PR so structural
+  # refactors cannot silently break integration-level flows. Visual
+  # regression (@visual) and accessibility scans (@a11y) are EXCLUDED
+  # here — they are state-sensitive and live on Nightly so they do not
+  # block feature PRs on environment noise.
+  e2e-chromium:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+      - name: Enable corepack and activate pnpm from packageManager field
+        run: |
+          corepack enable
+          corepack prepare --activate
+          pnpm --version
+      - name: Install backend deps
+        working-directory: .
+        run: uv sync
+      - run: pnpm install --frozen-lockfile
+      # Build static assets so the backend's SPA fallback is mounted
+      # (server.py gates the mount on ``STATIC_DIR/index.html`` existing).
+      # Without this the \`security-fixes\` spec — which expects /../ path
+      # traversal on :8501 to resolve to the SPA 200 / index.html — sees
+      # a FastAPI default 404 instead.
+      - run: pnpm build
+      # Cache the downloaded browser binaries across runs keyed on the
+      # pnpm lockfile (Playwright version is pinned via @playwright/test
+      # in package.json → frozen-lockfile guarantees reproducibility).
+      - name: Get Playwright version
+        id: pw-version
+        run: |
+          VERSION=$(node -e "console.log(require('@playwright/test/package.json').version)")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Run functional E2E (chromium, excluding @visual / @a11y)
+        env:
+          CI: "true"
+          LIZYSTUDIO_FILES_ROOT: /tmp
+          LIZYSTUDIO_JOBS_DIR: /tmp/e2e_jobs
+        run: |
+          rm -rf /tmp/e2e_jobs
+          # --ignore-snapshots skips ``toHaveScreenshot`` assertions that
+          # live inside functional specs (e.g. workspace-ui-improvements,
+          # inference-flow).  Those assertions are covered by the
+          # dedicated Nightly visual job; running them here would red-up
+          # PRs whenever the committed golden is missing or stale.
+          pnpm exec playwright test \
+            --project=chromium \
+            --grep-invert="@visual|@a11y|@ci-flaky" \
+            --ignore-snapshots
+      - name: Upload Playwright traces/screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-chromium
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # B-9 Part 2 (H-0078 follow-up): guard against raw Tailwind color
+  # utilities in frontend source. After the semantic-token migration
+  # (design-tokens.css + tailwind.config.ts), classes like ``bg-green-100``
+  # / ``text-red-600`` bypass dark-mode inversion and the WCAG-audited
+  # palette. Biome has no Tailwind plugin, so a grep-based check is the
+  # cheapest guard. Allowlist lives inside the script.
+  raw-color-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Scan frontend/src for raw Tailwind color classes
+        working-directory: frontend
+        run: bash scripts/check-raw-colors.sh
+
+  # C-6 Phase 5 (H-0080): guard against reintroduction of the retired
+  # ``apiFetch`` helper. After migrating files/inference/workspace/jobs
+  # to the openapi-fetch-based ``apiClient``, the old hand-rolled fetcher
+  # was removed from client.ts. This grep check makes sure a future
+  # change (copy-paste from an old branch, port from another project)
+  # cannot silently reintroduce it.
+  no-apifetch-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Scan frontend/src for retired apiFetch usage
+        working-directory: frontend
+        run: bash scripts/check-no-apifetch.sh
+
+  # C-1 / INV-CI-1: committed schema.d.ts must match freshly-generated
+  # output. Prevents drift between backend response_model declarations
+  # and the TypeScript types that the frontend compiles against.
+  api-types-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+      - name: Enable corepack + pnpm
+        working-directory: frontend
+        run: |
+          corepack enable
+          corepack prepare --activate
+      - run: uv sync
+      - name: Install frontend deps
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - name: Dump backend OpenAPI schema
+        run: |
+          uv run python -c "import json; from lizystudio.server import create_app; print(json.dumps(create_app().openapi()))" > /tmp/openapi.json
+      - name: Regenerate TypeScript schema from dumped OpenAPI
+        working-directory: frontend
+        run: node_modules/.bin/openapi-typescript /tmp/openapi.json -o src/api/generated/schema.d.ts
+      - name: Fail if schema.d.ts drifted
+        run: |
+          if ! git diff --exit-code frontend/src/api/generated/schema.d.ts; then
+            echo "::error::Committed schema.d.ts is out of date. Run 'cd frontend && pnpm generate:api' and commit."
+            exit 1
+          fi

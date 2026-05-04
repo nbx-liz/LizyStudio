@@ -1,7 +1,11 @@
 import { cleanup, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { JobDetail } from "@/api/types";
+import binaryIsotonicFit from "@/__fixtures__/lizyml/fit_result_binary_isotonic.json";
+import binaryNoCalFit from "@/__fixtures__/lizyml/fit_result_binary_no_cal.json";
+import regressionFit from "@/__fixtures__/lizyml/fit_result_regression.json";
+import tuneFit from "@/__fixtures__/lizyml/fit_result_tune.json";
+import type { FitResult, JobDetail } from "@/api/types";
 import { makeJob, renderWithQuery } from "@/test/helpers";
 import { ResultsCompletedView } from "./ResultsCompletedView";
 
@@ -436,6 +440,106 @@ describe("ResultsCompletedView — learning curve metrics filter", () => {
       const props = latestProps();
       expect(props.availableEvalMetrics).toEqual(["logloss"]);
       expect(props.lcMetric).not.toBe("auc");
+    });
+  });
+});
+
+// Production-artifact regression coverage at the component layer
+// (Issue #346 Phase B 3/3). Pivot lock-in lives in #349 (metrics.ts) and
+// hook lock-in in #350 (useJobResultData); these tests prove the rendered
+// primary-metric badge surfaces the right value end-to-end.
+async function renderViewWithFixture(fixture: unknown, lcMetrics: string[]) {
+  plotSectionCalls.length = 0;
+  const jobs = await import("@/api/jobs");
+  (
+    jobs.fetchJobLearningCurveMetrics as ReturnType<typeof vi.fn>
+  ).mockResolvedValue(lcMetrics);
+
+  const job = makeJob({
+    job_id: "job_fixture",
+    config: { model: { name: "LightGBM" } },
+    fit_result: fixture as FitResult,
+  });
+
+  renderWithQuery(
+    <ResultsCompletedView
+      job={job}
+      headerLabel="Test"
+      selectedPlot=""
+      onSelectPlot={vi.fn()}
+    />,
+  );
+  return job;
+}
+
+describe("ResultsCompletedView with real fit_result fixtures", () => {
+  it("renders the primary-metric badge from a real binary fit (no calibration)", async () => {
+    await renderViewWithFixture(binaryNoCalFit, []);
+    // First metric in the pivoted result is auc (insertion order matches
+    // raw.if_mean's first key). The badge reads
+    // ``${firstKey}: ${oos.toFixed(4)}`` so we assert against the real
+    // raw.oof.auc value.
+    const expectedOos = binaryNoCalFit.metrics.raw.oof.auc;
+    await waitFor(() => {
+      expect(
+        screen.getByText(`auc: ${expectedOos.toFixed(4)}`),
+      ).toBeInTheDocument();
+    });
+  });
+
+  // Locks PR #344 regression at the component layer: the badge must read
+  // the canonical ``raw.oof.auc``, NOT ``calibrated.oof.auc``. The fixture
+  // values diverge so any future regression that picked up calibrated
+  // through the data flow would render a different number here.
+  it("renders the badge from raw subtree, not calibrated, on a calibrated fit", async () => {
+    await renderViewWithFixture(binaryIsotonicFit, []);
+    const rawOos = binaryIsotonicFit.metrics.raw.oof.auc;
+    const calOos = binaryIsotonicFit.metrics.calibrated.oof.auc;
+    expect(rawOos).not.toBe(calOos);
+    await waitFor(() => {
+      expect(screen.getByText(`auc: ${rawOos.toFixed(4)}`)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(`auc: ${calOos.toFixed(4)}`)).toBeNull();
+  });
+
+  it("renders the primary-metric badge from a real regression fit", async () => {
+    await renderViewWithFixture(regressionFit, []);
+    const expectedOos = regressionFit.metrics.raw.oof.rmse;
+    await waitFor(() => {
+      expect(
+        screen.getByText(`rmse: ${expectedOos.toFixed(4)}`),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("renders the primary-metric badge from a real tune fit's best-params fit_result", async () => {
+    plotSectionCalls.length = 0;
+    const jobs = await import("@/api/jobs");
+    (
+      jobs.fetchJobLearningCurveMetrics as ReturnType<typeof vi.fn>
+    ).mockResolvedValue([]);
+    const job = makeJob({
+      job_id: "job_tune_fixture",
+      job_type: "tune",
+      config: { model: { name: "LightGBM" } },
+      fit_result: tuneFit as FitResult,
+      // Without tune_result the badge falls back to the metrics-derived
+      // path (firstKey + oos), which is what we want to assert here.
+      tune_result: null,
+    });
+    renderWithQuery(
+      <ResultsCompletedView
+        job={job}
+        headerLabel="Test"
+        selectedPlot=""
+        onSelectPlot={vi.fn()}
+      />,
+    );
+    const expectedOos = tuneFit.metrics.raw.oof.auc;
+    await waitFor(() => {
+      expect(
+        screen.getByText(`auc: ${expectedOos.toFixed(4)}`),
+      ).toBeInTheDocument();
     });
   });
 });

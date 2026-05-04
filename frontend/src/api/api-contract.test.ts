@@ -30,8 +30,12 @@ import type {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-function assertDefined(value: unknown, label: string) {
+function assertDefined<T>(
+  value: T,
+  label: string,
+): asserts value is NonNullable<T> {
   expect(value, `${label} should be defined`).toBeDefined();
+  expect(value, `${label} should not be null`).not.toBeNull();
 }
 
 // ---------------------------------------------------------------------------
@@ -79,6 +83,7 @@ describe("WorkspaceStatus", () => {
         shape: [100, 10],
       },
       current_job_id: "job-1",
+      files_root: "/tmp",
     };
     expect(status.has_data).toBe(true);
     expect(status.has_config).toBe(true);
@@ -93,6 +98,7 @@ describe("WorkspaceStatus", () => {
       has_result: false,
       data_ref: null,
       current_job_id: null,
+      files_root: "/tmp",
     };
     expect(status.data_ref).toBeNull();
     expect(status.current_job_id).toBeNull();
@@ -165,15 +171,27 @@ describe("PreviewResponse", () => {
 // ConfigUpdateResponse + ConfigError
 // ---------------------------------------------------------------------------
 describe("ConfigUpdateResponse", () => {
-  it("has config and errors", () => {
+  it("has config, errors, and saved", () => {
     const err: ConfigError = { path: "model.name", message: "required" };
     const resp: ConfigUpdateResponse = {
       config: { model: { name: "lgbm" } },
       errors: [err],
+      saved: false,
     };
     assertDefined(resp.config, "config");
     expect(resp.errors).toHaveLength(1);
     expect(resp.errors[0].path).toBe("model.name");
+    expect(resp.saved).toBe(false);
+  });
+
+  it("saved=true means the backend persisted the PUT body (Issue #276)", () => {
+    const resp: ConfigUpdateResponse = {
+      config: { model: { name: "lgbm" } },
+      errors: [],
+      saved: true,
+    };
+    expect(resp.saved).toBe(true);
+    expect(resp.errors).toHaveLength(0);
   });
 });
 
@@ -260,13 +278,6 @@ describe("JobDetail", () => {
       backend_name: "lizyml",
       model_name: "lgbm",
       config: {},
-      data_ref: {
-        source_type: "path",
-        path: "/test",
-        filename: "test.csv",
-        fingerprint: "abc",
-        shape: [100, 10],
-      },
       created_at: "2026-01-01T00:00:00Z",
       completed_at: "2026-01-01T00:05:00Z",
       error: null,
@@ -274,15 +285,14 @@ describe("JobDetail", () => {
       fit_result: {
         metrics: { auc: 0.92, logloss: 0.3 },
         fold_count: 5,
-        params: [{ parameter: "learning_rate", value: 0.1 }],
+        params: [{ learning_rate: 0.1 }],
       },
       tune_result: null,
-      model_path: "/models/job-detail-1.pkl",
       parent_job_id: null,
     };
     assertDefined(detail.fit_result, "fit_result");
     expect(detail.tune_result).toBeNull();
-    assertDefined(detail.model_path, "model_path");
+    expect(detail.fit_result.fold_count).toBe(5);
   });
 });
 
@@ -294,10 +304,9 @@ describe("FitResult", () => {
     const result: FitResult = {
       metrics: { auc: 0.95, logloss: 0.2 },
       fold_count: 5,
-      params: [
-        { parameter: "learning_rate", value: 0.1 },
-        { parameter: "num_leaves", value: 31 },
-      ],
+      // Backend emits free-form param rows (list[dict[str, Any]]);
+      // callers narrow per-row shape at the usage site.
+      params: [{ learning_rate: 0.1 }, { num_leaves: 31 }],
     };
     expect(result.fold_count).toBe(5);
     expect(result.params).toHaveLength(2);
@@ -360,44 +369,66 @@ describe("SplitSummaryRow", () => {
 // ---------------------------------------------------------------------------
 // WebSocket messages
 // ---------------------------------------------------------------------------
-describe("WsMessage", () => {
-  it("ProgressMessage has type, current, total", () => {
+describe("WsMessage (H-0069 SSOT)", () => {
+  it("ProgressMessage carries job_id, current, total, message", () => {
     const msg: ProgressMessage = {
       type: "progress",
+      job_id: "job-1",
       current: 3,
       total: 5,
       message: "Fold 3/5",
-      elapsed: 12.5,
-      metrics: { auc: 0.91 },
+      fold_results: [{ fold: 0, metric: "auc", score: 0.9 }],
+      trial_results: null,
     };
     expect(msg.type).toBe("progress");
+    expect(msg.job_id).toBe("job-1");
     expect(msg.current).toBe(3);
     expect(msg.total).toBe(5);
   });
 
-  it("CompletedMessage has type and job_id", () => {
-    const msg: CompletedMessage = { type: "completed", job_id: "job-1" };
+  it("CompletedMessage carries job_id and message", () => {
+    const msg: CompletedMessage = {
+      type: "completed",
+      job_id: "job-1",
+      message: "Completed.",
+    };
     expect(msg.type).toBe("completed");
     assertDefined(msg.job_id, "job_id");
   });
 
-  it("ErrorMessage has type and message", () => {
-    const msg: ErrorMessage = { type: "error", message: "Something failed" };
+  it("ErrorMessage carries job_id, message, code", () => {
+    const msg: ErrorMessage = {
+      type: "error",
+      job_id: "job-1",
+      message: "Something failed",
+      code: "BACKEND_ERROR",
+    };
     expect(msg.type).toBe("error");
     assertDefined(msg.message, "message");
+    assertDefined(msg.job_id, "job_id");
   });
 
-  it("WsMessage union covers all three types", () => {
+  it("WsMessage union covers progress/completed/error/ping", () => {
     const messages: WsMessage[] = [
-      { type: "progress", current: 1, total: 5 },
-      { type: "completed", job_id: "j1" },
-      { type: "error", message: "fail" },
+      {
+        type: "progress",
+        job_id: "j1",
+        current: 1,
+        total: 5,
+        message: "m",
+        fold_results: null,
+        trial_results: null,
+      },
+      { type: "completed", job_id: "j1", message: "Completed." },
+      { type: "error", job_id: "j1", message: "fail", code: "BACKEND_ERROR" },
+      { type: "ping", job_id: "j1" },
     ];
-    expect(messages).toHaveLength(3);
+    expect(messages).toHaveLength(4);
     expect(messages.map((m) => m.type)).toEqual([
       "progress",
       "completed",
       "error",
+      "ping",
     ]);
   });
 });

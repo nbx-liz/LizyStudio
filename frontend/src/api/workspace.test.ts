@@ -1,17 +1,15 @@
+import { HttpResponse, http } from "msw";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("./client", () => ({
-  apiFetch: vi.fn(),
-}));
-
-import { apiFetch } from "./client";
+import { server } from "../test/mocks/server";
 import {
   fetchBackends,
+  fetchColumnStats,
   fetchColumns,
   fetchConfig,
   fetchConfigDefaults,
   fetchConfigSchema,
   fetchPreview,
+  fetchSplitPreview,
   fetchUiSchema,
   getConfigDownloadUrl,
   loadDataFromPath,
@@ -23,230 +21,443 @@ import {
   validateConfig,
 } from "./workspace";
 
-const mockApiFetch = vi.mocked(apiFetch);
-
 afterEach(() => {
   vi.clearAllMocks();
 });
 
+// C-6 Phase 3: tests exercise the typed apiClient through MSW rather than
+// mocking the client module, matching the Phase 1/2 pattern. Each test
+// captures the outgoing request (method, URL, query, body) so the
+// openapi-fetch builder is proven to produce the same wire-level shape
+// that the hand-rolled ``apiFetch`` did.
+
 // ---------------------------------------------------------------------------
-// loadDataFromPath
+// loadDataFromPath — POST /api/workspace/data/path
 // ---------------------------------------------------------------------------
 describe("loadDataFromPath", () => {
-  it("calls apiFetch with POST and JSON body", async () => {
-    mockApiFetch.mockResolvedValue({
-      data_ref: { path: "/data/train.csv", shape: [100, 5] },
-    });
-    await loadDataFromPath("/data/train.csv");
-    expect(mockApiFetch).toHaveBeenCalledWith("/workspace/data/path", {
-      method: "POST",
-      body: JSON.stringify({ path: "/data/train.csv" }),
-    });
+  it("sends POST with the path field in a JSON body", async () => {
+    let capturedBody: unknown = null;
+    let capturedMethod = "";
+    server.use(
+      http.post("/api/workspace/data/path", async ({ request }) => {
+        capturedMethod = request.method;
+        capturedBody = await request.json();
+        return HttpResponse.json({
+          data_ref: { path: "/data/train.csv", shape: [100, 5] },
+        });
+      }),
+    );
+
+    const result = await loadDataFromPath("/data/train.csv");
+    expect(capturedMethod).toBe("POST");
+    expect(capturedBody).toEqual({ path: "/data/train.csv" });
+    expect(result.data_ref.shape).toEqual([100, 5]);
   });
 });
 
 // ---------------------------------------------------------------------------
-// uploadData
+// uploadData — POST /api/workspace/data/upload (multipart/form-data)
 // ---------------------------------------------------------------------------
 describe("uploadData", () => {
-  it("sends FormData with empty headers override", async () => {
+  it("sends the file as multipart/form-data", async () => {
     const file = new File(["content"], "data.csv", { type: "text/csv" });
-    mockApiFetch.mockResolvedValue({
-      data_ref: { path: "/uploads/data.csv", shape: [10, 3] },
-    });
+    let capturedContentType: string | null = null;
+    let capturedFile: File | null = null;
+    server.use(
+      http.post("/api/workspace/data/upload", async ({ request }) => {
+        capturedContentType = request.headers.get("content-type");
+        const form = await request.formData();
+        const f = form.get("file");
+        if (f instanceof File) {
+          capturedFile = f;
+        }
+        return HttpResponse.json({
+          data_ref: { path: "/uploads/data.csv", shape: [10, 3] },
+        });
+      }),
+    );
+
     await uploadData(file);
-    expect(mockApiFetch).toHaveBeenCalledWith("/workspace/data/upload", {
-      method: "POST",
-      body: expect.any(FormData),
-      headers: {},
-    });
-    const formData = mockApiFetch.mock.calls[0][1]?.body as FormData;
-    expect(formData.get("file")).toBe(file);
+    expect(capturedContentType).toMatch(/^multipart\/form-data;/);
+    expect(capturedFile).not.toBeNull();
+    expect((capturedFile as unknown as File).name).toBe("data.csv");
   });
 });
 
 // ---------------------------------------------------------------------------
-// fetchPreview
+// fetchPreview — GET /api/workspace/data/preview
 // ---------------------------------------------------------------------------
 describe("fetchPreview", () => {
-  it("defaults to 5 rows", async () => {
-    mockApiFetch.mockResolvedValue({ columns: [], data: [] });
+  it("defaults to rows=5", async () => {
+    let capturedRows: string | null = null;
+    server.use(
+      http.get("/api/workspace/data/preview", ({ request }) => {
+        capturedRows = new URL(request.url).searchParams.get("rows");
+        return HttpResponse.json({ columns: [], data: [] });
+      }),
+    );
     await fetchPreview();
-    expect(mockApiFetch).toHaveBeenCalledWith("/workspace/data/preview?rows=5");
+    expect(capturedRows).toBe("5");
   });
 
-  it("accepts a custom row count", async () => {
-    mockApiFetch.mockResolvedValue({ columns: [], data: [] });
-    await fetchPreview(10);
-    expect(mockApiFetch).toHaveBeenCalledWith(
-      "/workspace/data/preview?rows=10",
+  it("forwards a custom rows value", async () => {
+    let capturedRows: string | null = null;
+    server.use(
+      http.get("/api/workspace/data/preview", ({ request }) => {
+        capturedRows = new URL(request.url).searchParams.get("rows");
+        return HttpResponse.json({ columns: [], data: [] });
+      }),
     );
+    await fetchPreview(10);
+    expect(capturedRows).toBe("10");
   });
 });
 
 // ---------------------------------------------------------------------------
-// fetchColumns
+// fetchColumns — GET /api/workspace/data/columns
 // ---------------------------------------------------------------------------
 describe("fetchColumns", () => {
-  it("calls without params when no target", async () => {
-    mockApiFetch.mockResolvedValue({ target: null, columns: [] });
+  it("omits target when no argument is given", async () => {
+    let capturedSearch: string | null = null;
+    server.use(
+      http.get("/api/workspace/data/columns", ({ request }) => {
+        capturedSearch = new URL(request.url).search;
+        return HttpResponse.json({ target: null, columns: [] });
+      }),
+    );
     await fetchColumns();
-    expect(mockApiFetch).toHaveBeenCalledWith("/workspace/data/columns");
+    expect(capturedSearch).toBe("");
   });
 
-  it("encodes target query param", async () => {
-    mockApiFetch.mockResolvedValue({ target: "y", columns: [] });
-    await fetchColumns("some col");
-    expect(mockApiFetch).toHaveBeenCalledWith(
-      "/workspace/data/columns?target=some%20col",
+  it("forwards the target query param", async () => {
+    let capturedTarget: string | null = null;
+    server.use(
+      http.get("/api/workspace/data/columns", ({ request }) => {
+        capturedTarget = new URL(request.url).searchParams.get("target");
+        return HttpResponse.json({ target: "some col", columns: [] });
+      }),
     );
+    await fetchColumns("some col");
+    expect(capturedTarget).toBe("some col");
   });
 });
 
 // ---------------------------------------------------------------------------
-// fetchConfigSchema
+// fetchColumnStats — GET /api/workspace/data/column-stats/{col}
+// ---------------------------------------------------------------------------
+describe("fetchColumnStats", () => {
+  it("interpolates col into the path and forwards top_n", async () => {
+    let capturedCol = "";
+    let capturedTopN: string | null = null;
+    server.use(
+      http.get(
+        "/api/workspace/data/column-stats/:col",
+        ({ request, params }) => {
+          capturedCol = String(params.col);
+          capturedTopN = new URL(request.url).searchParams.get("top_n");
+          return HttpResponse.json({
+            name: "x",
+            dtype: "int",
+            unique_count: 0,
+            total_count: 0,
+            null_count: 0,
+            value_counts: [],
+          });
+        },
+      ),
+    );
+    await fetchColumnStats("my col", 30);
+    expect(capturedCol).toBe("my col");
+    expect(capturedTopN).toBe("30");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchSplitPreview — GET /api/workspace/data/split-preview
+// ---------------------------------------------------------------------------
+describe("fetchSplitPreview", () => {
+  it("GETs the split-preview endpoint", async () => {
+    let called = false;
+    server.use(
+      http.get("/api/workspace/data/split-preview", () => {
+        called = true;
+        return HttpResponse.json({ folds: [], strategy: "holdout" });
+      }),
+    );
+    await fetchSplitPreview();
+    expect(called).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchConfigSchema — GET /api/workspace/config/schema
 // ---------------------------------------------------------------------------
 describe("fetchConfigSchema", () => {
-  it("calls the correct endpoint", async () => {
-    mockApiFetch.mockResolvedValue({});
+  it("GETs the schema endpoint", async () => {
+    let called = false;
+    server.use(
+      http.get("/api/workspace/config/schema", () => {
+        called = true;
+        return HttpResponse.json({});
+      }),
+    );
     await fetchConfigSchema();
-    expect(mockApiFetch).toHaveBeenCalledWith("/workspace/config/schema");
+    expect(called).toBe(true);
   });
 });
 
 // ---------------------------------------------------------------------------
-// fetchConfigDefaults
+// fetchConfigDefaults — GET /api/workspace/config/defaults
 // ---------------------------------------------------------------------------
 describe("fetchConfigDefaults", () => {
-  it("encodes task and target params", async () => {
-    mockApiFetch.mockResolvedValue({});
-    await fetchConfigDefaults("classification", "target col");
-    expect(mockApiFetch).toHaveBeenCalledWith(
-      "/workspace/config/defaults?task=classification&target=target%20col",
+  it("sends task and target as query params", async () => {
+    let capturedTask: string | null = null;
+    let capturedTarget: string | null = null;
+    server.use(
+      http.get("/api/workspace/config/defaults", ({ request }) => {
+        const url = new URL(request.url);
+        capturedTask = url.searchParams.get("task");
+        capturedTarget = url.searchParams.get("target");
+        return HttpResponse.json({});
+      }),
     );
+    await fetchConfigDefaults("classification", "target col");
+    expect(capturedTask).toBe("classification");
+    expect(capturedTarget).toBe("target col");
   });
 });
 
 // ---------------------------------------------------------------------------
-// fetchConfig
+// fetchConfig — GET /api/workspace/config (with optional AbortSignal)
 // ---------------------------------------------------------------------------
 describe("fetchConfig", () => {
-  it("calls without options when none provided", async () => {
-    mockApiFetch.mockResolvedValue({});
+  it("GETs the config endpoint with no signal", async () => {
+    let called = false;
+    server.use(
+      http.get("/api/workspace/config", () => {
+        called = true;
+        return HttpResponse.json({});
+      }),
+    );
     await fetchConfig();
-    expect(mockApiFetch).toHaveBeenCalledWith("/workspace/config", {
-      signal: undefined,
-    });
+    expect(called).toBe(true);
   });
 
-  it("passes abort signal", async () => {
+  it("forwards a pre-aborted signal so fetch rejects immediately", async () => {
     const controller = new AbortController();
-    mockApiFetch.mockResolvedValue({});
-    await fetchConfig({ signal: controller.signal });
-    expect(mockApiFetch).toHaveBeenCalledWith("/workspace/config", {
-      signal: controller.signal,
-    });
+    controller.abort();
+    server.use(http.get("/api/workspace/config", () => HttpResponse.json({})));
+    await expect(fetchConfig({ signal: controller.signal })).rejects.toThrow();
   });
 });
 
 // ---------------------------------------------------------------------------
-// updateConfig
+// updateConfig — PUT /api/workspace/config
 // ---------------------------------------------------------------------------
 describe("updateConfig", () => {
-  it("sends PUT with JSON body", async () => {
+  it("sends PUT with JSON body and returns the updated config", async () => {
     const config = { task: "classification" };
-    mockApiFetch.mockResolvedValue({ config, errors: [] });
-    await updateConfig(config);
-    expect(mockApiFetch).toHaveBeenCalledWith("/workspace/config", {
-      method: "PUT",
-      body: JSON.stringify(config),
-      signal: undefined,
-    });
+    let capturedMethod = "";
+    let capturedBody: unknown = null;
+    server.use(
+      http.put("/api/workspace/config", async ({ request }) => {
+        capturedMethod = request.method;
+        capturedBody = await request.json();
+        return HttpResponse.json({ config, errors: [] });
+      }),
+    );
+    const result = await updateConfig(config);
+    expect(capturedMethod).toBe("PUT");
+    expect(capturedBody).toEqual(config);
+    expect(result.config).toEqual(config);
+  });
+
+  it("forwards a pre-aborted signal", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    server.use(
+      http.put("/api/workspace/config", () =>
+        HttpResponse.json({ config: {}, errors: [] }),
+      ),
+    );
+    await expect(
+      updateConfig({ task: "x" }, { signal: controller.signal }),
+    ).rejects.toThrow();
   });
 });
 
 // ---------------------------------------------------------------------------
-// validateConfig
+// validateConfig — POST /api/workspace/config/validate
 // ---------------------------------------------------------------------------
 describe("validateConfig", () => {
   it("sends POST with JSON body", async () => {
     const config = { task: "regression" };
-    mockApiFetch.mockResolvedValue({ valid: true, errors: [] });
-    await validateConfig(config);
-    expect(mockApiFetch).toHaveBeenCalledWith("/workspace/config/validate", {
-      method: "POST",
-      body: JSON.stringify(config),
-    });
+    let capturedBody: unknown = null;
+    server.use(
+      http.post("/api/workspace/config/validate", async ({ request }) => {
+        capturedBody = await request.json();
+        return HttpResponse.json({ valid: true, errors: [] });
+      }),
+    );
+    const result = await validateConfig(config);
+    expect(capturedBody).toEqual(config);
+    expect(result).toEqual({ valid: true, errors: [] });
   });
 });
 
 // ---------------------------------------------------------------------------
-// uploadConfig
+// uploadConfig — POST /api/workspace/config/upload (multipart/form-data)
 // ---------------------------------------------------------------------------
 describe("uploadConfig", () => {
-  it("sends FormData with empty headers override", async () => {
+  it("sends the file as multipart/form-data", async () => {
     const file = new File(["{}"], "config.yaml", {
       type: "application/x-yaml",
     });
-    mockApiFetch.mockResolvedValue({ config: {}, errors: [] });
+    let capturedContentType: string | null = null;
+    let capturedFile: File | null = null;
+    server.use(
+      http.post("/api/workspace/config/upload", async ({ request }) => {
+        capturedContentType = request.headers.get("content-type");
+        const form = await request.formData();
+        const f = form.get("file");
+        if (f instanceof File) {
+          capturedFile = f;
+        }
+        return HttpResponse.json({ config: {}, errors: [] });
+      }),
+    );
     await uploadConfig(file);
-    expect(mockApiFetch).toHaveBeenCalledWith("/workspace/config/upload", {
-      method: "POST",
-      body: expect.any(FormData),
-      headers: {},
-    });
-    const formData = mockApiFetch.mock.calls[0][1]?.body as FormData;
-    expect(formData.get("file")).toBe(file);
+    expect(capturedContentType).toMatch(/^multipart\/form-data;/);
+    expect(capturedFile).not.toBeNull();
+    expect((capturedFile as unknown as File).name).toBe("config.yaml");
   });
 });
 
 // ---------------------------------------------------------------------------
-// getConfigDownloadUrl
+// getConfigDownloadUrl — pure URL builder
 // ---------------------------------------------------------------------------
 describe("getConfigDownloadUrl", () => {
-  it("returns the correct URL", () => {
+  it("returns the download URL", () => {
     expect(getConfigDownloadUrl()).toBe("/api/workspace/config/download");
   });
 });
 
 // ---------------------------------------------------------------------------
-// runFit / runTune
+// runFit / runTune — POST /api/workspace/fit and /tune
 // ---------------------------------------------------------------------------
 describe("runFit", () => {
-  it("sends POST to /workspace/fit", async () => {
-    mockApiFetch.mockResolvedValue({ job_id: "j1" });
+  it("sends POST and returns the job_id", async () => {
+    server.use(
+      http.post("/api/workspace/fit", () =>
+        HttpResponse.json({ job_id: "j1" }),
+      ),
+    );
+    const result = await runFit();
+    expect(result).toEqual({ job_id: "j1" });
+  });
+
+  it("sends no body when called with no argument (P-0086)", async () => {
+    let capturedBody: unknown = "not captured";
+    server.use(
+      http.post("/api/workspace/fit", async ({ request }) => {
+        capturedBody = await request
+          .clone()
+          .json()
+          .catch(() => "empty");
+        return HttpResponse.json({ job_id: "j1" });
+      }),
+    );
     await runFit();
-    expect(mockApiFetch).toHaveBeenCalledWith("/workspace/fit", {
-      method: "POST",
-    });
+    expect(capturedBody).toBe("empty");
+  });
+
+  it("sends body={config} when called with config (P-0086)", async () => {
+    let capturedBody: unknown = null;
+    server.use(
+      http.post("/api/workspace/fit", async ({ request }) => {
+        capturedBody = await request.json();
+        return HttpResponse.json({ job_id: "j1" });
+      }),
+    );
+    const config = { task: "binary", features: { exclude: ["age"] } };
+    await runFit(config);
+    expect(capturedBody).toEqual({ config });
   });
 });
 
 describe("runTune", () => {
-  it("sends POST to /workspace/tune", async () => {
-    mockApiFetch.mockResolvedValue({ job_id: "j2" });
-    await runTune();
-    expect(mockApiFetch).toHaveBeenCalledWith("/workspace/tune", {
-      method: "POST",
-    });
+  it("sends POST and returns the job_id", async () => {
+    server.use(
+      http.post("/api/workspace/tune", () =>
+        HttpResponse.json({ job_id: "j2" }),
+      ),
+    );
+    const result = await runTune();
+    expect(result).toEqual({ job_id: "j2" });
+  });
+
+  it("sends body={config} when called with config (P-0086)", async () => {
+    let capturedBody: unknown = null;
+    server.use(
+      http.post("/api/workspace/tune", async ({ request }) => {
+        capturedBody = await request.json();
+        return HttpResponse.json({ job_id: "j2" });
+      }),
+    );
+    const config = { task: "regression", features: { exclude: ["x"] } };
+    await runTune(config);
+    expect(capturedBody).toEqual({ config });
   });
 });
 
 // ---------------------------------------------------------------------------
-// fetchBackends / fetchUiSchema
+// fetchBackends / fetchUiSchema — GET /api/backends and /backends/ui-schema
 // ---------------------------------------------------------------------------
 describe("fetchBackends", () => {
-  it("calls /backends", async () => {
-    mockApiFetch.mockResolvedValue([]);
+  it("GETs /api/backends", async () => {
+    let called = false;
+    server.use(
+      http.get("/api/backends", () => {
+        called = true;
+        return HttpResponse.json([]);
+      }),
+    );
     await fetchBackends();
-    expect(mockApiFetch).toHaveBeenCalledWith("/backends");
+    expect(called).toBe(true);
   });
 });
 
 describe("fetchUiSchema", () => {
-  it("calls /backends/ui-schema", async () => {
-    mockApiFetch.mockResolvedValue({});
+  it("GETs /api/backends/ui-schema", async () => {
+    let called = false;
+    server.use(
+      http.get("/api/backends/ui-schema", () => {
+        called = true;
+        return HttpResponse.json({
+          sections: [],
+          option_sets: {
+            objective: {},
+            metric: {},
+            model_metric: {},
+            metric_direction: {},
+          },
+          parameter_hints: [],
+          search_space_catalog: [],
+          step_map: {},
+          conditional_visibility: {},
+          defaults: {},
+          inner_valid_options: [],
+          n_trials_presets: [],
+          capabilities: {
+            cv_strategies: [],
+            tune: { allow_empty_space: true },
+          },
+          calibration_methods: [],
+          additional_params: [],
+        });
+      }),
+    );
     await fetchUiSchema();
-    expect(mockApiFetch).toHaveBeenCalledWith("/backends/ui-schema");
+    expect(called).toBe(true);
   });
 });

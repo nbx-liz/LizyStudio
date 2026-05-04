@@ -1,12 +1,11 @@
-import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
+import type { ComparisonStats, InferenceRecord } from "@/api/inference";
 import {
-  type ComparisonStats,
-  fetchInferenceComparison,
-  fetchInferencePlot,
-  fetchInferenceShapPlot,
-  type InferenceRecord,
-} from "@/api/inference";
+  useInferenceComparison,
+  useInferencePlot,
+  useInferenceShap,
+  useJobPlots,
+} from "@/api/queries";
 import {
   Accordion,
   AccordionContent,
@@ -56,12 +55,11 @@ export function ResultsPredOnly({
       })()
     : 0;
 
-  const { data: comparison } = useQuery({
-    queryKey: ["inf-comparison", record.inf_id, compareInfId, record.job_id],
-    queryFn: () =>
-      fetchInferenceComparison(record.inf_id, compareInfId, record.job_id),
-    enabled: !!compareInfId,
-  });
+  const { data: comparison } = useInferenceComparison(
+    record.inf_id,
+    compareInfId || null,
+    record.job_id,
+  );
 
   return (
     <div className="flex h-full flex-col overflow-auto p-6">
@@ -81,11 +79,14 @@ export function ResultsPredOnly({
         <PredictionsTable infId={record.inf_id} jobId={record.job_id} />
       </section>
 
-      {/* Prediction Distribution */}
-      <section className="mb-6">
-        <h4 className="mb-2 text-sm font-medium">Prediction Distribution</h4>
-        <PredDistributionPlot infId={record.inf_id} jobId={record.job_id} />
-      </section>
+      {/* Prediction Distribution.
+          Issue #370: gate the section on the backend's available plot
+          list so the panel only renders when the underlying plot type
+          actually exists (binary => ``probability-histogram``;
+          regression has no equivalent today). Without the gate the
+          frontend used to request the non-existent
+          ``prediction-distribution`` and emit a 404 on every record. */}
+      <PredDistributionSection infId={record.inf_id} jobId={record.job_id} />
 
       {/* Comparison */}
       {otherRecords.length > 0 && (
@@ -175,27 +176,50 @@ function formatStatName(key: string): string {
   return key.charAt(0).toUpperCase() + key.slice(1);
 }
 
-/** Prediction distribution plot section. */
-function PredDistributionPlot({
+/**
+ * Inference distribution section. Issue #370.
+ *
+ * The frontend used to hardcode ``prediction-distribution`` as the
+ * plot type, but the backend's ``LizyMLAdapter._PLOT_DISPATCH``
+ * registers binary classification's distribution under
+ * ``probability-histogram`` (and regression has no equivalent at all).
+ * The mismatch produced a 404 on every Inference render plus a stale
+ * "Prediction Distribution" heading with no plot underneath.
+ *
+ * The section now gates on the backend's available-plots list (same
+ * pattern as the SHAP gate added for Issue #355) so:
+ *   - binary fits => render the histogram from ``probability-histogram``
+ *   - regression / unsupported => hide the entire section, no 404, no
+ *     empty heading.
+ */
+function PredDistributionSection({
   infId,
   jobId,
 }: {
   infId: string;
   jobId: string;
 }) {
-  const { data, isLoading } = useQuery({
-    queryKey: ["inf-plot", infId, jobId, "prediction-distribution"],
-    queryFn: () => fetchInferencePlot(infId, jobId, "prediction-distribution"),
-    retry: false,
-  });
-
-  if (isLoading) {
-    return (
-      <p className="text-xs text-muted-foreground">Loading distribution...</p>
-    );
-  }
-  if (!data) return null;
-  return <PlotlyChart plotlyJson={data.plotly_json} />;
+  const { data: availablePlots } = useJobPlots(jobId);
+  const distributionPlotType = availablePlots?.includes("probability-histogram")
+    ? "probability-histogram"
+    : null;
+  const { data, isLoading } = useInferencePlot(
+    infId,
+    jobId,
+    distributionPlotType ?? "",
+    { retry: false, enabled: distributionPlotType != null },
+  );
+  if (distributionPlotType == null) return null;
+  return (
+    <section className="mb-6">
+      <h4 className="mb-2 text-sm font-medium">Prediction Distribution</h4>
+      {isLoading ? (
+        <p className="text-xs text-muted-foreground">Loading distribution...</p>
+      ) : data ? (
+        <PlotlyChart plotlyJson={data.plotly_json} />
+      ) : null}
+    </section>
+  );
 }
 
 /** SHAP summary + warnings as accordion sections. */
@@ -208,11 +232,16 @@ function ShapAndWarningsAccordion({
   jobId: string;
   warnings: string[];
 }) {
-  const { data: shapData, isLoading: shapLoading } = useQuery({
-    queryKey: ["inf-shap", infId, jobId],
-    queryFn: () => fetchInferenceShapPlot(infId, jobId),
-    retry: false,
-  });
+  // Issue #355: gate SHAP fetch on the backend's available_plots so
+  // we never request a plot the backend cannot render (which would
+  // log a 404 in the browser console on every Inference run).
+  const { data: availablePlots } = useJobPlots(jobId);
+  const shapAvailable = availablePlots?.includes("shap-summary") ?? false;
+  const { data: shapData, isLoading: shapLoading } = useInferenceShap(
+    infId,
+    jobId,
+    { retry: false, enabled: shapAvailable },
+  );
 
   const hasShap = shapData != null || shapLoading;
   const hasWarnings = warnings.length > 0;
@@ -240,7 +269,7 @@ function ShapAndWarningsAccordion({
         <AccordionItem value="warnings">
           <AccordionTrigger>Warnings</AccordionTrigger>
           <AccordionContent>
-            <ul className="list-disc pl-4 text-sm text-orange-600">
+            <ul className="list-disc pl-4 text-sm text-degraded-fg">
               {warnings.map((w, i) => (
                 <li key={`warn-${i}`}>{w}</li>
               ))}

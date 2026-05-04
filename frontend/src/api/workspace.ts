@@ -1,4 +1,5 @@
-import { apiFetch } from "./client";
+import { apiClient } from "./client";
+import type { components } from "./generated/schema";
 import type {
   BackendInfo,
   ColumnStatsResponse,
@@ -10,114 +11,227 @@ import type {
   UiSchema,
 } from "./types";
 
-export function loadDataFromPath(
-  path: string,
-): Promise<{ data_ref: { path: string; shape: [number, number] } }> {
-  return apiFetch("/workspace/data/path", {
-    method: "POST",
-    body: JSON.stringify({ path }),
-  });
+function unwrap<T>(data: T | undefined, endpoint: string): T {
+  if (!data) {
+    throw new Error(`apiClient returned no data for ${endpoint}`);
+  }
+  return data;
 }
 
-export function uploadData(
+export async function loadDataFromPath(
+  path: string,
+): Promise<{ data_ref: { path: string; shape: [number, number] } }> {
+  const { data } = await apiClient.POST("/api/workspace/data/path", {
+    body: { path },
+  });
+  // SSOT-EXEMPT (Issue #236): backend returns DataLoadResponse but the narrow
+  // consumer interface uses an inline subset; the generated shape is wider.
+  return unwrap(data, "/api/workspace/data/path") as unknown as {
+    data_ref: { path: string; shape: [number, number] };
+  };
+}
+
+export async function uploadData(
   file: File,
 ): Promise<{ data_ref: { path: string; shape: [number, number] } }> {
   const formData = new FormData();
   formData.append("file", file);
-  return apiFetch("/workspace/data/upload", {
-    method: "POST",
-    body: formData,
-    headers: {},
+  const { data } = await apiClient.POST("/api/workspace/data/upload", {
+    // SSOT-EXEMPT (Issue #236): openapi-fetch's FormData bodySerializer
+    // pattern — the two casts let the browser generate the multipart
+    // boundary instead of JSON.stringify-ing the FormData.
+    body: formData as unknown as components["schemas"]["Body_data_upload_api_workspace_data_upload_post"],
+    bodySerializer: (body) => body as unknown as BodyInit,
   });
+  // SSOT-EXEMPT (Issue #236): inline subset of DataLoadResponse.
+  return unwrap(data, "/api/workspace/data/upload") as unknown as {
+    data_ref: { path: string; shape: [number, number] };
+  };
 }
 
-export function fetchPreview(rows = 5): Promise<PreviewResponse> {
-  return apiFetch(`/workspace/data/preview?rows=${rows}`);
+export async function fetchPreview(rows = 5): Promise<PreviewResponse> {
+  const { data } = await apiClient.GET("/api/workspace/data/preview", {
+    params: { query: { rows } },
+  });
+  return unwrap(data, "/api/workspace/data/preview") as PreviewResponse;
 }
 
-export function fetchColumns(target?: string): Promise<ColumnsResponse> {
-  const params = target ? `?target=${encodeURIComponent(target)}` : "";
-  return apiFetch(`/workspace/data/columns${params}`);
+export async function fetchColumns(target?: string): Promise<ColumnsResponse> {
+  const { data } = await apiClient.GET("/api/workspace/data/columns", {
+    params: { query: target ? { target } : {} },
+  });
+  return unwrap(data, "/api/workspace/data/columns") as ColumnsResponse;
 }
 
-export function fetchColumnStats(
+export async function fetchColumnStats(
   col: string,
   topN = 20,
 ): Promise<ColumnStatsResponse> {
-  return apiFetch(
-    `/workspace/data/column-stats/${encodeURIComponent(col)}?top_n=${topN}`,
+  const { data } = await apiClient.GET(
+    "/api/workspace/data/column-stats/{col}",
+    {
+      params: { path: { col }, query: { top_n: topN } },
+    },
   );
+  // SSOT-EXEMPT (Issue #236): ColumnStatsResponse is the backend Pydantic
+  // model; generated type differs in Optional/None handling only.
+  return unwrap(
+    data,
+    "/api/workspace/data/column-stats/{col}",
+  ) as unknown as ColumnStatsResponse;
 }
 
-export function fetchSplitPreview(): Promise<SplitPreviewResponse> {
-  return apiFetch("/workspace/data/split-preview");
+/**
+ * Workspace status snapshot — used for UI rehydration on reload
+ * (Issue #363).
+ */
+export interface WorkspaceStatus {
+  has_data: boolean;
+  has_config: boolean;
+  has_result: boolean;
+  data_ref: { filename: string; shape: number[] } | null;
+  current_job_id: string | null;
+  files_root: string;
 }
 
-export function fetchConfigSchema(): Promise<Record<string, unknown>> {
-  return apiFetch("/workspace/config/schema");
+export async function fetchWorkspaceStatus(): Promise<WorkspaceStatus> {
+  const { data } = await apiClient.GET("/api/workspace/status", {});
+  // SSOT-EXEMPT: the generated WorkspaceStatusResponse type uses
+  // optional fields where the runtime value is null; the local
+  // interface normalises them to ``X | null`` for ergonomics.
+  return unwrap(data, "/api/workspace/status") as unknown as WorkspaceStatus;
 }
 
-export function fetchConfigDefaults(
+export async function fetchSplitPreview(): Promise<SplitPreviewResponse> {
+  const { data } = await apiClient.GET("/api/workspace/data/split-preview", {});
+  return unwrap(
+    data,
+    "/api/workspace/data/split-preview",
+  ) as SplitPreviewResponse;
+}
+
+export async function fetchConfigSchema(): Promise<Record<string, unknown>> {
+  const { data } = await apiClient.GET("/api/workspace/config/schema", {});
+  return unwrap(data, "/api/workspace/config/schema") as Record<
+    string,
+    unknown
+  >;
+}
+
+export async function fetchConfigDefaults(
   task: string,
   target: string,
 ): Promise<Record<string, unknown>> {
-  return apiFetch(
-    `/workspace/config/defaults?task=${encodeURIComponent(task)}&target=${encodeURIComponent(target)}`,
-  );
+  const { data } = await apiClient.GET("/api/workspace/config/defaults", {
+    params: { query: { task, target } },
+  });
+  return unwrap(data, "/api/workspace/config/defaults") as Record<
+    string,
+    unknown
+  >;
 }
 
-export function fetchConfig(opts?: {
+export async function fetchConfig(opts?: {
   signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
-  return apiFetch("/workspace/config", { signal: opts?.signal });
+  const { data } = await apiClient.GET("/api/workspace/config", {
+    signal: opts?.signal,
+  });
+  return unwrap(data, "/api/workspace/config") as Record<string, unknown>;
 }
 
-export function updateConfig(
+export async function updateConfig(
   config: Record<string, unknown>,
   opts?: { signal?: AbortSignal },
 ): Promise<ConfigUpdateResponse> {
-  return apiFetch("/workspace/config", {
-    method: "PUT",
-    body: JSON.stringify(config),
+  const { data } = await apiClient.PUT("/api/workspace/config", {
+    body: config,
     signal: opts?.signal,
   });
+  // SSOT-EXEMPT (Issue #236): ConfigUpdateResponse mirrors the backend model;
+  // cast needed to align optional/null handling with the hand-written narrow type.
+  return unwrap(
+    data,
+    "/api/workspace/config (PUT)",
+  ) as unknown as ConfigUpdateResponse;
 }
 
-export function validateConfig(
+export async function validateConfig(
   config: Record<string, unknown>,
 ): Promise<{ valid: boolean; errors: ConfigError[] }> {
-  return apiFetch("/workspace/config/validate", {
-    method: "POST",
-    body: JSON.stringify(config),
+  const { data } = await apiClient.POST("/api/workspace/config/validate", {
+    body: config,
   });
+  // SSOT-EXEMPT (Issue #236): backend returns ValidationResponse; the narrow
+  // consumer interface pins errors to ConfigError[].
+  return unwrap(data, "/api/workspace/config/validate") as unknown as {
+    valid: boolean;
+    errors: ConfigError[];
+  };
 }
 
-export function uploadConfig(file: File): Promise<ConfigUpdateResponse> {
+export async function uploadConfig(file: File): Promise<ConfigUpdateResponse> {
   const formData = new FormData();
   formData.append("file", file);
-  return apiFetch("/workspace/config/upload", {
-    method: "POST",
-    body: formData,
-    headers: {},
+  const { data } = await apiClient.POST("/api/workspace/config/upload", {
+    // SSOT-EXEMPT (Issue #236): FormData bodySerializer pattern, same as uploadData.
+    body: formData as unknown as components["schemas"]["Body_config_upload_api_workspace_config_upload_post"],
+    bodySerializer: (body) => body as unknown as BodyInit,
   });
+  // SSOT-EXEMPT (Issue #236): same reason as updateConfig.
+  return unwrap(
+    data,
+    "/api/workspace/config/upload",
+  ) as unknown as ConfigUpdateResponse;
 }
 
+// Pure URL builder, not routed through apiClient. The anchor ``href`` is
+// what the UI consumes — there is no response body to type.
 export function getConfigDownloadUrl(): string {
   return "/api/workspace/config/download";
 }
 
-export function runFit(): Promise<{ job_id: string }> {
-  return apiFetch("/workspace/fit", { method: "POST" });
+// P-0086 (Issue #251): accept an optional ``config`` so the latest UI state
+// is applied atomically at fit time. Without this, an in-flight ``PUT /config``
+// can lose the race against ``POST /fit`` and the server reads a stale
+// ``ws.config``, which silently drops manual Exclude / Type edits made just
+// before pressing Fit.
+export async function runFit(
+  config?: Record<string, unknown>,
+): Promise<{ job_id: string }> {
+  // SSOT-EXEMPT (Issue #236): openapi-fetch's generated body type for
+  // /api/workspace/fit is ``WorkspaceFitRequest | undefined``, but the
+  // body must be wrapped under ``{ body: ... }`` for the client and
+  // also allow complete omission when ``config`` is undefined. The
+  // conditional-wrapper + cast keeps the single call-site ergonomic.
+  const options =
+    config !== undefined
+      ? ({ body: { config } } as never)
+      : (undefined as never);
+  const { data } = await apiClient.POST("/api/workspace/fit", options);
+  // SSOT-EXEMPT (Issue #236): backend returns JobStartResponse — wider than this subset.
+  return unwrap(data, "/api/workspace/fit") as unknown as { job_id: string };
 }
 
-export function runTune(): Promise<{ job_id: string }> {
-  return apiFetch("/workspace/tune", { method: "POST" });
+export async function runTune(
+  config?: Record<string, unknown>,
+): Promise<{ job_id: string }> {
+  // SSOT-EXEMPT (Issue #236): see runFit above.
+  const options =
+    config !== undefined
+      ? ({ body: { config } } as never)
+      : (undefined as never);
+  const { data } = await apiClient.POST("/api/workspace/tune", options);
+  // SSOT-EXEMPT (Issue #236): backend returns JobStartResponse — wider than this subset.
+  return unwrap(data, "/api/workspace/tune") as unknown as { job_id: string };
 }
 
-export function fetchBackends(): Promise<BackendInfo[]> {
-  return apiFetch("/backends");
+export async function fetchBackends(): Promise<BackendInfo[]> {
+  const { data } = await apiClient.GET("/api/backends", {});
+  return unwrap(data, "/api/backends") as BackendInfo[];
 }
 
-export function fetchUiSchema(): Promise<UiSchema> {
-  return apiFetch("/backends/ui-schema");
+export async function fetchUiSchema(): Promise<UiSchema> {
+  const { data } = await apiClient.GET("/api/backends/ui-schema", {});
+  return unwrap(data, "/api/backends/ui-schema") as UiSchema;
 }

@@ -1,4 +1,3 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
   Download,
@@ -7,18 +6,12 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import {
-  cancelJob,
-  fetchJob,
-  fetchJobLineage,
-  fetchJobLog,
-  type LineageNode,
-} from "@/api/jobs";
+import type { LineageNode } from "@/api/jobs";
+import { useJobLineage, useJobLog, useJobsInvalidator } from "@/api/queries";
 import type { JobDetail as JobDetailType, ProgressMessage } from "@/api/types";
-import { connectJobProgress } from "@/api/websocket";
 import { JobLineageTree } from "@/components/retune/JobLineageTree";
 import { ResumeActionButton } from "@/components/retune/ResumeActionButton";
 import { RetuneActionButton } from "@/components/retune/RetuneActionButton";
@@ -37,7 +30,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
-import { formatElapsed } from "@/lib/utils";
+import { useJobLifecycle } from "@/hooks/useJobLifecycle";
+import {
+  defaultRetuneTrials,
+  getModelName,
+  remainingRetuneTrials,
+} from "@/lib/job-config";
 import { CompletedContent } from "./CompletedContent";
 import { ConfigTreeView } from "./ConfigTreeView";
 import { DeleteDialog } from "./DeleteDialog";
@@ -65,31 +63,32 @@ export function JobDetailPanel({
   onJobSelect,
 }: JobDetailProps) {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const [progress, setProgress] = useState<ProgressMessage | null>(null);
+  const invalidateJobs = useJobsInvalidator();
   const [selectedPlot, setSelectedPlot] = useState<string>("");
   const [logOpen, setLogOpen] = useState(false);
   const [cancelConfirm, setCancelConfirm] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
-  const { data: job, refetch: refetchJob } = useQuery({
-    queryKey: ["job", jobId],
-    queryFn: () => fetchJob(jobId),
-    refetchInterval: (query) => {
-      const data = query.state.data as JobDetailType | undefined;
-      return data?.status === "running" ? 2000 : false;
-    },
+  const onTerminal = useCallback(() => {
+    onJobChanged();
+  }, [onJobChanged]);
+
+  const onWsError = useCallback((message: string) => {
+    toast.error(message);
+  }, []);
+
+  const { job, progress, cancel } = useJobLifecycle({
+    jobId,
+    onTerminal,
+    onWsError,
   });
 
   // H-0067: Re-tune / Resume / Lineage in the Jobs page. Lineage is
   // auxiliary info — swallow errors silently. Only fetch for tune
   // jobs because only tune jobs can have a lineage.
-  const { data: lineageData } = useQuery({
-    queryKey: ["job-lineage", jobId],
-    queryFn: () => fetchJobLineage(jobId),
+  const { data: lineageData } = useJobLineage(jobId, {
     enabled: job?.job_type === "tune",
-    retry: false,
   });
   const lineageRoot: LineageNode | null = lineageData?.tree ?? null;
   const showLineage =
@@ -106,67 +105,18 @@ export function JobDetailPanel({
     (childJobId: string) => {
       // Invalidate the list so the new child shows up immediately in
       // the left panel, then switch selection to it.
-      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      invalidateJobs();
       onJobSelect?.(childJobId);
     },
-    [queryClient, onJobSelect],
+    [invalidateJobs, onJobSelect],
   );
 
-  const modelName = (job?.config?.model as Record<string, unknown>)?.name as
-    | string
-    | undefined;
-
-  // WebSocket progress
-  useEffect(() => {
-    if (!jobId || job?.status !== "running") return;
-
-    const disconnect = connectJobProgress(jobId, {
-      onProgress: (msg) => setProgress(msg),
-      onCompleted: () => {
-        setProgress(null);
-        refetchJob();
-        queryClient.invalidateQueries({ queryKey: ["jobs"] });
-        onJobChanged();
-      },
-      onError: (msg) => {
-        setProgress(null);
-        toast.error(msg.message);
-        refetchJob();
-        onJobChanged();
-      },
-    });
-
-    return () => disconnect();
-  }, [jobId, job?.status, refetchJob, queryClient, onJobChanged]);
-
-  // Polling fallback
-  const prevStatusRef = useRef<string | undefined>(undefined);
-  useEffect(() => {
-    const prev = prevStatusRef.current;
-    prevStatusRef.current = job?.status;
-    if (
-      prev === "running" &&
-      job?.status &&
-      job.status !== "running" &&
-      job.status !== "pending" &&
-      progress !== null
-    ) {
-      setProgress(null);
-      onJobChanged();
-    }
-  }, [job?.status, onJobChanged, progress]);
+  const modelName = getModelName(job) || undefined;
 
   const handleCancel = useCallback(async () => {
-    try {
-      await cancelJob(jobId);
-      toast.info("Job cancelled");
-      refetchJob();
-      queryClient.invalidateQueries({ queryKey: ["jobs"] });
-    } catch {
-      toast.error("Failed to cancel job");
-    }
+    await cancel();
     setCancelConfirm(false);
-  }, [jobId, refetchJob, queryClient]);
+  }, [cancel]);
 
   const handleRefit = useCallback(() => {
     // Navigate to workspace with job config
@@ -315,7 +265,7 @@ export function JobDetailPanel({
         {isCompleted && job.job_type === "tune" && (
           <RetuneActionButton
             jobId={job.job_id}
-            defaultNTrials={_defaultRetuneTrials(job)}
+            defaultNTrials={defaultRetuneTrials(job)}
             onStarted={handleRetuneStarted}
           />
         )}
@@ -324,7 +274,7 @@ export function JobDetailPanel({
         {isFailed && job.job_type === "tune" && (
           <ResumeActionButton
             jobId={job.job_id}
-            remainingTrials={_computeRemainingTrials(job)}
+            remainingTrials={remainingRetuneTrials(job)}
             disabledReason={
               job.parent_job_id
                 ? "Resume of a re-tune child is not supported. Start from the original parent job."
@@ -344,15 +294,17 @@ export function JobDetailPanel({
           </Button>
         )}
         {!isRunning && (
-          // text-red-700 / dark:text-red-400 meet WCAG 2 AA contrast
-          // against the outline button's white / dark surface; the
-          // default text-destructive token (hsl(0 84.2% 60.2%)) is
-          // only 3.76:1 which axe flags as a serious violation (#168
-          // scope expansion — same audit surfaced this button).
+          // text-danger-fg maps onto --lzs-danger-fg (hsl(0 63% 31%)
+          // light / hsl(0 94% 75%) dark), which matches the previous
+          // red-700/red-400 pair and preserves WCAG 2 AA contrast
+          // against the outline button surface (the default
+          // text-destructive token at hsl(0 84.2% 60.2%) was only
+          // 3.76:1 and axe flagged it as a serious violation — #168
+          // scope expansion).
           <Button
             variant="outline"
             size="sm"
-            className="ml-auto text-red-700 hover:text-red-700 dark:text-red-400 dark:hover:text-red-400"
+            className="ml-auto text-danger-fg hover:text-danger-fg"
             onClick={() => setDeleteOpen(true)}
           >
             <Trash2 className="mr-1 h-3 w-3" />
@@ -429,11 +381,15 @@ function JobHeader({
 function StatusBadge({ status }: { status: string }) {
   switch (status) {
     case "completed":
-      // bg-green-700 (#15803d) meets WCAG 2 AA contrast (~4.5:1)
-      // against white; the previous bg-green-600 (#16a34a) scored
-      // only 3.29:1 (Issue #168).
+      // bg-success-solid maps onto --lzs-success-solid-bg (#15803d,
+      // green-700 equivalent) which keeps WCAG 2 AA contrast (~4.5:1)
+      // against white; the previous bg-green-600 scored only 3.29:1
+      // (Issue #168).
       return (
-        <Badge variant="default" className="bg-green-700">
+        <Badge
+          variant="default"
+          className="bg-success-solid text-success-solid-fg"
+        >
           {"\u2713"} Completed
         </Badge>
       );
@@ -496,19 +452,12 @@ function RunningView({
       {!isTune && (
         <p className="mb-1 text-sm">{progress?.message ?? "Fitting..."}</p>
       )}
-      {progress?.elapsed != null && (
-        <p className="text-xs text-muted-foreground">
-          Elapsed: {formatElapsed(progress.elapsed)}
-        </p>
-      )}
-      {isTune && progress?.metrics && (
-        <p className="mt-1 text-xs text-muted-foreground">
-          Best so far:{" "}
-          {Object.entries(progress.metrics)
-            .map(([k, v]) => `${k} ${Number(v).toFixed(4)}`)
-            .join(", ")}
-        </p>
-      )}
+      {/*
+        H-0069: the previous implementation dereferenced
+        `progress.elapsed` / `progress.metrics`, but the backend never
+        emits those fields on WsProgress.  The dead branches were
+        removed when the schema was unified to the Pydantic SSOT.
+      */}
     </div>
   );
 }
@@ -534,10 +483,7 @@ function FailedView({
 }
 
 function ExecutionLogContent({ jobId }: { jobId: string }) {
-  const { data } = useQuery({
-    queryKey: ["job-log", jobId],
-    queryFn: () => fetchJobLog(jobId),
-  });
+  const { data } = useJobLog(jobId, { enabled: true });
 
   return (
     <pre className="max-h-64 overflow-auto rounded bg-muted p-3 text-xs font-mono">
@@ -555,11 +501,7 @@ function LogDialog({
   onOpenChange: (open: boolean) => void;
   jobId: string;
 }) {
-  const { data } = useQuery({
-    queryKey: ["job-log", jobId],
-    queryFn: () => fetchJobLog(jobId),
-    enabled: open,
-  });
+  const { data } = useJobLog(jobId, { enabled: open });
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -573,27 +515,6 @@ function LogDialog({
       </DialogContent>
     </Dialog>
   );
-}
-
-// ---------------------------------------------------------------------------
-// H-0067: default-trials helpers shared with the Workspace side
-// (ResultsCompletedView._defaultRetuneTrials and
-// ResultsPanel._computeRemainingTrials). Kept local here to avoid a
-// component-to-component util dependency; a future refactor can lift
-// these into `components/retune/trial-defaults.ts` once the call
-// surface stabilises.
-// ---------------------------------------------------------------------------
-
-function _defaultRetuneTrials(job: JobDetailType): number {
-  const config = job.config as Record<string, unknown> | undefined;
-  const tuning = config?.tuning as Record<string, unknown> | undefined;
-  const optuna = tuning?.optuna as Record<string, unknown> | undefined;
-  const params = optuna?.params as Record<string, unknown> | undefined;
-  const raw = params?.n_trials;
-  if (typeof raw === "number" && raw > 0) {
-    return raw;
-  }
-  return 50;
 }
 
 /**
@@ -623,22 +544,4 @@ function _findNode(tree: LineageNode, jobId: string): LineageNode | null {
     if (hit) return hit;
   }
   return null;
-}
-
-function _computeRemainingTrials(job: JobDetailType): number {
-  const config = job.config as Record<string, unknown> | undefined;
-  const tuning = config?.tuning as Record<string, unknown> | undefined;
-  const optuna = tuning?.optuna as Record<string, unknown> | undefined;
-  const params = optuna?.params as Record<string, unknown> | undefined;
-  const originalRaw = params?.n_trials;
-  const original =
-    typeof originalRaw === "number" && originalRaw > 0 ? originalRaw : 50;
-  const tuneResult = job.tune_result as
-    | { trials?: unknown[] | null }
-    | null
-    | undefined;
-  const completed = Array.isArray(tuneResult?.trials)
-    ? (tuneResult?.trials?.length ?? 0)
-    : 0;
-  return Math.max(1, original - completed);
 }

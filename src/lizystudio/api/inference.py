@@ -24,6 +24,19 @@ from lizystudio.api.errors import (
     JobNotCompletedError,
     JobNotFoundError,
     PathNotFoundError,
+    PlotNotAvailableError,
+)
+from lizystudio.api.models import (
+    ComparisonStatsResponse,
+    InferenceMetricsResponse,
+    InferenceRecordResponse,
+    InferenceRunResponse,
+    InferenceUploadResponse,
+    PlotResponseModel,
+    PredictionsResponse,
+)
+from lizystudio.backends.exceptions import (
+    PlotNotAvailableError as _BackendPlotNotAvailable,
 )
 from lizystudio.security import read_upload_checked, validate_path_within
 from lizystudio.services.inference import (
@@ -71,18 +84,38 @@ class RunRequest(BaseModel):
     evaluate: bool = True
 
 
-@router.post("/run")
+@router.post("/run", response_model=InferenceRunResponse)
 def inference_run(
     body: RunRequest,
     job_store: JobStore = Depends(get_job_store),
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, str]:
-    """Run inference with a path to data (H-0009)."""
-    # Validate data path is within allowed root
-    try:
-        validate_path_within(Path(body.data.path), security.ALLOWED_FILES_ROOT)
-    except ValueError as exc:
-        raise PathNotFoundError(str(exc)) from exc
+    """Run inference with a path to data (H-0009).
+
+    Path validation is split by ``source_type``:
+
+    * ``"path"`` — a user-supplied filesystem path. Must resolve to a
+      location under ``ALLOWED_FILES_ROOT`` (default: the user's home
+      directory) so the backend never reads files the operator did not
+      intend to expose.
+    * ``"upload"`` — a server-staged tempfile produced by
+      ``POST /api/inference/upload``. The path lives under the OS temp
+      dir (typically ``/tmp``), which is outside ``ALLOWED_FILES_ROOT``
+      by design. We instead verify the path is tracked in
+      ``WorkspaceState._temp_files``, ensuring the request cannot be
+      forged with ``source_type="upload"`` against an arbitrary system
+      file (Issue #374).
+    """
+    if body.data.source_type == "upload":
+        if not ws.is_tracked_temp_file(body.data.path):
+            raise PathNotFoundError(
+                f"Upload path is not a server-staged tempfile: {body.data.path}"
+            )
+    else:
+        try:
+            validate_path_within(Path(body.data.path), security.ALLOWED_FILES_ROOT)
+        except ValueError as exc:
+            raise PathNotFoundError(str(exc)) from exc
     job = _get_job_or_404(body.job_id, job_store)
     try:
         record = run_inference(
@@ -105,7 +138,7 @@ def inference_run(
             ws.consume_temp_file(body.data.path)
 
 
-@router.post("/upload")
+@router.post("/upload", response_model=InferenceUploadResponse)
 async def inference_upload(
     file: UploadFile,
     ws: WorkspaceState = Depends(get_workspace),
@@ -130,7 +163,7 @@ async def inference_upload(
 # --- Query ---
 
 
-@router.get("/history")
+@router.get("/history", response_model=list[InferenceRecordResponse])
 def inference_history(
     job_id: str | None = None,
     job_store: JobStore = Depends(get_job_store),
@@ -141,7 +174,7 @@ def inference_history(
     return [asdict(r) for r in records]
 
 
-@router.get("/{inf_id}")
+@router.get("/{inf_id}", response_model=InferenceRecordResponse)
 def inference_get(
     inf_id: str,
     job_id: str,
@@ -155,7 +188,7 @@ def inference_get(
     return asdict(record)
 
 
-@router.get("/{inf_id}/predictions")
+@router.get("/{inf_id}/predictions", response_model=PredictionsResponse)
 def inference_predictions(
     inf_id: str,
     job_id: str,
@@ -171,7 +204,11 @@ def inference_predictions(
     return store.get_predictions(job_id, inf_id, rows=rows, offset=offset)
 
 
-@router.get("/{inf_id}/metrics")
+@router.get(
+    "/{inf_id}/metrics",
+    response_model=InferenceMetricsResponse,
+    response_model_exclude_none=True,
+)
 def inference_metrics(
     inf_id: str,
     job_id: str,
@@ -188,7 +225,7 @@ def inference_metrics(
     return metrics
 
 
-@router.get("/{inf_id}/plot/{plot_type}")
+@router.get("/{inf_id}/plot/{plot_type}", response_model=PlotResponseModel)
 def inference_plot(
     inf_id: str,
     plot_type: str,
@@ -208,11 +245,24 @@ def inference_plot(
     try:
         plot_data = get_inference_plot(job, ws.backend, plot_type)
         return {"plotly_json": plot_data.plotly_json}
+    except _BackendPlotNotAvailable as exc:
+        # Issue #355: 404 (client asked for an unsupported plot)
+        # rather than 500 (genuine backend failure).
+        raise PlotNotAvailableError(exc.plot_type, exc.available) from exc
     except Exception as exc:
         raise BackendError(exc) from exc
 
 
-@router.get("/{inf_id}/download")
+@router.get(
+    "/{inf_id}/download",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "content": {"text/csv": {}},
+            "description": "Predictions CSV download (streaming).",
+        }
+    },
+)
 def inference_download(
     inf_id: str,
     job_id: str,
@@ -237,7 +287,10 @@ def inference_download(
     )
 
 
-@router.get("/{inf_id}/comparison/{other_inf_id}")
+@router.get(
+    "/{inf_id}/comparison/{other_inf_id}",
+    response_model=ComparisonStatsResponse,
+)
 def inference_comparison(
     inf_id: str,
     other_inf_id: str,

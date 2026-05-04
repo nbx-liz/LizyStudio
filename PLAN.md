@@ -50,6 +50,10 @@ Phase 0〜30 は v1 で完了済み。バックエンド（Python / FastAPI / Ad
 | v3-10 | Search Space デフォルト Range 自動ポピュレート | H-0053 | v3-3 | ✅ |
 | v3-11 | Re-tune Dashboard Phase A（Study Resume + Boundary Expansion 可視化） | H-0061 | v3-6 | ✅ |
 | v3-12 | Re-tune Dashboard Phase B（Job lineage + Incremental checkpoint + Re-tune/Resume actions） | H-0062 | v3-11 | ✅ |
+| v3-13 | Workspace 信頼性 Sprint（fit/tune body / UI-Pydantic drift contract / running lock / cross-hook funnel） | P-0086〜P-0092 | v3-9, v3-12 | ✅ |
+| v3-14 | GUI E2E カバレッジ強化（Phase D 残）— B-1/B-2/B-4/B-5/B-6/B-8 + Phase C generator | gui-e2e-plan.md | v3-13 | 🟡 進行中 |
+
+> 詳細な未着手バックログ・命名体系の Glossary は [docs/ROADMAP.md](docs/ROADMAP.md) を参照。
 
 ---
 
@@ -1118,3 +1122,119 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 - [x] Phase A の re_tune 実行が影響を受けない（後方互換）
 - [x] pytest / mypy / ruff / vitest / biome / pnpm build がすべて緑
 - [x] BLUEPRINT §3.4.4 / §4.3 / §6.1 に仕様が反映されている
+
+
+---
+
+## Phase v3-13: Workspace 信頼性 Sprint（P-0086〜P-0092）✅
+
+**期間:** 2026-04-25 〜 2026-04-30
+
+**対象 Proposal:** P-0086 / P-0087 (Phase 1+2) / P-0088 / P-0089 / P-0090 / P-0091 / P-0092
+
+**動機:** post-#271 smoke で複数の cross-hook write race と silent rejection を観測。Workspace の write path を「観察できる単一 funnel」に集約し、ConfigForm / useConfigSync / useTargetSelection / useModelPanelData / useDataPanel / WorkspacePage の 6 writer を順次 funnel 経由化することで、設計レベルで race 条件を解消した。
+
+**成果物:**
+- `useConfigWriteFunnel.ts` + `useConfigWriteFunnelContext.tsx`（FIFO + per-reason 直列化 + same-reason coalesce）
+- `cv-state.ts` で CV state machine を ConfigForm から抽出
+- `B-3 workspace-cv.spec.ts` で 7 strategy 巡回が green（P-0092 hypothesis 検証）
+- `tests/regression/test_reg_0279_workspace_locked_during_run.py` でバックエンド INV-1〜INV-4 をロック
+- `tests/contract/test_ui_schema_pydantic_alignment.py` で UI schema ↔ Pydantic drift をロック（P-0087 Phase 1+2）
+- `/api/workspace/status` に `files_root` 追加（P-0088）+ E2E globalSetup で env fingerprint 検証
+- `/fit` `/tune` に optional `config` body を追加（P-0086）
+
+**主要 PR:** #260〜#264, #281〜#287, #288, #289, #290〜#295, #296, #298 系（後続 hardening は #300/#303/#306〜#310）
+
+**DoD:**
+- [x] B-3 e2e spec が 7/7 strategy で green（P-0092 hypothesis 証明）
+- [x] `tests/contract/` で UI schema drift がブロック可能
+- [x] `tests/regression/` で running-lock の INV-1〜INV-4 がロック
+- [x] post-merge 監査の H-1〜H-4 / G-1〜G-8 / Issue #298 が解消（HISTORY.md §P-0092 follow-ups 参照）
+- [x] pytest / mypy / ruff / vitest / biome / pnpm build がすべて緑
+
+---
+
+## Phase v3-14: GUI E2E カバレッジ強化（gui-e2e-plan.md Phase D 残）✅
+
+**動機:** Phase A の Config field × E2E カバレッジが約 18% にとどまる。残 80% のフィールド（B-1/B-2/B-4/B-5/B-6/B-8 + Phase C generator）を計画的に埋める。
+
+**対象 Proposal/Plan:** `docs/gui-e2e-plan.md` Phase B 残 + Phase C generator、`docs/ROADMAP.md` §3 で進捗管理
+
+**サブフェーズ:** 規模が大きいため、各 PR 単位で独立に進めて OK（HISTORY.md の Proposal は不要、ROADMAP.md §3 で進捗追跡）
+
+| サブフェーズ | 内容 | 状態 | PR |
+|---|---|---|---|
+| v3-14a | B-4 Feature Weights editor spec | ✅ | #312 |
+| v3-14b | B-5 Column Settings spec | ✅ | #313 |
+| v3-14c | B-1 Jobs UI spec | ✅ | #316 |
+| v3-14d | B-6 Preset Load reflection 拡張 | ✅ | #314 |
+| v3-14e | Phase C fixture loop 起動（22 フィールド） | ✅ | #317〜#325 |
+| v3-14f | B-8 mobile spec + Issue #304 完全クローズ | ✅ | #318 + Issue #304 closed 2026-04-30 |
+| v3-14g | B-2 Inference history click 拡張 | ✅ | #315 |
+| v3-14h | B-3b BlockedGroupKFold 専用 spec | 🔴 deferred | funnel state 問題で当面 component test 経由（`docs/ROADMAP.md` §4.1 参照） |
+
+**DoD:**
+- [x] Phase A マトリクスの主要 22/40 field をカバー（残り 18 は UI 露出無し / 隠しフィールド / 複合 UI のため対象外、`docs/ROADMAP.md` §4.2 末尾「カバー困難」表参照）
+- [x] Issue #304 の DataPanel skip / mobile skip がすべて整理（DataPanel 2 件は削除 + 代替カバー記載、mobile 6 件は B-8 へのポインタ付き）
+- [x] Phase C generator が fixture 行追加だけで新規フィールド E2E をカバーできる状態
+- [x] CI の e2e-chromium が安定して green
+
+---
+
+## Phase v3-15: WebSocket terminal-replay（P-0093 / Issue #327）✅
+
+**期間:** 2026-05-01
+
+**対象 Proposal:** P-0093
+
+**動機:** 高速 Fit (< 3 秒) で `ProgressBroadcaster.send()` が subscribe 前 message を破棄し、UI の terminal-detection が 2〜4 秒遅延（`useJob` polling fallback 経由）。直近 Workspace 運用ログで「同一 config・8 秒間隔の連続 Fit」が観測され、ユーザーの再試行行動を裏付けた。
+
+**成果物:**
+- `ProgressBroadcaster._last_terminal` per-jobId cache + TTL ベース lazy GC
+- `subscribe()` が cache 内 terminal を queue の first message として注入
+- `MetricsRegistry.progress_terminal_replayed_total` Counter 追加
+- 環境変数 `LIZYSTUDIO_WS_TERMINAL_TTL_S` で TTL 上書き（default 300 秒）
+- `tests/test_progress.py::TestTerminalReplay` 7 ケース（INV-1 / INV-2 / INV-3 / metric / TTL env）
+
+**主要 PR:** TBD（fix/issue-327-ws-terminal-replay）
+
+**DoD:**
+- [x] `tests/test_progress.py` 全 30 件 green（既存 23 + 新規 7）
+- [x] `tests/test_metrics_registry.py` / `tests/test_metrics_api.py` 全 green
+- [x] mypy / ruff / ruff format 全 green
+- [x] HISTORY.md P-0093 Proposal が Approved
+- [x] BLUEPRINT 変更不要（wire format 変更なし、内部実装のみ）
+- [ ] CI（develop ブランチ）で e2e 含む全 gate green（PR 作成後に確認）
+
+---
+
+## Phase v3-16: pytest-benchmark performance baseline（P-0094 / Issue #27 (a)）✅
+
+**期間:** 2026-05-01
+
+**対象 Proposal:** P-0094
+
+**動機:** B/C coupling refactor 後の services/training/jobs に perf regression 検知装置がない。LizyML adapter の fit 1 cycle のベースライン (mean / stddev) を継続測定する。
+
+**サブフェーズ:**
+
+| サブフェーズ | 内容 | 状態 | PR |
+|---|---|---|---|
+| v3-16a | P-0094 Proposal 起票 | ✅ | #333 |
+| v3-16b | 実装：`pyproject.toml` + `tests/bench/` + nightly.yml job | ✅ | #334 |
+
+**DoD:**
+- [x] HISTORY.md P-0094 が **Approved**（PR #334 で Decision 行を Pending → Approved に更新）
+- [x] `pyproject.toml` に `pytest-benchmark>=4.0` 追加 + `[tool.pytest.ini_options]` の addopts に `--benchmark-skip`
+- [x] `tests/bench/test_bench_lizyml_fit.py` で 100k 行 synthetic CSV → fit 1 cycle の bench
+- [x] `.github/workflows/nightly.yml` に bench job 追加、JSON artefact upload（90-day retention）
+- [x] CI 標準 PR の backend ジョブ実行時間が増えていない（addopts skip 効果確認、local: `pytest -q` で bench 1 skipped）
+- [x] nightly bench job 初回 baseline 取得は次の nightly 実行で確認予定（local: mean ≈ 13.5 s / stddev ≈ 1.5 s on 3 rounds）
+
+---
+
+## 採番ガイダンス（v3-17 以降）
+
+- 新規 Proposal は **P-0095** 以降を起票（P-0094 = 2026-05-01 pytest-benchmark）。
+- 仕様変更を伴う作業は HISTORY.md に Proposal → 本 PLAN.md にフェーズ追加（`v3-17`...）の順で進める。
+- 詳細な未着手バックログは `docs/ROADMAP.md` を参照。

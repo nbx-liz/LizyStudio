@@ -82,7 +82,7 @@ export function DeleteDialog({
             deleted.
           </p>
           {descendantCount > 0 && (
-            <div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950">
+            <div className="flex items-center gap-2 rounded-md border border-warning-border bg-warning p-3">
               <Checkbox
                 id="delete-cascade"
                 checked={cascade}
@@ -90,7 +90,7 @@ export function DeleteDialog({
               />
               <Label
                 htmlFor="delete-cascade"
-                className="text-sm font-normal text-amber-900 dark:text-amber-100"
+                className="text-sm font-normal text-warning-fg"
               >
                 Also delete {descendantCount} descendant job
                 {descendantCount === 1 ? "" : "s"} (cascade)

@@ -58,7 +58,7 @@ describe("ScoreTable", () => {
     render(<ScoreTable metrics={metrics} />);
     // The Inf cell for auc should have orange styling (degraded)
     const infCell = screen.getByText("0.5000");
-    expect(infCell.className).toContain("text-orange-600");
+    expect(infCell.className).toContain("text-degraded-fg");
   });
 
   it("does not highlight non-degraded score", () => {
@@ -70,7 +70,7 @@ describe("ScoreTable", () => {
     };
     render(<ScoreTable metrics={metrics} />);
     const infCell = screen.getByText("0.9200");
-    expect(infCell.className).not.toContain("text-orange-600");
+    expect(infCell.className).not.toContain("text-degraded-fg");
   });
 
   it("highlights degraded score for lower-is-better metrics (mse)", () => {
@@ -82,7 +82,7 @@ describe("ScoreTable", () => {
     };
     render(<ScoreTable metrics={metrics} />);
     const infCell = screen.getByText("0.5000");
-    expect(infCell.className).toContain("text-orange-600");
+    expect(infCell.className).toContain("text-degraded-fg");
   });
 
   it("does not highlight non-degraded lower-is-better metric", () => {
@@ -93,7 +93,7 @@ describe("ScoreTable", () => {
     };
     render(<ScoreTable metrics={metrics} />);
     const infCell = screen.getByText("0.1600");
-    expect(infCell.className).not.toContain("text-orange-600");
+    expect(infCell.className).not.toContain("text-degraded-fg");
   });
 
   it("renders multiple metric rows", () => {

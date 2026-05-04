@@ -92,7 +92,7 @@ class LifecycleMixin:
         if need_bridge:
             from lizyml import TuneProgressInfo
 
-            from lizystudio.services.training import CancelledError
+            from lizystudio.backends.exceptions import CancelledError
 
             def _bridge(info: TuneProgressInfo) -> None:
                 nonlocal current_round

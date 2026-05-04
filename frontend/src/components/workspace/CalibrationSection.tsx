@@ -59,6 +59,7 @@ export function CalibrationSection({
           Calibration
         </AccordionTrigger>
         <Switch
+          aria-label="Calibration"
           checked={isOn}
           onCheckedChange={handleToggle}
           className="ml-2"

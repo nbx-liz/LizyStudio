@@ -13,6 +13,14 @@ interface NumberInputProps {
   disabled?: boolean;
   className?: string;
   id?: string;
+  /**
+   * Accessible name for the input element. Wrapping <Label> components
+   * in this codebase frequently omit `htmlFor`, so we expose `aria-label`
+   * here to give each input a stable name without requiring every call
+   * site to thread an `id`. E2E specs rely on this to drive the field
+   * via `getByRole("textbox", { name: ... })`.
+   */
+  ariaLabel?: string;
 }
 
 export function NumberInput({
@@ -25,6 +33,7 @@ export function NumberInput({
   disabled,
   className,
   id,
+  ariaLabel,
 }: NumberInputProps) {
   // Track raw text to allow intermediate input like "0." or "1.0"
   const [raw, setRaw] = useState(value == null ? "" : String(value));
@@ -115,6 +124,7 @@ export function NumberInput({
         onBlur={handleBlur}
         placeholder={placeholder}
         disabled={disabled}
+        aria-label={ariaLabel}
         className="h-7 w-20 text-center text-xs tabular-nums [appearance:textfield]"
       />
       <Button

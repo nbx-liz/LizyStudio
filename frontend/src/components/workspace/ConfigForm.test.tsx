@@ -3,6 +3,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -234,8 +235,11 @@ describe("ConfigForm", () => {
     const config = {
       model: { name: "lgbm", params: {} },
       training: {
-        early_stopping: { enabled: true, patience: 10 },
-        inner_valid: { method: "holdout", ratio: 0.15 },
+        early_stopping: {
+          enabled: true,
+          patience: 10,
+          inner_valid: { method: "holdout", ratio: 0.15 },
+        },
       },
     };
 
@@ -310,6 +314,186 @@ describe("ConfigForm", () => {
     });
 
     expect(screen.queryByText("Calibration")).not.toBeInTheDocument();
+  });
+
+  it("auto-clears stale calibration when task is not binary (Issue #269)", async () => {
+    // Reproduces the silent state bug from #269: calibration was set
+    // while task=binary, then the user switched to regression and the
+    // Calibration UI hid itself but the value lingered, causing a
+    // ~5s LightGBM error after Fit. The auto-reset effect must
+    // immediately write calibration=null on render with task!=binary.
+    const onChange = vi.fn();
+    const staleConfig = {
+      ...minimalConfig,
+      config_version: 1,
+      calibration: { method: "platt", n_splits: 5, params: {} },
+    };
+    renderConfigForm({
+      schema: minimalSchema,
+      config: staleConfig,
+      onChange,
+      task: "regression",
+    });
+
+    // Allow the effect to flush.
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalled();
+    });
+    // The reset write must zero the calibration field (immutably).
+    const calls = onChange.mock.calls.map((c) => c[0]);
+    const cleared = calls.find(
+      (c) => c && (c as { calibration?: unknown }).calibration === null,
+    );
+    expect(cleared).toBeTruthy();
+  });
+
+  it("does not auto-clear calibration on binary task", async () => {
+    const onChange = vi.fn();
+    const config = {
+      ...minimalConfig,
+      config_version: 1,
+      calibration: { method: "platt", n_splits: 5, params: {} },
+    };
+    renderConfigForm({
+      schema: minimalSchema,
+      config,
+      onChange,
+      task: "binary",
+    });
+
+    // Brief wait — binary must NOT trigger the reset effect.
+    await new Promise((r) => setTimeout(r, 50));
+    const reset = onChange.mock.calls.find(
+      (c) => c[0] && (c[0] as { calibration?: unknown }).calibration === null,
+    );
+    expect(reset).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // Issue #272 — task-derived effects must wait for config.task to catch up
+  // -------------------------------------------------------------------------
+  it("skips task-derived effects while config.task is stale (Issue #272)", async () => {
+    // Race scenario: the user just clicked task=regression. WorkspacePage's
+    // task prop is regression (synchronous setter), but the cached config
+    // returned by useConfig() still has task=binary because useConfigSync
+    // has not finished its PUT yet. ConfigForm's auto-select / auto-clear
+    // effects must NOT fire on this stale snapshot — otherwise they PUT
+    // a binary-task body and revert the user's regression change.
+    const onChange = vi.fn();
+    const staleConfig = {
+      config_version: 1,
+      task: "binary",
+      model: {
+        name: "lgbm",
+        // Stale binary objective + calibration; both would normally
+        // trigger reset effects.
+        params: { objective: "binary", metric: ["auc"] },
+      },
+      calibration: { method: "platt", n_splits: 5, params: {} },
+    };
+    renderConfigForm({
+      schema: minimalSchema,
+      config: staleConfig,
+      onChange,
+      // Prop says regression — fresh from the radio click.
+      task: "regression",
+      uiSchema: {
+        parameter_hints: [],
+        option_sets: {
+          objective: {
+            binary: ["binary", "cross_entropy"],
+            regression: ["huber", "regression_l1"],
+          },
+          model_metric: {
+            binary: ["auc", "binary_logloss"],
+            regression: ["rmse", "huber"],
+          },
+        },
+      } as unknown as UiSchema,
+    });
+
+    // Allow effect microtasks to flush.
+    await new Promise((r) => setTimeout(r, 60));
+
+    // Critical guard: NONE of the task-derived effects (objective auto-
+    // select, metric auto-select, calibration auto-clear) may fire while
+    // the snapshot's task differs from the prop task. Each of those
+    // writes would otherwise PUT a body where ``task`` is still
+    // ``binary`` (because configRef.current.task is binary), reverting
+    // the user's regression intent.
+    const wroteObjective = onChange.mock.calls.find(
+      ([cfg]) =>
+        cfg?.model?.params?.objective !== undefined &&
+        cfg.model.params.objective !== "binary",
+    );
+    expect(wroteObjective).toBeUndefined();
+
+    const wroteMetric = onChange.mock.calls.find(
+      ([cfg]) =>
+        cfg?.model?.params?.metric !== undefined &&
+        JSON.stringify(cfg.model.params.metric) !== JSON.stringify(["auc"]),
+    );
+    expect(wroteMetric).toBeUndefined();
+
+    const clearedCalibration = onChange.mock.calls.find(
+      ([cfg]) => cfg?.calibration === null,
+    );
+    expect(clearedCalibration).toBeUndefined();
+  });
+
+  it("runs task-derived effects once config.task catches up (Issue #272)", async () => {
+    // Inverse case: once ``useConfigSync`` has flushed and the cached
+    // config now reflects ``task=regression``, the task-derived effects
+    // are free to fire. (configRef.current.task === task prop)
+    const onChange = vi.fn();
+    const freshConfig = {
+      config_version: 1,
+      task: "regression",
+      model: {
+        name: "lgbm",
+        // Stale binary objective from before the task change — should
+        // be reset because task is now regression and the snapshot agrees.
+        params: { objective: "binary" },
+      },
+      calibration: { method: "platt", n_splits: 5, params: {} },
+    };
+    renderConfigForm({
+      schema: minimalSchema,
+      config: freshConfig,
+      onChange,
+      task: "regression",
+      uiSchema: {
+        parameter_hints: [],
+        option_sets: {
+          objective: {
+            binary: ["binary", "cross_entropy"],
+            regression: ["huber", "regression_l1"],
+          },
+          model_metric: {
+            binary: ["auc", "binary_logloss"],
+            regression: ["rmse", "huber"],
+          },
+        },
+      } as unknown as UiSchema,
+    });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalled();
+    });
+
+    // Calibration must clear (regression doesn't support it).
+    const clearedCalibration = onChange.mock.calls.find(
+      ([cfg]) => cfg?.calibration === null,
+    );
+    expect(clearedCalibration).toBeTruthy();
+
+    // Objective must reset to a regression-valid value.
+    const resetObjective = onChange.mock.calls.find(
+      ([cfg]) =>
+        cfg?.model?.params?.objective === "huber" ||
+        cfg?.model?.params?.objective === "regression_l1",
+    );
+    expect(resetObjective).toBeTruthy();
   });
 
   it("renders section title from uiSchema when provided", () => {
@@ -1087,6 +1271,83 @@ describe("ConfigForm — inner_valid_options (Inner Validation select)", () => {
 
     expect(screen.queryByText("Inner Validation")).not.toBeInTheDocument();
   });
+
+  it("reads inner_valid.method from training.early_stopping.inner_valid (H-2)", () => {
+    // H-2 regression: the read site used to look at
+    // ``trainingConfig.inner_valid`` (top-level), which is the
+    // ``Extra inputs are not permitted`` path. The Select must
+    // reflect the canonical nested path the backend accepts.
+    renderConfigForm({
+      schema: schemaWithTraining,
+      config: {
+        model: { name: "lgbm", params: {} },
+        training: {
+          early_stopping: {
+            enabled: true,
+            inner_valid: { method: "cv", ratio: 0.2 },
+          },
+        },
+      },
+      onChange: vi.fn(),
+      uiSchema: {
+        inner_valid_options: ["holdout", "cv"],
+      } as unknown as UiSchema,
+    });
+
+    // The Select renders its current value as visible text inside
+    // the trigger. Read it from the trigger's accessible name.
+    const trigger = screen.getByLabelText("Inner validation method");
+    expect(trigger).toHaveTextContent("cv");
+  });
+
+  it("writes Inner Validation method change to training.early_stopping.inner_valid (H-2)", () => {
+    // H-2 regression: the user-driven Select onValueChange used to
+    // emit ``["training", "inner_valid", "method"]``, which lizyml
+    // rejects with ``Extra inputs are not permitted``. The auto-reset
+    // effect was already migrated in P-0092 Phase 2 — this test pins
+    // the write half of the same surface.
+    const onChange = vi.fn();
+    renderConfigForm({
+      schema: schemaWithTraining,
+      config: {
+        model: { name: "lgbm", params: {} },
+        training: {
+          early_stopping: {
+            enabled: true,
+            inner_valid: { method: "holdout", ratio: 0.2 },
+          },
+        },
+      },
+      onChange,
+      uiSchema: {
+        inner_valid_options: ["holdout", "cv"],
+      } as unknown as UiSchema,
+    });
+
+    // Open the Select and pick "cv". Radix's Select renders options in
+    // a portal — open via keyboard so the listbox mounts deterministically
+    // even in jsdom (where pointer events are simulated, not real).
+    const trigger = screen.getByLabelText("Inner validation method");
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    const cvOption = screen.getByRole("option", { name: "cv" });
+    fireEvent.click(cvOption);
+
+    expect(onChange).toHaveBeenCalled();
+    const lastCall = onChange.mock.calls.at(-1);
+    const nextConfig = lastCall?.[0] as Record<string, unknown>;
+    const written = (
+      (
+        (nextConfig.training as Record<string, unknown>)
+          ?.early_stopping as Record<string, unknown>
+      )?.inner_valid as Record<string, unknown>
+    )?.method;
+    expect(written).toBe("cv");
+    // The legacy top-level path must NOT be touched — that was the
+    // P-0087 ``Extra inputs are not permitted`` regression.
+    expect(
+      (nextConfig.training as Record<string, unknown>)?.inner_valid,
+    ).toBeUndefined();
+  });
 });
 
 describe("ConfigForm — Calibration section edge cases", () => {
@@ -1255,6 +1516,136 @@ describe("ConfigForm — CalibrationSection onChange propagation", () => {
     expect(onChange).toHaveBeenCalled();
     // After toggling ON (was null), calibration should be set to defaults (non-null object)
     const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0];
+    expect(lastCall.calibration).not.toBeNull();
+    expect(typeof lastCall.calibration).toBe("object");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #253 — ConfigForm onChange handlers must use the latest snapshot
+// (`configRef.current`), not the captured `config` prop. Two writes in the
+// same render tick must both land in the final onChange payload.
+// ---------------------------------------------------------------------------
+
+describe("ConfigForm — Issue #253 configRef (two writes in same tick)", () => {
+  afterEach(() => {
+    cleanup();
+    dynParamCalls.length = 0;
+  });
+
+  it("preserves the first write when a second DynParam write fires in the same tick (numeric branch)", () => {
+    // Two essential DynParams fire onChange back-to-back without the parent
+    // re-rendering (simulates batched React updates + effect-driven writes
+    // that all target the same commit). If the numeric branch of
+    // handleHintChange still reads the captured `config`, the second write
+    // rebuilds params from the stale snapshot and loses the first write.
+    const onChange = vi.fn();
+    renderConfigForm({
+      schema: minimalSchema,
+      config: {
+        model: {
+          name: "lgbm",
+          params: { learning_rate: 0.1, max_depth: 6 },
+        },
+      },
+      onChange,
+      uiSchema: {
+        parameter_hints: [
+          { key: "learning_rate", kind: "number", label: "LR" },
+          { key: "max_depth", kind: "integer", label: "Depth" },
+        ],
+      } as unknown as UiSchema,
+    });
+
+    const lrParam = screen
+      .getAllByTestId("dyn-param")
+      .find((el) => el.dataset.hintKey === "learning_rate");
+    const depthParam = screen
+      .getAllByTestId("dyn-param")
+      .find((el) => el.dataset.hintKey === "max_depth");
+
+    // Fire both writes before the parent re-renders with the new config.
+    fireEvent.click(lrParam!);
+    fireEvent.click(depthParam!);
+
+    // The last onChange call represents the final state the backend would
+    // observe. Both writes must be present — neither may be overwritten by
+    // a stale-snapshot rebuild.
+    const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0];
+    expect(lastCall.model.params.learning_rate).toBe("__changed__");
+    expect(lastCall.model.params.max_depth).toBe("__changed__");
+  });
+
+  it("preserves a prior handleHintChange write when FeatureWeightsEditor writes in the same tick", () => {
+    // handleHintChange (objective) goes through handleFieldChange →
+    // configRef. FeatureWeightsEditor.onChange must also use configRef, or
+    // its write rebuilds config from the stale snapshot and drops the
+    // objective change.
+    const onChange = vi.fn();
+    renderConfigForm({
+      schema: minimalSchema,
+      config: {
+        model: { name: "lgbm", params: {}, feature_weights: null },
+      },
+      onChange,
+      columns: ["age"],
+      uiSchema: {
+        parameter_hints: [
+          { key: "objective", kind: "objective", label: "Obj" },
+        ],
+      } as unknown as UiSchema,
+    });
+
+    // 1. Objective change (goes via handleFieldChange / configRef)
+    const objParam = screen
+      .getAllByTestId("dyn-param")
+      .find((el) => el.dataset.hintKey === "objective");
+    fireEvent.click(objParam!);
+
+    // 2. FeatureWeightsEditor ON (Switch). Before the parent re-renders
+    //    with the new config from step 1.
+    const weightsSwitch = screen.getByLabelText(/enable feature weights/i);
+    fireEvent.click(weightsSwitch);
+
+    // The final onChange payload must carry BOTH: the objective set in
+    // step 1 and the feature_weights toggle from step 2.
+    const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0];
+    expect(lastCall.model.params.objective).toBe("__changed__");
+    expect(lastCall.model.feature_weights).toEqual({});
+  });
+
+  it("preserves a prior handleHintChange write when CalibrationSection toggles in the same tick", () => {
+    // CalibrationSection is the last onChange site migrated to
+    // handleFieldChange. Same race shape: objective set first via
+    // handleFieldChange, then CalibrationSection writes calibration.
+    const onChange = vi.fn();
+    renderConfigForm({
+      schema: minimalSchema,
+      config: { ...minimalConfig, calibration: null },
+      onChange,
+      task: "binary",
+      uiSchema: {
+        parameter_hints: [
+          { key: "objective", kind: "objective", label: "Obj" },
+        ],
+      } as unknown as UiSchema,
+    });
+
+    const objParam = screen
+      .getAllByTestId("dyn-param")
+      .find((el) => el.dataset.hintKey === "objective");
+    fireEvent.click(objParam!);
+
+    // Toggle calibration ON (null → defaults object)
+    const calibrationHeading = screen.getByText("Calibration");
+    const calibrationSection = calibrationHeading.closest(
+      '[data-slot="accordion-item"]',
+    ) as HTMLElement;
+    const toggle = within(calibrationSection).getByRole("switch");
+    fireEvent.click(toggle);
+
+    const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0];
+    expect(lastCall.model.params.objective).toBe("__changed__");
     expect(lastCall.calibration).not.toBeNull();
     expect(typeof lastCall.calibration).toBe("object");
   });

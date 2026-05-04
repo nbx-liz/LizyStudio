@@ -12,15 +12,21 @@ import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 from fastapi import Request
 
-from lizystudio.backends.base import BackendAdapter
 from lizystudio.backends.types import DataRef, FitSummary, TuningSummary
-from lizystudio.metrics import ACTIVE_JOBS
 from lizystudio.security import validate_path_within  # noqa: E402
+from lizystudio.storage.versions import (  # noqa: E402
+    read_versioned_json,
+    write_versioned_json,
+)
+
+if TYPE_CHECKING:
+    from lizystudio.backends.base import BackendAdapter
+    from lizystudio.metrics import JobType, MetricsRegistry, TerminalStatus
 
 _logger = logging.getLogger(__name__)
 
@@ -32,6 +38,45 @@ _logger = logging.getLogger(__name__)
 # ``request_cancel`` between trials, so cooperative cancel (H-0011)
 # actually fires before the SIGTERM escalation.
 CANCEL_FLAG_FILENAME = "CANCEL"
+
+
+# A-10: BLUEPRINT §3.4.4 on-disk layout for a single job. Centralising
+# this map is the core of the path-layout SSOT — every artifact filename
+# lives here, and every caller goes through ``JobStore.path_for`` (or
+# the module-level :func:`artifact_path` helper, used by call sites
+# that have a ``jobs_dir`` but no ``JobStore`` instance).
+ArtifactKind = Literal[
+    "meta",
+    "fit_result",
+    "tune_result",
+    "model",
+    "log",
+    "tuning_plot",
+    "cancel_flag",
+]
+
+ARTIFACT_FILENAMES: dict[ArtifactKind, str] = {
+    "meta": "meta.json",
+    "fit_result": "fit_result.json",
+    "tune_result": "tune_result.json",
+    "model": "model",  # directory (see load/save in adapters)
+    "log": "execution.log",
+    "tuning_plot": "tuning_plot.json",
+    "cancel_flag": CANCEL_FLAG_FILENAME,
+}
+
+
+def artifact_path(jobs_dir: Path, job_id: str, kind: ArtifactKind) -> Path:
+    """Resolve ``{jobs_dir}/{job_id}/<artifact>`` without a ``JobStore``.
+
+    ``JobStore.path_for`` is the preferred entry point (it also applies
+    path-traversal guards). This helper exists for call sites — e.g.
+    :mod:`lizystudio.services.job_results` — that hold a ``Job`` and can
+    derive ``jobs_dir`` from ``Job.model_path`` but do not own the
+    ``JobStore`` instance. Callers are responsible for validating
+    ``job_id`` when it is user-controlled.
+    """
+    return jobs_dir / job_id / ARTIFACT_FILENAMES[kind]
 
 
 @dataclass
@@ -66,13 +111,25 @@ class JobStore:
         {jobs_dir}/{job_id}/model/
     """
 
-    def __init__(self, jobs_dir: Path) -> None:
+    def __init__(
+        self,
+        jobs_dir: Path,
+        metrics: MetricsRegistry | None = None,
+    ) -> None:
         self.jobs_dir = jobs_dir
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         self._cancel_requested: set[str] = set()
         self._cancel_lock = threading.Lock()
         self._active_job_id: str | None = None
         self._active_lock = threading.Lock()
+        # A-9: the active-slot gauge lives on the per-app MetricsRegistry.
+        # ``metrics`` is None in the subprocess child path
+        # (:func:`subprocess_runner._run_job_in_subprocess`) where the
+        # child's Prometheus state is isolated from the parent and
+        # scrape output comes from the parent's registry only — bumping
+        # a disconnected gauge inside the child would be a no-op, so we
+        # simply skip it.
+        self._metrics = metrics
         # H-0062: per-parent exclusive lock for Re-tune / Resume children.
         # Maps parent_job_id -> child_job_id currently holding the slot.
         # In-memory only; cleared naturally on process restart because
@@ -80,12 +137,75 @@ class JobStore:
         # already marked failed at restart time.
         self._parent_locks: dict[str, str] = {}
         self._parent_lock_mutex = threading.Lock()
+        # H-0084 (Issue #235): model cache lives on the JobStore so two
+        # app instances sharing a process keep their caches isolated.
+        # Imported lazily to avoid a top-level cycle with job_results.
+        from lizystudio.services.job_results import ModelCache
+
+        self.model_cache: ModelCache = ModelCache()
+
+    def load_model(self, job: Job, backend: BackendAdapter) -> Any:
+        """Load a trained model, memoised via the owned ``ModelCache``
+        (H-0084)."""
+        return self.model_cache.load(job, backend)
+
+    def clear_model_cache(self) -> None:
+        """Drop all memoised models (H-0084)."""
+        self.model_cache.clear()
+
+    def clear_model_cache_for(self, model_path: str) -> None:
+        """Drop memoised entries for a specific model path (H-0084)."""
+        self.model_cache.clear_for(model_path)
+
+    def _set_active_gauge(self, value: float) -> None:
+        """Update the active-jobs gauge on the bound MetricsRegistry."""
+        if self._metrics is not None:
+            self._metrics.active_jobs.set(value)
+
+    def record_job_terminal(
+        self,
+        job_type: JobType,
+        status: TerminalStatus,
+        duration: float = 0.0,
+    ) -> None:
+        """Forward a terminal transition to the bound :class:`MetricsRegistry`.
+
+        A-9: the training service layer already threads a ``JobStore``
+        through every call path, so re-using it as the metrics entry
+        point avoids duplicating the plumbing. A ``None`` registry is
+        a no-op (used by the subprocess child where Prometheus output
+        is never scraped).
+        """
+        if self._metrics is None:
+            return
+        self._metrics.record_job_terminal(job_type, status, duration=duration)
 
     def _job_dir(self, job_id: str) -> Path:
         """Resolve job directory with traversal guard."""
         candidate = (self.jobs_dir / job_id).resolve()
         validate_path_within(candidate, self.jobs_dir)
         return candidate
+
+    # --- Path resolution (A-10) ---
+
+    def job_dir(self, job_id: str) -> Path:
+        """Public job directory resolver with traversal guard.
+
+        Callers outside :class:`JobStore` should prefer :meth:`path_for`
+        for named artifacts and reserve :meth:`job_dir` for cases that
+        need the directory itself (e.g. checkpoint base dir for
+        subprocess runners).
+        """
+        return self._job_dir(job_id)
+
+    def path_for(self, job_id: str, kind: ArtifactKind) -> Path:
+        """Resolve the on-disk path of a named job artifact.
+
+        Backed by the module-level :data:`ARTIFACT_FILENAMES` map so the
+        layout stays a single source of truth. The returned path is
+        already guarded against traversal via :meth:`_job_dir`.
+        """
+        return self._job_dir(job_id) / ARTIFACT_FILENAMES[kind]
 
     # --- CRUD ---
 
@@ -119,8 +239,7 @@ class JobStore:
 
     def get(self, job_id: str) -> Job | None:
         """Load a job by ID. Returns ``None`` if not found."""
-        meta_path = self._job_dir(job_id) / "meta.json"
-        if not meta_path.exists():
+        if not self.path_for(job_id, "meta").exists():
             return None
         return self._load_job(job_id)
 
@@ -169,12 +288,12 @@ class JobStore:
         self._save_meta(job)
         if job.fit_result is not None:
             self._write_json(
-                self.jobs_dir / job.job_id / "fit_result.json",
+                self.path_for(job.job_id, "fit_result"),
                 asdict(job.fit_result),
             )
         if job.tune_result is not None:
             self._write_json(
-                self.jobs_dir / job.job_id / "tune_result.json",
+                self.path_for(job.job_id, "tune_result"),
                 asdict(job.tune_result),
             )
 
@@ -186,7 +305,7 @@ class JobStore:
         removed (existing children become orphaned).  An empty list is
         returned when the job does not exist.
         """
-        if not self._job_dir(job_id).exists():
+        if not self.job_dir(job_id).exists():
             return []
 
         removed: builtins.list[str] = []
@@ -203,7 +322,7 @@ class JobStore:
             removed.append(job_id)
 
         for jid in removed:
-            target = self._job_dir(jid)
+            target = self.job_dir(jid)
             if target.exists():
                 # ignore_errors: a concurrent request_cancel (#152) can
                 # briefly stage a tempfile inside the victim tree, and
@@ -212,6 +331,9 @@ class JobStore:
                 # deleted anyway; swallow the transient error instead
                 # of propagating it out of delete().
                 shutil.rmtree(target, ignore_errors=True)
+            # Drop any cached deserialised model for this job via the
+            # JobStore-owned cache (H-0084).
+            self.clear_model_cache_for(str(self.path_for(jid, "model")))
         return removed
 
     # --- H-0062 lineage helpers ---
@@ -438,10 +560,10 @@ class JobStore:
     def _cancel_flag_path(self, job_id: str) -> Path:
         """Resolve the cancel flag path with the traversal guard.
 
-        Reuses ``_job_dir``'s path validation so a malformed job_id
-        cannot escape the jobs_dir root.
+        Thin wrapper over :meth:`path_for` so a malformed job_id cannot
+        escape the jobs_dir root.
         """
-        return self._job_dir(job_id) / CANCEL_FLAG_FILENAME
+        return self.path_for(job_id, "cancel_flag")
 
     # --- Active job tracking (concurrency control) ---
 
@@ -501,7 +623,7 @@ class JobStore:
                 parent_job_id=parent_job_id,
             )
             self._active_job_id = job.job_id
-            ACTIVE_JOBS.set(1)
+            self._set_active_gauge(1)
             return job
 
     def _is_slot_holder_stale_locked(self) -> bool:
@@ -531,10 +653,10 @@ class JobStore:
         with self._active_lock:
             if self._active_job_id is None:
                 self._active_job_id = job_id
-                ACTIVE_JOBS.set(1)
+                self._set_active_gauge(1)
                 return True
             # H-0065: the `self._active_job_id == job_id` re-claim
-            # branch intentionally skips `ACTIVE_JOBS.set(1)` — the
+            # branch intentionally skips the gauge update — the
             # gauge was already set to 1 by the original
             # `create_and_claim_active` or `claim_active` call that
             # acquired the slot, and bumping it again would be a
@@ -546,7 +668,7 @@ class JobStore:
         with self._active_lock:
             if self._active_job_id == job_id:
                 self._active_job_id = None
-                ACTIVE_JOBS.set(0)
+                self._set_active_gauge(0)
 
     def force_release_active_if(self, expected_job_id: str) -> bool:
         """Atomically release the slot iff it is still held by *expected_job_id*.
@@ -566,7 +688,7 @@ class JobStore:
         with self._active_lock:
             if self._active_job_id == expected_job_id:
                 self._active_job_id = None
-                ACTIVE_JOBS.set(0)
+                self._set_active_gauge(0)
                 return True
             return False
 
@@ -583,7 +705,7 @@ class JobStore:
 
     def get_log(self, job_id: str) -> str:
         """Read execution log for a job. Returns empty string if not found."""
-        log_path = self._job_dir(job_id) / "execution.log"
+        log_path = self.path_for(job_id, "log")
         if not log_path.exists():
             return ""
         return log_path.read_text(encoding="utf-8")
@@ -591,7 +713,7 @@ class JobStore:
     # --- Internal helpers ---
 
     def _save_meta(self, job: Job) -> None:
-        job_dir = self._job_dir(job.job_id)
+        job_dir = self.job_dir(job.job_id)
         job_dir.mkdir(parents=True, exist_ok=True)
         meta = {
             "job_id": job.job_id,
@@ -606,20 +728,19 @@ class JobStore:
             "error": job.error,
             "parent_job_id": job.parent_job_id,
         }
-        self._write_json(job_dir / "meta.json", meta)
+        self._write_json(self.path_for(job.job_id, "meta"), meta)
 
     def _load_job(self, job_id: str) -> Job:
-        job_dir = self._job_dir(job_id)
-        meta = self._read_json(job_dir / "meta.json")
+        meta = self._read_json(self.path_for(job_id, "meta"))
 
         fit_result = None
-        fit_path = job_dir / "fit_result.json"
+        fit_path = self.path_for(job_id, "fit_result")
         if fit_path.exists():
             d = self._read_json(fit_path)
             fit_result = FitSummary(**d)
 
         tune_result = None
-        tune_path = job_dir / "tune_result.json"
+        tune_path = self.path_for(job_id, "tune_result")
         if tune_path.exists():
             d = self._read_json(tune_path)
             tune_result = TuningSummary(**d)
@@ -643,14 +764,28 @@ class JobStore:
         )
 
     @staticmethod
-    def _write_json(path: Path, data: Any) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        text = json.dumps(data, ensure_ascii=False, default=str)
-        path.write_text(text, encoding="utf-8")
+    def _write_json(path: Path, data: dict[str, Any]) -> None:
+        """Write a Studio-owned JSON artefact with ``format_version`` embedded.
+
+        Routes through :func:`lizystudio.storage.versions.write_versioned_json`
+        (C-9 / H-0081) so every persisted file declares its schema
+        version. ``data`` must already be a dict — fit/tune results and
+        job meta all derive from ``asdict(...)`` so this is satisfied
+        at the one call site that serialises a dataclass directly.
+        """
+        write_versioned_json(path, data)
 
     @staticmethod
-    def _read_json(path: Path) -> Any:
-        return json.loads(path.read_text(encoding="utf-8"))
+    def _read_json(path: Path) -> dict[str, Any]:
+        """Load a versioned JSON artefact and run migrations if needed.
+
+        Returns the migrated domain payload with the ``format_version``
+        sentinel stripped, so callers consume the same shape regardless
+        of whether the file was written by a pre-C-9 or post-C-9
+        runtime (missing key is treated as v0 per H-0081).
+        """
+        _, payload = read_versioned_json(path)
+        return payload
 
 
 def get_job_store(request: Request) -> JobStore:
@@ -658,94 +793,37 @@ def get_job_store(request: Request) -> JobStore:
     return request.app.state.job_store  # type: ignore[no-any-return]
 
 
-# --- Service-layer helpers for job results (Phase 20) ---
+# --- Back-compat re-exports (A-7: dispatch helpers moved to job_results) ---
+# External callers historically import these from services.jobs. The logic
+# now lives in services/job_results.py. H-0084: the cache-management
+# helpers (clear_model_cache / clear_model_cache_for / load_job_model)
+# have been retired in favour of the JobStore-owned ModelCache; use
+# ``JobStore.load_model`` / ``JobStore.clear_model_cache`` / the helpers
+# below that accept a ``cache`` argument instead.
+from lizystudio.services.job_results import (  # noqa: E402
+    _get_jobs_dir,
+    _load_tuning_plot_from_file,
+    get_available_plots,
+    get_importance,
+    get_importance_kinds,
+    get_job_plot,
+    get_learning_curve_metrics,
+    get_metrics_table,
+    get_split_summary,
+)
 
-
-def load_job_model(job: Job, backend: BackendAdapter) -> Any:
-    """Load a trained model from a completed job."""
-    if job.model_path is None:
-        msg = f"Job {job.job_id} has no saved model"
-        raise ValueError(msg)
-    return backend.load_model(job.model_path)
-
-
-def get_metrics_table(job: Job, backend: BackendAdapter) -> list[dict[str, Any]]:
-    """Get the metrics evaluation table for a completed job."""
-    model = load_job_model(job, backend)
-    return backend.evaluate_table(model)
-
-
-def get_split_summary(job: Job, backend: BackendAdapter) -> list[dict[str, Any]]:
-    """Get fold/split summary for a completed job."""
-    model = load_job_model(job, backend)
-    return backend.split_summary(model)
-
-
-def get_importance(
-    job: Job, backend: BackendAdapter, kind: str = "split"
-) -> dict[str, float]:
-    """Get feature importance for a completed job."""
-    model = load_job_model(job, backend)
-    return backend.importance(model, kind=kind)
-
-
-def get_importance_kinds(job: Job, backend: BackendAdapter) -> list[str]:
-    """Get the list of valid importance kind identifiers for a completed job."""
-    model = load_job_model(job, backend)
-    return backend.importance_kinds(model)
-
-
-def get_learning_curve_metrics(job: Job, backend: BackendAdapter) -> list[str]:
-    """Get the list of metric names available in the learning curve history."""
-    model = load_job_model(job, backend)
-    return backend.learning_curve_metrics(model)
-
-
-def _get_jobs_dir(job: Job) -> Path | None:
-    """Derive the jobs directory from a job's model_path."""
-    if job.model_path:
-        return Path(job.model_path).parent.parent
-    return None
-
-
-def _load_tuning_plot_from_file(job: Job) -> Any:
-    """Load a saved tuning plot JSON from disk (fallback for exported models)."""
-    from lizystudio.backends.types import PlotData
-
-    jobs_dir = _get_jobs_dir(job)
-    if jobs_dir is None:
-        return None
-    path = jobs_dir / job.job_id / "tuning_plot.json"
-    if not path.exists():
-        return None
-    return PlotData(plotly_json=path.read_text(encoding="utf-8"))
-
-
-def get_job_plot(
-    job: Job, backend: BackendAdapter, plot_type: str, **kwargs: Any
-) -> Any:
-    """Get a plot for a completed job. Returns PlotData."""
-    model = load_job_model(job, backend)
-    # For tuning plots, the exported model may lack Optuna study data.
-    # Fall back to the saved file captured at tune time.
-    if plot_type == "tuning":
-        try:
-            return backend.plot(model, plot_type, **kwargs)
-        except Exception:  # noqa: BLE001
-            saved = _load_tuning_plot_from_file(job)
-            if saved is not None:
-                return saved
-            raise
-    return backend.plot(model, plot_type, **kwargs)
-
-
-def get_available_plots(job: Job, backend: BackendAdapter) -> list[str]:
-    """Get list of available plot types for a completed job."""
-    model = load_job_model(job, backend)
-    plots = list(backend.available_plots(model))
-    # If tuning plot file exists but model doesn't have tuning data, add it
-    if "tuning" not in plots and job.job_type == "tune":
-        saved = _load_tuning_plot_from_file(job)
-        if saved is not None:
-            plots.append("tuning")
-    return plots
+__all__ = [
+    "CANCEL_FLAG_FILENAME",
+    "Job",
+    "JobStore",
+    "_get_jobs_dir",
+    "_load_tuning_plot_from_file",
+    "get_available_plots",
+    "get_importance",
+    "get_importance_kinds",
+    "get_job_plot",
+    "get_job_store",
+    "get_learning_curve_metrics",
+    "get_metrics_table",
+    "get_split_summary",
+]

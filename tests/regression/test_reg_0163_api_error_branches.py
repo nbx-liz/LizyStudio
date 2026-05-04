@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+import lizyml
 import pytest
 from fastapi.testclient import TestClient
 
@@ -29,6 +30,8 @@ from lizystudio.backends.types import DataRef, TuningSummary
 from lizystudio.services.jobs import JobStore
 
 pytestmark = pytest.mark.integration
+
+_LIZYML_VERSION = lizyml.__version__
 
 
 # ---------------------------------------------------------------------------
@@ -73,7 +76,7 @@ def _make_completed_tune_job(client: TestClient, data_ref: DataRef) -> str:
     job_dir.mkdir(parents=True, exist_ok=True)
     (job_dir / "model.pkl").write_bytes(b"fake pickle payload")
     (job_dir / "model_meta.json").write_text(
-        '{"pickle_schema": 1, "lizyml_version": "0.9.1", '
+        '{"pickle_schema": 1, "lizyml_version": "' + _LIZYML_VERSION + '", '
         '"lightgbm_version": "4.5.0", "optuna_version": "4.0.0", '
         '"saved_at": "2026-04-13T12:00:00+00:00"}'
     )
@@ -293,7 +296,7 @@ def test_resume_rebind_race_deletes_child_and_returns_409(
     job_dir.mkdir(parents=True, exist_ok=True)
     (job_dir / "model.pkl").write_bytes(b"fake")
     (job_dir / "model_meta.json").write_text(
-        '{"pickle_schema": 1, "lizyml_version": "0.9.1", '
+        '{"pickle_schema": 1, "lizyml_version": "' + _LIZYML_VERSION + '", '
         '"lightgbm_version": "4.5.0", "optuna_version": "4.0.0", '
         '"saved_at": "2026-04-13T12:00:00+00:00"}'
     )

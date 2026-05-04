@@ -147,6 +147,8 @@ class ColumnsResponse:
 
 #### 3.3.2 BackendAdapter Protocol
 
+Adapter 契約は capability 別に 5 つの `@runtime_checkable` Protocol に分割され、`BackendAdapter` はそれらを継承した alias として定義される (H-0068)。個別 Protocol を使うことで将来のバックエンド追加時に必要最小のメソッド集合から段階的に実装できる。既存の `adapter: BackendAdapter` 型注釈・`isinstance(x, BackendAdapter)` チェックは継承 alias により継続動作する。
+
 ```python
 # src/lizystudio/backends/base.py
 
@@ -159,8 +161,9 @@ class ProgressCallback(Protocol):
     ) -> None: ...
 
 
-class BackendAdapter(Protocol):
-    """ML バックエンドとのインターフェース。"""
+@runtime_checkable
+class BackendCore(Protocol):
+    """ML モデルの生成・学習・推論・永続化を担う最小契約。"""
 
     # --- Identification ---
     @property
@@ -168,13 +171,12 @@ class BackendAdapter(Protocol):
 
     # --- Config ---
     def get_config_schema(self) -> ConfigSchema: ...
-    def get_ui_schema(self) -> dict[str, Any]: ...  # UI メタデータ (H-0026, H-0055)
     def validate_config(self, config: dict[str, Any]) -> list[dict[str, Any]]: ...  # エラー一覧 (空=valid)
-    def get_default_config(self, task: str, target: str) -> dict[str, Any]: ...  # 完全なデフォルト Config (H-0025)
+    def get_default_config(self, task: str, target: str) -> dict[str, Any]: ...  # H-0025
     def load_config_from_file(self, content: bytes, filename: str) -> dict[str, Any]: ...
 
     # --- Model lifecycle ---
-    def create_model(self, config: dict[str, Any], dataframe: pd.DataFrame) -> Any: ...  # 内部モデルオブジェクト
+    def create_model(self, config: dict[str, Any], dataframe: pd.DataFrame) -> Any: ...
 
     def fit(
         self,
@@ -191,47 +193,96 @@ class BackendAdapter(Protocol):
         on_progress: ProgressCallback | None = None,
         re_tune: dict[str, Any] | None = None,       # H-0061 多ラウンド再チューニング
         checkpoint_dir: Any = None,                  # H-0062 試行ごとのチェックポイント
-        resume: bool = False,                        # H-0062 Phase B: 既存 study の再開
+        resume: bool = False,                        # H-0062 Phase B
     ) -> TuningSummary: ...
 
     def predict(
         self, model: Any, data: pd.DataFrame, *, return_shap: bool = False  # H-0012
     ) -> PredictionSummary: ...
 
-    # --- Evaluation ---
+    # --- Checkpoint persistence (H-0062) ---
+    def save_checkpoint(self, model: Any, path: Any) -> None: ...
+    def load_checkpoint(self, path: Any, *, allowed_root: Any | None = None) -> Any: ...
+    def verify_checkpoint_compatibility(self, job_dir: Any) -> None: ...  # H-0068
+        # pickle / sidecar 互換性を確認できないときは backends.exceptions.CheckpointIncompatibleError を raise
+    def preflight_checkpoint_dir(self, job_dir: Any) -> None: ...  # H-0062
+        # tune 開始前に書き込み権限と picklable 性を検証。問題があれば PICKLE_PREFLIGHT_FAILED を raise
+
+    # --- Persistence ---
+    def export_model(self, model: Any, path: str) -> str: ...
+    def load_model(self, path: str) -> Any: ...
+    def model_info(self, model: Any) -> dict[str, Any]: ...
+
+
+@runtime_checkable
+class BackendEvaluator(Protocol):
+    """評価・解釈のための任意 capability。"""
+
     def evaluate_table(self, model: Any) -> list[dict[str, Any]]: ...
     def split_summary(self, model: Any) -> list[dict[str, Any]]: ...
     def importance(self, model: Any, kind: str = "split") -> dict[str, float]: ...
-    def importance_kinds(self, model: Any) -> list[str]: ...  # 利用可能な重要度の種類 (H-0055)
-    def learning_curve_metrics(self, model: Any) -> list[str]: ...  # H-0051 学習曲線のメトリック一覧
+    def importance_kinds(self, model: Any) -> list[str]: ...       # H-0055
+    def learning_curve_metrics(self, model: Any) -> list[str]: ...  # H-0051
     def confusion_matrix(self, model: Any, threshold: float = 0.5) -> dict[str, Any]: ...
+
+
+@runtime_checkable
+class BackendPlotter(Protocol):
+    """plotly 図の生成を担う任意 capability。"""
+
     def plot(self, model: Any, plot_type: str, **kwargs: Any) -> PlotData: ...
     def available_plots(self, model: Any) -> list[str]: ...
 
-    # --- Checkpoint persistence (H-0062) ---
-    def save_checkpoint(self, model: Any, path: Any) -> None: ...  # 原子的に pickle 書き込み
-    def load_checkpoint(self, path: Any, *, allowed_root: Any | None = None) -> Any: ...  # allowed_root で展開先を制限
 
-    # --- Persistence ---
-    def export_model(self, model: Any, path: str) -> str: ...  # 保存先パス
-    def export_code(self, model: Any, path: str) -> str: ...   # スタンドアロン Python コードへの書き出し
-    def load_model(self, path: str) -> Any: ...
-    def model_info(self, model: Any) -> dict[str, Any]: ...
+@runtime_checkable
+class BackendCodeExporter(Protocol):
+    """スタンドアロン Python コード書き出し capability。"""
+
+    def export_code(self, model: Any, path: str) -> str: ...
+
+
+@runtime_checkable
+class BackendUiSchemaProvider(Protocol):
+    """画面メタデータを提供する任意 capability。"""
+
+    def get_ui_schema(self) -> dict[str, Any]: ...  # H-0026 / H-0055
+
+
+@runtime_checkable
+class BackendAdapter(
+    BackendCore,
+    BackendEvaluator,
+    BackendPlotter,
+    BackendCodeExporter,
+    BackendUiSchemaProvider,
+    Protocol,
+):
+    """全 capability を備えた完全な ML バックエンド契約。
+    既存の `adapter: BackendAdapter` 受け型との互換維持のため継承 alias として残す。"""
 ```
+
+例外型は `src/lizystudio/backends/exceptions.py` に集約される (H-0068):
+
+- `CancelledError`: 長時間実行のキャンセル要求シグナル。`services.training` および `services._training_core` が identity 互換のまま re-export する。
+- `CheckpointIncompatibleError`: `verify_checkpoint_compatibility` が互換性違反を検出した際に raise。旧 `backends.lizyml.PickleIncompatibleError` を置き換え、API / service 層は `backends.lizyml` を直接 import しない。
 
 #### 3.3.3 Adapter 登録
 
 ```python
 # src/lizystudio/backends/registry.py
 
-# バックエンド名 → Adapter のマッピング
-# 初期状態では LizyML のみ。新バックエンドは Adapter 実装 + 登録で追加。
+# バックエンド名 → Adapter factory のマッピング (H-0068)
+# 型は `dict[str, Callable[[], BackendAdapter]]` で、新バックエンドは
+# `register_backend("name", factory)` を呼ぶだけで追加できる。
+# factory は lazy — 使用時に初めて `LizyMLAdapter()` が生成されるので
+# 未使用 backend の重い依存ライブラリはロードされない。
 ```
 
 起動時のバックエンド選択:
 - デフォルトは `lizyml`
 - CLI オプション `lizystudio --backend lizyml` で明示指定可能
 - 将来的に画面上でバックエンド切り替え UI を追加する余地を残す
+- サードパーティ backend は import 時に `register_backend(name, factory)` を呼ぶことで `get_adapter(name)` 経由でアクセス可能になる
 
 ### 3.4 状態管理
 
@@ -247,10 +298,12 @@ class BackendAdapter(Protocol):
 | `workspace_config` | `dict \| None` | Config設定時に生成 |
 | `workspace_data` | `DataRef \| None` | データ指定時に生成 |
 | `workspace_result` | `Job \| None` | 現セッション中の直近fit結果のみ |
+| `active_job_id` | `str \| None` | 実行中ジョブのスロット。`JobStore.active_job_id` が単一所有者として保持（P-0089 / Issue #279） |
 
 - `workspace_result` は現セッション中にWorkspaceからfitした場合のみセットされる
 - ブラウザ再アクセス時は `workspace_result = None`（右パネル空）
 - 過去のJob結果は表示しない（混乱防止）
+- **Active job lock (P-0089)**: `active_job_id` がセットされている間、`PUT /api/workspace/config` および `PATCH /api/workspace/config` は 409 `WORKSPACE_LOCKED` を返す。これは UI 上の cross-hook race（CV strategy 切り替え / target 変更等）が走行中ジョブの config を後から書き換えるのを構造的に防ぐ。INV: `meta.json` に保存される config は `claim_active` 直前の workspace config と完全一致する
 
 #### 3.4.2 Job 状態（永続・ディスク）
 
@@ -2259,7 +2312,7 @@ Workspace の揮発状態を管理する。
 
 | メソッド | パス | 説明 |
 |---------|------|------|
-| GET | `/api/workspace/status` | Workspace の現在状態（data, config, result の有無） |
+| GET | `/api/workspace/status` | Workspace の現在状態（data, config, result の有無）+ `files_root: str` で `/api/files` がアクセス可能なルートディレクトリも返す（P-0088 / Issue #256） |
 | POST | `/api/workspace/reset` | Workspace 状態をリセット |
 
 #### Config
@@ -2327,6 +2380,10 @@ Workspace の揮発状態を管理する。
 
 レスポンス（共通）: `{ "job_id": "job_042" }`
 Workspace の `workspace_result` は完了時に自動更新される。
+
+**Optional `config` body (P-0086 / Issue #251):** `/fit` `/tune` のリクエストボディに `{"config": {...}}` を含めると、`/config` PUT を待たずに fit/tune と同じトランザクション内で workspace config を atomic に上書きしてから実行できる。これは Frontend 側の保留中 PUT と POST `/fit` 間の race window を閉じるためで、body が省略された場合は従来通り workspace の現行 config が使われる（後方互換）。
+
+**Active-job lock (P-0089 / Issue #279):** ジョブが running 中は `PUT /api/workspace/config` / `PATCH /api/workspace/config` が `WORKSPACE_LOCKED` (409) を返す。詳細は §3.4。
 
 ### 5.3 Jobs API
 
@@ -2473,6 +2530,12 @@ Workspace の `workspace_result` は完了時に自動更新される。
 ```
 
 `ping` は 30 秒間隔の keepalive メッセージ（H-0058）。クライアントは受信しても無視してよい（WebSocket 接続維持のため）。
+
+**Schema SSOT (H-0069):** 上記 4 variant は `src/lizystudio/ws/messages.py` の Pydantic discriminated union として単一定義される。サーバ側送信は `WsMessage.model_dump_json(exclude_none=True)` を通り、フロントは生成 `schema.d.ts` から `WsMessage` 型を import する。optional フィールド (`fold_results` / `trial_results`) は値が存在するときだけ wire に現れ、`null` フィールドはシリアライズしない（既存 wire format と bit-identical）。
+
+**Terminal replay (P-0093 / Issue #327):** `completed` / `error` メッセージは `ProgressBroadcaster._last_terminal` に per-jobId でキャッシュされ、subscribe より前に送信された場合でも late subscriber に replay される。TTL は default 5 分（環境変数 `LIZYSTUDIO_WS_TERMINAL_TTL_S` で上書き可）。これにより高速 fit (< 3 秒) の subscribe-vs-send race が解消される。INV-1: terminal メッセージは subscribe タイミングに関わらず subscriber に **少なくとも一度** 届く。INV-2: live broadcast 経路と replay 経路は subscriber の登録タイミングを境に disjoint なので、同一 subscriber への重複配信は発生しない。replay 発生は `lizystudio_progress_terminal_replayed_total` Counter で観測可能。
+
+進捗追跡の内部実装: 子プロセス → 親プロセスの JSONL 経路は `services/subprocess_runner.py` の独自 dict 形式を保持しており、親プロセスの `_forward_progress` が `WsMessage` への変換を担う。JSONL の wire は `job_id` を含まない（子プロセスは自 job を知らない前提）が、外部に露出しない内部通信のため SSOT 対象外。
 
 ### 5.6 Backend API
 
@@ -2732,8 +2795,10 @@ lizystudio_active_jobs 0.0
 |--------|------|---------------|
 | `WORKSPACE_NO_CONFIG` | Workspace に Config 未設定 | 400 |
 | `WORKSPACE_NO_DATA` | Workspace にデータ未読込 | 400 |
+| `WORKSPACE_LOCKED` | Job が running 中の Config 書き込み試行を拒否（P-0089 / Issue #279） | 409 |
 | `JOB_NOT_FOUND` | 指定されたジョブが存在しない | 404 |
 | `JOB_NOT_COMPLETED` | ジョブが未完了（Inference/Export等の前提） | 400 |
+| `JOB_CONFLICT` | active-job スロットを別ジョブが占有中（CRITICAL-2 / `JobStore.create_and_claim_active`） | 409 |
 | `VALIDATION_ERROR` | Config バリデーション失敗 | 422 |
 | `FILE_INVALID` | ファイルの読み込み失敗 | 400 |
 | `PATH_NOT_FOUND` | 指定されたローカルパスが存在しない | 400 |
@@ -2799,6 +2864,7 @@ frontend/src/api/
 | Unit | Service 層の個別メソッド | pytest |
 | API | 各エンドポイントのリクエスト/レスポンス | pytest + httpx (TestClient) |
 | Integration | LizyML との統合動作 | pytest (実際の LizyML 呼び出し) |
+| Performance | LizyML fit baseline (mean / stddev) | pytest-benchmark, `tests/bench/` (P-0094 / Issue #27 (a)) — PR CI からは `--benchmark-skip` で除外、nightly workflow が `--benchmark-only` で実行し JSON artefact を upload |
 
 ### 8.2 フロントエンド
 
@@ -3082,3 +3148,7 @@ Phase B では `{jobs_dir}/{job_id}/model.pkl` に cloudpickle で Tune Job の�
 - **API 経路**: pickle ファイルは HTTP リクエスト経由でアップロード/参照されない。`POST /api/jobs/{id}/retune` と `POST /api/jobs/{id}/resume` は `job_id` をパスから受け取り、`validate_path_within` で `jobs_dir` 内に解決されることを保証してから、その配下の `model.pkl` を `cloudpickle.load()` する。
 - **DoS 観点**: lineage tree / cascade delete の幅は無制限だが、子作成は per-parent 排他ロックで直列化されるため self-DoS のみが現実的なリスク。BLUEPRINT §11.5 と同じく、ローカル前提に基づき rate limiting は導入しない。
 - **エラー情報**: `PARENT_LOCKED` / `PARENT_HAS_ACTIVE_CHILDREN` のレスポンスには他 child の `job_id` を含めるが、シングルユーザー前提のもと意図的な情報露出として扱う。
+
+---
+
+_Last reconciled: 2026-05-01 against develop @ ad4c581. P-0086 (config body) / P-0088 (`files_root`) / P-0089 (active-job lock + `WORKSPACE_LOCKED`) / P-0093 (WS terminal-replay) / P-0094 (perf baseline) / `JOB_CONFLICT` / `preflight_checkpoint_dir` を本サイクルで反映。Tier 3 派生 doc（`docs/architecture.md` / `api.md` / `adapter-guide.md`）は #332 で同期済み。_

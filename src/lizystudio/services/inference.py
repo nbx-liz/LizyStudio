@@ -26,6 +26,12 @@ from lizystudio.backends.types import DataRef
 from lizystudio.security import validate_path_within  # noqa: E402
 from lizystudio.services.data import load_dataframe, make_data_ref
 from lizystudio.services.jobs import Job, JobStore
+from lizystudio.storage.versions import (
+    read_versioned_json,
+    write_versioned_json,
+)
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -64,20 +70,27 @@ class InferenceStore:
         d = self._inf_dir(record.job_id, record.inf_id)
         d.mkdir(parents=True, exist_ok=True)
 
-        # meta.json
+        # meta.json — routed through the versioned writer (C-9 / H-0081).
         meta = asdict(record)
         meta["data_ref"]["shape"] = list(meta["data_ref"]["shape"])
-        (d / "meta.json").write_text(
-            json.dumps(meta, ensure_ascii=False, default=str), encoding="utf-8"
-        )
+        write_versioned_json(d / "meta.json", meta)
 
         # predictions.parquet
         predictions.to_parquet(d / "predictions.parquet", index=False)
 
-        # metrics.json (ground truth only)
+        # metrics.json (ground truth only).
+        # NOTE (C-9 / H-0081 scope): metrics.json intentionally stays
+        # unversioned. Its shape is a backend-dependent flat mapping
+        # (``{mae: 0.3, rmse: 0.5, ...}``) that frontend consumers
+        # treat as an open-ended ``Record<string, number>``. Embedding
+        # a ``format_version`` key would either collide with a future
+        # metric name or force an envelope that breaks the REST
+        # response contract. Revisit when metrics.json gains a
+        # response_model on the backend.
         if metrics is not None:
             (d / "metrics.json").write_text(
-                json.dumps(metrics, ensure_ascii=False, default=str), encoding="utf-8"
+                json.dumps(metrics, ensure_ascii=False, default=str),
+                encoding="utf-8",
             )
 
     def get(self, job_id: str, inf_id: str) -> InferenceRecord | None:
@@ -88,20 +101,41 @@ class InferenceStore:
         return self._load_record(meta_path)
 
     def list(self, job_id: str) -> list[InferenceRecord]:
-        """List all inferences for a job, newest first."""
+        """List all inferences for a job, newest first.
+
+        Corrupt / in-flight records (e.g. an empty ``meta.json`` from a
+        crash mid-write, or a concurrent delete) are skipped with a
+        warning so one bad record does not take the whole endpoint to
+        500. Matches the ``JobStore.list`` resilience pattern (Issue
+        #241).
+        """
         inf_base = self.jobs_dir / job_id / "inferences"
         if not inf_base.exists():
             return []
         records: list[InferenceRecord] = []
         for d in inf_base.iterdir():
             mp = d / "meta.json"
-            if d.is_dir() and mp.exists():
+            if not (d.is_dir() and mp.exists()):
+                continue
+            try:
                 records.append(self._load_record(mp))
+            except (FileNotFoundError, OSError, json.JSONDecodeError, KeyError):
+                _logger.warning(
+                    "Skipping unreadable inference directory %s",
+                    d.name,
+                    exc_info=True,
+                )
+                continue
         records.sort(key=lambda r: r.created_at, reverse=True)
         return records
 
     def list_all(self) -> builtins.list[InferenceRecord]:
-        """List all inferences across all jobs, newest first (H-0010)."""
+        """List all inferences across all jobs, newest first (H-0010).
+
+        See :meth:`list` — corrupt records are skipped with a warning
+        rather than raising, to keep the history endpoint available
+        when one record is in flight.
+        """
         records: builtins.list[InferenceRecord] = []
         if not self.jobs_dir.exists():
             return records
@@ -113,8 +147,17 @@ class InferenceStore:
                 continue
             for d in inf_base.iterdir():
                 mp = d / "meta.json"
-                if d.is_dir() and mp.exists():
+                if not (d.is_dir() and mp.exists()):
+                    continue
+                try:
                     records.append(self._load_record(mp))
+                except (FileNotFoundError, OSError, json.JSONDecodeError, KeyError):
+                    _logger.warning(
+                        "Skipping unreadable inference directory %s",
+                        d.name,
+                        exc_info=True,
+                    )
+                    continue
         records.sort(key=lambda r: r.created_at, reverse=True)
         return records
 
@@ -152,7 +195,9 @@ class InferenceStore:
 
     @staticmethod
     def _load_record(meta_path: Path) -> InferenceRecord:
-        raw = json.loads(meta_path.read_text(encoding="utf-8"))
+        # Tolerates pre-C-9 workspaces via the v0 identity migration in
+        # lizystudio.storage.versions (H-0081).
+        _, raw = read_versioned_json(meta_path)
         dr = raw["data_ref"]
         dr["shape"] = tuple(dr["shape"])
         return InferenceRecord(
@@ -271,7 +316,18 @@ def _compute_inference_metrics(
 def _compute_inf_metrics(
     pred_df: pd.DataFrame, model_info: dict[str, Any]
 ) -> dict[str, Any]:
-    """Compute basic inference metrics from predictions vs actuals."""
+    """Compute basic inference metrics from predictions vs actuals.
+
+    Raises a clear ``ValueError`` when the backend's prediction frame
+    lacks the expected ``pred`` column — otherwise the bare
+    ``pred_df["pred"]`` below would surface as a pandas ``KeyError``
+    leaked through the REST surface (Issue #241 M-3).
+    """
+    if "pred" not in pred_df.columns:
+        raise ValueError(
+            "prediction frame is missing the 'pred' column; "
+            f"got columns={list(pred_df.columns)}"
+        )
     actual = pred_df["actual"]
     pred = pred_df["pred"]
     task = model_info.get("task", "regression")

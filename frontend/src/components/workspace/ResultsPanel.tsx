@@ -1,10 +1,7 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
-import { cancelJob, fetchJob, fetchJobLog, fetchJobs } from "@/api/jobs";
-import type { JobDetail, ProgressMessage } from "@/api/types";
-import { connectJobProgress } from "@/api/websocket";
+import { useJobLog, useJobsList } from "@/api/queries";
 import { ResumeActionButton } from "@/components/retune/ResumeActionButton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,6 +11,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useJobLifecycle } from "@/hooks/useJobLifecycle";
+import { getModelName, remainingRetuneTrials } from "@/lib/job-config";
 import { ResultsCompletedView } from "./ResultsCompletedView";
 import { ResultsRunningView } from "./ResultsRunningView";
 
@@ -41,29 +40,26 @@ export function ResultsPanel({
   onJobDone,
   onJobStarted,
 }: ResultsPanelProps) {
-  const queryClient = useQueryClient();
-  const [progress, setProgress] = useState<ProgressMessage | null>(null);
-  const [foldLog, setFoldLog] = useState<string[]>([]);
   const [selectedPlot, setSelectedPlot] = useState<string>("");
   const [logOpen, setLogOpen] = useState(false);
   const [cancelConfirm, setCancelConfirm] = useState(false);
 
-  const { data: job, refetch: refetchJob } = useQuery({
-    queryKey: ["job", jobId],
-    queryFn: () => fetchJob(jobId as string),
-    enabled: !!jobId,
-    refetchInterval: (query) => {
-      const data = query.state.data as JobDetail | undefined;
-      const s = data?.status;
-      return s === "running" || s === "pending" ? 2000 : false;
-    },
+  const onTerminal = useCallback(() => {
+    onJobDone?.();
+  }, [onJobDone]);
+
+  const onWsError = useCallback((message: string) => {
+    toast.error(message);
+  }, []);
+
+  const { job, progress, foldLog, cancel } = useJobLifecycle({
+    jobId,
+    onTerminal,
+    trackFoldLog: true,
+    onWsError,
   });
 
-  const { data: allJobs } = useQuery({
-    queryKey: ["jobs"],
-    queryFn: () => fetchJobs(),
-    enabled: !!jobId,
-  });
+  const { data: allJobs } = useJobsList();
 
   // Compute #N
   const jobNumber =
@@ -71,97 +67,12 @@ export function ResultsPanel({
       ? allJobs.length - allJobs.findIndex((j) => j.job_id === job.job_id)
       : null;
 
-  const modelName = (job?.config?.model as Record<string, unknown>)?.name as
-    | string
-    | undefined;
-
-  useEffect(() => {
-    if (!jobId) return;
-    // H-0062: allow WebSocket to start even when job is still undefined
-    // (child job just selected but its first fetch has not resolved).
-    // If the job is already terminal we still skip — no progress to
-    // subscribe to. When the job is undefined, optimistically connect
-    // so a fast-completing re-tune child does not lose its events.
-    if (job?.status && job.status !== "running" && job.status !== "pending")
-      return;
-
-    const disconnect = connectJobProgress(jobId, {
-      onProgress: (msg) => {
-        setProgress(msg);
-        if (msg.message) {
-          setFoldLog((prev) => {
-            const last = prev[prev.length - 1];
-            if (last === msg.message) return prev;
-            return [...prev, msg.message as string];
-          });
-        }
-      },
-      onCompleted: () => {
-        setProgress(null);
-        setFoldLog([]);
-        queryClient.invalidateQueries({ queryKey: ["job", jobId] });
-        queryClient.invalidateQueries({ queryKey: ["jobs"] });
-        onJobDone?.();
-      },
-      onError: (msg) => {
-        setProgress(null);
-        setFoldLog([]);
-        toast.error(msg.message);
-        queryClient.invalidateQueries({ queryKey: ["job", jobId] });
-        queryClient.invalidateQueries({ queryKey: ["jobs"] });
-        onJobDone?.();
-      },
-    });
-
-    return () => disconnect();
-  }, [jobId, job?.status, queryClient, onJobDone]);
-
-  // Polling fallback: detect completion if WebSocket misses it.
-  // H-0062: also handle the "jobId changed and the child is already
-  // completed / failed / cancelled" case, which happens when the
-  // backend finishes a short re-tune before the frontend could even
-  // subscribe. In that case prev was undefined (fresh selection) and
-  // we still need to flip running=false on the WorkspacePage.
-  const prevStatusRef = useRef<string | undefined>(undefined);
-  const prevJobIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    // Reset the cached status whenever the selected job id changes so
-    // a transition from one job to another is not misread as a status
-    // transition on the same job.
-    if (prevJobIdRef.current !== jobId) {
-      prevJobIdRef.current = jobId;
-      prevStatusRef.current = undefined;
-    }
-    const prev = prevStatusRef.current;
-    prevStatusRef.current = job?.status;
-    const reached_terminal =
-      job?.status === "completed" ||
-      job?.status === "failed" ||
-      job?.status === "cancelled";
-    if (!reached_terminal) return;
-    // Only notify when we transition TO a terminal state from a
-    // non-terminal one, OR when this is the first observation of a
-    // job that is already terminal (child selection edge case).
-    if (prev === undefined || prev === "running" || prev === "pending") {
-      setProgress(null);
-      onJobDone?.();
-    }
-  }, [jobId, job?.status, onJobDone]);
+  const modelName = getModelName(job) || undefined;
 
   const handleCancel = useCallback(async () => {
-    if (!jobId) return;
-    try {
-      await cancelJob(jobId);
-      toast.info("Job cancelled");
-      setProgress(null);
-      setFoldLog([]);
-      refetchJob();
-      onJobDone?.();
-    } catch {
-      toast.error("Failed to cancel job");
-    }
+    await cancel();
     setCancelConfirm(false);
-  }, [jobId, refetchJob, onJobDone]);
+  }, [cancel]);
 
   if (!jobId || !job) {
     return (
@@ -219,10 +130,7 @@ export function ResultsPanel({
   if (job.status === "pending") {
     return (
       <div className="flex h-full flex-col items-center justify-center p-8 text-center text-muted-foreground">
-        <Badge
-          variant="secondary"
-          className="mb-3 bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200"
-        >
+        <Badge variant="secondary" className="mb-3 bg-warning text-warning-fg">
           Queued
         </Badge>
         <p className="text-sm">Job queued, starting soon...</p>
@@ -245,7 +153,7 @@ export function ResultsPanel({
   }
 
   if (job.status === "failed") {
-    const remaining = _computeRemainingTrials(job);
+    const remaining = remainingRetuneTrials(job);
     return (
       <div className="flex h-full flex-col p-6">
         <div className="mb-4 flex items-center justify-between">
@@ -290,12 +198,7 @@ export function ResultsPanel({
           <h3 className="text-lg font-medium">
             {headerLabel} {modelName && `\u2014 ${modelName}`}
           </h3>
-          <Badge
-            variant="secondary"
-            className="bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200"
-          >
-            Cancelled
-          </Badge>
+          <Badge variant="secondary">Cancelled</Badge>
         </div>
         <p className="text-sm text-muted-foreground">
           This job was cancelled before completion.
@@ -328,11 +231,7 @@ function LogDialog({
   onOpenChange: (open: boolean) => void;
   jobId: string;
 }) {
-  const { data } = useQuery({
-    queryKey: ["job-log", jobId],
-    queryFn: () => fetchJobLog(jobId),
-    enabled: open,
-  });
+  const { data } = useJobLog(jobId, { enabled: open });
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -346,23 +245,4 @@ function LogDialog({
       </DialogContent>
     </Dialog>
   );
-}
-
-/** H-0062: compute remaining trials for a failed tune job's Resume dialog. */
-function _computeRemainingTrials(job: JobDetail): number {
-  const config = job.config as Record<string, unknown> | undefined;
-  const tuning = config?.tuning as Record<string, unknown> | undefined;
-  const optuna = tuning?.optuna as Record<string, unknown> | undefined;
-  const params = optuna?.params as Record<string, unknown> | undefined;
-  const originalRaw = params?.n_trials;
-  const original =
-    typeof originalRaw === "number" && originalRaw > 0 ? originalRaw : 50;
-  const tuneResult = job.tune_result as
-    | { trials?: unknown[] | null }
-    | null
-    | undefined;
-  const completed = Array.isArray(tuneResult?.trials)
-    ? (tuneResult?.trials?.length ?? 0)
-    : 0;
-  return Math.max(1, original - completed);
 }

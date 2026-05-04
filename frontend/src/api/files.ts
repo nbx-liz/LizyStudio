@@ -1,19 +1,19 @@
-import { apiFetch } from "./client";
+import { apiClient } from "./client";
+import type { components } from "./generated/schema";
 
-interface FileEntry {
-  name: string;
-  type: "file" | "directory";
-  size: number | null;
-  extension: string | null;
-}
+// SSOT: generated schema is the source of truth for the wire type.
+// Re-exported so consumers can keep the original import shape.
+export type DirectoryListing = components["schemas"]["DirectoryListing"];
 
-interface DirectoryListing {
-  path: string;
-  parent: string | null;
-  entries: FileEntry[];
-}
-
-export function fetchDirectory(path?: string): Promise<DirectoryListing> {
-  const params = path ? `?path=${encodeURIComponent(path)}` : "";
-  return apiFetch(`/files${params}`);
+export async function fetchDirectory(path?: string): Promise<DirectoryListing> {
+  const { data } = await apiClient.GET("/api/files", {
+    params: { query: path ? { path } : {} },
+  });
+  // The throwOnError middleware in client.ts throws ApiError on non-2xx
+  // responses, so ``data`` is always defined here. The explicit guard
+  // satisfies TypeScript's narrowing without relying on a non-null assertion.
+  if (!data) {
+    throw new Error("apiClient returned no data despite 2xx response");
+  }
+  return data;
 }

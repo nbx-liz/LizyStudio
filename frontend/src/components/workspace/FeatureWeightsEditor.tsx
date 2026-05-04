@@ -64,7 +64,11 @@ export function FeatureWeightsEditor({
         label="Feature Weights"
         description="Assign custom weights to features for training"
       >
-        <Switch checked={enabled} onCheckedChange={handleToggle} />
+        <Switch
+          checked={enabled}
+          onCheckedChange={handleToggle}
+          aria-label="Enable feature weights"
+        />
       </FormField>
 
       {enabled && (

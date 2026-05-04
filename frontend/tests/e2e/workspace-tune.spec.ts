@@ -1,5 +1,10 @@
 import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
+import { isMobileProject } from "./helpers/mobile";
+import {
+  pollJobUntilTerminal,
+  seedUiWorkspace,
+} from "./helpers/workspace-ui";
 
 const API = "http://localhost:8501/api";
 
@@ -251,5 +256,272 @@ test.describe("Workspace tune flow", () => {
     // ZIP magic bytes: PK\x03\x04
     expect(body[0]).toBe(0x50); // P
     expect(body[1]).toBe(0x4b); // K
+  });
+
+  /**
+   * Issue #257 Phase 3 — UI-driven Tune happy path.
+   *
+   * Parallel to the UI-Fit Scenario A in workspace-fit.spec.ts. Drives
+   * the real frontend path: seed data via the Path input, pick target,
+   * switch to the Tune tab, click the Tune button, assert POST
+   * /workspace/tune returns 200 and the job completes.
+   *
+   * TuneTab auto-populates a default search space from
+   * ``catalog_entries.default_range`` (see TuneTab.tsx:62-86), so a
+   * user-driven Tune with no manual search-space edits still submits a
+   * valid config. This spec locks that contract.
+   */
+  test("UI: load data -> pick target -> Tune tab -> click Tune -> tune returns 200", async ({
+    page,
+    request,
+  }, testInfo) => {
+    // Same budget as the UI-Fit scenarios (15s schema load + 15s combo
+    // enable + 30s tune accept + 90s poll), plus a margin for Optuna
+    // overhead on the first trial.
+    test.setTimeout(180_000);
+    if (isMobileProject(testInfo)) {
+      // Mobile layout collapses the Tune tab behind the tab nav;
+      // covered separately by ui-improvements specs.
+      test.skip(
+        true,
+        "Mobile happy-path is covered by workspace-mobile.spec.ts (B-8)",
+      );
+    }
+
+    const csvPath = createTestCsv();
+    await seedUiWorkspace(page, testInfo, { csvPath });
+
+    // Switch to the Tune tab. Radix Tabs uses role="tab" for triggers.
+    await page.getByRole("tab", { name: "Tune" }).click();
+    const tuneButton = page.getByRole("button", { name: "Tune", exact: true });
+    await expect(tuneButton).toBeEnabled({ timeout: 15_000 });
+
+    // Arm the response listener BEFORE the click so we don't miss the
+    // fast accept-on-submit path.
+    const tuneResponsePromise = page.waitForResponse(
+      (res) =>
+        res.url().endsWith("/api/workspace/tune") &&
+        res.request().method() === "POST",
+      { timeout: 30_000 },
+    );
+
+    await tuneButton.click();
+
+    const tuneResponse = await tuneResponsePromise;
+    expect(
+      tuneResponse.status(),
+      `POST /workspace/tune must succeed for default UI flow (got ${tuneResponse.status()}). ` +
+        `Body: ${await tuneResponse.text()}`,
+    ).toBe(200);
+    const tuneBody = await tuneResponse.json();
+    expect(tuneBody.job_id).toBeTruthy();
+
+    // Poll until the job completes. Tune walltime is dominated by the
+    // number of trials; TuneTab's default n_trials comes from the
+    // backend ui_schema. The shared helper caps at 90s and breaks on
+    // any terminal status (``cancelled`` included) so a cancel in-flight
+    // surfaces with a clear status rather than timing out.
+    const terminalBody = await pollJobUntilTerminal(
+      request,
+      tuneBody.job_id as string,
+    );
+    expect(terminalBody.status).toBe("completed");
+
+    // Sanity-check the tune_result shape so a "200 OK but garbage
+    // result" regression is also caught.
+    const tuneResult = terminalBody.tune_result as
+      | Record<string, unknown>
+      | null;
+    expect(tuneResult).toBeTruthy();
+    expect(tuneResult).toHaveProperty("best_params");
+    expect(tuneResult).toHaveProperty("best_score");
+  });
+
+  /**
+   * Issue #263 — UI-driven Retune happy path.
+   *
+   * Drives the full user flow: complete a Tune via the UI (Scenario T
+   * shape), wait for the workspace ResultsCompletedView to render the
+   * "Re-tune (+N trials)" button (only shown for completed Tune jobs
+   * with tune_result, see ResultsCompletedView.tsx:85), open the
+   * dialog, click "Start Re-tune", and assert
+   * ``POST /api/jobs/{parent}/retune`` returns 200 with the parent_job_id
+   * threaded through.
+   *
+   * This locks the regression class where a UI re-tune produces a
+   * malformed body (e.g. missing parent_job_id, wrong n_trials shape)
+   * because the API-only specs already in this file cannot catch it —
+   * they craft the body in TypeScript by hand.
+   */
+  test("UI: complete Tune -> click Re-tune -> dialog -> Start -> retune returns 200", async ({
+    page,
+    request,
+  }, testInfo) => {
+    // Tune + Retune walltime stacks: seed (~30s) + parent poll (90s
+    // default) + child poll (capped to 60s below since a continued
+    // Optuna study is faster than a fresh one) = ~180s in the worst
+    // case. 300s leaves ~2× headroom for CI IO jitter.
+    test.setTimeout(300_000);
+    if (isMobileProject(testInfo)) {
+      test.skip(
+        true,
+        "Mobile happy-path is covered by workspace-mobile.spec.ts (B-8)",
+      );
+    }
+
+    const csvPath = createTestCsv();
+    await seedUiWorkspace(page, testInfo, { csvPath });
+
+    // Drive the parent Tune through the UI (same as Scenario T).
+    await page.getByRole("tab", { name: "Tune" }).click();
+    const tuneButton = page.getByRole("button", { name: "Tune", exact: true });
+    await expect(tuneButton).toBeEnabled({ timeout: 15_000 });
+    const tuneResponsePromise = page.waitForResponse(
+      (res) =>
+        res.url().endsWith("/api/workspace/tune") &&
+        res.request().method() === "POST",
+      { timeout: 30_000 },
+    );
+    await tuneButton.click();
+    const tuneResponse = await tuneResponsePromise;
+    expect(tuneResponse.status()).toBe(200);
+    const { job_id: parentJobId } = await tuneResponse.json();
+
+    const parentBody = await pollJobUntilTerminal(request, parentJobId);
+    expect(parentBody.status).toBe("completed");
+
+    // Once parent is completed the workspace ResultsCompletedView
+    // renders the Re-tune button. ``aria-label="Re-tune with additional
+    // trials"`` is set in RetuneActionButton.tsx:99 — locator survives
+    // copy tweaks on the visible label.
+    const retuneTrigger = page.getByRole("button", {
+      name: "Re-tune with additional trials",
+    });
+    await expect(retuneTrigger).toBeVisible({ timeout: 15_000 });
+    await retuneTrigger.click();
+
+    // Dialog opens with default n_trials pre-filled. The Start button
+    // is the second button inside the dialog footer; lookup by role.
+    const startButton = page.getByRole("button", { name: "Start Re-tune" });
+    await expect(startButton).toBeEnabled({ timeout: 5_000 });
+
+    // Arm POST /jobs/{parentId}/retune capture before clicking Start.
+    const retuneResponsePromise = page.waitForResponse(
+      (res) =>
+        res.url().endsWith(`/api/jobs/${parentJobId}/retune`) &&
+        res.request().method() === "POST",
+      { timeout: 30_000 },
+    );
+    await startButton.click();
+
+    const retuneResponse = await retuneResponsePromise;
+    expect(
+      retuneResponse.status(),
+      `POST /jobs/${parentJobId}/retune must succeed for default UI flow ` +
+        `(got ${retuneResponse.status()}). Body: ${await retuneResponse.text()}`,
+    ).toBe(200);
+    const retuneBody = await retuneResponse.json();
+    expect(retuneBody.parent_job_id).toBe(parentJobId);
+    expect(retuneBody.job_id).toBeTruthy();
+
+    // Poll the child to terminal. Re-tune continues the existing study
+    // so it is typically faster than the parent — cap at 60s so a
+    // child stuck in ``running`` surfaces as a clear timeout rather
+    // than burning the test-level 300s budget.
+    const childBody = await pollJobUntilTerminal(
+      request,
+      retuneBody.job_id as string,
+      { timeoutMs: 60_000 },
+    );
+    expect(childBody.status).toBe("completed");
+    const childTuneResult = childBody.tune_result as
+      | Record<string, unknown>
+      | null;
+    expect(childTuneResult).toBeTruthy();
+    expect(childTuneResult).toHaveProperty("best_params");
+  });
+
+  /**
+   * Issue #266 + Issue #337 — Choice mode seeding and empty-Choice
+   * Tune button gate.
+   *
+   * Issue #337 changed Choice-mode initialization so switching a row
+   * from Fixed to Choice now seeds ``choices`` with the current Fixed
+   * value (``["binary"]`` for ``objective`` on a binary task). The
+   * Tune button stays enabled because the seeded list is non-empty.
+   *
+   * Issue #266's gate behavior is still required for the case where
+   * the user manually deselects every choice. This spec covers both:
+   *   1. Fixed -> Choice seeds the current Fixed value, no banner.
+   *   2. Deselecting every choice triggers the banner + disables Tune.
+   *   3. Reverting the row to Fixed clears the banner and re-enables.
+   */
+  test("UI: Choice mode seeds current Fixed value and gates Tune when emptied", async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(60_000);
+    if (isMobileProject(testInfo)) {
+      test.skip(
+        true,
+        "Mobile happy-path is covered by workspace-mobile.spec.ts (B-8)",
+      );
+    }
+
+    const csvPath = createTestCsv();
+    await seedUiWorkspace(page, testInfo, { csvPath });
+
+    await page.getByRole("tab", { name: "Tune" }).click();
+    const tuneButton = page.getByRole("button", { name: "Tune", exact: true });
+    await expect(tuneButton).toBeEnabled({ timeout: 15_000 });
+
+    // Drive the SearchSpaceTable: switch the ``objective`` row to Choice.
+    // SearchSpaceRow renders the param key as ``<span class="font-mono">``
+    // and the mode segments as ``role="radio"`` with capitalized labels
+    // (Fixed / Range / Choice — see SegmentGroup.tsx + SearchSpaceRow.tsx).
+    // Anchor to the row's outer wrapper (``border-b`` class) so the
+    // expanded ChoiceInput body — rendered as a sibling of the summary
+    // row — is also inside the locator subtree. The narrower
+    // ancestor::div[radiogroup] xpath misses the ChoiceInput chips.
+    const objectiveKey = page.locator("span.font-mono", {
+      hasText: /^objective$/,
+    });
+    const objectiveRow = objectiveKey
+      .locator("xpath=ancestor::div[contains(@class, 'border-b')][1]");
+    await expect(objectiveRow).toBeVisible({ timeout: 15_000 });
+    await objectiveRow.getByRole("radio", { name: "Choice" }).click();
+
+    // Issue #337: switching to Choice mode seeds choices with the
+    // current Fixed value (``binary`` for the binary task seeded by
+    // seedUiWorkspace). The banner must NOT appear and Tune must
+    // remain enabled.
+    await expect(page.getByTestId("empty-choice-banner")).toHaveCount(0);
+    await expect(tuneButton).toBeEnabled();
+
+    // ChoiceInput is rendered when the row is expanded; switching to
+    // Choice auto-expands it (SearchSpaceTable.tsx::handleModeChange).
+    // The ``binary`` chip is selected (``aria-pressed=true``); deselect
+    // it to drive the row into the empty-choices state.
+    const binaryChip = objectiveRow.getByRole("button", {
+      name: "binary",
+      exact: true,
+    });
+    await expect(binaryChip).toHaveAttribute("aria-pressed", "true");
+    await binaryChip.click();
+
+    // Issue #266: with no choices selected, the banner appears and
+    // Tune gates off.
+    await expect(page.getByTestId("empty-choice-banner")).toBeVisible({
+      timeout: 5_000,
+    });
+    await expect(page.getByTestId("empty-choice-banner")).toContainText(
+      "objective",
+    );
+    await expect(tuneButton).toBeDisabled();
+
+    // Reverting the row to Fixed must re-enable Tune and remove the
+    // banner. This is the recovery path users will take.
+    await objectiveRow.getByRole("radio", { name: "Fixed" }).click();
+    await expect(page.getByTestId("empty-choice-banner")).toHaveCount(0);
+    await expect(tuneButton).toBeEnabled({ timeout: 5_000 });
   });
 });

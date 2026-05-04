@@ -69,6 +69,27 @@ class JobConflictError(StudioError):
         )
 
 
+class WorkspaceLockedError(StudioError):
+    """Config write rejected because a fit/tune job is currently running.
+
+    P-0089 / Issue #279: while a job holds the active slot, mutating
+    ``ws.config`` would let cross-hook competing writes (CV strategy
+    radio, Folds NumberInput, target/task RadioGroup) corrupt the
+    config that the job's checkpoint and meta.json were created with.
+    The lock is released as soon as the job transitions to a terminal
+    status (``completed`` / ``failed`` / ``cancelled``) and the
+    runner's finally block calls ``release_active``.
+    """
+
+    def __init__(self, job_id: str) -> None:
+        super().__init__(
+            "WORKSPACE_LOCKED",
+            f"Config is locked while job {job_id} is running",
+            409,
+            details={"job_id": job_id},
+        )
+
+
 class ValidationError(StudioError):
     def __init__(self, errors: list[dict[str, Any]]) -> None:
         super().__init__(
@@ -103,6 +124,26 @@ class BackendError(StudioError):
 class InferenceNotFoundError(StudioError):
     def __init__(self, inf_id: str) -> None:
         super().__init__("INFERENCE_NOT_FOUND", f"Inference not found: {inf_id}", 404)
+
+
+class PlotNotAvailableError(StudioError):
+    """HTTP 404 envelope for an unsupported plot type (Issue #355).
+
+    Translated from
+    :class:`lizystudio.backends.exceptions.PlotNotAvailableError` by
+    the inference and jobs plot endpoints. The structured ``details``
+    payload lets the client recover (e.g. fall back to a different
+    plot, or hide the accordion) instead of treating this like a
+    real backend failure.
+    """
+
+    def __init__(self, plot_type: str, available: list[str]) -> None:
+        super().__init__(
+            "PLOT_NOT_AVAILABLE",
+            f"Plot type {plot_type!r} is not available (available: {available})",
+            404,
+            details={"plot_type": plot_type, "available": list(available)},
+        )
 
 
 class ConfigBuildError(StudioError):

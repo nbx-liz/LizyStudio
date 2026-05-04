@@ -544,3 +544,162 @@ class TestWebsocketProgressThreadSafety:
 
         assert len(broadcaster._queues.get("job-ts", [])) == 10
         loop.close()
+
+
+# ---------------------------------------------------------------------------
+# Issue #327 — terminal-replay invariants (P-0093)
+#
+# INV-1: terminal messages (completed / error) reach a subscriber that joins
+#        AFTER the message was sent, as long as the per-jobId cache is still
+#        within its TTL.
+# INV-2: each cached terminal is delivered at most once per subscriber via
+#        replay (already enforced UI-side via terminalFiredRef; here we only
+#        guarantee the server side does not duplicate the message into a
+#        subscriber that was present at send time).
+# INV-3: cache retention is bounded by ``LIZYSTUDIO_WS_TERMINAL_TTL_S``
+#        (default 5 minutes); expired entries are dropped on the next
+#        subscribe and never replayed.
+# ---------------------------------------------------------------------------
+
+
+class TestTerminalReplay:
+    """INV-1..INV-3: subscribe-before-send race fix (Issue #327)."""
+
+    def test_completed_replayed_to_late_subscriber(
+        self, broadcaster: ProgressBroadcaster
+    ) -> None:
+        """INV-1: a fast Fit's send_completed BEFORE subscribe still reaches
+        the eventual subscriber via the per-jobId terminal cache."""
+        loop = broadcaster._loop
+        assert loop is not None
+
+        # send terminal BEFORE any subscriber exists for this job
+        broadcaster.send_completed("job_late", "Done!")
+        loop.run_until_complete(asyncio.sleep(0.01))
+
+        # late subscribe — terminal must be replayed as the queue's first item
+        q = broadcaster.subscribe("job_late")
+        assert not q.empty()
+        msg = q.get_nowait()
+        assert msg["type"] == "completed"
+        assert msg["job_id"] == "job_late"
+        assert msg["message"] == "Done!"
+
+    def test_error_replayed_to_late_subscriber(
+        self, broadcaster: ProgressBroadcaster
+    ) -> None:
+        """INV-1 (error variant): error terminals are also replayed."""
+        loop = broadcaster._loop
+        assert loop is not None
+
+        broadcaster.send_error("job_err", "boom", code="X_TEST")
+        loop.run_until_complete(asyncio.sleep(0.01))
+
+        q = broadcaster.subscribe("job_err")
+        assert not q.empty()
+        msg = q.get_nowait()
+        assert msg["type"] == "error"
+        assert msg["code"] == "X_TEST"
+        assert msg["message"] == "boom"
+
+    def test_progress_not_cached_for_replay(
+        self, broadcaster: ProgressBroadcaster
+    ) -> None:
+        """INV-1 negative: non-terminal progress is not stored, so a late
+        subscriber starts with an empty queue (status quo for progress)."""
+        loop = broadcaster._loop
+        assert loop is not None
+
+        broadcaster.send_progress("job_p", current=1, total=2, message="hi")
+        loop.run_until_complete(asyncio.sleep(0.01))
+
+        q = broadcaster.subscribe("job_p")
+        assert q.empty()
+
+    def test_ttl_expired_entry_is_dropped(
+        self, broadcaster: ProgressBroadcaster
+    ) -> None:
+        """INV-3: cache retention is bounded; an expired entry is dropped on
+        the next subscribe and the queue starts empty as if no terminal was
+        ever sent."""
+        # Shrink TTL inside the test so we don't have to wait minutes.
+        broadcaster._terminal_ttl_s = 0.001  # 1ms
+
+        loop = broadcaster._loop
+        assert loop is not None
+
+        broadcaster.send_completed("job_ttl")
+        loop.run_until_complete(asyncio.sleep(0.05))  # >> TTL
+
+        q = broadcaster.subscribe("job_ttl")
+        # Expired: nothing to replay.
+        assert q.empty()
+        # And the cache entry itself is gone after the lazy GC.
+        assert "job_ttl" not in broadcaster._last_terminal
+
+    def test_replay_does_not_duplicate_to_present_subscriber(
+        self, broadcaster: ProgressBroadcaster
+    ) -> None:
+        """INV-2: a subscriber that was present at send time receives the
+        terminal exactly once (via the live broadcast path), NOT twice
+        (no double delivery via replay)."""
+        loop = broadcaster._loop
+        assert loop is not None
+
+        q_present = broadcaster.subscribe("job_present")
+        broadcaster.send_completed("job_present", "Done!")
+        loop.run_until_complete(asyncio.sleep(0.01))
+
+        # Drain — exactly one message expected.
+        msgs: list[dict[str, Any]] = []
+        while not q_present.empty():
+            msgs.append(q_present.get_nowait())
+        assert len(msgs) == 1
+        assert msgs[0]["type"] == "completed"
+
+    def test_reconnect_subscriber_gets_replayed_terminal(
+        self, broadcaster: ProgressBroadcaster
+    ) -> None:
+        """INV-1 (reconnect variant): the original subscriber drops, then a
+        fresh subscriber for the same job_id (e.g. WS reconnect) receives
+        the cached terminal so the UI never hangs in 'running' forever."""
+        loop = broadcaster._loop
+        assert loop is not None
+
+        q1 = broadcaster.subscribe("job_reconn")
+        broadcaster.send_completed("job_reconn", "Done!")
+        loop.run_until_complete(asyncio.sleep(0.01))
+
+        # Drain + drop original subscriber (simulates client disconnect).
+        assert q1.get_nowait()["type"] == "completed"
+        broadcaster.unsubscribe("job_reconn", q1)
+
+        # Reconnect — fresh subscriber must still see the terminal.
+        q2 = broadcaster.subscribe("job_reconn")
+        assert not q2.empty()
+        replayed = q2.get_nowait()
+        assert replayed["type"] == "completed"
+        assert replayed["job_id"] == "job_reconn"
+
+    def test_replay_increments_metric(self, broadcaster: ProgressBroadcaster) -> None:
+        """The replay path bumps the metrics counter so we can observe how
+        often the race actually fires in production."""
+        loop = broadcaster._loop
+        assert loop is not None
+
+        metrics = MagicMock()
+        broadcaster._metrics = metrics
+
+        broadcaster.send_completed("job_metric")
+        loop.run_until_complete(asyncio.sleep(0.01))
+
+        broadcaster.subscribe("job_metric")
+        metrics.progress_terminal_replayed_total.inc.assert_called_once()
+
+    def test_ttl_default_from_env_var(self) -> None:
+        """``LIZYSTUDIO_WS_TERMINAL_TTL_S`` overrides the default TTL."""
+        with patch.dict(
+            "os.environ", {"LIZYSTUDIO_WS_TERMINAL_TTL_S": "12.5"}, clear=False
+        ):
+            b = ProgressBroadcaster()
+        assert b._terminal_ttl_s == pytest.approx(12.5)

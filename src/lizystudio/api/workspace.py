@@ -11,14 +11,15 @@ import tempfile
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import yaml
-from fastapi import APIRouter, Depends, Query, Request, UploadFile  # noqa: F401
+from fastapi import APIRouter, Body, Depends, Query, Request, UploadFile  # noqa: F401
 from fastapi.responses import Response
 from pydantic import BaseModel  # noqa: F401
 
 import lizystudio.security as security
+from lizystudio.api.deps import get_broadcaster
 from lizystudio.api.errors import (
     ConfigImportError,
     FileInvalidError,
@@ -26,6 +27,7 @@ from lizystudio.api.errors import (
     JobConflictError,
     PathNotFoundError,
     ValidationError,
+    WorkspaceLockedError,
     WorkspaceNoConfigError,
     WorkspaceNoDataError,
 )
@@ -38,9 +40,10 @@ from lizystudio.api.models import (
     PreviewResponseModel,
     SplitPreviewResponseModel,
     ValidationResponse,
+    WorkspaceFitRequest,
     WorkspaceStatusResponse,
+    WorkspaceTuneRequest,
 )
-from lizystudio.metrics import record_job_terminal
 from lizystudio.security import (
     check_dataframe_memory,
     read_upload_checked,
@@ -101,6 +104,7 @@ def workspace_status(
         if ws.data_ref
         else None,
         "current_job_id": ws.current_job_id,
+        "files_root": str(security.ALLOWED_FILES_ROOT),
     }
 
 
@@ -419,12 +423,55 @@ def config_get(
     return ws.config
 
 
+def _check_workspace_lock(job_store: JobStore) -> None:
+    """Raise ``WorkspaceLockedError`` iff a non-terminal job holds the slot.
+
+    P-0089 / Issue #279: the config must be immutable while a fit/tune
+    job is actively running, but **only while it is actively running**.
+    Once a job transitions to a terminal status (``completed`` /
+    ``failed`` / ``cancelled``), the workspace must accept config
+    writes again — even if the runner's ``finally`` block has not yet
+    called ``release_active`` to drop the slot.
+
+    Without this terminal-status carve-out, the post-fit re-fit flow
+    (``waitForJobDone`` returns the moment status flips, but
+    ``release_active`` lags by an arbitrary number of microseconds)
+    races against the lock and produces spurious 409s for clients
+    that did the right thing — see the ``jobs-refit.spec.ts`` E2E
+    failure that surfaced this.
+    """
+    holder = job_store.active_job_id
+    if holder is None:
+        return
+    holder_job = job_store.get(holder)
+    if holder_job is not None and holder_job.status in (
+        "completed",
+        "failed",
+        "cancelled",
+    ):
+        return
+    raise WorkspaceLockedError(holder)
+
+
 @router.put("/config", response_model=ConfigUpdateResponse)
 def config_update(
     body: dict[str, Any],
     ws: WorkspaceState = Depends(get_workspace),
+    job_store: JobStore = Depends(get_job_store),
 ) -> dict[str, Any]:
-    """Update config with validation."""
+    """Update config with validation.
+
+    P-0089 / Issue #279: while a fit/tune job is actively running, the
+    config it was created with must be immutable. Cross-hook competing
+    writes (CV strategy radio, Folds NumberInput, target/task
+    RadioGroup) used to land mid-run and silently corrupt the config
+    the job's checkpoint and ``meta.json`` were based on. Reject such
+    writes with 409 ``WORKSPACE_LOCKED`` so the frontend can surface a
+    clear toast and re-sync. See ``_check_workspace_lock`` for the
+    terminal-status carve-out that lets the post-fit re-fit flow
+    proceed without racing against the runner's slot release.
+    """
+    _check_workspace_lock(job_store)
     errors = validate_config(ws, body)
     if not errors:
         ws.set_config(body)
@@ -435,8 +482,15 @@ def config_update(
 def config_patch(
     body: dict[str, Any],
     ws: WorkspaceState = Depends(get_workspace),
+    job_store: JobStore = Depends(get_job_store),
 ) -> dict[str, Any]:
-    """Partially update config via patch operations (H-0037)."""
+    """Partially update config via patch operations (H-0037).
+
+    P-0089 / Issue #279: same running-lock semantics as
+    ``config_update``. Patches against a locked workspace return 409
+    so the frontend can drop the in-flight edit and re-fetch.
+    """
+    _check_workspace_lock(job_store)
     if not ws.config:
         raise WorkspaceNoConfigError()
     ops = body.get("ops", [])
@@ -502,23 +556,35 @@ def config_download(
     )
 
 
-# --- Helpers ---
-
-
-def _get_broadcaster(request: Request) -> ProgressBroadcaster:
-    return request.app.state.broadcaster  # type: ignore[no-any-return]
-
-
 # --- Fit / Tune endpoints (BLUEPRINT §5.2 Fit/Tune) ---
 
 
 @router.post("/fit", response_model=JobStartResponse)
 def workspace_fit(
-    request: Request,
+    body: Annotated[WorkspaceFitRequest, Body()] = WorkspaceFitRequest(),
     ws: WorkspaceState = Depends(get_workspace),
     job_store: JobStore = Depends(get_job_store),
+    broadcaster: ProgressBroadcaster = Depends(get_broadcaster),
 ) -> dict[str, Any]:
-    """Create a fit job (thread managed by Service layer)."""
+    """Create a fit job (thread managed by Service layer).
+
+    P-0086 (Issue #251): ``body.config`` may be provided to atomically
+    overwrite ``ws.config`` at fit time, closing the race window between
+    a pending ``PUT /config`` and the ``POST /fit`` call. The body is
+    declared with a ``WorkspaceFitRequest()`` default (rather than
+    ``| None``) because ``from __future__ import annotations`` together
+    with ``Optional`` + ``Depends`` breaks FastAPI's body detection,
+    causing the parameter to be parsed as a query string.
+    """
+    # P-0086: apply body.config first so validate runs against what the
+    # caller actually wants to fit, and so ws.config ends up matching
+    # the config recorded in the job's meta.json.
+    if body.config is not None:
+        candidate = body.config
+        errors = validate_config(ws, candidate)
+        if errors:
+            raise ValidationError(errors)
+        ws.set_config(candidate)
     if not ws.config:
         raise WorkspaceNoConfigError()
     if ws.dataframe is None or ws.data_ref is None:
@@ -542,7 +608,7 @@ def workspace_fit(
         job_id = start_fit_async(
             ws=ws,
             job_store=job_store,
-            broadcaster=_get_broadcaster(request),
+            broadcaster=broadcaster,
             config=ws.config,
             dataframe=ws.dataframe,
             job=job,
@@ -555,7 +621,7 @@ def workspace_fit(
         # Issue #154: record the terminal status so the
         # lizystudio_jobs_total{status="failed"} counter is not under-
         # counted on slot-claim-after-claim failures.
-        record_job_terminal(job.job_type, "failed")
+        job_store.record_job_terminal(job.job_type, "failed")
         raise JobConflictError(job.job_id) from None
     except Exception:
         # Any other failure after we claimed the slot must release it,
@@ -563,18 +629,32 @@ def workspace_fit(
         # failed metric (#154) before re-raising so the counter
         # reflects the true failure count.
         job_store.release_active(job.job_id)
-        record_job_terminal(job.job_type, "failed")
+        job_store.record_job_terminal(job.job_type, "failed")
         raise
     return {"job_id": job_id}
 
 
 @router.post("/tune", response_model=JobStartResponse)
 def workspace_tune(
-    request: Request,
+    body: Annotated[WorkspaceTuneRequest, Body()] = WorkspaceTuneRequest(),
     ws: WorkspaceState = Depends(get_workspace),
     job_store: JobStore = Depends(get_job_store),
+    broadcaster: ProgressBroadcaster = Depends(get_broadcaster),
 ) -> dict[str, Any]:
-    """Create a tune job (thread managed by Service layer)."""
+    """Create a tune job (thread managed by Service layer).
+
+    P-0086 (Issue #251): ``body.config`` may be provided to atomically
+    overwrite ``ws.config`` at tune time. See ``workspace_fit`` above
+    for the rationale behind the ``WorkspaceTuneRequest()`` default.
+    """
+    # P-0086: same semantics as workspace_fit — body.config wins and
+    # updates ws.config before tuning injection / validation runs.
+    if body.config is not None:
+        candidate = body.config
+        errors = validate_config(ws, candidate)
+        if errors:
+            raise ValidationError(errors)
+        ws.set_config(candidate)
     if not ws.config:
         raise WorkspaceNoConfigError()
     if ws.dataframe is None or ws.data_ref is None:
@@ -615,7 +695,7 @@ def workspace_tune(
         job_id = start_tune_async(
             ws=ws,
             job_store=job_store,
-            broadcaster=_get_broadcaster(request),
+            broadcaster=broadcaster,
             config=ws.config,
             dataframe=ws.dataframe,
             job=job,
@@ -626,10 +706,10 @@ def workspace_tune(
         job_store.update(job)
         job_store.release_active(job.job_id)
         # Issue #154: record the terminal status (same fix as /fit).
-        record_job_terminal(job.job_type, "failed")
+        job_store.record_job_terminal(job.job_type, "failed")
         raise JobConflictError(job.job_id) from None
     except Exception:
         job_store.release_active(job.job_id)
-        record_job_terminal(job.job_type, "failed")
+        job_store.record_job_terminal(job.job_type, "failed")
         raise
     return {"job_id": job_id}

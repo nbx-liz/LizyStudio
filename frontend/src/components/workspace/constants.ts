@@ -1,31 +1,17 @@
 /**
- * Fallback constants for when GET /api/backends/ui-schema is not yet loaded.
- * Prefer values from the UiSchema API response.
- * @see H-0026 in HISTORY.md
+ * Pure UI presets that are not driven by the backend UiSchema response.
  *
- * NOTE: KNOWN_PARAMS and RANGE_DEFAULTS were removed in H-0053.
- * Search space defaults are now provided by the Adapter contract
- * via `default_mode` and `default_range` fields on each catalog entry.
+ * @see H-0026 in HISTORY.md for the UiSchema contract.
+ *
+ * Historical notes:
+ *  - KNOWN_PARAMS / RANGE_DEFAULTS removed in H-0053 (adapter-driven now).
+ *  - METRICS_BY_TASK removed in H-0074 (UiSchema option_sets.metric is the
+ *    sole source of task-to-metric mapping; MetricsChips renders empty
+ *    until UiSchema loads).
+ *  - CV_STRATEGY_FIELDS removed in H-0076 (UiSchema
+ *    capabilities.cv_strategy_fields is the sole source; cv-state.ts and
+ *    CvSection.tsx receive the field list via prop / argument).
  */
-
-/** Task-specific evaluation metrics. */
-export const METRICS_BY_TASK: Record<
-  string,
-  { available: string[]; defaults: string[] }
-> = {
-  binary: {
-    available: ["auc", "logloss", "accuracy", "f1", "precision", "recall"],
-    defaults: ["auc", "logloss"],
-  },
-  multiclass: {
-    available: ["accuracy", "f1_macro", "multi_logloss"],
-    defaults: ["accuracy", "multi_logloss"],
-  },
-  regression: {
-    available: ["rmse", "mae", "r2", "mse"],
-    defaults: ["rmse", "mae"],
-  },
-};
 
 /** Default calibration config when toggled ON. */
 export const CALIBRATION_DEFAULTS = {
@@ -53,38 +39,6 @@ export const CV_STRATEGY_LABELS: Record<string, string> = {
   purged_time_series: "PurgedTimeSeries",
   group_time_series: "GroupTimeSeries",
   blocked_group_kfold: "BlockedGroup",
-};
-
-/** Conditional fields shown per CV strategy */
-export const CV_STRATEGY_FIELDS: Record<string, readonly string[]> = {
-  kfold: ["folds", "random_state", "shuffle"],
-  stratified_kfold: ["folds", "random_state"],
-  group_kfold: ["folds", "group_col"],
-  stratified_group_kfold: ["folds", "random_state", "group_col"],
-  time_series: ["folds", "time_col", "gap", "train_size_max", "test_size_max"],
-  purged_time_series: [
-    "folds",
-    "time_col",
-    "purge_gap",
-    "embargo",
-    "train_size_max",
-    "test_size_max",
-  ],
-  group_time_series: [
-    "folds",
-    "time_col",
-    "group_col",
-    "gap",
-    "train_size_max",
-    "test_size_max",
-  ],
-  blocked_group_kfold: [
-    "folds",
-    "time_col",
-    "group_col",
-    "min_train_rows",
-    "min_valid_rows",
-  ],
 };
 
 /** Default CV strategy per task type. */

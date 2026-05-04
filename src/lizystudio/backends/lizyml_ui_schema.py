@@ -193,12 +193,6 @@ def build_ui_schema(
                 "default": -1,
             },
             {
-                "key": "balanced",
-                "label": "Balanced",
-                "kind": "boolean",
-                "default": True,
-            },
-            {
                 "key": "num_leaves",
                 "label": "Num Leaves",
                 "kind": "integer",
@@ -498,35 +492,64 @@ def build_ui_schema(
                 "blocked_group_kfold",
             ],
             "tune": {"allow_empty_space": True},
+            # H-0076 (C-5b Part 2): this map is the SSOT for the
+            # frontend CV-section conditional-field rendering AND for
+            # the values the UI writes into ``split`` / ``data``. Field
+            # names match the LizyConfig schema (e.g. ``train_size_max``,
+            # not the splitter's kwarg ``max_train_size``); ``time_col``
+            # / ``group_col`` are UI-level inputs that land in
+            # ``data`` rather than ``split``.
+            #
+            # Field ordering within each list is UI-presentation order
+            # (top-to-bottom in the form). Consumers treat the list as
+            # a set via ``.includes(...)`` / ``in`` — order has no
+            # semantic effect on the wire payload.
+            # Issue #258 / #259: every field must exist on the matching
+            # Pydantic variant (or on DataConfig for target/time_col/
+            # group_col). The contract test
+            # ``tests/contract/test_ui_schema_matches_pydantic.py``
+            # locks this invariant. Do not add a field here without
+            # extending the corresponding Pydantic model first.
             "cv_strategy_fields": {
-                "kfold": ["n_splits", "shuffle", "random_state"],
-                "stratified_kfold": ["n_splits", "shuffle", "random_state"],
+                "kfold": ["n_splits", "random_state", "shuffle"],
+                "stratified_kfold": ["n_splits", "random_state"],
                 "group_kfold": ["n_splits", "group_col"],
-                "stratified_group_kfold": ["n_splits", "group_col"],
+                "stratified_group_kfold": [
+                    "n_splits",
+                    "random_state",
+                    "shuffle",
+                    "group_col",
+                ],
                 "time_series": [
                     "n_splits",
+                    "time_col",
                     "gap",
-                    "max_train_size",
-                    "max_test_size",
+                    "train_size_max",
+                    "test_size_max",
                 ],
                 "purged_time_series": [
                     "n_splits",
                     "time_col",
                     "purge_gap",
                     "embargo",
+                    "train_size_max",
+                    "test_size_max",
                 ],
                 "group_time_series": [
                     "n_splits",
+                    "time_col",
                     "group_col",
                     "gap",
-                    "max_train_size",
-                    "max_test_size",
+                    "train_size_max",
+                    "test_size_max",
                 ],
+                # blocked_group_kfold has no `n_splits` — the two axes
+                # (period blocks, group KFold) are configured via
+                # ``blocks`` / ``groups`` sub-objects on the Pydantic
+                # model. The UI renders those via a dedicated editor.
                 "blocked_group_kfold": [
-                    "blocks_col",
-                    "groups_col",
-                    "mode",
-                    "train_window",
+                    "time_col",
+                    "group_col",
                     "min_train_rows",
                     "min_valid_rows",
                 ],

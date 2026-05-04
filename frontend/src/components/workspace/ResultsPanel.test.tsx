@@ -1,5 +1,6 @@
 import { cleanup, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { queryKeys } from "@/api/queryKeys";
 import { makeJob, renderWithQuery } from "@/test/helpers";
 
 const mockFetchJob = vi.fn();
@@ -342,7 +343,7 @@ describe("ResultsPanel", () => {
 
     // Manually invalidate to trigger refetch with completed state
     act(() => {
-      queryClient.invalidateQueries({ queryKey: ["job", "test-job-1"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.job("test-job-1") });
     });
 
     await waitFor(() => expect(onJobDone).toHaveBeenCalled(), {
@@ -1047,42 +1048,7 @@ describe("ResultsPanel", () => {
     expect(await screen.findByText("Execution Log")).toBeInTheDocument();
   });
 
-  it("renders elapsed time when progress has elapsed field", async () => {
-    const { waitFor, act } = await import("@testing-library/react");
-    const runningJob = makeJob({ status: "running" });
-    mockFetchJob.mockResolvedValue(runningJob);
-    mockFetchJobs.mockResolvedValue([runningJob]);
-
-    let capturedCallbacks: Record<
-      string,
-      (msg?: {
-        current?: number;
-        total?: number;
-        message?: string;
-        elapsed?: number;
-      }) => void
-    > = {};
-    mockConnectJobProgress.mockImplementation(
-      (_id: string, callbacks: typeof capturedCallbacks) => {
-        capturedCallbacks = callbacks;
-        return () => {};
-      },
-    );
-
-    renderWithQuery(<ResultsPanel jobId="test-job-1" />);
-    await screen.findByText("Running");
-
-    act(() =>
-      capturedCallbacks.onProgress?.({
-        current: 3,
-        total: 10,
-        message: "step",
-        elapsed: 12.5,
-      }),
-    );
-
-    await waitFor(() =>
-      expect(screen.getByText(/Elapsed:/)).toBeInTheDocument(),
-    );
-  });
+  // H-0069: the "Elapsed: …" branch dereferenced `progress.elapsed`
+  // which the backend never emits on WsProgress.  Removed together
+  // with the WebSocket SSOT switch; this test is intentionally dropped.
 });

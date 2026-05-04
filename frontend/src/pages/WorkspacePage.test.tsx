@@ -1,4 +1,5 @@
-import { act, cleanup, screen } from "@testing-library/react";
+import { act, cleanup, screen, waitFor } from "@testing-library/react";
+import { forwardRef, useImperativeHandle } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/test/helpers";
 import { WorkspacePage } from "./WorkspacePage";
@@ -16,16 +17,36 @@ const {
   mockRunFit: vi.fn(),
   mockRunTune: vi.fn(),
   mockUpdateConfig: vi.fn(),
-  mockToast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
+  mockToast: {
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
+  },
 }));
 
-const { mockFetchConfig } = vi.hoisted(() => ({
+const { mockFetchConfig, mockFetchWorkspaceStatus } = vi.hoisted(() => ({
   mockFetchConfig: vi.fn().mockResolvedValue({ model: { name: "lgbm" } }),
+  mockFetchWorkspaceStatus: vi.fn().mockResolvedValue({
+    has_data: false,
+    has_config: false,
+    has_result: false,
+    data_ref: null,
+    current_job_id: null,
+    files_root: "/home/rem",
+  }),
 }));
 
 vi.mock("@/api/workspace", () => ({
   fetchConfig: (...args: unknown[]) => mockFetchConfig(...args),
   fetchUiSchema: (...args: unknown[]) => mockFetchUiSchema(...args),
+  // Issue #363: WorkspacePage now probes /api/workspace/status on
+  // mount to drive rehydration. Default to ``has_data: false`` so
+  // existing tests keep their pre-#363 behaviour (Workspace stays in
+  // its empty default state); individual rehydration tests override
+  // by calling ``mockFetchWorkspaceStatus.mockResolvedValueOnce(...)``.
+  fetchWorkspaceStatus: (...args: unknown[]) =>
+    mockFetchWorkspaceStatus(...args),
   runFit: (...args: unknown[]) => mockRunFit(...args),
   runTune: (...args: unknown[]) => mockRunTune(...args),
   updateConfig: (...args: unknown[]) => mockUpdateConfig(...args),
@@ -52,11 +73,62 @@ let capturedDataPanelProps: Record<string, unknown> = {};
 let capturedModelPanelProps: Record<string, unknown> = {};
 let capturedResultsPanelProps: Record<string, unknown> = {};
 
+// P-0086: DataPanel now forwards a ref that exposes ``getSubmitConfig``.
+// The mock mirrors that contract so handleFit / handleTune can read the
+// latest merged config through the ref at click time. ``submitConfigRef``
+// is created via ``vi.hoisted`` because vi.mock factories execute before
+// module-scope ``const`` initializers, and because a mutable ref is the
+// idiomatic way to let individual tests swap the value seen by the mock.
+const { submitConfigRef, submitConfigErrorRef, hydrateCallsRef } = vi.hoisted(
+  () => ({
+    submitConfigRef: { current: null as Record<string, unknown> | null },
+    submitConfigErrorRef: { current: null as Error | null },
+    // Issue #363: capture every ``hydrateFromServer`` call from the
+    // WorkspacePage effect so individual tests can assert payload + count.
+    hydrateCallsRef: {
+      current: [] as Array<{
+        path: string;
+        shape: [number, number];
+        target: string | null;
+        task: string | null;
+      }>,
+    },
+  }),
+);
+
 vi.mock("@/components/workspace/DataPanel", () => ({
-  DataPanel: (props: Record<string, unknown>) => {
-    capturedDataPanelProps = props;
-    return <div data-testid="data-panel">DataPanel</div>;
-  },
+  DataPanel: forwardRef(
+    (
+      props: Record<string, unknown>,
+      ref: React.Ref<{
+        getSubmitConfig: () => Promise<Record<string, unknown>>;
+        hydrateFromServer: (params: {
+          path: string;
+          shape: [number, number];
+          target: string | null;
+          task: string | null;
+        }) => Promise<void>;
+      }>,
+    ) => {
+      capturedDataPanelProps = props;
+      useImperativeHandle(
+        ref,
+        () => ({
+          getSubmitConfig: async () => {
+            if (submitConfigErrorRef.current) {
+              throw submitConfigErrorRef.current;
+            }
+            return submitConfigRef.current ?? ({} as Record<string, unknown>);
+          },
+          hydrateFromServer: async (params) => {
+            hydrateCallsRef.current.push(params);
+          },
+        }),
+        [],
+      );
+      return <div data-testid="data-panel">DataPanel</div>;
+    },
+  ),
 }));
 vi.mock("@/components/workspace/ModelPanel", () => ({
   ModelPanel: (props: Record<string, unknown>) => {
@@ -79,6 +151,19 @@ describe("WorkspacePage", () => {
     capturedDataPanelProps = {};
     capturedModelPanelProps = {};
     capturedResultsPanelProps = {};
+    submitConfigRef.current = null;
+    submitConfigErrorRef.current = null;
+    hydrateCallsRef.current = [];
+    // Reset rehydration mock to the empty default; tests that need a
+    // populated server snapshot opt in via mockResolvedValueOnce.
+    mockFetchWorkspaceStatus.mockResolvedValue({
+      has_data: false,
+      has_config: false,
+      has_result: false,
+      data_ref: null,
+      current_job_id: null,
+      files_root: "/home/rem",
+    });
 
     Object.defineProperty(window, "matchMedia", {
       writable: true,
@@ -268,6 +353,34 @@ describe("WorkspacePage", () => {
     expect(mockToast.error).toHaveBeenCalledWith("Failed to apply tune config");
   });
 
+  // P-0092 Q-1 Phase 6 (cleanup): handleApplyToFit must route through the
+  // funnel so it serialises behind any in-flight writers. The default
+  // putConfig is updateConfig, so mockUpdateConfig still fires — but the
+  // funnel-specific behaviour is observable via the saved=false branch:
+  // when backend returns saved=false the toast must be the error toast,
+  // and the cache must be invalidated, NOT updated with the rejected body.
+  it("handleApplyToFit surfaces error toast when backend returns saved=false", async () => {
+    mockUpdateConfig.mockResolvedValueOnce({
+      config: {},
+      errors: [{ path: "data", message: "Field required" }],
+      saved: false,
+    });
+    renderWithProviders(<WorkspacePage />);
+
+    const onApplyToFit = capturedResultsPanelProps.onApplyToFit as (
+      config: Record<string, unknown>,
+    ) => Promise<void>;
+    await act(async () => onApplyToFit({ model: { name: "X" } }));
+
+    expect(mockToast.error).toHaveBeenCalledWith(
+      "Failed to apply tune config: backend rejected the body",
+    );
+    // Tab MUST NOT have switched to fit on backend rejection.
+    expect(mockToast.success).not.toHaveBeenCalledWith(
+      "Best params applied to Fit tab. Click Fit to run.",
+    );
+  });
+
   it("updates task when onTaskChanged is called", () => {
     renderWithProviders(<WorkspacePage />);
 
@@ -325,6 +438,96 @@ describe("WorkspacePage", () => {
     expect(mockToast.error).toHaveBeenCalledWith(
       "Tune failed: plain string error",
     );
+  });
+
+  // -----------------------------------------------------------------
+  // Issue #363: rehydrate the Workspace from server-persisted state
+  // on mount, so a browser reload no longer forces the user to
+  // re-enter the CSV path / re-pick the target / re-configure CV.
+  // -----------------------------------------------------------------
+  describe("workspace rehydration from server (Issue #363)", () => {
+    it("calls DataPanel.hydrateFromServer when status reports has_data=true", async () => {
+      mockFetchWorkspaceStatus.mockResolvedValue({
+        has_data: true,
+        has_config: true,
+        has_result: false,
+        data_ref: { filename: "data.csv", shape: [418, 13] },
+        current_job_id: null,
+        files_root: "/home/rem",
+      });
+      mockFetchConfig.mockResolvedValue({
+        task: "binary",
+        data: { path: "/home/rem/data/x.csv", target: "Survived" },
+      });
+
+      renderWithProviders(<WorkspacePage />);
+      // status + config are async — wait for the rehydration effect.
+      await waitFor(() => {
+        expect(hydrateCallsRef.current).toHaveLength(1);
+      });
+      expect(hydrateCallsRef.current[0]).toEqual({
+        path: "/home/rem/data/x.csv",
+        shape: [418, 13],
+        target: "Survived",
+        task: "binary",
+      });
+    });
+
+    it("does not call hydrateFromServer when status reports has_data=false", async () => {
+      // mockFetchWorkspaceStatus default already returns has_data=false.
+      renderWithProviders(<WorkspacePage />);
+      // Give the component time to settle; the hydration effect must
+      // remain dormant when the server has no persisted data.
+      await new Promise((r) => setTimeout(r, 50));
+      expect(hydrateCallsRef.current).toHaveLength(0);
+    });
+
+    it("does not re-call hydrateFromServer when status/config refetches with the same payload (latched once)", async () => {
+      mockFetchWorkspaceStatus.mockResolvedValue({
+        has_data: true,
+        has_config: true,
+        has_result: false,
+        data_ref: { filename: "data.csv", shape: [10, 2] },
+        current_job_id: null,
+        files_root: "/home/rem",
+      });
+      mockFetchConfig.mockResolvedValue({
+        task: "regression",
+        data: { path: "/p.csv", target: "y" },
+      });
+
+      renderWithProviders(<WorkspacePage />);
+      await waitFor(() => {
+        expect(hydrateCallsRef.current).toHaveLength(1);
+      });
+      // Trigger a re-render path that the rehydration effect's deps
+      // (workspaceStatus, config) would normally retrigger on. Even
+      // when the queries' identities flip, ``hydratedRef`` must keep
+      // the effect dormant.
+      const onDataChanged = capturedDataPanelProps.onDataChanged as () => void;
+      act(() => onDataChanged());
+      await new Promise((r) => setTimeout(r, 30));
+      expect(hydrateCallsRef.current).toHaveLength(1);
+    });
+
+    it("skips rehydration when config.data.path is missing", async () => {
+      mockFetchWorkspaceStatus.mockResolvedValue({
+        has_data: true,
+        has_config: false,
+        has_result: false,
+        data_ref: { filename: "data.csv", shape: [10, 2] },
+        current_job_id: null,
+        files_root: "/home/rem",
+      });
+      mockFetchConfig.mockResolvedValue({
+        task: null,
+        data: { target: null }, // no path
+      });
+
+      renderWithProviders(<WorkspacePage />);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(hydrateCallsRef.current).toHaveLength(0);
+    });
   });
 
   // -----------------------------------------------------------------
@@ -481,6 +684,59 @@ describe("WorkspacePage", () => {
       expect(screen.getByRole("tab", { name: /model/i })).toHaveAttribute(
         "aria-selected",
         "true",
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------
+  // P-0086 (Issue #251): handleFit / handleTune must read the latest
+  // merged config from DataPanel's ref and include it in the POST body,
+  // so Fit/Tune never loses the race against an in-flight PUT /config.
+  // -------------------------------------------------------------------
+  describe("P-0086 fit/tune config body", () => {
+    it("passes DataPanel's merged config as runFit body", async () => {
+      mockRunFit.mockResolvedValue({ job_id: "job-fit-p0086" });
+      submitConfigRef.current = {
+        task: "binary",
+        features: { exclude: ["age"], categorical: [] },
+      };
+      renderWithProviders(<WorkspacePage />);
+
+      const onFit = capturedModelPanelProps.onFit as () => Promise<void>;
+      await act(async () => onFit());
+
+      expect(mockRunFit).toHaveBeenCalledWith(submitConfigRef.current);
+    });
+
+    it("passes DataPanel's merged config as runTune body", async () => {
+      mockRunTune.mockResolvedValue({ job_id: "job-tune-p0086" });
+      submitConfigRef.current = {
+        task: "regression",
+        features: { exclude: ["id"], categorical: [] },
+      };
+      renderWithProviders(<WorkspacePage />);
+
+      const onTune = capturedModelPanelProps.onTune as () => Promise<void>;
+      await act(async () => onTune());
+
+      expect(mockRunTune).toHaveBeenCalledWith(submitConfigRef.current);
+    });
+
+    it("falls back to body-less runFit and warns when getSubmitConfig throws", async () => {
+      // Review feedback on P-0086: when fetchConfig fails inside the
+      // DataPanel imperative handle, the fit/tune click must still
+      // reach the server (body-less regression path) AND surface a
+      // toast so the user knows why their latest edits may be missing.
+      mockRunFit.mockResolvedValue({ job_id: "job-fallback" });
+      submitConfigErrorRef.current = new Error("network down");
+      renderWithProviders(<WorkspacePage />);
+
+      const onFit = capturedModelPanelProps.onFit as () => Promise<void>;
+      await act(async () => onFit());
+
+      expect(mockRunFit).toHaveBeenCalledWith(undefined);
+      expect(mockToast.warning).toHaveBeenCalledWith(
+        expect.stringContaining("network down"),
       );
     });
   });

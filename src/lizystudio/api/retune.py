@@ -11,9 +11,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import Depends, Request
+from fastapi import Depends
 from pydantic import BaseModel, ConfigDict
 
+from lizystudio.api.deps import get_broadcaster
 from lizystudio.api.errors import (
     JobNotCompletedError,
     JobNotFoundError,
@@ -24,8 +25,12 @@ from lizystudio.api.errors import (
     PickleIncompatibleError as PickleIncompatibleApiError,
 )
 from lizystudio.api.jobs import _get_job_or_404, router
+from lizystudio.api.models import LineageResponse, RetuneJobResponse
+from lizystudio.backends.base import BackendAdapter
+from lizystudio.backends.exceptions import CheckpointIncompatibleError
 from lizystudio.services.jobs import Job, JobStore, get_job_store
 from lizystudio.services.workspace import WorkspaceState, get_workspace
+from lizystudio.ws.progress import ProgressBroadcaster
 
 # Hard upper bound on Re-tune / Resume n_trials. Mirrors lizyml's
 # _MAX_RE_TUNE_TRIALS_PER_ROUND so a Re-tune child cannot smuggle
@@ -82,7 +87,9 @@ def _validate_boundary_threshold(threshold: float | None) -> None:
         )
 
 
-def _require_tune_job_with_checkpoint(parent: Job, job_store: JobStore) -> None:
+def _require_tune_job_with_checkpoint(
+    parent: Job, job_store: JobStore, backend: BackendAdapter
+) -> None:
     """Validate that *parent* can host a Re-tune / Resume child (H-0062).
 
     H-0062 Decision 2026-04-14: Grandchild retune (re-tuning a retune
@@ -103,7 +110,7 @@ def _require_tune_job_with_checkpoint(parent: Job, job_store: JobStore) -> None:
             "INVALID_PARAM",
             f"Job {parent.job_id} is not a tune job (type={parent.job_type})",
         )
-    parent_dir = job_store.jobs_dir / parent.job_id
+    parent_dir = job_store.job_dir(parent.job_id)
     checkpoint = parent_dir / "model.pkl"
     if not checkpoint.exists():
         raise StudioError(
@@ -113,33 +120,16 @@ def _require_tune_job_with_checkpoint(parent: Job, job_store: JobStore) -> None:
                 "re-tune/resume unavailable"
             ),
         )
-    # H-0062: check pickle metadata if present. Missing meta is
-    # tolerated (legacy / pre-H-0062 checkpoints) -- only the explicit
-    # mismatch case raises. A meta file that exists but is corrupted
-    # (truncated write, partial atomic rename failure, manual edit) is
-    # treated as an incompatible checkpoint rather than a 500 -- the
-    # user can recover by deleting the parent and re-tuning.
-    meta_path = parent_dir / "model_meta.json"
-    if meta_path.exists():
-        import json as _json
-
-        from lizystudio.backends.lizyml import (
-            PickleIncompatibleError as _AdapterIncompatible,
-        )
-        from lizystudio.backends.lizyml import (
-            verify_pickle_compatibility,
-        )
-
-        try:
-            meta = _json.loads(meta_path.read_text(encoding="utf-8"))
-        except (OSError, _json.JSONDecodeError) as exc:
-            raise PickleIncompatibleApiError(
-                f"Corrupted model_meta.json for {parent.job_id}: {exc}"
-            ) from exc
-        try:
-            verify_pickle_compatibility(meta)
-        except _AdapterIncompatible as exc:
-            raise PickleIncompatibleApiError(str(exc)) from exc
+    # H-0062 / H-0068: delegate compatibility checks to the adapter so
+    # this router never learns about a specific backend's sidecar
+    # format. Missing sidecars remain tolerated (legacy checkpoints);
+    # corrupted sidecars and version mismatches both surface as
+    # ``CheckpointIncompatibleError`` which we translate to the
+    # Studio-domain ``PickleIncompatibleError`` for the JSON envelope.
+    try:
+        backend.verify_checkpoint_compatibility(parent_dir)
+    except CheckpointIncompatibleError as exc:
+        raise PickleIncompatibleApiError(f"{parent.job_id}: {exc}") from exc
 
 
 def _claim_retune_slot(parent_job_id: str, job_store: JobStore) -> str:
@@ -156,18 +146,13 @@ def _claim_retune_slot(parent_job_id: str, job_store: JobStore) -> str:
     return placeholder
 
 
-def _get_broadcaster(request: Request) -> Any:
-    """Pull the ProgressBroadcaster off the app state (H-0062)."""
-    return request.app.state.broadcaster
-
-
-@router.post("/{job_id}/retune")
+@router.post("/{job_id}/retune", response_model=RetuneJobResponse)
 def retune_job(
     job_id: str,
     body: RetuneRequest,
-    request: Request,
     job_store: JobStore = Depends(get_job_store),
     ws: WorkspaceState = Depends(get_workspace),
+    broadcaster: ProgressBroadcaster = Depends(get_broadcaster),
 ) -> dict[str, str]:
     """Start a Re-tune child job from a completed parent Tune (H-0062)."""
     from lizystudio.services.training import start_retune_async
@@ -175,7 +160,7 @@ def retune_job(
     parent = _get_job_or_404(job_id, job_store)
     if parent.status != "completed":
         raise JobNotCompletedError(job_id)
-    _require_tune_job_with_checkpoint(parent, job_store)
+    _require_tune_job_with_checkpoint(parent, job_store, ws.backend)
     _validate_n_trials(body.n_trials)
     _validate_boundary_threshold(body.boundary_threshold)
 
@@ -212,7 +197,7 @@ def retune_job(
         start_retune_async(
             ws=ws,
             job_store=job_store,
-            broadcaster=_get_broadcaster(request),
+            broadcaster=broadcaster,
             parent_job=parent,
             child_job=child,
             n_trials=body.n_trials,
@@ -227,13 +212,13 @@ def retune_job(
     return {"job_id": child.job_id, "parent_job_id": parent.job_id}
 
 
-@router.post("/{job_id}/resume")
+@router.post("/{job_id}/resume", response_model=RetuneJobResponse)
 def resume_job(
     job_id: str,
     body: ResumeRequest,
-    request: Request,
     job_store: JobStore = Depends(get_job_store),
     ws: WorkspaceState = Depends(get_workspace),
+    broadcaster: ProgressBroadcaster = Depends(get_broadcaster),
 ) -> dict[str, str]:
     """Resume a failed Tune Job from its last saved checkpoint (H-0062)."""
     from lizystudio.services.training import start_retune_async
@@ -244,7 +229,7 @@ def resume_job(
             "JOB_NOT_FAILED",
             f"Resume is only available on failed tune jobs (status={parent.status})",
         )
-    _require_tune_job_with_checkpoint(parent, job_store)
+    _require_tune_job_with_checkpoint(parent, job_store, ws.backend)
 
     # Auto-compute remaining trials from original config when not provided.
     n_trials = body.n_trials
@@ -272,7 +257,7 @@ def resume_job(
         start_retune_async(
             ws=ws,
             job_store=job_store,
-            broadcaster=_get_broadcaster(request),
+            broadcaster=broadcaster,
             parent_job=parent,
             child_job=child,
             n_trials=n_trials,
@@ -316,7 +301,7 @@ def _auto_remaining_trials(parent: Job) -> int:
     return max(1, expected_total - completed)
 
 
-@router.get("/{job_id}/lineage")
+@router.get("/{job_id}/lineage", response_model=LineageResponse)
 def get_job_lineage(
     job_id: str,
     job_store: JobStore = Depends(get_job_store),

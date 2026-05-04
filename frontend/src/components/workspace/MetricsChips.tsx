@@ -3,7 +3,6 @@ import type { MetricEntry } from "@/api/types";
 import { metricEntryName } from "@/api/types";
 import { ChipGroup } from "./ChipGroup";
 import { CompactStepper } from "./CompactStepper";
-import { METRICS_BY_TASK } from "./constants";
 
 interface ConditionalParamDef {
   label: string;
@@ -54,22 +53,12 @@ export function MetricsChips({
   metricsByTask,
   conditionalParams,
 }: MetricsChipsProps) {
-  // Merge backend option_sets with fallback constants
-  // Default: ALL metrics enabled for the task
-  const effectiveMetrics = useMemo(() => {
-    if (metricsByTask?.[task]) {
-      const available = metricsByTask[task];
-      return { available, defaults: [...available] };
-    }
-    const fallback = METRICS_BY_TASK[task];
-    if (fallback) {
-      return {
-        available: fallback.available,
-        defaults: [...fallback.available],
-      };
-    }
-    return { available: [], defaults: [] };
-  }, [task, metricsByTask]);
+  // Metric catalog is backend-driven via UiSchema option_sets.metric.
+  // Default on task change: ALL metrics enabled for the task.
+  const available = useMemo(
+    () => metricsByTask?.[task] ?? [],
+    [task, metricsByTask],
+  );
 
   const prevTask = useRef(task);
 
@@ -77,15 +66,12 @@ export function MetricsChips({
   useEffect(() => {
     const taskChanged = task !== prevTask.current;
     prevTask.current = task;
-    if (
-      (taskChanged || selectedMetrics.length === 0) &&
-      effectiveMetrics.defaults.length > 0
-    ) {
-      onChange([...effectiveMetrics.defaults]);
+    if ((taskChanged || selectedMetrics.length === 0) && available.length > 0) {
+      onChange([...available]);
     }
-  }, [task, onChange, effectiveMetrics, selectedMetrics.length]);
+  }, [task, onChange, available, selectedMetrics.length]);
 
-  if (effectiveMetrics.available.length === 0) return null;
+  if (available.length === 0) return null;
 
   const names = selectedNames(selectedMetrics);
 
@@ -130,7 +116,7 @@ export function MetricsChips({
   return (
     <div className="flex flex-col gap-2">
       <ChipGroup
-        options={effectiveMetrics.available}
+        options={available}
         selected={names}
         onChange={handleChipChange}
         minSelected={1}

@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { deleteAllJobs } from "../helpers/api";
 import { dismissOnboarding } from "../helpers/onboarding";
 import { waitForStableUI } from "../helpers/visual";
 
@@ -8,6 +9,14 @@ import { waitForStableUI } from "../helpers/visual";
  * Covers dark/light mode across all pages, responsive viewports,
  * and form state visual verification.
  */
+
+// Nightly reuses /tmp/e2e_jobs across runs, so Jobs-page screenshots
+// capture every stale job an earlier session left behind. Wipe the
+// jobs_dir once per file so ``jobs-dark`` / ``jobs-light`` /
+// ``jobs-empty-state`` reflect a clean slate (matching the golden).
+test.beforeAll(async ({ request }) => {
+  await deleteAllJobs(request);
+});
 
 // --- Theme toggle helpers ---
 
@@ -37,7 +46,7 @@ async function navigateAndWait(
 
 // --- Dark/Light mode screenshots ---
 
-test.describe("Theme: Dark mode", () => {
+test.describe("Theme: Dark mode @visual", () => {
   test.beforeEach(async ({ page }) => {
     await dismissOnboarding(page);
   });
@@ -61,7 +70,7 @@ test.describe("Theme: Dark mode", () => {
   });
 });
 
-test.describe("Theme: Light mode", () => {
+test.describe("Theme: Light mode @visual", () => {
   test.beforeEach(async ({ page }) => {
     await dismissOnboarding(page);
   });
@@ -87,7 +96,7 @@ test.describe("Theme: Light mode", () => {
 
 // --- Theme toggle interaction ---
 
-test.describe("Theme: Toggle interaction", () => {
+test.describe("Theme: Toggle interaction @visual", () => {
   test.beforeEach(async ({ page }) => {
     await dismissOnboarding(page);
   });
@@ -116,7 +125,7 @@ test.describe("Theme: Toggle interaction", () => {
 
 // --- Form states ---
 
-test.describe("Form states visual", () => {
+test.describe("Form states visual @visual", () => {
   test.beforeEach(async ({ page }) => {
     await dismissOnboarding(page);
   });

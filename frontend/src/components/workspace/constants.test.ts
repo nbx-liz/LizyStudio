@@ -5,10 +5,8 @@
 import { describe, expect, it } from "vitest";
 import {
   CALIBRATION_DEFAULTS,
-  CV_STRATEGY_FIELDS,
   CV_STRATEGY_LABELS,
   getDefaultCvStrategy,
-  METRICS_BY_TASK,
   N_TRIALS_PRESETS,
   TIMEOUT_PRESETS,
 } from "./constants";
@@ -39,28 +37,6 @@ describe("TIMEOUT_PRESETS", () => {
   });
 });
 
-describe("METRICS_BY_TASK", () => {
-  it("has entries for binary, multiclass, regression", () => {
-    expect(METRICS_BY_TASK).toHaveProperty("binary");
-    expect(METRICS_BY_TASK).toHaveProperty("multiclass");
-    expect(METRICS_BY_TASK).toHaveProperty("regression");
-  });
-
-  it("each task has available array with at least one metric", () => {
-    for (const [, info] of Object.entries(METRICS_BY_TASK)) {
-      expect(info.available.length).toBeGreaterThan(0);
-    }
-  });
-
-  it("uses lowercase metric names", () => {
-    for (const [, info] of Object.entries(METRICS_BY_TASK)) {
-      for (const m of info.available) {
-        expect(m).toBe(m.toLowerCase());
-      }
-    }
-  });
-});
-
 describe("CALIBRATION_DEFAULTS", () => {
   it("has method isotonic and n_splits 5", () => {
     expect(CALIBRATION_DEFAULTS.method).toBe("isotonic");
@@ -86,56 +62,6 @@ describe("CV_STRATEGY_LABELS", () => {
       expect(typeof CV_STRATEGY_LABELS[key]).toBe("string");
       expect(CV_STRATEGY_LABELS[key].length).toBeGreaterThan(0);
     }
-  });
-});
-
-describe("CV_STRATEGY_FIELDS", () => {
-  it("maps conditional fields per strategy", () => {
-    expect(CV_STRATEGY_FIELDS.kfold).toEqual([
-      "folds",
-      "random_state",
-      "shuffle",
-    ]);
-    expect(CV_STRATEGY_FIELDS.stratified_kfold).toEqual([
-      "folds",
-      "random_state",
-    ]);
-    expect(CV_STRATEGY_FIELDS.group_kfold).toEqual(["folds", "group_col"]);
-    expect(CV_STRATEGY_FIELDS.stratified_group_kfold).toEqual([
-      "folds",
-      "random_state",
-      "group_col",
-    ]);
-    expect(CV_STRATEGY_FIELDS.time_series).toEqual([
-      "folds",
-      "time_col",
-      "gap",
-      "train_size_max",
-      "test_size_max",
-    ]);
-    expect(CV_STRATEGY_FIELDS.purged_time_series).toEqual([
-      "folds",
-      "time_col",
-      "purge_gap",
-      "embargo",
-      "train_size_max",
-      "test_size_max",
-    ]);
-    expect(CV_STRATEGY_FIELDS.group_time_series).toEqual([
-      "folds",
-      "time_col",
-      "group_col",
-      "gap",
-      "train_size_max",
-      "test_size_max",
-    ]);
-    expect(CV_STRATEGY_FIELDS.blocked_group_kfold).toEqual([
-      "folds",
-      "time_col",
-      "group_col",
-      "min_train_rows",
-      "min_valid_rows",
-    ]);
   });
 });
 

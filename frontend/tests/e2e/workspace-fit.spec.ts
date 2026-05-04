@@ -5,12 +5,19 @@ import {
   openWorkspaceSectionIfMobile,
 } from "./helpers/mobile";
 import { dismissOnboarding } from "./helpers/onboarding";
+import {
+  pollJobUntilTerminal,
+  seedUiWorkspace,
+} from "./helpers/workspace-ui";
 
 const API = "http://localhost:8501/api";
 
 /**
  * Create a synthetic CSV with 100 rows for binary classification.
  * Includes numeric + categorical features and a binary target column.
+ *
+ * Kept local (vs. the shared helper) because the API-only specs at the
+ * top of this file reuse the same file path to avoid a redundant write.
  */
 function createTestCsv(): string {
   const csvPath = "/tmp/e2e_fit_test.csv";
@@ -264,5 +271,241 @@ test.describe("Workspace Fit Flow", () => {
     await page.waitForLoadState("networkidle");
 
     await expect(page).toHaveScreenshot("fit-data-loaded.png");
+  });
+
+  /**
+   * Issue #257 / #258 / #259 — UI-driven Fit happy path.
+   *
+   * Before this spec, the E2E suite exercised Fit only through
+   * ``request.post``. The real frontend path — where
+   * ``buildSyncedConfig`` assembles a payload on top of backend defaults
+   * — was never run in CI, so drift between the UI schema helper and
+   * the lizyml Pydantic model (#258) could only be caught by live
+   * browser testing. This spec drives the minimal UI flow and fails if
+   * ``POST /api/workspace/fit`` comes back with anything other than 200.
+   */
+  test("UI: load data -> pick target -> click Fit -> fit returns 200", async ({
+    page,
+    request,
+  }, testInfo) => {
+    // 120s was too tight on slow CI (15s schema load + 15s combo enable +
+    // 30s fit accept + 90s poll) — 180s matches the existing API-only
+    // ``run fit, verify results`` spec.
+    test.setTimeout(180_000);
+    if (isMobileProject(testInfo)) {
+      // The mobile layout hides the Fit button behind the tab nav;
+      // covered separately by ui-improvements specs.
+      test.skip(
+        true,
+        "Mobile happy-path Fit is covered by workspace-mobile.spec.ts (B-8)",
+      );
+    }
+
+    const csvPath = createTestCsv();
+    await seedUiWorkspace(page, testInfo, { csvPath });
+
+    // The Fit button enables once target is set and config is synced.
+    const fitButton = page.getByRole("button", { name: "Fit", exact: true });
+    await expect(fitButton).toBeEnabled({ timeout: 15_000 });
+
+    // Arm the response listener *before* clicking so we capture the
+    // POST /workspace/fit round trip the click triggers.
+    const fitResponsePromise = page.waitForResponse(
+      (res) =>
+        res.url().endsWith("/api/workspace/fit") && res.request().method() === "POST",
+      { timeout: 30_000 },
+    );
+
+    await fitButton.click();
+
+    const fitResponse = await fitResponsePromise;
+    expect(
+      fitResponse.status(),
+      `POST /workspace/fit must succeed for default UI flow (got ${fitResponse.status()}). ` +
+        `Body: ${await fitResponse.text()}`,
+    ).toBe(200);
+    const fitBody = await fitResponse.json();
+    expect(fitBody.job_id).toBeTruthy();
+
+    // Poll until the job completes so the regression net covers the
+    // full lifecycle, not just the accept-on-submit moment. Uses the
+    // shared helper so ``cancelled`` short-circuits instead of burning
+    // the full 90s budget before the final ``=== "completed"`` assert.
+    const jobBody = await pollJobUntilTerminal(
+      request,
+      fitBody.job_id as string,
+    );
+    expect(jobBody.status).toBe("completed");
+  });
+
+  /**
+   * Scenario B (Issue #257 Phase 2): the user edits the config via the
+   * UI — toggling a ConfigForm control — and then clicks Fit. Before the
+   * #253 fix this race would land an outdated config in the final PUT.
+   * This spec catches that regression at the integration layer (the
+   * Vitest unit only covers two-writes-in-same-tick at the hook level).
+   *
+   * Edit chosen: toggle the Calibration switch ON. It writes to a nested
+   * path (``model.calibration``) that is distinct from the defaults-only
+   * shape of Scenario A, so any drop-write regression surfaces as an
+   * absent ``model.calibration`` object in the final PUT payload.
+   */
+  test("UI: toggle Calibration, click Fit, verify edit reached PUT /config", async ({
+    page,
+    request,
+  }, testInfo) => {
+    // Same 180s budget as Scenario A (15s schema load + 15s combo enable
+    // + calibration PUT observe + 30s fit accept + 90s poll). Overrides
+    // the 120s default in playwright.config.ts.
+    test.setTimeout(180_000);
+    if (isMobileProject(testInfo)) {
+      test.skip(
+        true,
+        "Mobile happy-path Fit is covered by workspace-mobile.spec.ts (B-8)",
+      );
+    }
+
+    const csvPath = createTestCsv();
+    await seedUiWorkspace(page, testInfo, { csvPath });
+
+    // Wait for the ConfigForm to finish seeding; the Calibration section
+    // only appears once the model accordion is populated.
+    const calibrationHeader = page.getByRole("button", {
+      name: /Calibration/i,
+    });
+    await expect(calibrationHeader).toBeVisible({ timeout: 15_000 });
+
+    // Calibration Switch is a sibling of the accordion trigger within
+    // the same row. Located by its aria-label so the query survives
+    // future layout tweaks around the header.
+    const calibrationSwitch = page.getByRole("switch", { name: "Calibration" });
+    await expect(calibrationSwitch).toBeVisible();
+
+    // Arm the PUT listener BEFORE the click so the race is observable.
+    // Calibration is written at top-level config.calibration, not under
+    // model — see ConfigForm.tsx handleFieldChange(["calibration"], cal).
+    const calibrationPutPromise = page.waitForRequest(
+      (req) =>
+        req.url().endsWith("/api/workspace/config") &&
+        req.method() === "PUT" &&
+        (() => {
+          try {
+            const body = req.postDataJSON() as { calibration?: unknown };
+            return body?.calibration != null;
+          } catch {
+            return false;
+          }
+        })(),
+      { timeout: 15_000 },
+    );
+
+    await calibrationSwitch.click();
+
+    // Confirm the UI edit produced a PUT whose payload includes the new
+    // calibration object (not a stale copy without it).
+    const calibrationPut = await calibrationPutPromise;
+    const putBody = calibrationPut.postDataJSON() as {
+      calibration: Record<string, unknown>;
+    };
+    expect(putBody.calibration).not.toBeNull();
+    expect(putBody.calibration.method).toBeTruthy();
+
+    const fitButton = page.getByRole("button", { name: "Fit", exact: true });
+    await expect(fitButton).toBeEnabled({ timeout: 15_000 });
+
+    const fitResponsePromise = page.waitForResponse(
+      (res) =>
+        res.url().endsWith("/api/workspace/fit") &&
+        res.request().method() === "POST",
+      { timeout: 30_000 },
+    );
+
+    await fitButton.click();
+
+    const fitResponse = await fitResponsePromise;
+    expect(
+      fitResponse.status(),
+      `POST /workspace/fit must succeed after UI edit (got ${fitResponse.status()}). ` +
+        `Body: ${await fitResponse.text()}`,
+    ).toBe(200);
+    const fitBody = await fitResponse.json();
+    expect(fitBody.job_id).toBeTruthy();
+
+    // Poll to completion so backend actually runs with the calibrated
+    // config (any schema mismatch on the extra field surfaces here, not
+    // only at accept-time). Shared helper breaks on any terminal state.
+    const jobBody = await pollJobUntilTerminal(
+      request,
+      fitBody.job_id as string,
+    );
+    expect(jobBody.status).toBe("completed");
+  });
+
+  /**
+   * Issue #265 — UI-driven Balanced switch lock.
+   *
+   * The Smart Params Balanced switch must propagate to ``model.balanced``
+   * (the LGBMConfig top-level field consumed by lizyml). Before the fix
+   * a duplicate parameter_hint rendered a second toggle in Advanced
+   * Model Params that wrote to ``model.params.balanced`` — silently
+   * dropped by lizyml. This spec locks the contract: only one Balanced
+   * switch is rendered, and toggling it reaches ``model.balanced`` in
+   * the next PUT body.
+   */
+  test("UI: toggle Balanced, verify model.balanced reaches PUT /config and only one toggle exists", async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(60_000);
+    if (isMobileProject(testInfo)) {
+      test.skip(
+        true,
+        "Mobile happy-path Fit is covered by workspace-mobile.spec.ts (B-8)",
+      );
+    }
+
+    const csvPath = createTestCsv();
+    await seedUiWorkspace(page, testInfo, { csvPath });
+
+    // Smart Params Balanced switch (role="switch") — distinct from any
+    // CompactToggle in Advanced Model Params. Locating by accessible
+    // name guarantees we hit the Switch primitive, not a sibling input.
+    const balancedSwitch = page.getByRole("switch", { name: "Balanced" });
+    await expect(balancedSwitch).toBeVisible({ timeout: 15_000 });
+
+    // Issue #265 root cause: a parameter_hint named "balanced" rendered
+    // a SECOND toggle in the Advanced section that wrote to the wrong
+    // path. Open Advanced and assert there is exactly one Balanced
+    // switch on the page.
+    await page.getByTestId("toggle-advanced-params").click();
+    const allBalanced = page.getByRole("switch", { name: "Balanced" });
+    await expect(allBalanced).toHaveCount(1);
+
+    // Arm a PUT listener that watches for ``model.balanced === true``.
+    const balancedPutPromise = page.waitForRequest(
+      (req) =>
+        req.url().endsWith("/api/workspace/config") &&
+        req.method() === "PUT" &&
+        (() => {
+          try {
+            const body = req.postDataJSON() as {
+              model?: { balanced?: unknown };
+            };
+            return body?.model?.balanced === true;
+          } catch {
+            return false;
+          }
+        })(),
+      { timeout: 15_000 },
+    );
+
+    await balancedSwitch.click();
+    const put = await balancedPutPromise;
+    const putBody = put.postDataJSON() as {
+      model: { balanced: unknown; params?: { balanced?: unknown } };
+    };
+    expect(putBody.model.balanced).toBe(true);
+    // model.params.balanced must NOT be set — that path is silently
+    // dropped by lizyml and is the wrong target.
+    expect(putBody.model.params?.balanced).toBeUndefined();
   });
 });

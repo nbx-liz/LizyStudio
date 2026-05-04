@@ -35,6 +35,7 @@ describe("SetupPanel", () => {
 
   const baseProps = {
     completedJobs: [] as JobSummary[],
+    allJobs: [] as JobSummary[],
     selectedJobId: null,
     onSelectJob: vi.fn(),
     history: [] as InferenceRecord[],
@@ -118,6 +119,54 @@ describe("SetupPanel", () => {
   it("shows target detected when targetCol is provided", () => {
     render(<SetupPanel {...baseProps} targetCol="price" />);
     expect(screen.getByText(/Target.*'price'.*detected/)).toBeInTheDocument();
+  });
+
+  // Issue #359: Inference dropdown ``#N`` must be derived against the
+  // full ``allJobs`` list so it matches what JobsPage shows for the
+  // same job_id, even when failed/cancelled jobs sit between
+  // completed ones.
+  it("renders dropdown #N derived from allJobs (not completedJobs)", async () => {
+    const user = userEvent.setup();
+    const completedTop = {
+      job_id: "j-top",
+      job_type: "fit",
+      status: "completed",
+      backend_name: "lizyml",
+      model_name: "lgbm",
+      created_at: "2025-01-03T00:00:00Z",
+      completed_at: "2025-01-03T00:01:00Z",
+      error: null,
+      primary_score: 0.7,
+      parent_job_id: null,
+    } as JobSummary;
+    const failedMiddle = {
+      ...completedTop,
+      job_id: "j-mid-failed",
+      status: "failed" as const,
+      primary_score: null,
+    } as JobSummary;
+    const completedBottom = {
+      ...completedTop,
+      job_id: "j-bottom",
+      status: "completed" as const,
+      primary_score: 0.5,
+    } as JobSummary;
+    const allJobs = [completedTop, failedMiddle, completedBottom];
+    const completedJobs = [completedTop, completedBottom];
+    render(
+      <SetupPanel
+        {...baseProps}
+        allJobs={allJobs}
+        completedJobs={completedJobs}
+      />,
+    );
+    await user.click(screen.getByLabelText("Select completed job"));
+    // top completed job sits at allJobs idx 0 -> #3
+    expect(screen.getByText(/#3 fit lgbm/)).toBeInTheDocument();
+    // bottom completed job sits at allJobs idx 2 -> #1 (NOT #2 which
+    // would be the buggy completedJobs-only derivation)
+    expect(screen.getByText(/#1 fit lgbm/)).toBeInTheDocument();
+    expect(screen.queryByText(/#2 fit lgbm/)).not.toBeInTheDocument();
   });
 
   it("shows score info for selected job with primary_score", () => {
@@ -322,6 +371,58 @@ describe("SetupPanel", () => {
 
     expect(baseProps.onRunInference).toHaveBeenCalledWith({
       dataPath: "/data/test.csv",
+      sourceType: "path",
+      evaluate: true,
+      returnShap: false,
+    });
+  });
+
+  // Issue #374: Upload mode previously dropped the ``sourceType``
+  // between SetupPanel and the API call, so the run request always
+  // carried ``source_type: "path"``. The backend then validated the
+  // upload tempfile against ALLOWED_FILES_ROOT and rejected it.
+  it("forwards sourceType='upload' to onRunInference after upload (Issue #374)", async () => {
+    mockUpload.mockResolvedValue({
+      upload_path: "/tmp/lizystudio_test.csv",
+      filename: "uploaded.csv",
+    });
+    const job = {
+      job_id: "j1",
+      job_type: "fit",
+      status: "completed",
+      backend_name: "lizyml",
+      model_name: "lgbm",
+      created_at: "2025-01-01T00:00:00Z",
+      completed_at: "2025-01-01T00:01:00Z",
+      error: null,
+      primary_score: 0.9,
+      parent_job_id: null,
+    } as JobSummary;
+    const onRunInference = vi.fn();
+
+    const user = userEvent.setup();
+    render(
+      <SetupPanel
+        {...baseProps}
+        onRunInference={onRunInference}
+        completedJobs={[job]}
+        selectedJobId="j1"
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Upload" }));
+    const file = new File(["a,b\n1,2"], "uploaded.csv", { type: "text/csv" });
+    const input = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [file] } });
+    await waitFor(() => expect(mockUpload).toHaveBeenCalled());
+
+    await user.click(screen.getByRole("button", { name: /run inference/i }));
+
+    expect(onRunInference).toHaveBeenCalledWith({
+      dataPath: "/tmp/lizystudio_test.csv",
+      sourceType: "upload",
       evaluate: true,
       returnShap: false,
     });

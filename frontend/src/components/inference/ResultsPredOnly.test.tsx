@@ -11,6 +11,13 @@ vi.mock("@/api/inference", () => ({
   fetchInferenceShapPlot: vi.fn().mockResolvedValue(null),
 }));
 
+// Issue #355: SHAP fetch is gated on the available_plots returned by
+// /api/jobs/{id}/plots. The mock defaults to "no SHAP available" so
+// the gate stays closed; SHAP-positive tests opt in below.
+vi.mock("@/api/jobs", () => ({
+  fetchJobPlots: vi.fn().mockResolvedValue([]),
+}));
+
 vi.mock("./PredictionsTable", () => ({
   PredictionsTable: ({ infId, jobId }: { infId: string; jobId: string }) => (
     <div data-testid="predictions-table">
@@ -31,6 +38,7 @@ import {
   fetchInferenceShapPlot,
   type InferenceRecord,
 } from "@/api/inference";
+import { fetchJobPlots } from "@/api/jobs";
 import { ResultsPredOnly } from "./ResultsPredOnly";
 
 function makeRecord(overrides: Partial<InferenceRecord> = {}): InferenceRecord {
@@ -38,7 +46,7 @@ function makeRecord(overrides: Partial<InferenceRecord> = {}): InferenceRecord {
     inf_id: "inf-001",
     job_id: "job-001",
     data_ref: {
-      source_type: "file",
+      source_type: "upload",
       path: "/data/test.csv",
       filename: "test.csv",
       fingerprint: "abc123",
@@ -61,6 +69,7 @@ beforeEach(() => {
     current: {},
     other: {},
   });
+  vi.mocked(fetchJobPlots).mockResolvedValue([]);
 });
 
 describe("ResultsPredOnly", () => {
@@ -107,7 +116,10 @@ describe("ResultsPredOnly", () => {
     expect(screen.getByTestId("predictions-table")).toBeInTheDocument();
   });
 
-  it("renders Prediction Distribution heading", () => {
+  // Issue #370: the section is gated on the backend's available plot
+  // list — only renders when ``probability-histogram`` is advertised.
+  it("renders Prediction Distribution heading when probability-histogram is available", async () => {
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce(["probability-histogram"]);
     const record = makeRecord();
     renderWithQuery(
       <ResultsPredOnly
@@ -118,7 +130,44 @@ describe("ResultsPredOnly", () => {
       />,
     );
 
-    expect(screen.getByText("Prediction Distribution")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Prediction Distribution")).toBeInTheDocument();
+    });
+  });
+
+  it("hides Prediction Distribution heading when probability-histogram is unavailable (e.g. regression)", async () => {
+    vi.mocked(fetchInferencePlot).mockClear();
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce([
+      "learning-curve",
+      "residuals",
+    ]);
+    const record = makeRecord();
+    renderWithQuery(
+      <ResultsPredOnly
+        record={record}
+        infNumber={1}
+        jobLabel="job"
+        history={[record]}
+      />,
+    );
+
+    // Give react-query time to settle the available-plots fetch.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(
+      screen.queryByText("Prediction Distribution"),
+    ).not.toBeInTheDocument();
+    // The frontend MUST NOT have requested the distribution plot
+    // (no ``prediction-distribution`` 404 in DevTools).
+    expect(fetchInferencePlot).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      "probability-histogram",
+    );
+    expect(fetchInferencePlot).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      "prediction-distribution",
+    );
   });
 
   it("does not render Comparison section when no other records exist", () => {
@@ -185,7 +234,7 @@ describe("ResultsPredOnly", () => {
     const record = makeRecord({
       row_count: 50,
       data_ref: {
-        source_type: "file",
+        source_type: "upload",
         path: "/data/test.csv",
         filename: "my_dataset.csv",
         fingerprint: "abc",
@@ -295,6 +344,10 @@ describe("ResultsPredOnly", () => {
   // --- PredDistributionPlot conditional branches (lines 194-195) ---
 
   it("renders PlotlyChart inside PredDistributionPlot when data is available", async () => {
+    // Issue #370: section now gates on the backend's available plot
+    // list, so the test must advertise ``probability-histogram``
+    // before the inference plot fetch fires.
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce(["probability-histogram"]);
     vi.mocked(fetchInferencePlot).mockResolvedValueOnce({
       plotly_json: '{"data":[]}',
     });
@@ -312,6 +365,13 @@ describe("ResultsPredOnly", () => {
     await waitFor(() => {
       expect(screen.getByTestId("plotly-chart")).toBeInTheDocument();
     });
+    // Issue #370: the request MUST go to ``probability-histogram``,
+    // not the legacy non-existent ``prediction-distribution`` key.
+    expect(fetchInferencePlot).toHaveBeenCalledWith(
+      record.inf_id,
+      record.job_id,
+      "probability-histogram",
+    );
   });
 
   it("renders nothing for PredDistributionPlot when data is null", () => {
@@ -333,6 +393,7 @@ describe("ResultsPredOnly", () => {
   // --- ShapAndWarningsAccordion coverage (lines 199-250) ---
 
   it("renders SHAP Summary accordion when shap data is available", async () => {
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce(["shap-summary"]);
     vi.mocked(fetchInferenceShapPlot).mockResolvedValueOnce({
       plotly_json: '{"data":[]}',
     });
@@ -353,6 +414,7 @@ describe("ResultsPredOnly", () => {
   });
 
   it("renders SHAP Summary accordion trigger while loading", async () => {
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce(["shap-summary"]);
     // Use a never-resolving promise to hold the loading state
     vi.mocked(fetchInferenceShapPlot).mockReturnValueOnce(
       new Promise(() => {}),
@@ -375,6 +437,7 @@ describe("ResultsPredOnly", () => {
   });
 
   it("renders both SHAP Summary and Warnings accordions together", async () => {
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce(["shap-summary"]);
     vi.mocked(fetchInferenceShapPlot).mockResolvedValueOnce({
       plotly_json: '{"data":[]}',
     });

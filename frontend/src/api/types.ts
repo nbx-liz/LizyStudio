@@ -8,16 +8,14 @@
  *    names so consumers keep importing from `@/api/types`.
  *
  * 2. **Hand-written** — types where:
- *    - The generated schema marks fields as optional (`?`) but the frontend
- *      expects them as required with `null` (e.g. `JobSummary.error`).
  *    - The generated schema lacks the type entirely (endpoint has no
  *      `response_model`, or it's a frontend-only / WebSocket type).
  *    - The shape differs (e.g. `shape: [number, number]` vs `number[]`).
  *
  * Backend Pydantic models now use `Literal[...]` annotations for enum-like
- * fields. `ColumnInfo` and `ColumnsResponse` are re-exported from the
- * generated schema. `JobSummary` remains hand-written due to optional vs
- * required field differences.
+ * fields and `JobSummaryResponse` / `JobDetailResponse` / `FitResultResponse`
+ * / `TuneResultResponse` have been strengthened so this file re-exports them
+ * directly (C-4, docs/coupling-analysis.md).
  */
 
 import type { components } from "./generated/schema";
@@ -71,6 +69,10 @@ export interface WorkspaceStatus {
   has_result: boolean;
   data_ref: { filename: string; shape: [number, number] } | null;
   current_job_id: string | null;
+  // P-0088 / Issue #256: backend's active ALLOWED_FILES_ROOT. Used by
+  // the E2E globalSetup to fingerprint the server env; UI does not
+  // render this field.
+  files_root: string;
 }
 
 /**
@@ -87,10 +89,16 @@ export type ColumnsResponse = components["schemas"]["ColumnsResponseModel"];
  * ConfigUpdateResponse — hand-written because generated type has
  * `errors: {[key: string]: unknown}[]` whereas we use the structured
  * `ConfigError` type, and the generated type includes an index signature.
+ *
+ * `saved` is the backend's authoritative answer to "did this PUT
+ * actually persist?" — false when validation rejected the body.
+ * Callers must observe it (Issue #276); silently dropping it leads to
+ * UI ↔ backend divergence.
  */
 export interface ConfigUpdateResponse {
   config: Record<string, unknown>;
   errors: ConfigError[];
+  saved: boolean;
 }
 
 export interface ConfigError {
@@ -98,52 +106,28 @@ export interface ConfigError {
   message: string;
 }
 
-// --- Job types — hand-written because generated schema marks optional fields
-// with `?` (e.g. `error?: string | null`) while frontend expects them as
-// required with `null` default. Literal unions now match the generated schema. ---
+// --- Job types — re-exported from the generated schema (C-4).
+//
+// Backend Pydantic models (``api/models.py``) are the SSOT:
+// - JobSummaryResponse / JobDetailResponse no longer use ``extra='allow'``
+//   so the generated shape is strict.
+// - FitResult / TuneResult have concrete Pydantic sub-models so consumers
+//   see ``metrics`` / ``fold_count`` / ``best_params`` etc. instead of
+//   ``Record<string, unknown>``.
+//
+// ``H-0062 parent_job_id`` is always present in the API response so callers
+// rely on ``job.parent_job_id === null`` (not ``undefined``). The Pydantic
+// field is ``str | None = None`` which generates ``?: string | null``; we
+// treat an absent key as a backend bug rather than a valid state.
 
-export interface JobSummary {
-  job_id: string;
-  job_type: "fit" | "tune";
-  status: "pending" | "running" | "completed" | "failed" | "cancelled";
-  backend_name: string;
-  model_name: string;
-  created_at: string;
-  completed_at: string | null;
-  error: string | null;
-  primary_score: number | null;
-  // H-0062: lineage link — null for standalone / root jobs, set to the
-  // parent job id for Re-tune and Resume children. Always present in
-  // the API response so callers can rely on === null rather than
-  // checking for the key's existence.
-  parent_job_id: string | null;
-}
-
-export interface JobDetail extends JobSummary {
-  config: Record<string, unknown>;
-  data_ref: DataRef;
-  fit_result: FitResult | null;
-  tune_result: TuneResult | null;
-  model_path: string | null;
-}
+export type JobSummary = components["schemas"]["JobSummaryResponse"];
+export type JobDetail = components["schemas"]["JobDetailResponse"];
+export type FitResult = components["schemas"]["FitResultResponse"];
+export type TuneResult = components["schemas"]["TuneResultResponse"];
 
 export interface FitResultParam {
   parameter: string;
   value: unknown;
-}
-
-export interface FitResult {
-  metrics: Record<string, unknown>;
-  fold_count: number;
-  params: FitResultParam[];
-}
-
-export interface TuneResult {
-  best_params: Record<string, unknown>;
-  best_score: number;
-  trials: Record<string, unknown>[];
-  metric_name: string;
-  direction: string;
 }
 
 // --- Types absent from the generated schema ---
@@ -175,41 +159,28 @@ export interface SplitSummaryRow {
 // Frontend-only types (WebSocket messages, UI helpers)
 // ---------------------------------------------------------------------------
 
-export type FoldResult = {
-  fold: number;
-  metric: string;
-  score: number;
-};
+// H-0069: FoldResult / TrialResult re-exported from the generated
+// schema so they stay in sync with the Pydantic SSOT in
+// ``src/lizystudio/ws/messages.py``.  Metric names vary by task
+// (rmse/r2 for regression, auc/logloss for classification) — the
+// backend declares only the invariant fields and ``extra='allow'``
+// keeps optional metric keys flowing through.
+export type FoldResult = components["schemas"]["WsFoldResult"];
+export type TrialResult = components["schemas"]["WsTrialResult"];
 
-export type TrialResult = {
-  number: number;
-  score: number | null;
-  state: string;
-  best_score: number | null;
-};
+// --- WebSocket messages (H-0069 SSOT) ---
+//
+// These mirror the Pydantic discriminated union in
+// ``src/lizystudio/ws/messages.py``. Types are generated from the
+// backend OpenAPI schema by ``openapi-typescript`` and re-exported
+// here so existing imports keep working.  Do NOT redeclare the shape
+// — edit ``ws/messages.py`` and run ``pnpm generate:api``.
 
-export type ProgressMessage = {
-  type: "progress";
-  current: number;
-  total: number;
-  message?: string;
-  elapsed?: number;
-  metrics?: Record<string, unknown>;
-  fold_results?: FoldResult[];
-  trial_results?: TrialResult[];
-};
-
-export type CompletedMessage = {
-  type: "completed";
-  job_id: string;
-};
-
-export type ErrorMessage = {
-  type: "error";
-  message: string;
-};
-
-export type WsMessage = ProgressMessage | CompletedMessage | ErrorMessage;
+export type ProgressMessage = components["schemas"]["WsProgress"];
+export type CompletedMessage = components["schemas"]["WsCompleted"];
+export type ErrorMessage = components["schemas"]["WsError"];
+export type PingMessage = components["schemas"]["WsPing"];
+export type WsMessage = components["schemas"]["WsMessage"];
 
 // --- MetricEntry (H-0034) ---
 
@@ -233,51 +204,15 @@ export function metricEntryName(entry: MetricEntry): string {
   return key;
 }
 
-// --- UI Schema (H-0026) ---
+// --- UI Schema (H-0026 / C-5) ---
+//
+// Re-exported from the generated schema. Backend Pydantic
+// (`api/models.py::UiSchemaResponse`) is the SSOT — the 3-way drift
+// between backend dict / OpenAPI / hand-written TS is eliminated.
+// `ParameterHint` / `SearchSpaceCatalogEntry` keep their legacy names
+// so existing consumers need not change their imports.
 
-export interface ParameterHint {
-  key: string;
-  label: string;
-  kind: string;
-  step?: number;
-  default?: unknown;
-  description?: string;
-}
-
-export interface SearchSpaceCatalogEntry {
-  key: string;
-  title: string;
-  paramType: string;
-  modes: string[];
-  group?: string;
-  default?: unknown;
-  /** Initial mode for the parameter: "fixed" (default), "range", or "choice". */
-  default_mode?: "fixed" | "range" | "choice";
-  /** Default range values when switching to range mode. */
-  default_range?: { low: number; high: number; log: boolean };
-  /** Default choices when switching to choice mode. */
-  default_choices?: (string | number)[];
-}
-
-export interface UiSchema {
-  sections: { key: string; title: string }[];
-  option_sets: Record<string, Record<string, string[]>>;
-  metric_direction?: Record<string, Record<string, string>>;
-  parameter_hints: ParameterHint[];
-  search_space_catalog: SearchSpaceCatalogEntry[];
-  step_map: Record<string, number>;
-  conditional_visibility: Record<string, Record<string, unknown>>;
-  defaults: Record<string, Record<string, unknown>>;
-  inner_valid_options: string[];
-  n_trials_presets?: number[];
-  capabilities?: {
-    cv_strategies: string[];
-    tune: { allow_empty_space: boolean };
-    cv_strategy_fields?: Record<string, string[]>;
-    cv_defaults?: Record<string, unknown>;
-    cv_default_strategy?: Record<string, string>;
-  };
-  calibration_methods?: string[];
-  additional_params?: string[];
-  special_search_space_fields?: Record<string, string>;
-}
+export type UiSchema = components["schemas"]["UiSchemaResponse"];
+export type ParameterHint = components["schemas"]["ParameterHintResponse"];
+export type SearchSpaceCatalogEntry =
+  components["schemas"]["SearchSpaceCatalogEntryResponse"];

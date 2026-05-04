@@ -18,6 +18,23 @@ describe("FeatureWeightsEditor", () => {
     cleanup();
   });
 
+  describe("accessibility", () => {
+    // Radix <Switch> renders as a <button role="switch">. Axe's
+    // ``button-name`` rule computes the accessible name via WAI-ARIA
+    // spec and rejects FormField's <Label htmlFor> association for
+    // button-typed labelable elements in practice (Nightly #188 /
+    // PR #220 artefact). An explicit ``aria-label`` is the only
+    // reliable remediation, so we assert it directly rather than
+    // relying on testing-library's get-by-role name lookup (which
+    // over-estimates the accessible name relative to axe).
+    it("Switch has an explicit aria-label attribute", () => {
+      renderEditor({ weights: null, columns: COLUMNS, onChange: vi.fn() });
+      const switchEl = screen.getByRole("switch");
+      expect(switchEl).toHaveAttribute("aria-label");
+      expect(switchEl.getAttribute("aria-label")).toMatch(/feature weights/i);
+    });
+  });
+
   describe("OFF state (weights is null)", () => {
     it("renders Feature Weights label", () => {
       renderEditor({ weights: null, columns: COLUMNS, onChange: vi.fn() });

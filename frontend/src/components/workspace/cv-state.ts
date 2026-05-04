@@ -1,6 +1,93 @@
+import type { UiSchema } from "@/api/types";
 import type { BlockedGroupKFoldState } from "./BlockedGroupKFoldEditor";
 import { INITIAL_BLOCKED_STATE } from "./BlockedGroupKFoldEditor";
-import { CV_STRATEGY_FIELDS } from "./constants";
+import { getDefaultCvStrategy } from "./constants";
+
+/**
+ * B-5 / H-0077: resolve the default CV strategy for a task, preferring
+ * the backend's `UiSchema.capabilities.cv_default_strategy` before
+ * falling back to the UI-local `getDefaultCvStrategy` (H-0074 map).
+ * Extracted so `useDataPanel` and `useTargetSelection` share one
+ * resolution path instead of each reimplementing the nullish chain.
+ */
+export function getEffectiveCvStrategy(
+  task: string,
+  uiSchema: UiSchema | undefined,
+): string {
+  return (
+    uiSchema?.capabilities?.cv_default_strategy?.[task] ??
+    getDefaultCvStrategy(task)
+  );
+}
+
+/**
+ * C-5b Part 2 (H-0076): conditional-field allow-list per strategy. This
+ * mirrors `UiSchema.capabilities.cv_strategy_fields` emitted by
+ * `lizyml_ui_schema.py` and serves as the fallback when ``fields`` is
+ * not explicitly passed (e.g. pre-load or tests that want the legacy
+ * behaviour). Keep this in sync with the backend SSOT — the shape is
+ * asserted by `tests/test_ui_schema.py::test_capabilities_cv_strategy_fields_ui_semantics`.
+ */
+// Issue #258 / #259: every field must match the backend Pydantic
+// variant (or DataConfig for target/time_col/group_col). A contract
+// test on the backend side
+// (``tests/contract/test_ui_schema_matches_pydantic.py``) locks this
+// invariant server-side; this fallback only applies before the live
+// UI schema is fetched, so keep it in sync to avoid the same drift
+// class at boot time.
+export const FALLBACK_CV_STRATEGY_FIELDS: Record<string, readonly string[]> = {
+  kfold: ["n_splits", "random_state", "shuffle"],
+  stratified_kfold: ["n_splits", "random_state"],
+  group_kfold: ["n_splits", "group_col"],
+  stratified_group_kfold: ["n_splits", "random_state", "shuffle", "group_col"],
+  time_series: [
+    "n_splits",
+    "time_col",
+    "gap",
+    "train_size_max",
+    "test_size_max",
+  ],
+  purged_time_series: [
+    "n_splits",
+    "time_col",
+    "purge_gap",
+    "embargo",
+    "train_size_max",
+    "test_size_max",
+  ],
+  group_time_series: [
+    "n_splits",
+    "time_col",
+    "group_col",
+    "gap",
+    "train_size_max",
+    "test_size_max",
+  ],
+  blocked_group_kfold: [
+    "time_col",
+    "group_col",
+    "min_train_rows",
+    "min_valid_rows",
+  ],
+};
+
+/**
+ * Resolve the conditional-field allow-list. Explicit ``fields`` wins;
+ * otherwise fall back to the strategy-indexed map above. Unknown
+ * strategies fall through to ``["n_splits"]`` so Folds is always
+ * included but ``group_col`` / ``time_col`` are NOT injected. If a
+ * new backend introduces a new strategy name, add it to both
+ * :data:`FALLBACK_CV_STRATEGY_FIELDS` and the backend-side
+ * ``capabilities.cv_strategy_fields`` simultaneously (see
+ * `lizyml_ui_schema.py`).
+ */
+function resolveFields(
+  strategy: string,
+  explicit: readonly string[] | undefined,
+): readonly string[] {
+  if (explicit !== undefined) return explicit;
+  return FALLBACK_CV_STRATEGY_FIELDS[strategy] ?? ["n_splits"];
+}
 
 /** Default values for CV fields, reset when strategy changes. */
 export const CV_FIELD_DEFAULTS = {
@@ -92,80 +179,215 @@ export function recommendedInnerValid(strategy: string): string {
   }
 }
 
-/** Build a split config object containing only strategy-relevant fields. */
+/**
+ * Inner-validation method ⇒ allowed config fields.
+ *
+ * Mirrors the lizyml Pydantic schema (extra="forbid") for InnerValidConfig:
+ *
+ *   - holdout:        method, ratio, stratify, random_state
+ *   - group_holdout:  method, ratio, random_state          (no stratify)
+ *   - time_holdout:   method, ratio                         (no stratify, no random_state)
+ *
+ * Used by `useConfigSync` when auto-switching inner_valid.method on
+ * cv-strategy change: cross-method fields (e.g. ``stratify`` carrying
+ * over from holdout into group_holdout) are filtered out so the PUT
+ * does not get rejected with "Extra inputs are not permitted".
+ */
+const INNER_VALID_FIELDS_BY_METHOD: Record<string, readonly string[]> = {
+  holdout: ["method", "ratio", "stratify", "random_state"],
+  group_holdout: ["method", "ratio", "random_state"],
+  time_holdout: ["method", "ratio"],
+};
+
+/**
+ * Project an existing inner_valid object onto the allowed fields for the
+ * given method, preserving any values the user already set on shared
+ * fields (e.g. ratio carries over across methods).
+ */
+export function pruneInnerValidForMethod(
+  current: Record<string, unknown>,
+  method: string,
+): Record<string, unknown> {
+  const allowed = INNER_VALID_FIELDS_BY_METHOD[method];
+  if (!allowed) {
+    // Unknown method — return unchanged so a future schema revision
+    // does not silently drop fields. Backend will surface the error.
+    return { ...current, method };
+  }
+  const result: Record<string, unknown> = { method };
+  for (const field of allowed) {
+    if (field === "method") continue;
+    if (current[field] !== undefined) {
+      result[field] = current[field];
+    }
+  }
+  return result;
+}
+
+/** Build a split config object containing only strategy-relevant fields.
+ *
+ * ``fields`` is the `UiSchema.capabilities.cv_strategy_fields[strategy]`
+ * allow-list (wire-format names). When omitted (uiSchema not yet
+ * loaded) this falls back to emitting every conditional field for which
+ * ``cv`` has a value — the legacy pre-H-0076 behaviour.
+ */
 export function buildSplitConfig(
   cv: CvState,
   blocked?: BlockedGroupKFoldState,
+  fields?: readonly string[],
 ): Record<string, unknown> {
-  const fields = CV_STRATEGY_FIELDS[cv.strategy] ?? ["folds"];
+  const active = resolveFields(cv.strategy, fields);
   const split: Record<string, unknown> = {
     method: cv.strategy,
-    n_splits: cv.folds,
   };
-  if (fields.includes("random_state") && cv.randomState !== undefined) {
+  // Issue #258 / #259: n_splits is strategy-specific. Pydantic variants
+  // like BlockedGroupKFoldConfig have no n_splits field and reject it
+  // with extra="forbid". Gate the assignment on the active fields list
+  // (same pattern as every other split property below).
+  if (active.includes("n_splits")) {
+    split.n_splits = cv.folds;
+  }
+  if (active.includes("random_state") && cv.randomState !== undefined) {
     split.random_state = cv.randomState;
   }
-  if (fields.includes("shuffle")) {
+  if (active.includes("shuffle")) {
     split.shuffle = cv.shuffle;
   }
-  if (fields.includes("gap") && cv.gap !== undefined) {
+  if (active.includes("gap") && cv.gap !== undefined) {
     split.gap = cv.gap;
   }
-  if (fields.includes("purge_gap") && cv.purgeGap !== undefined) {
+  if (active.includes("purge_gap") && cv.purgeGap !== undefined) {
     split.purge_gap = cv.purgeGap;
   }
-  if (fields.includes("embargo") && cv.embargo !== undefined) {
+  if (active.includes("embargo") && cv.embargo !== undefined) {
     split.embargo = cv.embargo;
   }
-  if (fields.includes("train_size_max") && cv.trainSizeMax !== undefined) {
+  if (active.includes("train_size_max") && cv.trainSizeMax !== undefined) {
     split.train_size_max = cv.trainSizeMax;
   }
-  if (fields.includes("test_size_max") && cv.testSizeMax !== undefined) {
+  if (active.includes("test_size_max") && cv.testSizeMax !== undefined) {
     split.test_size_max = cv.testSizeMax;
   }
-  if (fields.includes("min_train_rows") && cv.minTrainRows !== undefined) {
+  if (active.includes("min_train_rows") && cv.minTrainRows !== undefined) {
     split.min_train_rows = cv.minTrainRows;
   }
-  if (fields.includes("min_valid_rows") && cv.minValidRows !== undefined) {
+  if (active.includes("min_valid_rows") && cv.minValidRows !== undefined) {
     split.min_valid_rows = cv.minValidRows;
   }
-  // blocked_group_kfold-specific fields from the dedicated editor state
+  // Issue #278: BlockedGroupKFoldConfig requires nested `blocks` and
+  // `groups` sub-objects (BlocksConfig + GroupCVConfig). Flat fields at
+  // the split level are rejected by `extra="forbid"`. Only emit the
+  // nested objects when the user has supplied the col values + at least
+  // one cutoff — otherwise omit them so the rejection localises cleanly
+  // to "blocks: Field required" / "groups: Field required" instead of a
+  // confusing "min_length=1" deep-nested message.
   if (cv.strategy === "blocked_group_kfold") {
     const b = blocked ?? INITIAL_BLOCKED_STATE;
-    split.mode = b.blockMode;
-    split.train_window = b.trainWindow;
-    if (b.cutoffs.length > 0) {
-      split.cutoffs = b.cutoffs;
+    if (cv.timeCol && b.cutoffs.length > 0) {
+      const blocks: Record<string, unknown> = {
+        col: cv.timeCol,
+        cutoffs: b.cutoffs,
+        mode: b.blockMode,
+      };
+      // BlocksConfig.train_window is None when expanding (server-side
+      // warning emitted otherwise), int when sliding.
+      if (b.blockMode === "sliding") {
+        blocks.train_window = b.trainWindow;
+      } else {
+        blocks.train_window = null;
+      }
+      split.blocks = blocks;
     }
-    if (b.stratify !== "auto") {
-      split.stratify = b.stratify === "on";
+    if (cv.groupCol) {
+      const groups: Record<string, unknown> = {
+        col: cv.groupCol,
+        n_splits: cv.folds,
+        // GroupCVConfig.stratify is "auto" | bool. The UI tristate maps
+        // to those: auto → "auto", on → true, off → false.
+        stratify: b.stratify === "auto" ? "auto" : b.stratify === "on",
+      };
+      split.groups = groups;
     }
   }
   return split;
 }
 
-/** Extract group_col / time_col into data config when strategy requires them. */
+/** Extract group_col / time_col into data config when strategy requires them.
+ *
+ * ``fields`` behaves the same as in {@link buildSplitConfig}. When
+ * omitted we fall back to injecting whatever ``cv`` supplies.
+ */
 export function applyCvDataFields(
   data: Record<string, unknown>,
   cv: CvState,
+  fields?: readonly string[],
 ): Record<string, unknown> {
-  const fields = CV_STRATEGY_FIELDS[cv.strategy] ?? [];
+  const active = resolveFields(cv.strategy, fields);
   const result = { ...data };
-  // blocked_group_kfold uses blocks_col/groups_col instead of time_col/group_col
+  // Issue #278: BlockedGroupKFoldConfig owns the col names inside
+  // split.blocks.col and split.groups.col (handled by
+  // {@link buildSplitConfig}); they do NOT live at the data level.
+  // Pass the data object through unchanged for this strategy.
   if (cv.strategy === "blocked_group_kfold") {
-    if (cv.timeCol) {
-      result.blocks_col = cv.timeCol;
-    }
-    if (cv.groupCol) {
-      result.groups_col = cv.groupCol;
-    }
     return result;
   }
-  if (fields.includes("group_col") && cv.groupCol) {
+  if (active.includes("group_col") && cv.groupCol) {
     result.group_col = cv.groupCol;
   }
-  if (fields.includes("time_col") && cv.timeCol) {
+  if (active.includes("time_col") && cv.timeCol) {
     result.time_col = cv.timeCol;
   }
   return result;
+}
+
+/** Inverse of {@link buildSplitConfig} — read the CvState slice that an
+ * external write has stored in the cached config back into local state.
+ *
+ * Used by ``useDataPanel`` (P-0090 / Issue #278 residual) to reconcile
+ * its controlled inputs with the TanStack Query cache after preset
+ * Load, undo/redo, or any other path that writes to ``queryKeys.config()``
+ * without going through the normal user-edit flow. The function returns
+ * a partial CvState — only fields that are present in the input ``split``
+ * are returned, so callers can spread the result onto their existing
+ * state without erasing fields that the cached config does not declare.
+ */
+export function parseSplitToCv(
+  split: Record<string, unknown> | undefined | null,
+  data?: Record<string, unknown> | undefined | null,
+): Partial<CvState> {
+  if (!split) return {};
+  const out: Partial<CvState> = {};
+  if (typeof split.method === "string") out.strategy = split.method;
+  if (typeof split.n_splits === "number") out.folds = split.n_splits;
+  if (typeof split.random_state === "number")
+    out.randomState = split.random_state;
+  if (typeof split.shuffle === "boolean") out.shuffle = split.shuffle;
+  if (typeof split.gap === "number") out.gap = split.gap;
+  if (typeof split.purge_gap === "number") out.purgeGap = split.purge_gap;
+  if (typeof split.embargo === "number") out.embargo = split.embargo;
+  if (typeof split.train_size_max === "number")
+    out.trainSizeMax = split.train_size_max;
+  if (typeof split.test_size_max === "number")
+    out.testSizeMax = split.test_size_max;
+  if (typeof split.min_train_rows === "number")
+    out.minTrainRows = split.min_train_rows;
+  if (typeof split.min_valid_rows === "number")
+    out.minValidRows = split.min_valid_rows;
+  // group_col / time_col live in `data` for non-blocked strategies and
+  // inside split.blocks/groups for blocked_group_kfold (handled by a
+  // dedicated parser if needed). Read from data here so the simple
+  // cases — Load Preset on a kfold/group_kfold/time_series config —
+  // resync the column dropdowns too.
+  if (data) {
+    if (typeof data.group_col === "string") out.groupCol = data.group_col;
+    if (typeof data.time_col === "string") out.timeCol = data.time_col;
+  }
+  // BlockedGroupKFold: read the nested split.blocks/groups col fields
+  // when present so the editor shows what was loaded. The full
+  // BlockedGroupKFoldState (cutoffs etc.) is parsed by a separate path.
+  const blocks = split.blocks as Record<string, unknown> | undefined;
+  const groups = split.groups as Record<string, unknown> | undefined;
+  if (typeof blocks?.col === "string") out.timeCol = blocks.col;
+  if (typeof groups?.col === "string") out.groupCol = groups.col;
+  return out;
 }

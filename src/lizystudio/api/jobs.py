@@ -21,12 +21,21 @@ from lizystudio.api.errors import (
     JobNotFoundError,
     JobRunningError,
     ParentHasActiveChildrenError,
+    PlotNotAvailableError,
     StudioError,
 )
 from lizystudio.api.models import (
+    CancelJobResponse,
+    DeleteJobResponse,
+    ExportCodeResponse,
+    ExportJobResponse,
     JobDetailResponse,
+    JobLogResponse,
     JobSummaryResponse,
     PlotResponseModel,
+)
+from lizystudio.backends.exceptions import (
+    PlotNotAvailableError as _BackendPlotNotAvailable,
 )
 from lizystudio.services.export import export_code_as_zip, export_model, export_report
 from lizystudio.services.jobs import (
@@ -139,7 +148,7 @@ def get_job(
     return result
 
 
-@router.get("/{job_id}/log")
+@router.get("/{job_id}/log", response_model=JobLogResponse)
 def get_job_log(
     job_id: str,
     job_store: JobStore = Depends(get_job_store),
@@ -159,7 +168,7 @@ def get_job_config(
     return job.config
 
 
-@router.delete("/{job_id}")
+@router.delete("/{job_id}", response_model=DeleteJobResponse)
 def delete_job(
     job_id: str,
     cascade: bool = False,
@@ -206,7 +215,7 @@ def delete_job(
     return {"status": "deleted", "removed_job_ids": removed}
 
 
-@router.post("/{job_id}/cancel")
+@router.post("/{job_id}/cancel", response_model=CancelJobResponse)
 def cancel_job(
     job_id: str,
     job_store: JobStore = Depends(get_job_store),
@@ -236,7 +245,7 @@ def get_job_metrics_endpoint(
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
     try:
-        return get_metrics_table(job, ws.backend)
+        return get_metrics_table(job, ws.backend, job_store.model_cache)
     except Exception as exc:
         raise BackendError(exc) from exc
 
@@ -251,7 +260,7 @@ def get_job_split_summary_endpoint(
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
     try:
-        return get_split_summary(job, ws.backend)
+        return get_split_summary(job, ws.backend, job_store.model_cache)
     except Exception as exc:
         raise BackendError(exc) from exc
 
@@ -267,7 +276,7 @@ def get_job_importance_endpoint(
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
     try:
-        return get_importance(job, ws.backend, kind=kind)
+        return get_importance(job, ws.backend, job_store.model_cache, kind=kind)
     except Exception as exc:
         raise BackendError(exc) from exc
 
@@ -282,7 +291,7 @@ def get_job_importance_kinds_endpoint(
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
     try:
-        return get_importance_kinds(job, ws.backend)
+        return get_importance_kinds(job, ws.backend, job_store.model_cache)
     except Exception as exc:
         raise BackendError(exc) from exc
 
@@ -302,7 +311,7 @@ def get_job_learning_curve_metrics_endpoint(
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
     try:
-        return get_learning_curve_metrics(job, ws.backend)
+        return get_learning_curve_metrics(job, ws.backend, job_store.model_cache)
     except Exception as exc:
         raise BackendError(exc) from exc
 
@@ -345,8 +354,14 @@ def get_job_plot_endpoint(
             raise StudioError("INVALID_PARAM", f"Invalid kind: {kind!r}", 400)
         kwargs["kind"] = kind
     try:
-        plot_data = get_job_plot(job, ws.backend, plot_type, **kwargs)
+        plot_data = get_job_plot(
+            job, ws.backend, job_store.model_cache, plot_type, **kwargs
+        )
         return {"plotly_json": plot_data.plotly_json}
+    except _BackendPlotNotAvailable as exc:
+        # Issue #355: 404 (client asked for an unsupported plot)
+        # rather than 500 (genuine backend failure).
+        raise PlotNotAvailableError(exc.plot_type, exc.available) from exc
     except Exception as exc:
         raise BackendError(exc) from exc
 
@@ -361,7 +376,7 @@ def get_job_available_plots_endpoint(
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
     try:
-        return get_available_plots(job, ws.backend)
+        return get_available_plots(job, ws.backend, job_store.model_cache)
     except Exception as exc:
         raise BackendError(exc) from exc
 
@@ -405,7 +420,7 @@ class ExportRequest(BaseModel):
     output_path: str
 
 
-@router.post("/{job_id}/export")
+@router.post("/{job_id}/export", response_model=ExportJobResponse)
 def export_job(
     job_id: str,
     body: ExportRequest,
@@ -435,7 +450,7 @@ def export_job(
         raise ExportError(str(exc)) from exc
 
 
-@router.get("/{job_id}/export-code")
+@router.get("/{job_id}/export-code", response_model=ExportCodeResponse)
 def export_code(
     job_id: str,
     background_tasks: BackgroundTasks,

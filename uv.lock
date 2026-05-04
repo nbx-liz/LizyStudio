@@ -560,7 +560,7 @@ wheels = [
 
 [[package]]
 name = "lizyml"
-version = "0.9.0"
+version = "0.10.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "joblib" },
@@ -574,9 +574,9 @@ dependencies = [
     { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/79/74/3a4275bb82da96109e881496dc9929eb37ab298209d35027d7a22151bb90/lizyml-0.9.0.tar.gz", hash = "sha256:11648172e0e9ec7b96eb2837159ef58a9c8265b085d934c91e8dc0842b448eda", size = 633317, upload-time = "2026-04-11T15:58:33.52Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/01/a2/fb4677239cbc84bb9ba15155329b9a585ace6bb1e4fa2625d9b438632561/lizyml-0.10.0.tar.gz", hash = "sha256:1b3560ffb2ea1e1b7b6a2bc8af0d8394df20a361a27e67be2fc760b24c1615f0", size = 651238, upload-time = "2026-05-04T05:38:36.111Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ea/ac/07abdfa6b62bf132b60398ec42fe8d7ff553c7ec9011bd3cc17659731ff0/lizyml-0.9.0-py3-none-any.whl", hash = "sha256:e8eaacde5efd50b3a7c10f7431f69edbd378bd725117cd24b2454abf8ec9f49a", size = 151674, upload-time = "2026-04-11T15:58:31.921Z" },
+    { url = "https://files.pythonhosted.org/packages/f9/61/eea1bbaef13ab14e393471d83e30e82b8366bf73e360f26741e6c4b87d58/lizyml-0.10.0-py3-none-any.whl", hash = "sha256:909bcfe86fb9fc158b1f0cc9b7b3f2721d1b1d456f4a4a3eb854104f34f943df", size = 156728, upload-time = "2026-05-04T05:38:34.463Z" },
 ]
 
 [package.optional-dependencies]
@@ -617,6 +617,7 @@ dev = [
     { name = "pre-commit" },
     { name = "pyarrow" },
     { name = "pytest" },
+    { name = "pytest-benchmark" },
     { name = "pytest-cov" },
     { name = "pytest-rerunfailures" },
     { name = "ruff" },
@@ -627,7 +628,7 @@ dev = [
 requires-dist = [
     { name = "cloudpickle", specifier = ">=3.0" },
     { name = "fastapi", specifier = ">=0.115" },
-    { name = "lizyml", extras = ["calibration", "explain", "plots", "tuning"], specifier = ">=0.9.0,<0.10.0" },
+    { name = "lizyml", extras = ["calibration", "explain", "plots", "tuning"], specifier = ">=0.10.0,<0.11.0" },
     { name = "prometheus-client", specifier = ">=0.20" },
     { name = "python-multipart", specifier = ">=0.0.18" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
@@ -642,6 +643,7 @@ dev = [
     { name = "pre-commit", specifier = ">=4.0" },
     { name = "pyarrow", specifier = ">=23.0.1" },
     { name = "pytest", specifier = ">=8.0" },
+    { name = "pytest-benchmark", specifier = ">=4.0" },
     { name = "pytest-cov", specifier = ">=5.0" },
     { name = "pytest-rerunfailures", specifier = ">=14.0" },
     { name = "ruff", specifier = ">=0.8" },
@@ -1342,6 +1344,15 @@ wheels = [
 ]
 
 [[package]]
+name = "py-cpuinfo"
+version = "9.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/37/a8/d832f7293ebb21690860d2e01d8115e5ff6f2ae8bbdc953f0eb0fa4bd2c7/py-cpuinfo-9.0.0.tar.gz", hash = "sha256:3cdbbf3fac90dc6f118bfd64384f309edeadd902d7c8fb17f02ffa1fc3f49690", size = 104716, upload-time = "2022-10-25T20:38:06.303Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e0/a9/023730ba63db1e494a271cb018dcd361bd2c917ba7004c3e49d5daf795a2/py_cpuinfo-9.0.0-py3-none-any.whl", hash = "sha256:859625bc251f64e21f077d099d4162689c762b5d6a4c3c97553d56241c9674d5", size = 22335, upload-time = "2022-10-25T20:38:27.636Z" },
+]
+
+[[package]]
 name = "pyarrow"
 version = "23.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1556,6 +1567,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/d1/db/7ef3487e0fb0049ddb5ce41d3a49c235bf9ad299b6a25d5780a89f19230f/pytest-9.0.2.tar.gz", hash = "sha256:75186651a92bd89611d1d9fc20f0b4345fd827c41ccd5c299a868a05d70edf11", size = 1568901, upload-time = "2025-12-06T21:30:51.014Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3b/ab/b3226f0bd7cdcf710fbede2b3548584366da3b19b5021e74f5bde2a8fa3f/pytest-9.0.2-py3-none-any.whl", hash = "sha256:711ffd45bf766d5264d487b917733b453d917afd2b0ad65223959f59089f875b", size = 374801, upload-time = "2025-12-06T21:30:49.154Z" },
+]
+
+[[package]]
+name = "pytest-benchmark"
+version = "5.2.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "py-cpuinfo" },
+    { name = "pytest" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/24/34/9f732b76456d64faffbef6232f1f9dbec7a7c4999ff46282fa418bd1af66/pytest_benchmark-5.2.3.tar.gz", hash = "sha256:deb7317998a23c650fd4ff76e1230066a76cb45dcece0aca5607143c619e7779", size = 341340, upload-time = "2025-11-09T18:48:43.215Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/33/29/e756e715a48959f1c0045342088d7ca9762a2f509b945f362a316e9412b7/pytest_benchmark-5.2.3-py3-none-any.whl", hash = "sha256:bc839726ad20e99aaa0d11a127445457b4219bdb9e80a1afc4b51da7f96b0803", size = 45255, upload-time = "2025-11-09T18:48:39.765Z" },
 ]
 
 [[package]]

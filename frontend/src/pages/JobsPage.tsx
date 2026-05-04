@@ -1,18 +1,13 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
-import { fetchJobs } from "@/api/jobs";
+import { useJobsInvalidator, useJobsList } from "@/api/queries";
 import { JobDetailPanel } from "@/components/jobs/JobDetail";
 import { JobList } from "@/components/jobs/JobList";
 
 export function JobsPage() {
-  const queryClient = useQueryClient();
+  const invalidateJobs = useJobsInvalidator();
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
 
-  const { data: jobs = [] } = useQuery({
-    queryKey: ["jobs"],
-    queryFn: () => fetchJobs(),
-    refetchInterval: 5000,
-  });
+  const { data: jobs = [] } = useJobsList({ refetchInterval: 5000 });
 
   // Auto-select latest job on first load
   useEffect(() => {
@@ -32,12 +27,12 @@ export function JobsPage() {
 
   const handleJobDeleted = useCallback(() => {
     setSelectedJobId(null);
-    queryClient.invalidateQueries({ queryKey: ["jobs"] });
-  }, [queryClient]);
+    invalidateJobs();
+  }, [invalidateJobs]);
 
   const handleJobChanged = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ["jobs"] });
-  }, [queryClient]);
+    invalidateJobs();
+  }, [invalidateJobs]);
 
   return (
     <div className="flex h-full">

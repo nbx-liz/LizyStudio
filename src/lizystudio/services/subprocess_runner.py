@@ -21,12 +21,10 @@ import os
 import subprocess
 import sys
 import tempfile
-import threading
 import time
-from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import IO, TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any
 
 from lizystudio.services.jobs import Job, JobStore
 
@@ -50,99 +48,73 @@ _WAIT_TIMEOUT = 10.0
 _FINAL_FLUSH_RETRIES = 5
 _FINAL_FLUSH_INTERVAL = 0.05
 
-# Issue #150: the child's stderr pipe must be drained concurrently or
-# the child blocks on write(2) once it exceeds the OS pipe buffer
-# (~64 KiB on Linux). We retain only the last _STDERR_TAIL_CHUNKS *
-# _STDERR_READ_SIZE bytes so a chatty child does not grow the parent's
-# memory unboundedly; this tail is what the error-logging path at
-# run_job_in_subprocess reports when the child exits non-zero.
-_STDERR_READ_SIZE = 4096  # bytes per read(2)
-_STDERR_TAIL_CHUNKS = 16  # retain the most recent chunks (~64 KiB)
+# Issue #328: ``execution.log`` size cap. The parent passes a writable
+# file descriptor as the child's ``stdout`` (with ``stderr`` merged via
+# ``subprocess.STDOUT``), so a runaway child could fill the disk through
+# this single artifact. After the child exits we read the file size and,
+# if it exceeds ``_MAX_LOG_BYTES``, atomically rewrite the file as
+# ``_TRUNCATION_MARKER`` + the last ``_MAX_LOG_BYTES - len(marker)``
+# bytes. Tail-keeping fits the diagnostic use case (the dialog reads
+# what the user wants to debug — the failure). The cap also provides
+# the bounded buffer that ``_StderrDrainer`` previously enforced for
+# the in-memory ring; the kernel handles the running-write case (no
+# pipe buffer involved when stdout is a file descriptor).
+_MAX_LOG_BYTES = 10 * 1024 * 1024
+_TRUNCATION_MARKER = b"... [truncated; head dropped to fit 10 MiB cap] ...\n"
 
 
-class _StderrDrainer:
-    """Concurrently drain a subprocess stderr pipe on a daemon thread.
+def _truncate_log_if_needed(path: Path, max_bytes: int = _MAX_LOG_BYTES) -> None:
+    """Cap ``path`` at ``max_bytes`` by keeping the tail.
 
-    The parent no longer blocks on ``proc.stderr.read()`` only after
-    ``proc.wait()`` — which would deadlock any child that writes more
-    than the OS pipe buffer. Instead, a dedicated daemon thread reads
-    chunks until EOF (or the pipe is closed) and keeps the most
-    recent chunks in a bounded ring for post-mortem logging.
-
-    The drainer does NOT own the ``Popen`` object; callers are
-    expected to ``start()`` right after ``Popen`` and ``join(timeout)``
-    after ``proc.wait()``. ``tail_bytes()`` is safe to call after
-    ``join()`` completes.
+    No-op when the file is missing or already under the cap. On OS
+    errors the cap is best-effort: log a warning and leave the file
+    alone rather than risk losing diagnostic output.
     """
-
-    def __init__(self, stream: IO[bytes]) -> None:
-        self._stream = stream
-        self._buffer: deque[bytes] = deque(maxlen=_STDERR_TAIL_CHUNKS)
-        self._thread = threading.Thread(
-            target=self._run, name="lizystudio-stderr-drain", daemon=True
-        )
-
-    def _run(self) -> None:
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return
+    if size <= max_bytes:
+        return
+    keep_bytes = max_bytes - len(_TRUNCATION_MARKER)
+    if keep_bytes <= 0:
+        # max_bytes is smaller than the marker itself — write only the
+        # marker so the file fits the cap and is still informative.
         try:
-            while True:
-                chunk = self._stream.read(_STDERR_READ_SIZE)
-                if not chunk:
-                    # EOF or pipe closed by child exit.
-                    break
-                self._buffer.append(chunk)
-        except (OSError, ValueError):
-            # Stream closed out from under us; nothing to do.
-            return
-        except Exception:
-            # Any other exception would otherwise be silently logged by
-            # threading.excepthook and leave the pipe undrained, which
-            # in turn can re-introduce the #150 deadlock. Log with the
-            # stack trace so diagnosis is possible post-mortem.
-            _logger.exception("stderr drainer thread crashed")
-            return
+            path.write_bytes(_TRUNCATION_MARKER[:max_bytes])
+        except OSError:
+            _logger.warning("failed to truncate %s", path, exc_info=True)
+        return
+    try:
+        with path.open("rb") as f:
+            f.seek(size - keep_bytes)
+            tail = f.read(keep_bytes)
+        # Atomic-ish replace: write to a sibling tmp then rename. Same
+        # filesystem so ``os.replace`` is atomic on POSIX.
+        tmp_path = path.with_suffix(path.suffix + ".trunc")
+        tmp_path.write_bytes(_TRUNCATION_MARKER + tail)
+        os.replace(tmp_path, path)
+    except OSError:
+        _logger.warning("failed to truncate %s", path, exc_info=True)
 
-    def start(self) -> None:
-        self._thread.start()
 
-    def join(self, timeout: float | None = None) -> None:
-        """Wait for the drainer to reach EOF, then close the stream.
+def _read_log_tail(path: Path, n: int) -> bytes:
+    """Return at most the last ``n`` bytes of ``path``.
 
-        Safe to call multiple times — the second call is a no-op on a
-        terminated thread and an already-closed stream. Callers should
-        invoke ``join`` before ``tail_bytes`` to ensure the drainer has
-        finished writing to the buffer.
-
-        If the drainer does not finish within *timeout*, close the
-        stream anyway — ``read(4096)`` on a closed stream returns
-        ``b""`` or raises, both of which terminate the loop above.
-        """
-        self._thread.join(timeout=timeout)
-        with contextlib.suppress(Exception):
-            self._stream.close()
-        # If the thread was still mid-read when the stream closed,
-        # give it a brief moment to unwind. This is a best-effort
-        # cleanup — daemon=True prevents it from blocking interpreter
-        # shutdown either way.
-        if self._thread.is_alive():
-            self._thread.join(timeout=0.5)
-            if self._thread.is_alive():
-                _logger.warning(
-                    "stderr drainer thread did not exit after join + close; "
-                    "leaving as daemon"
-                )
-
-    def tail_bytes(self) -> bytes:
-        """Return the retained tail of stderr output.
-
-        MUST be called after :meth:`join` returns so the drainer thread
-        is no longer appending to the buffer. Reading earlier is
-        technically memory-safe under CPython's GIL but may return a
-        truncated tail.
-
-        Bounded by the ring's capacity — a chatty child only gets
-        its final chunks logged, not the entire history.
-        """
-        return b"".join(self._buffer)
+    Returns ``b""`` when the file is missing or unreadable so callers
+    in the failure-tail logging path do not have to handle exceptions.
+    """
+    try:
+        with path.open("rb") as f:
+            try:
+                size = path.stat().st_size
+            except OSError:
+                return f.read()
+            if size > n:
+                f.seek(size - n)
+            return f.read()
+    except OSError:
+        return b""
 
 
 def run_job_in_subprocess(
@@ -204,7 +176,17 @@ def run_job_in_subprocess(
     args_p = Path(args_path)
     progress_path = str(args_p.parent / (args_p.stem + "_progress.jsonl"))
 
-    drainer: _StderrDrainer | None = None
+    # Issue #328: route the child's stdout AND stderr to
+    # ``execution.log`` via a parent-owned file descriptor so the UI's
+    # "View Full Log" dialog renders real content. Merging stderr into
+    # stdout (``stderr=subprocess.STDOUT``) preserves the chronological
+    # order of trace output relative to the print that triggered it,
+    # and avoids the OS pipe-buffer deadlock that motivated #150 (no
+    # pipe in this path — writes go straight to the file).
+    log_path = job_store.path_for(job.job_id, "log")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_fp = log_path.open("ab")
+    proc: subprocess.Popen[bytes] | None = None
     try:
         proc = subprocess.Popen(
             [
@@ -214,16 +196,9 @@ def run_job_in_subprocess(
                 args_path,
                 progress_path,
             ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stdout=log_fp,
+            stderr=subprocess.STDOUT,
         )
-
-        # Issue #150: drain stderr concurrently so the child cannot
-        # block on write(2) once it exceeds the OS pipe buffer. The
-        # drainer keeps a bounded tail for post-mortem logging below.
-        if proc.stderr is not None:
-            drainer = _StderrDrainer(proc.stderr)
-            drainer.start()
 
         # H-0062 Bugfix 2026-04-14 (5): pass job_store so _poll_progress
         # can honour cancel requests and terminate a hung subprocess.
@@ -245,26 +220,22 @@ def run_job_in_subprocess(
             proc.kill()
             with contextlib.suppress(subprocess.TimeoutExpired):
                 proc.wait(timeout=_WAIT_TIMEOUT)
-
-        # Wait for the drainer to finish consuming stderr BEFORE reading
-        # the retained tail. Otherwise tail_bytes() can race with the
-        # final appends and return a truncated buffer. join() is safe
-        # to call twice — the finally below is idempotent insurance
-        # against any exception between here and there.
-        if drainer is not None:
-            drainer.join(timeout=2.0)
-
-        if proc.returncode not in (0, None):
-            tail = drainer.tail_bytes() if drainer is not None else b""
-            stderr = tail.decode(errors="replace")
+    finally:
+        # Close the parent's fd before reading the file back so any
+        # last buffered writes are flushed to disk. The child's own fd
+        # was inherited and lives in the child process; ``proc.wait()``
+        # above has already reaped that side. Truncation runs after
+        # close so the rewrite-tail path observes the final size.
+        with contextlib.suppress(Exception):
+            log_fp.close()
+        _truncate_log_if_needed(log_path)
+        if proc is not None and proc.returncode not in (0, None):
+            tail = _read_log_tail(log_path, n=4096).decode(errors="replace")
             _logger.error(
                 "Subprocess exited with code %d: %s",
                 proc.returncode,
-                stderr[-500:],
+                tail[-500:],
             )
-    finally:
-        if drainer is not None:
-            drainer.join(timeout=2.0)
         Path(args_path).unlink(missing_ok=True)
         Path(progress_path).unlink(missing_ok=True)
 

@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request, Response, WebSocket
+from fastapi import Depends, FastAPI, Request, Response, WebSocket
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -26,13 +26,14 @@ from lizystudio.api import (
     metrics_api,
     workspace,
 )
+from lizystudio.api.deps import get_broadcaster
 from lizystudio.api.errors import (
     StudioError,
     studio_error_handler,
     validation_error_handler,
 )
 from lizystudio.backends.registry import get_adapter
-from lizystudio.metrics import REQUEST_DURATION, REQUESTS_TOTAL
+from lizystudio.metrics import MetricsRegistry
 from lizystudio.services.jobs import JobStore
 from lizystudio.services.workspace import WorkspaceState
 from lizystudio.ws.progress import ProgressBroadcaster, websocket_progress
@@ -60,6 +61,24 @@ _CSP_DEV = (
     "img-src 'self' data: blob:; "
     "font-src 'self'"
 )
+
+
+_DEFAULT_CORS_ORIGINS = ("http://localhost:5173",)
+"""Development fallback when LIZYSTUDIO_CORS_ALLOWED_ORIGINS is unset."""
+
+
+def _parse_cors_allowed_origins(raw: str | None) -> list[str]:
+    """Parse the comma-separated env var for CORS allowlist (H-0083).
+
+    Returns the dev fallback when the variable is unset or empty. Blank
+    entries are filtered out: a stray empty string in ``allow_origins``
+    would accept unauthenticated cross-origin requests (mirrors the
+    C-10 WS origin guard).
+    """
+    if not raw:
+        return list(_DEFAULT_CORS_ORIGINS)
+    parsed = [entry.strip() for entry in raw.split(",") if entry.strip()]
+    return parsed or list(_DEFAULT_CORS_ORIGINS)
 
 
 def _warmup_adapter(adapter: object) -> None:
@@ -91,15 +110,23 @@ def create_app() -> FastAPI:
     backend_name = os.environ.get("LIZYSTUDIO_BACKEND", "lizyml")
     jobs_dir = Path(os.environ.get("LIZYSTUDIO_JOBS_DIR", ".lizystudio/jobs"))
 
+    # A-9: per-app Prometheus registry. Instantiated before ``lifespan``
+    # so both the metrics_middleware closure below and the JobStore can
+    # bind to the same registry. Each ``create_app()`` invocation builds
+    # a fresh :class:`CollectorRegistry`, so two apps can coexist in
+    # the same process (e.g. pytest).
+    metrics = MetricsRegistry()
+
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         adapter = get_adapter(backend_name)
         # Eagerly import the ML backend to avoid import-lock deadlocks
         # when concurrent API requests trigger lazy imports in threads.
         _warmup_adapter(adapter)
+        application.state.metrics = metrics
         application.state.workspace = WorkspaceState(backend=adapter)
-        application.state.job_store = JobStore(jobs_dir)
-        broadcaster = ProgressBroadcaster()
+        application.state.job_store = JobStore(jobs_dir, metrics=metrics)
+        broadcaster = ProgressBroadcaster(metrics=metrics)
         broadcaster.set_loop(asyncio.get_running_loop())
         application.state.broadcaster = broadcaster
         yield
@@ -156,24 +183,31 @@ def create_app() -> FastAPI:
         route = request.scope.get("route")
         label_path = getattr(route, "path", None) or "unmatched"
 
-        REQUESTS_TOTAL.labels(
+        metrics.requests_total.labels(
             method=request.method,
             path=label_path,
             status=str(response.status_code),
         ).inc()
-        REQUEST_DURATION.labels(
+        metrics.request_duration.labels(
             method=request.method,
             path=label_path,
         ).observe(elapsed)
         return response
 
-    # CORS — allow frontend dev server during development
+    # CORS — allow the Vite dev server during development, or whatever
+    # origins the deployment specifies via LIZYSTUDIO_CORS_ALLOWED_ORIGINS
+    # (comma-separated). H-0083 mirrors the WS LIZYSTUDIO_WS_ALLOWED_ORIGINS
+    # pattern so production deployments behind a reverse proxy do not
+    # require a source edit.
+    cors_origins = _parse_cors_allowed_origins(
+        os.environ.get("LIZYSTUDIO_CORS_ALLOWED_ORIGINS")
+    )
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173"],
+        allow_origins=cors_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+        allow_headers=["Content-Type", "Authorization"],
     )
 
     # Exception handlers
@@ -201,21 +235,49 @@ def create_app() -> FastAPI:
 
     # WebSocket route for job progress (BLUEPRINT §5.5)
     @application.websocket("/ws/jobs/{job_id}/progress")
-    async def ws_job_progress(ws: WebSocket, job_id: str) -> None:
-        broadcaster: ProgressBroadcaster = application.state.broadcaster
+    async def ws_job_progress(
+        ws: WebSocket,
+        job_id: str,
+        broadcaster: ProgressBroadcaster = Depends(get_broadcaster),
+    ) -> None:
         await websocket_progress(ws, job_id, broadcaster)
 
-    # Serve built frontend (production)
+    # H-0069: expose the WebSocket message Pydantic union in OpenAPI so
+    # openapi-typescript generates a concrete `WsMessage` type for the
+    # frontend to import instead of hand-maintaining a duplicate.  The
+    # schema is injected into ``components.schemas`` without adding a
+    # real HTTP endpoint.
+    _install_ws_message_schema(application)
+
+    # Serve built frontend (production).
+    # C-12: surface misconfigured deployments at startup instead of
+    # silently 404-ing every SPA request — an ops person now sees a
+    # single warning line at boot if the pnpm build artefacts are
+    # missing / mounted at the wrong path.
+    if not STATIC_DIR.is_dir() or not (STATIC_DIR / "index.html").exists():
+        logger.warning(
+            "Static assets directory missing or empty at %s — "
+            "SPA requests will 404. Run `pnpm build` or point "
+            "STATIC_DIR at the frontend dist/.",
+            STATIC_DIR,
+        )
     if STATIC_DIR.is_dir() and (STATIC_DIR / "index.html").exists():
         application.mount(
             "/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets"
         )
 
-        @application.get("/{full_path:path}")
+        @application.get("/{full_path:path}", include_in_schema=False)
         async def serve_spa(full_path: str) -> FileResponse:
-            """Serve the SPA — all non-API/WS routes return index.html."""
+            """Serve the SPA — all non-API/WS routes return index.html.
+
+            Excluded from OpenAPI so the schema is identical whether or
+            not the frontend build artefacts exist (C-1 drift gate).
+            """
             if full_path.startswith(("api/", "ws/")):
-                raise HTTPException(status_code=404, detail="Not found")
+                # C-8: use the StudioError envelope so the frontend's
+                # ``isStudioError`` path handles this uniformly instead
+                # of falling back to "API error 404".
+                raise StudioError("NOT_FOUND", f"Route not found: /{full_path}", 404)
             from lizystudio.security import validate_static_path
 
             safe = validate_static_path(STATIC_DIR / full_path, STATIC_DIR)
@@ -224,6 +286,70 @@ def create_app() -> FastAPI:
             return FileResponse(STATIC_DIR / "index.html")
 
     return application
+
+
+def _install_ws_message_schema(application: FastAPI) -> None:
+    """Inject ``WsMessage`` and its variants into ``components.schemas``.
+
+    The WebSocket handler is not a regular HTTP route, so FastAPI's
+    OpenAPI builder does not discover its Pydantic models on its own.
+    We override ``app.openapi`` so the generated document carries
+    ``WsMessage`` / ``WsProgress`` / ``WsCompleted`` / ``WsError`` /
+    ``WsPing`` schemas — ``openapi-typescript`` then emits a typed
+    union the frontend can import directly.
+    """
+    from fastapi.openapi.utils import get_openapi
+    from pydantic import TypeAdapter
+
+    from lizystudio.ws.messages import (
+        WsCompleted,
+        WsError,
+        WsMessage,
+        WsPing,
+        WsProgress,
+    )
+
+    # Clear any schema that FastAPI may have already cached before this
+    # hook was installed — otherwise the first call returns the
+    # pre-injection version and locks it in for the life of the app.
+    application.openapi_schema = None
+
+    def _custom_openapi() -> dict[str, Any]:
+        if application.openapi_schema:
+            return application.openapi_schema
+        schema = get_openapi(
+            title=application.title,
+            version=application.version,
+            openapi_version=application.openapi_version,
+            description=application.description,
+            routes=application.routes,
+        )
+        components = schema.setdefault("components", {})
+        schemas = components.setdefault("schemas", {})
+        ws_schema = TypeAdapter(WsMessage).json_schema(
+            ref_template="#/components/schemas/{model}",
+        )
+        # TypeAdapter emits `$defs` for the referenced variants; lift
+        # them into `components.schemas` so openapi-typescript resolves
+        # the refs correctly.
+        for name, body in ws_schema.pop("$defs", {}).items():
+            schemas[name] = body
+        # Also register the union itself as a named schema so
+        # consumers can `import { WsMessage } from schema`.
+        schemas["WsMessage"] = ws_schema
+        # Deterministic ordering — keeps the generated schema.d.ts
+        # stable across dumps so the api-types-drift CI job does not
+        # flap on dict ordering.
+        for model in (WsProgress, WsCompleted, WsError, WsPing):
+            name = model.__name__
+            if name not in schemas:
+                schemas[name] = model.model_json_schema(
+                    ref_template="#/components/schemas/{model}",
+                )
+        application.openapi_schema = schema
+        return schema
+
+    application.openapi = _custom_openapi  # type: ignore[method-assign]
 
 
 # Module-level app for uvicorn (used by CLI: uvicorn lizystudio.server:app)

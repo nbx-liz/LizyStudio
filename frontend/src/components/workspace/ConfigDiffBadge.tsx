@@ -80,7 +80,7 @@ export function ConfigDiffBadge({
       <PopoverTrigger asChild>
         <Badge
           variant="outline"
-          className="cursor-pointer border-amber-400 text-amber-700 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-950"
+          className="cursor-pointer border-warning-border text-warning-fg hover:bg-warning"
           role="button"
           tabIndex={0}
         >

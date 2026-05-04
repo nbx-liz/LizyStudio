@@ -23,15 +23,15 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from lizystudio.backends.base import BackendAdapter, ProgressCallback
 from lizystudio.backends.types import FitSummary, TuningSummary
-from lizystudio.metrics import record_job_terminal
-from lizystudio.services.jobs import Job, JobStore
-from lizystudio.services.training import (
+from lizystudio.services._training_core import (
     _join_previous_thread,
     _prepare_autofit_config,
     _run_job_core,
     _run_pickle_preflight,
+    _run_subprocess_job,
     _save_tuning_plot,
 )
+from lizystudio.services.jobs import Job, JobStore
 
 if TYPE_CHECKING:
     from lizystudio.services.workspace import WorkspaceState
@@ -71,10 +71,10 @@ def run_retune(
     continued for the requested n_trials. Subsequent trials are saved
     back to the child's own checkpoint via the standard bridge callback.
     """
-    parent_dir = job_store.jobs_dir / parent_job.job_id
-    child_dir = job_store.jobs_dir / child_job.job_id
+    parent_dir = job_store.job_dir(parent_job.job_id)
+    child_dir = job_store.job_dir(child_job.job_id)
     _copy_checkpoint_to_child(parent_dir, child_dir)
-    _run_pickle_preflight(child_dir)
+    _run_pickle_preflight(backend, child_dir)
 
     def execute(
         cb: ProgressCallback,
@@ -143,11 +143,10 @@ def _mark_retune_child_failed(
     child_job.error = message
     child_job.completed_at = datetime.now(timezone.utc).isoformat()
     job_store.update(child_job)
-    with ws._lock:
-        ws.current_job_id = child_job.job_id
+    ws.note_current_job(child_job.job_id)
     if broadcaster is not None:
         broadcaster.send_error(child_job.job_id, message)
-    record_job_terminal(child_job.job_type, "failed")
+    job_store.record_job_terminal(child_job.job_type, "failed")
 
 
 def _run_retune_subprocess(
@@ -168,7 +167,6 @@ def _run_retune_subprocess(
     ``run_job_in_subprocess`` call, workspace state update, and
     active-slot release) is not duplicated.
     """
-    from lizystudio.services.training import _run_subprocess_job
 
     def _on_data_missing(_job: Job) -> None:
         _mark_retune_child_failed(
@@ -264,8 +262,7 @@ def start_retune_async(
         # H-0062: always point the workspace at the child so a failed /
         # cancelled / crashed retune still surfaces through the Workspace
         # Results Panel instead of leaving the selection on the parent.
-        with ws._lock:
-            ws.current_job_id = child_job.job_id
+        ws.note_current_job(child_job.job_id)
         try:
             if use_subprocess:
                 _run_retune_subprocess(
@@ -290,10 +287,11 @@ def start_retune_async(
                     boundary_threshold=boundary_threshold,
                     broadcaster=broadcaster,
                 )
-                with ws._lock:
-                    ws.workspace_fit_result = finished.fit_result
-                    ws.workspace_tune_result = finished.tune_result
-                    ws.current_job_id = finished.job_id
+                ws.record_completion(
+                    fit_result=finished.fit_result,
+                    tune_result=finished.tune_result,
+                    job_id=finished.job_id,
+                )
         except Exception as exc:  # noqa: BLE001
             # H-0062 Bugfix 2026-04-14 (6): any unexpected exception
             # inside the worker thread must still transition the child
@@ -330,6 +328,5 @@ def start_retune_async(
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
-    with ws._lock:
-        ws._job_thread = t
+    ws.register_job_thread(t)
     return child_job.job_id

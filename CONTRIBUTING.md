@@ -108,6 +108,27 @@ Every PR must pass these checks before merge:
 | Types | `mypy src/lizystudio/` | TypeScript strict via `pnpm build` |
 | Tests | `pytest` (80%+ coverage) | `vitest run --coverage` |
 
+## Test fixtures
+
+When adding a new transform, parser, or schema mapper, the **first test case
+must use a fixture captured from a real production run**, not hand-written
+synthetic data. Synthetic data verifies logic but cannot track shape
+evolution; PR #344 and Issue #345 both shipped to GUI because tests
+asserted against shapes that had drifted from what production wrote.
+
+- **Frontend** consumers: import from [`frontend/src/__fixtures__/lizyml/`](frontend/src/__fixtures__/lizyml/)
+- **Backend** consumers: read from [`tests/fixtures/lizyml/<scenario>/`](tests/fixtures/lizyml/)
+
+Re-capture is manual (GUI-driven) and required when `lizyml` minor/major
+bumps or when the API/Service layer changes how artifacts are written. The
+procedure is in [`tests/fixtures/lizyml/README.md`](tests/fixtures/lizyml/README.md).
+The manual GUI flow is intentional: a scripted re-capture would bypass
+the API/Service layer that determines what production users actually
+write to disk — exactly the layering this fixture set is meant to lock down.
+
+See Issue #346 for the rollout (4 fixture scenarios on lizyml 0.9.1,
+3-layer frontend lock, fit→load round-trip CI gate at P-0095).
+
 ## Change gate
 
 Changes to public APIs, data contracts, or architecture require a **Proposal** in

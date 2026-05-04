@@ -72,6 +72,21 @@ class WorkspaceState:
         Path(path).unlink(missing_ok=True)
         return True
 
+    def is_tracked_temp_file(self, path: str) -> bool:
+        """Return ``True`` when *path* is a server-staged upload tempfile.
+
+        Used by ``/api/inference/run`` to authorise ``source_type=upload``
+        paths without sending them through the user-facing
+        ``ALLOWED_FILES_ROOT`` validation: server tempfiles live under
+        the OS temp dir (typically ``/tmp``), which is intentionally
+        outside the user's home root. Verifying membership in
+        ``_temp_files`` (populated only by ``/api/*/upload`` endpoints)
+        prevents an attacker from bypassing path validation by
+        declaring ``source_type=upload`` with an arbitrary system path.
+        """
+        with self._lock:
+            return path in self._temp_files
+
     def set_data(self, dataframe: pd.DataFrame, data_ref: DataRef) -> None:
         """Load data into the workspace."""
         with self._lock:
@@ -82,6 +97,48 @@ class WorkspaceState:
         """Update the current config."""
         with self._lock:
             self.config = config
+
+    # --- Background job thread coordination (A-4) ---
+
+    def register_job_thread(self, thread: threading.Thread) -> None:
+        """Record *thread* as the currently-active background job thread.
+
+        Replaces any previously-registered handle under the workspace
+        lock so the reader side (:meth:`previous_job_thread`) never sees
+        a torn write when a new job is started while the previous one is
+        still winding down.
+        """
+        with self._lock:
+            self._job_thread = thread
+
+    def previous_job_thread(self) -> threading.Thread | None:
+        """Return the most recently registered background job thread."""
+        with self._lock:
+            return self._job_thread
+
+    def record_completion(
+        self,
+        *,
+        fit_result: FitSummary | None,
+        tune_result: TuningSummary | None,
+        job_id: str,
+    ) -> None:
+        """Atomically update the post-job workspace state.
+
+        Fit / tune / retune launchers write three related fields when a
+        job finishes: the fit summary, the tune summary, and the active
+        job id. Routing them through a single method guarantees readers
+        observe a consistent snapshot.
+        """
+        with self._lock:
+            self.workspace_fit_result = fit_result
+            self.workspace_tune_result = tune_result
+            self.current_job_id = job_id
+
+    def note_current_job(self, job_id: str) -> None:
+        """Update only the current job id (for early-failure paths)."""
+        with self._lock:
+            self.current_job_id = job_id
 
 
 def get_workspace(request: Request) -> WorkspaceState:
@@ -115,7 +172,48 @@ def validate_config(ws: WorkspaceState, config: dict[str, Any]) -> list[dict[str
         message = err.get("msg", err.get("message", ""))
         if path or message:
             normalized.append({"path": path, "message": message})
+    # Issue #268: workspace-aware validation. n_splits > n_rows is
+    # accepted by Pydantic (no row-count knowledge inside the schema)
+    # but explodes ~5s after Fit with sklearn's
+    # "Cannot have number of splits greater than the number of samples".
+    # Surfacing it here lets the existing "Fix validation errors first"
+    # banner block the user before they even click Fit.
+    normalized.extend(_workspace_split_errors(ws, config))
     return normalized
+
+
+def _workspace_split_errors(
+    ws: WorkspaceState, config: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Return ``{path, message}`` errors for split.n_splits > n_rows.
+
+    Returns an empty list when the workspace has no data loaded yet, or
+    when the config is malformed in ways the Pydantic layer already
+    flagged (defensive to avoid raising AttributeError on top of an
+    unrelated validation failure).
+    """
+    data_ref = ws.data_ref
+    if data_ref is None:
+        return []
+    n_rows = data_ref.shape[0]
+    split = config.get("split") if isinstance(config, dict) else None
+    if not isinstance(split, dict):
+        return []
+    n_splits_raw = split.get("n_splits")
+    if not isinstance(n_splits_raw, int) or isinstance(n_splits_raw, bool):
+        return []
+    if n_splits_raw <= n_rows:
+        return []
+    return [
+        {
+            "path": "split.n_splits",
+            "message": (
+                f"n_splits={n_splits_raw} is greater than the number of "
+                f"samples in the loaded dataset (n_rows={n_rows}). "
+                f"Reduce Folds to at most {n_rows}."
+            ),
+        }
+    ]
 
 
 def load_config_from_file(

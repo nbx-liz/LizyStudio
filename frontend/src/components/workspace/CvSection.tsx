@@ -17,7 +17,7 @@ import {
 
 export { type BlockedGroupKFoldState, INITIAL_BLOCKED_STATE };
 
-import { CV_STRATEGY_FIELDS, CV_STRATEGY_LABELS } from "./constants";
+import { CV_STRATEGY_LABELS } from "./constants";
 import { NullableNumberField } from "./NullableNumberField";
 import { NumberInput } from "./NumberInput";
 import { SegmentGroup } from "./SegmentGroup";
@@ -34,7 +34,11 @@ export {
   resetCvState,
 } from "./cv-state";
 
-import { type CvState, resetCvState } from "./cv-state";
+import {
+  type CvState,
+  FALLBACK_CV_STRATEGY_FIELDS,
+  resetCvState,
+} from "./cv-state";
 
 // ---------------------------------------------------------------------------
 // Component
@@ -47,6 +51,20 @@ interface CvSectionProps {
   nonExcludedCols: ColumnInfo[];
   blocked?: BlockedGroupKFoldState;
   onBlockedChange?: (next: BlockedGroupKFoldState) => void;
+  /**
+   * Issue #268: dataset row count threaded down so the Folds NumberInput
+   * can clamp to ``min(n_rows, hard_max)``. Optional — when undefined
+   * (no data loaded yet) the input falls back to the hard max only.
+   */
+  nRows?: number;
+  /**
+   * P-0089 / Issue #279: lock the CV section while a fit/tune job is
+   * running. PUT /config returns 409 server-side; disabling the
+   * controls here prevents the user from issuing rejected writes and
+   * keeps the form value pinned to the config the running job was
+   * created with.
+   */
+  disabled?: boolean;
 }
 
 export function CvSection({
@@ -56,6 +74,8 @@ export function CvSection({
   nonExcludedCols,
   blocked,
   onBlockedChange,
+  nRows,
+  disabled = false,
 }: CvSectionProps) {
   const availableStrategies = useMemo(
     () =>
@@ -63,10 +83,14 @@ export function CvSection({
     [uiSchema],
   );
 
-  const activeFields = useMemo(
-    () => CV_STRATEGY_FIELDS[cv.strategy] ?? ["folds"],
-    [cv.strategy],
-  );
+  const activeFields = useMemo(() => {
+    const fromSchema =
+      uiSchema?.capabilities?.cv_strategy_fields?.[cv.strategy];
+    if (fromSchema !== undefined && fromSchema !== null) {
+      return fromSchema;
+    }
+    return FALLBACK_CV_STRATEGY_FIELDS[cv.strategy] ?? ["n_splits"];
+  }, [cv.strategy, uiSchema]);
 
   const has = useCallback(
     (field: string) => activeFields.includes(field),
@@ -95,6 +119,7 @@ export function CvSection({
           value={cv.strategy}
           onChange={handleStrategyChange}
           labels={CV_STRATEGY_LABELS}
+          disabled={disabled}
         />
       </div>
 
@@ -106,11 +131,12 @@ export function CvSection({
           blocked={blocked}
           onBlockedChange={onBlockedChange}
           nonExcludedCols={nonExcludedCols}
+          disabled={disabled}
         />
       )}
 
       {/* Generic conditional fields (hidden when blocked_group_kfold editor is active) */}
-      {cv.strategy !== "blocked_group_kfold" && has("folds") && (
+      {cv.strategy !== "blocked_group_kfold" && has("n_splits") && (
         <div className="space-y-1">
           <Label className="text-xs font-medium text-muted-foreground">
             Folds
@@ -119,8 +145,15 @@ export function CvSection({
             value={cv.folds}
             onChange={(v) => update({ folds: v ?? 5 })}
             min={2}
+            // Issue #268: cap Folds at the dataset row count so the user
+            // gets feedback in the input instead of a 5-second silent
+            // failure after Fit. Backend validator catches the YAML
+            // import / preset path on top of this.
+            max={nRows && nRows >= 2 ? nRows : undefined}
             step={1}
             placeholder="5"
+            disabled={disabled}
+            ariaLabel="Folds"
           />
         </div>
       )}
@@ -135,6 +168,7 @@ export function CvSection({
             onChange={(v) => update({ randomState: v })}
             step={1}
             placeholder="42"
+            disabled={disabled}
           />
         </div>
       )}
@@ -147,6 +181,7 @@ export function CvSection({
           <Switch
             checked={cv.shuffle}
             onCheckedChange={(v) => update({ shuffle: v })}
+            disabled={disabled}
           />
         </div>
       )}
@@ -159,6 +194,7 @@ export function CvSection({
           <Select
             value={cv.groupCol ?? ""}
             onValueChange={(v) => update({ groupCol: v })}
+            disabled={disabled}
           >
             <SelectTrigger aria-label="Group column">
               <SelectValue placeholder="Select column" />
@@ -182,6 +218,7 @@ export function CvSection({
           <Select
             value={cv.timeCol ?? ""}
             onValueChange={(v) => update({ timeCol: v })}
+            disabled={disabled}
           >
             <SelectTrigger aria-label="Time column">
               <SelectValue placeholder="Select column" />
@@ -203,6 +240,7 @@ export function CvSection({
           value={cv.gap}
           onChange={(v) => update({ gap: v })}
           placeholder="0"
+          disabled={disabled}
         />
       )}
 
@@ -212,6 +250,7 @@ export function CvSection({
           value={cv.purgeGap}
           onChange={(v) => update({ purgeGap: v })}
           placeholder="0"
+          disabled={disabled}
         />
       )}
 
@@ -221,6 +260,7 @@ export function CvSection({
           value={cv.embargo}
           onChange={(v) => update({ embargo: v })}
           placeholder="0"
+          disabled={disabled}
         />
       )}
 
@@ -230,6 +270,7 @@ export function CvSection({
           value={cv.trainSizeMax}
           onChange={(v) => update({ trainSizeMax: v })}
           autoHint
+          disabled={disabled}
         />
       )}
 
@@ -239,6 +280,7 @@ export function CvSection({
           value={cv.testSizeMax}
           onChange={(v) => update({ testSizeMax: v })}
           autoHint
+          disabled={disabled}
         />
       )}
 
@@ -248,6 +290,7 @@ export function CvSection({
           value={cv.minTrainRows}
           onChange={(v) => update({ minTrainRows: v })}
           autoHint
+          disabled={disabled}
         />
       )}
 
@@ -257,6 +300,7 @@ export function CvSection({
           value={cv.minValidRows}
           onChange={(v) => update({ minValidRows: v })}
           autoHint
+          disabled={disabled}
         />
       )}
     </div>

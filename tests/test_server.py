@@ -188,3 +188,90 @@ def test_create_app_custom_jobs_dir_env(
     with TestClient(app) as tc:
         res = tc.get("/api/jobs/")
         assert res.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# H-0083 — CORS allow_origins is driven by LIZYSTUDIO_CORS_ALLOWED_ORIGINS
+# ---------------------------------------------------------------------------
+
+
+def _cors_preflight(tc: TestClient, origin: str) -> str | None:
+    """Run a CORS preflight and return the allow-origin response header."""
+    res = tc.options(
+        "/api/backends",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    return res.headers.get("access-control-allow-origin")
+
+
+def test_h0083_cors_env_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A production-like origin is honoured when listed in the env var."""
+    monkeypatch.setenv("LIZYSTUDIO_JOBS_DIR", str(tmp_path / "jobs"))
+    monkeypatch.setenv(
+        "LIZYSTUDIO_CORS_ALLOWED_ORIGINS",
+        "https://app.example.com,https://staging.example.com",
+    )
+    from lizystudio.server import create_app
+
+    app = create_app()
+    with TestClient(app) as tc:
+        allowed = _cors_preflight(tc, "https://app.example.com")
+        assert allowed == "https://app.example.com"
+        # An unlisted origin must not receive an allow-origin header.
+        assert _cors_preflight(tc, "https://evil.example.com") is None
+
+
+def test_h0083_cors_fallback_when_env_unset(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Without the env var only localhost:5173 is allowed."""
+    monkeypatch.setenv("LIZYSTUDIO_JOBS_DIR", str(tmp_path / "jobs"))
+    monkeypatch.delenv("LIZYSTUDIO_CORS_ALLOWED_ORIGINS", raising=False)
+    from lizystudio.server import create_app
+
+    app = create_app()
+    with TestClient(app) as tc:
+        assert _cors_preflight(tc, "http://localhost:5173") == "http://localhost:5173"
+        assert _cors_preflight(tc, "https://app.example.com") is None
+
+
+def test_h0083_cors_blank_entries_are_filtered(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Blank / whitespace entries in the env list must be dropped so a
+    stray '' never widens the allowlist to every origin.
+    """
+    monkeypatch.setenv("LIZYSTUDIO_JOBS_DIR", str(tmp_path / "jobs"))
+    monkeypatch.setenv(
+        "LIZYSTUDIO_CORS_ALLOWED_ORIGINS",
+        "https://a.example.com, ,https://b.example.com",
+    )
+    from lizystudio.server import create_app
+
+    app = create_app()
+    with TestClient(app) as tc:
+        assert _cors_preflight(tc, "https://a.example.com") == "https://a.example.com"
+        assert _cors_preflight(tc, "https://b.example.com") == "https://b.example.com"
+        # An empty origin string must not match.
+        assert _cors_preflight(tc, "") is None
+
+
+def test_h0083_cors_parse_allowed_origins_helper() -> None:
+    """Parser unit test — isolates the env-splitting logic from FastAPI."""
+    from lizystudio.server import _parse_cors_allowed_origins
+
+    assert _parse_cors_allowed_origins(None) == ["http://localhost:5173"]
+    assert _parse_cors_allowed_origins("") == ["http://localhost:5173"]
+    assert _parse_cors_allowed_origins("   ") == ["http://localhost:5173"]
+    assert _parse_cors_allowed_origins("a,b") == ["a", "b"]
+    assert _parse_cors_allowed_origins("a, ,b") == ["a", "b"]
+    assert _parse_cors_allowed_origins(" https://x.example , https://y.example ") == [
+        "https://x.example",
+        "https://y.example",
+    ]

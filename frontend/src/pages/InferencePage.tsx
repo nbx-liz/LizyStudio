@@ -1,51 +1,43 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { getErrorMessage } from "@/api/errors";
 import {
-  fetchInferenceHistory,
-  fetchInferenceRecord,
-  runInference,
-} from "@/api/inference";
-import { fetchJob, fetchJobs } from "@/api/jobs";
+  useInferenceHistory,
+  useInferenceRecord,
+  useJob,
+  useJobsList,
+  useRunInference,
+} from "@/api/queries";
 import { ResultsPredOnly } from "@/components/inference/ResultsPredOnly";
 import { ResultsWithGT } from "@/components/inference/ResultsWithGT";
 import { SetupPanel } from "@/components/inference/SetupPanel";
+import { useJobIdParam } from "@/hooks/useJobIdParam";
+import { getTargetColumn } from "@/lib/job-config";
+import { getJobNumber } from "@/lib/job-number";
 
 export function InferencePage() {
-  const queryClient = useQueryClient();
-  const [searchParams, setSearchParams] = useSearchParams();
-
-  const [selectedJobId, setSelectedJobId] = useState<string | null>(() =>
-    searchParams.get("job_id"),
-  );
   const [selectedInfId, setSelectedInfId] = useState<string | null>(null);
 
   // Fetch completed jobs
-  const { data: allJobs = [] } = useQuery({
-    queryKey: ["jobs"],
-    queryFn: () => fetchJobs(),
-  });
+  const { data: allJobs = [] } = useJobsList();
 
   const completedJobs = useMemo(
     () => allJobs.filter((j) => j.status === "completed"),
     [allJobs],
   );
 
-  // Auto-select job from URL param.
-  //
-  // HIGH-4: read the current value of the `job_id` query param on each
-  // run instead of closing over `initialJobId` from first render. That
-  // older pattern missed subsequent URL updates because the constant
-  // was never recomputed, so navigating to a different job via the URL
-  // bar silently kept the first-loaded selection.
-  useEffect(() => {
-    const jobIdParam = searchParams.get("job_id");
-    if (jobIdParam && completedJobs.some((j) => j.job_id === jobIdParam)) {
-      setSelectedJobId(jobIdParam);
-    }
-  }, [searchParams, completedJobs]);
+  // HIGH-4 (pre-B-8 context): URL→state sync must re-run when
+  // ``completedJobs`` changes so that a deep-link to ``?job_id=xyz``
+  // is honoured the moment ``xyz`` appears in the completed list.
+  // ``useJobIdParam`` re-evaluates the filter whenever its identity
+  // changes, so we memoize the filter against ``completedJobs``.
+  const filterByCompleted = useCallback(
+    (id: string) => completedJobs.some((j) => j.job_id === id),
+    [completedJobs],
+  );
+  const { jobId: selectedJobId, setJobId: setSelectedJobId } = useJobIdParam({
+    filter: filterByCompleted,
+  });
 
   // Fetch inference history for selected job.
   //
@@ -54,66 +46,56 @@ export function InferencePage() {
   // that can produce new records on its own, so the previous five-second
   // `refetchInterval` was pure wasted bandwidth. Rely on the mutation's
   // invalidation instead.
-  const { data: history = [] } = useQuery({
-    queryKey: ["inf-history", selectedJobId],
-    queryFn: () => fetchInferenceHistory(selectedJobId ?? undefined),
-    enabled: selectedJobId != null,
-  });
+  const { data: history = [] } = useInferenceHistory(selectedJobId);
 
   // Fetch selected inference record
-  const { data: selectedRecord } = useQuery({
-    queryKey: ["inf-record", selectedInfId, selectedJobId],
-    queryFn: () =>
-      fetchInferenceRecord(selectedInfId ?? "", selectedJobId ?? ""),
-    enabled: selectedInfId != null && selectedJobId != null,
-  });
+  const { data: selectedRecord } = useInferenceRecord(
+    selectedInfId,
+    selectedJobId,
+  );
 
   // Run inference mutation
-  const mutation = useMutation({
-    mutationFn: (params: {
+  const mutation = useRunInference();
+  const runInferenceAction = useCallback(
+    (params: {
       dataPath: string;
+      sourceType: "path" | "upload";
       evaluate: boolean;
       returnShap: boolean;
     }) => {
-      if (!selectedJobId) {
-        return Promise.reject(new Error("No job selected"));
-      }
-      return runInference({
-        job_id: selectedJobId,
-        data: { source_type: "path", path: params.dataPath },
-        return_shap: params.returnShap,
-        evaluate: params.evaluate,
-      });
+      if (!selectedJobId) return;
+      mutation.mutate(
+        {
+          job_id: selectedJobId,
+          data: { source_type: params.sourceType, path: params.dataPath },
+          return_shap: params.returnShap,
+          evaluate: params.evaluate,
+        },
+        {
+          onSuccess: (result) => {
+            toast.success("Inference completed");
+            setSelectedInfId(result.inf_id);
+          },
+          onError: (err) => {
+            toast.error(`Inference failed: ${getErrorMessage(err)}`);
+          },
+        },
+      );
     },
-    onSuccess: (result) => {
-      toast.success("Inference completed");
-      queryClient.invalidateQueries({ queryKey: ["inf-history"] });
-      setSelectedInfId(result.inf_id);
-    },
-    onError: (err) => {
-      toast.error(`Inference failed: ${getErrorMessage(err)}`);
-    },
-  });
+    [mutation, selectedJobId],
+  );
 
   const handleSelectJob = useCallback(
     (jobId: string) => {
-      setSelectedJobId(jobId);
+      setSelectedJobId(jobId, { writeUrl: true });
       setSelectedInfId(null);
-      setSearchParams({ job_id: jobId });
     },
-    [setSearchParams],
+    [setSelectedJobId],
   );
 
   const handleSelectInf = useCallback((infId: string) => {
     setSelectedInfId(infId);
   }, []);
-
-  const handleRunInference = useCallback(
-    (params: { dataPath: string; evaluate: boolean; returnShap: boolean }) => {
-      mutation.mutate(params);
-    },
-    [mutation.mutate],
-  );
 
   // Auto-select latest inference when history loads
   useEffect(() => {
@@ -129,26 +111,20 @@ export function InferencePage() {
     return idx >= 0 ? history.length - idx : 0;
   }, [selectedInfId, history]);
 
-  // Compute job label
+  // Compute job label.
+  // Issue #359: derive the ``#N`` against the full all-jobs list (not
+  // ``completedJobs``) so the label matches what JobsPage shows.
   const jobLabel = useMemo(() => {
     const job = completedJobs.find((j) => j.job_id === selectedJobId);
     if (!job) return "";
-    const num = completedJobs.length - completedJobs.indexOf(job);
+    const num = getJobNumber(job, allJobs);
     return `Job #${num} ${job.model_name}`;
-  }, [selectedJobId, completedJobs]);
+  }, [selectedJobId, completedJobs, allJobs]);
 
   // Fetch job detail to get config.data.target for ground-truth detection
-  const { data: jobDetail } = useQuery({
-    queryKey: ["job-detail", selectedJobId],
-    queryFn: () => fetchJob(selectedJobId ?? ""),
-    enabled: selectedJobId != null,
-  });
+  const { data: jobDetail } = useJob(selectedJobId);
 
-  const targetCol = useMemo(() => {
-    if (!jobDetail?.config) return "";
-    const data = jobDetail.config.data as Record<string, unknown> | undefined;
-    return String(data?.target ?? "");
-  }, [jobDetail]);
+  const targetCol = useMemo(() => getTargetColumn(jobDetail), [jobDetail]);
 
   return (
     <div className="flex h-full">
@@ -156,12 +132,13 @@ export function InferencePage() {
       <div className="w-[360px] shrink-0 border-r">
         <SetupPanel
           completedJobs={completedJobs}
+          allJobs={allJobs}
           selectedJobId={selectedJobId}
           onSelectJob={handleSelectJob}
           history={history}
           selectedInfId={selectedInfId}
           onSelectInf={handleSelectInf}
-          onRunInference={handleRunInference}
+          onRunInference={runInferenceAction}
           isRunning={mutation.isPending}
           targetCol={targetCol}
         />

@@ -2,7 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ColumnInfo, ColumnsResponse } from "@/api/types";
+import { queryKeys } from "@/api/queryKeys";
+import type { ColumnInfo, ColumnsResponse, UiSchema } from "@/api/types";
 
 const mocks = vi.hoisted(() => ({
   loadDataFromPath: vi.fn(),
@@ -284,8 +285,317 @@ describe("useDataPanel", () => {
     // The merged config must be present in the query cache so the
     // ModelPanel-side useQuery(['config']) consumer sees it without
     // waiting for a refetch.
-    const cached = queryClient.getQueryData(["config"]);
+    const cached = queryClient.getQueryData(queryKeys.config());
     expect(cached).toEqual(merged);
+  });
+
+  // --- C-5b: uiSchema.capabilities.cv_default_strategy overrides hard-coded fallback ---
+
+  it("handleTargetChange uses uiSchema.capabilities.cv_default_strategy when provided", async () => {
+    mocks.fetchColumns.mockResolvedValue(COLS_OK);
+    mocks.fetchConfigDefaults.mockResolvedValue({
+      config_version: 1,
+      task: "binary",
+      data: { path: null, target: null },
+      features: { categorical: [], exclude: [] },
+      split: { method: "kfold", n_splits: 5 },
+      model: { name: "lgbm", params: {} },
+    });
+
+    const uiSchema = {
+      capabilities: {
+        cv_default_strategy: { binary: "group_kfold" },
+        cv_strategies: ["kfold", "stratified_kfold", "group_kfold"],
+        tune: { allow_empty_space: true },
+      },
+    } as unknown as UiSchema;
+
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(
+      () => useDataPanel({ onDataChanged: vi.fn(), uiSchema }),
+      { wrapper },
+    );
+
+    await act(async () => {
+      await result.current.handleTargetChange("a");
+    });
+
+    expect(result.current.cv.strategy).toBe("group_kfold");
+  });
+
+  it("handleTargetChange falls back to hard-coded default when uiSchema is absent", async () => {
+    mocks.fetchColumns.mockResolvedValue(COLS_OK);
+    mocks.fetchConfigDefaults.mockResolvedValue({
+      config_version: 1,
+      task: "binary",
+      data: { path: null, target: null },
+      features: { categorical: [], exclude: [] },
+      split: { method: "kfold", n_splits: 5 },
+      model: { name: "lgbm", params: {} },
+    });
+
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(
+      () => useDataPanel({ onDataChanged: vi.fn() }),
+      { wrapper },
+    );
+
+    await act(async () => {
+      await result.current.handleTargetChange("a");
+    });
+
+    // Binary task → stratified_kfold (hard-coded fallback).
+    expect(result.current.cv.strategy).toBe("stratified_kfold");
+  });
+
+  it("handleTaskChange uses uiSchema.capabilities.cv_default_strategy when provided", () => {
+    const uiSchema = {
+      capabilities: {
+        cv_default_strategy: { regression: "time_series" },
+        cv_strategies: ["kfold", "time_series"],
+        tune: { allow_empty_space: true },
+      },
+    } as unknown as UiSchema;
+
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(
+      () => useDataPanel({ onDataChanged: vi.fn(), uiSchema }),
+      { wrapper },
+    );
+
+    act(() => {
+      result.current.handleTaskChange("regression");
+    });
+
+    expect(result.current.cv.strategy).toBe("time_series");
+  });
+
+  // -------------------------------------------------------------------------
+  // P-0090 / Issue #278 residual: when an external write updates the cached
+  // config (e.g. handleLoadPreset → setQueryData with n_splits=5), the
+  // controlled inputs in CvSection must re-render to the new value. The
+  // inputs are bound to useDataPanel's local `cv` state, which has no
+  // subscription to the config cache, so without an explicit back-sync the
+  // Folds NumberInput stays stuck at the pre-preset value (8) until a full
+  // page reload re-derives the state. The hook subscribes to the
+  // queryKeys.config() cache and reconciles cv.folds / cv.strategy / etc.
+  // when the cache value diverges from local state.
+  // -------------------------------------------------------------------------
+  describe("back-sync from config cache (#278 residual / setQueryData input race)", () => {
+    it("updates cv.folds when an external setQueryData writes a new n_splits", async () => {
+      const { wrapper, queryClient } = createWrapper();
+      const { result } = renderHook(
+        () => useDataPanel({ onDataChanged: vi.fn() }),
+        { wrapper },
+      );
+
+      // Initial state: defaults — folds=5 (per CV_FIELD_DEFAULTS).
+      expect(result.current.cv.folds).toBe(5);
+
+      // Simulate an external write (e.g. preset Load or
+      // useConfigSync's new setQueryData path) that drops a new
+      // config into the TanStack Query cache.
+      act(() => {
+        queryClient.setQueryData(queryKeys.config(), {
+          config_version: 1,
+          task: "binary",
+          split: { method: "stratified_kfold", n_splits: 8, random_state: 42 },
+        });
+      });
+
+      await waitFor(() => expect(result.current.cv.folds).toBe(8));
+      expect(result.current.cv.strategy).toBe("stratified_kfold");
+    });
+
+    it("updates cv.strategy when external config switches the CV method", async () => {
+      const { wrapper, queryClient } = createWrapper();
+      const { result } = renderHook(
+        () => useDataPanel({ onDataChanged: vi.fn() }),
+        { wrapper },
+      );
+
+      act(() => {
+        queryClient.setQueryData(queryKeys.config(), {
+          config_version: 1,
+          task: "regression",
+          split: { method: "time_series", n_splits: 4 },
+        });
+      });
+
+      await waitFor(() =>
+        expect(result.current.cv.strategy).toBe("time_series"),
+      );
+      expect(result.current.cv.folds).toBe(4);
+    });
+
+    // Issue #358: BlockedGroup CV strategy click never sticks because a
+    // concurrent stale cache write re-fires the reconcile effect and
+    // reverts ``cv.strategy`` to the previously-cached value before the
+    // user-driven PUT lands. The fix latches the user's chosen strategy
+    // so reconcile bails on cache writes that disagree with it, and
+    // clears the latch once the cache catches up.
+    it("does not revert cv.strategy when a stale cache update fires after setCvFromUser", async () => {
+      const { wrapper, queryClient } = createWrapper();
+      const { result } = renderHook(
+        () => useDataPanel({ onDataChanged: vi.fn() }),
+        { wrapper },
+      );
+
+      // Seed the cache with the strategy the user is about to switch
+      // away from. This is the "previous" value that, without the fix,
+      // a stale subscriber callback would push back into local state.
+      act(() => {
+        queryClient.setQueryData(queryKeys.config(), {
+          config_version: 1,
+          task: "binary",
+          split: { method: "stratified_kfold", n_splits: 5 },
+        });
+      });
+      await waitFor(() =>
+        expect(result.current.cv.strategy).toBe("stratified_kfold"),
+      );
+
+      // User picks BlockedGroup via the segment buttons (CvSection
+      // wires this to ``setCvFromUser``).
+      act(() => {
+        result.current.setCvFromUser({
+          ...result.current.cv,
+          strategy: "blocked_group_kfold",
+        });
+      });
+      expect(result.current.cv.strategy).toBe("blocked_group_kfold");
+
+      // Simulate the stale cache update that arrives while the user-
+      // driven PUT is still in flight. Without the latch this would
+      // trigger reconcile to setCv back to ``stratified_kfold``.
+      act(() => {
+        queryClient.setQueryData(queryKeys.config(), {
+          config_version: 1,
+          task: "binary",
+          split: { method: "stratified_kfold", n_splits: 5 },
+        });
+      });
+      // Give the subscriber callback time to fire.
+      await new Promise((r) => setTimeout(r, 30));
+
+      // Local state stays at the user's choice — NOT reverted.
+      expect(result.current.cv.strategy).toBe("blocked_group_kfold");
+    });
+
+    it("clears the latch and resumes back-sync once the cache catches up to the user's choice", async () => {
+      const { wrapper, queryClient } = createWrapper();
+      const { result } = renderHook(
+        () => useDataPanel({ onDataChanged: vi.fn() }),
+        { wrapper },
+      );
+
+      // User picks BlockedGroup.
+      act(() => {
+        result.current.setCvFromUser({
+          ...result.current.cv,
+          strategy: "blocked_group_kfold",
+        });
+      });
+      expect(result.current.cv.strategy).toBe("blocked_group_kfold");
+
+      // PUT lands; cache catches up to the user's choice.
+      act(() => {
+        queryClient.setQueryData(queryKeys.config(), {
+          config_version: 1,
+          task: "binary",
+          split: { method: "blocked_group_kfold", n_splits: 5 },
+        });
+      });
+      await new Promise((r) => setTimeout(r, 30));
+      expect(result.current.cv.strategy).toBe("blocked_group_kfold");
+
+      // After the latch clears, a legitimate external write (e.g.
+      // Load Preset) must still drive local state.
+      act(() => {
+        queryClient.setQueryData(queryKeys.config(), {
+          config_version: 1,
+          task: "regression",
+          split: { method: "time_series", n_splits: 4 },
+        });
+      });
+      await waitFor(() =>
+        expect(result.current.cv.strategy).toBe("time_series"),
+      );
+    });
+
+    // Issue #358 follow-up: the latch must auto-expire so that a
+    // backend rejection (PUT returns ``saved=false`` and the cache
+    // never catches up to the latched strategy) does not
+    // permanently lock out subsequent external writes such as Load
+    // Preset. Discovered during Round 3 Step 3 when Load Preset
+    // failed to switch from kfold (user-clicked, PUT rejected) to
+    // the preset's time_series.
+    it("auto-expires the latch so Load Preset still works after a rejected user-driven PUT", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const { wrapper, queryClient } = createWrapper();
+        const { result } = renderHook(
+          () => useDataPanel({ onDataChanged: vi.fn() }),
+          { wrapper },
+        );
+
+        // User picks KFold; the PUT is rejected so the cache never
+        // catches up. Without auto-expire, ``lastUserStrategyRef``
+        // would stay pinned to "kfold" indefinitely.
+        act(() => {
+          result.current.setCvFromUser({
+            ...result.current.cv,
+            strategy: "kfold",
+          });
+        });
+        expect(result.current.cv.strategy).toBe("kfold");
+
+        // Advance past the TTL so the latch self-clears.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2100);
+        });
+
+        // Now Load Preset writes a different strategy to the cache.
+        // Reconcile must apply it (latch expired = no longer guards).
+        act(() => {
+          queryClient.setQueryData(queryKeys.config(), {
+            config_version: 1,
+            task: "regression",
+            split: { method: "time_series", n_splits: 4 },
+          });
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(50);
+        });
+        expect(result.current.cv.strategy).toBe("time_series");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("does not write back to the cache when reconciling from external state", async () => {
+      const { wrapper, queryClient } = createWrapper();
+      renderHook(() => useDataPanel({ onDataChanged: vi.fn() }), { wrapper });
+
+      // Reset call count so we observe only post-back-sync writes.
+      mocks.updateConfig.mockClear();
+
+      act(() => {
+        queryClient.setQueryData(queryKeys.config(), {
+          config_version: 1,
+          task: "binary",
+          split: { method: "kfold", n_splits: 7 },
+        });
+      });
+
+      // Allow the back-sync effect to run and any erroneous useConfigSync
+      // re-fire to settle.
+      await new Promise((r) => setTimeout(r, 30));
+      // Back-sync must not echo the cached value back to the server —
+      // that would loop infinitely. Without target set the sync effect
+      // is gated, so updateConfig should remain at zero calls.
+      expect(mocks.updateConfig).not.toHaveBeenCalled();
+    });
   });
 });
 

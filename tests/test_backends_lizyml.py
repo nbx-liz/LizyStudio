@@ -198,6 +198,75 @@ def test_adapter_validate_config_does_not_crash_on_non_dict_params() -> None:
     assert isinstance(errors, list)
 
 
+def test_adapter_validate_config_rejects_regression_with_calibration() -> None:
+    """Issue #269: lizyml only supports calibration for task='binary'
+    and raises ``CALIBRATION_NOT_SUPPORTED`` ~5s after Fit otherwise.
+    The compat helper must surface that mismatch up-front so the
+    'Fix validation errors first' banner blocks the run.
+    """
+    adapter = LizyMLAdapter()
+    cfg: dict[str, Any] = {
+        "config_version": 1,
+        "task": "regression",
+        "data": {"target": "y"},
+        "model": {"name": "lgbm", "params": {"objective": "huber"}},
+        "split": {"method": "kfold"},
+        "calibration": {"method": "platt", "n_splits": 5, "params": {}},
+    }
+    errors = adapter.validate_config(cfg)
+    assert any(
+        e.get("type") == "task_calibration_mismatch"
+        or "calibration" in str(e.get("loc", ()))
+        for e in errors
+    ), errors
+
+
+def test_adapter_validate_config_rejects_multiclass_with_calibration() -> None:
+    """Same guard for multiclass — calibration is binary-only."""
+    adapter = LizyMLAdapter()
+    cfg: dict[str, Any] = {
+        "config_version": 1,
+        "task": "multiclass",
+        "data": {"target": "y"},
+        "model": {"name": "lgbm", "params": {"objective": "multiclass"}},
+        "split": {"method": "stratified_kfold"},
+        "calibration": {"method": "platt", "n_splits": 5, "params": {}},
+    }
+    errors = adapter.validate_config(cfg)
+    assert any(e.get("type") == "task_calibration_mismatch" for e in errors), errors
+
+
+def test_adapter_validate_config_accepts_binary_with_calibration() -> None:
+    """Sanity check: calibration with task='binary' must NOT trigger the
+    new compat error."""
+    adapter = LizyMLAdapter()
+    cfg = _valid_binary_config()
+    cfg["calibration"] = {"method": "platt", "n_splits": 5, "params": {}}
+    errors = adapter.validate_config(cfg)
+    compat = [e for e in errors if e.get("type") == "task_calibration_mismatch"]
+    assert compat == []
+
+
+def test_adapter_validate_config_accepts_null_calibration_for_any_task() -> None:
+    """``calibration: null`` is the explicit 'off' state — must never
+    trigger the calibration compat error regardless of task."""
+    adapter = LizyMLAdapter()
+    for task in ("binary", "multiclass", "regression"):
+        cfg: dict[str, Any] = {
+            "config_version": 1,
+            "task": task,
+            "data": {"target": "y"},
+            "model": {"name": "lgbm"},
+            "split": {
+                "method": "stratified_kfold" if task != "regression" else "kfold"
+            },
+            "calibration": None,
+        }
+        errors = adapter.validate_config(cfg)
+        compat = [e for e in errors if e.get("type") == "task_calibration_mismatch"]
+        assert compat == [], (task, errors)
+
+
 def test_adapter_load_config_yaml() -> None:
     adapter = LizyMLAdapter()
     content = b"task: binary\nmodel:\n  name: lightgbm"
@@ -301,6 +370,65 @@ def test_available_plots_with_tuning() -> None:
     model = _make_mock_model(task="binary", tuning_result={"some": "data"})
     plots = adapter.available_plots(model)
     assert "tuning" in plots
+
+
+# --- Issue #373: shap-summary plot wiring ---
+
+
+def test_available_plots_includes_shap_summary_when_supported() -> None:
+    """available_plots() advertises 'shap-summary' when the model can
+    compute fold-averaged SHAP importances (Issue #373).
+
+    Mirrors the existing tuning probe pattern: we call
+    ``model.importance(kind='shap')`` defensively and skip when it
+    raises (shap missing, no analysis_context, etc).
+    """
+    adapter = LizyMLAdapter()
+    model = _make_mock_model(task="binary")
+    # Defensive: importance(kind='shap') succeeds → shap is available
+    model.importance.return_value = {"f1": 0.3, "f2": 0.5, "f3": 0.2}
+    plots = adapter.available_plots(model)
+    assert "shap-summary" in plots
+
+
+def test_available_plots_omits_shap_summary_when_not_supported() -> None:
+    """available_plots() omits 'shap-summary' when the SHAP probe raises.
+
+    Replicates the OPTIONAL_DEP_MISSING / MODEL_NOT_FIT cases lizyml
+    raises from importance(kind='shap') when shap is missing or the
+    fit lacks analysis_context.
+    """
+    adapter = LizyMLAdapter()
+    model = _make_mock_model(task="binary")
+    model.importance.side_effect = RuntimeError("OPTIONAL_DEP_MISSING")
+    plots = adapter.available_plots(model)
+    assert "shap-summary" not in plots
+
+
+def test_plot_shap_summary_dispatches_to_importance_plot_with_kind_shap() -> None:
+    """plot('shap-summary') resolves to importance_plot(kind='shap').
+
+    Reuses lizyml's existing ``importance_plot(kind='shap', top_n=20)``
+    method (Model.importance_plot supports kind=split/gain/shap). No
+    new lizyml method is required.
+    """
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_fig = MagicMock()
+    mock_fig.to_json.return_value = "{}"
+    mock_model.importance_plot.return_value = mock_fig
+
+    result = adapter.plot(mock_model, "shap-summary")
+
+    mock_model.importance_plot.assert_called_once_with(kind="shap")
+    assert isinstance(result, PlotData)
+
+
+def test_plot_dispatch_table_includes_shap_summary() -> None:
+    """``shap-summary`` must be a registered key in _PLOT_DISPATCH so
+    PlotNotAvailableError lists it under ``available`` (Issue #373).
+    """
+    assert "shap-summary" in LizyMLAdapter._PLOT_DISPATCH
 
 
 def test_fit_invokes_on_progress() -> None:
@@ -1397,14 +1525,26 @@ def test_plot_known_type_returns_plot_data() -> None:
     assert result.plotly_json == '{"data": []}'
 
 
-def test_plot_unknown_type_raises_value_error() -> None:
-    """plot() raises ValueError for unrecognised plot type."""
+def test_plot_unknown_type_raises_plot_not_available() -> None:
+    """plot() raises PlotNotAvailableError for unrecognised plot type
+    so the API layer can map it to HTTP 404 (Issue #355).
+
+    Bare ``ValueError`` was too coarse — the API funneled it through
+    ``except Exception: raise BackendError`` and returned 500, hiding
+    a 4xx-shaped condition behind a server-error envelope.
+    """
     import pytest
+
+    from lizystudio.backends.exceptions import PlotNotAvailableError
 
     adapter = LizyMLAdapter()
     mock_model = MagicMock()
-    with pytest.raises(ValueError, match="Unknown plot type"):
+    with pytest.raises(PlotNotAvailableError) as exc_info:
         adapter.plot(mock_model, "nonexistent-plot")
+
+    err = exc_info.value
+    assert err.plot_type == "nonexistent-plot"
+    assert "learning-curve" in err.available  # known supported plot
 
 
 def test_plot_all_dispatch_keys() -> None:

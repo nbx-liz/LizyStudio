@@ -9,7 +9,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
-import { formatElapsed } from "@/lib/utils";
 import { FoldProgressList } from "./FoldProgressList";
 import { LiveTrialChart } from "./LiveTrialChart";
 
@@ -46,10 +45,7 @@ export function ResultsRunningView({
             {headerLabel} {modelName && `\u2014 ${modelName}`}
           </h3>
         </div>
-        <Badge
-          variant="secondary"
-          className="bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200"
-        >
+        <Badge variant="secondary" className="bg-info text-info-strong-fg">
           Running
         </Badge>
       </div>
@@ -63,11 +59,9 @@ export function ResultsRunningView({
           {progress.message ?? `${progress.current} / ${progress.total}`}
         </p>
       )}
-      {progress?.elapsed != null && (
-        <p className="text-xs text-muted-foreground">
-          Elapsed: {formatElapsed(progress.elapsed)}
-        </p>
-      )}
+      {/* H-0069: `progress.elapsed` was a dead branch on a field the
+          backend never emits — removed together with the WsMessage
+          SSOT switch. */}
 
       {progress?.fold_results && progress.fold_results.length > 0 && (
         <FoldProgressList

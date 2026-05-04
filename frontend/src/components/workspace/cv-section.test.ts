@@ -12,7 +12,46 @@ import {
   recommendedInnerValid,
   resetCvState,
 } from "./CvSection";
-import { CV_STRATEGY_FIELDS } from "./constants";
+
+// C-5b Part 2 (H-0076): `cv_strategy_fields` comes from the backend
+// UiSchema at runtime. The map below mirrors what
+// `lizyml_ui_schema.py` emits and is used to drive every test that
+// previously imported `CV_STRATEGY_FIELDS` from `./constants`.
+const CV_STRATEGY_FIELDS: Record<string, readonly string[]> = {
+  kfold: ["n_splits", "random_state", "shuffle"],
+  stratified_kfold: ["n_splits", "random_state"],
+  group_kfold: ["n_splits", "group_col"],
+  stratified_group_kfold: ["n_splits", "random_state", "shuffle", "group_col"],
+  time_series: [
+    "n_splits",
+    "time_col",
+    "gap",
+    "train_size_max",
+    "test_size_max",
+  ],
+  purged_time_series: [
+    "n_splits",
+    "time_col",
+    "purge_gap",
+    "embargo",
+    "train_size_max",
+    "test_size_max",
+  ],
+  group_time_series: [
+    "n_splits",
+    "time_col",
+    "group_col",
+    "gap",
+    "train_size_max",
+    "test_size_max",
+  ],
+  blocked_group_kfold: [
+    "time_col",
+    "group_col",
+    "min_train_rows",
+    "min_valid_rows",
+  ],
+};
 
 // ---------------------------------------------------------------------------
 // resetCvState
@@ -128,7 +167,12 @@ describe("buildSplitConfig", () => {
       });
     });
 
-    it("stratified_kfold includes folds and random_state but not shuffle", () => {
+    it("stratified_kfold includes folds and random_state (no shuffle — see #258 / #259)", () => {
+      // Issue #258 / #259: stratified_kfold in the lizyml Pydantic
+      // schema does not accept `shuffle` (only `kfold` does). The UI
+      // schema was updated to match; buildSplitConfig must therefore
+      // drop `shuffle` for this strategy even though the UI toggle
+      // still exists in CvState.
       const cv: CvState = {
         ...INITIAL_CV_STATE,
         strategy: "stratified_kfold",
@@ -136,12 +180,30 @@ describe("buildSplitConfig", () => {
         randomState: 0,
         shuffle: true,
       };
-      const result = buildSplitConfig(cv);
+      const result = buildSplitConfig(
+        cv,
+        undefined,
+        CV_STRATEGY_FIELDS.stratified_kfold,
+      );
       expect(result).toEqual({
         method: "stratified_kfold",
         n_splits: 3,
         random_state: 0,
       });
+    });
+
+    it("drops shuffle when fields map excludes it (SSOT-driven)", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "stratified_kfold",
+        folds: 3,
+        randomState: 0,
+        shuffle: true,
+      };
+      // A hypothetical backend that chooses to hide shuffle for this
+      // strategy — buildSplitConfig must honour the fields contract.
+      const fields = ["n_splits", "random_state"];
+      const result = buildSplitConfig(cv, undefined, fields);
       expect(result).not.toHaveProperty("shuffle");
     });
   });
@@ -240,44 +302,19 @@ describe("buildSplitConfig", () => {
   });
 
   describe("blocked_group_kfold", () => {
-    it("includes min_train_rows and min_valid_rows", () => {
+    // Issue #278: BlockedGroupKFoldConfig requires nested `blocks` and
+    // `groups` sub-objects (BlocksConfig + GroupCVConfig in
+    // lizyml.config.schema). Flat `mode`/`train_window` at the split
+    // level are rejected by `extra="forbid"`.
+    it("nests block-axis fields under split.blocks (not flat)", () => {
       const cv: CvState = {
         ...INITIAL_CV_STATE,
         strategy: "blocked_group_kfold",
         folds: 5,
         timeCol: "date",
-        groupCol: "block",
+        groupCol: "entity",
         minTrainRows: 100,
         minValidRows: 50,
-      };
-      const result = buildSplitConfig(cv);
-      expect(result.min_train_rows).toBe(100);
-      expect(result.min_valid_rows).toBe(50);
-    });
-
-    it("omits undefined optional cv fields but includes blocked defaults", () => {
-      const cv: CvState = {
-        ...INITIAL_CV_STATE,
-        strategy: "blocked_group_kfold",
-        folds: 3,
-        minTrainRows: undefined,
-        minValidRows: undefined,
-      };
-      const result = buildSplitConfig(cv);
-      expect(result).toEqual({
-        method: "blocked_group_kfold",
-        n_splits: 3,
-        mode: "expanding",
-        train_window: 1,
-      });
-    });
-
-    it("includes blocked state fields (mode, train_window, cutoffs, stratify)", () => {
-      const cv: CvState = {
-        ...INITIAL_CV_STATE,
-        strategy: "blocked_group_kfold",
-        folds: 5,
-        minTrainRows: 100,
       };
       const blocked: BlockedGroupKFoldState = {
         cutoffs: ["2023-01", "2023-06"],
@@ -286,67 +323,125 @@ describe("buildSplitConfig", () => {
         stratify: "on",
       };
       const result = buildSplitConfig(cv, blocked);
-      expect(result.mode).toBe("sliding");
-      expect(result.train_window).toBe(3);
-      expect(result.cutoffs).toEqual(["2023-01", "2023-06"]);
-      expect(result.stratify).toBe(true);
-      expect(result.min_train_rows).toBe(100);
+      expect(result.method).toBe("blocked_group_kfold");
+      expect(result.blocks).toBeDefined();
+      expect(result.blocks).toMatchObject({
+        col: "date",
+        cutoffs: ["2023-01", "2023-06"],
+        mode: "sliding",
+        train_window: 3,
+      });
+      // Flat fields must NOT exist at the split level.
+      expect(result).not.toHaveProperty("mode");
+      expect(result).not.toHaveProperty("train_window");
+      expect(result).not.toHaveProperty("cutoffs");
     });
 
-    it("omits cutoffs when empty", () => {
+    it("nests group-axis fields under split.groups (not flat)", () => {
       const cv: CvState = {
         ...INITIAL_CV_STATE,
         strategy: "blocked_group_kfold",
         folds: 4,
+        timeCol: "period",
+        groupCol: "entity",
+      };
+      const blocked: BlockedGroupKFoldState = {
+        ...INITIAL_BLOCKED_STATE,
+        cutoffs: ["2024-01"],
+        stratify: "on",
+      };
+      const result = buildSplitConfig(cv, blocked);
+      expect(result.groups).toBeDefined();
+      expect(result.groups).toMatchObject({
+        col: "entity",
+        n_splits: 4,
+        stratify: true,
+      });
+      // No flat group fields.
+      expect(result).not.toHaveProperty("stratify");
+      expect(result).not.toHaveProperty("group_col");
+    });
+
+    it("sets groups.stratify=false when blocked.stratify=off", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "blocked_group_kfold",
+        folds: 4,
+        timeCol: "date",
+        groupCol: "entity",
+      };
+      const blocked: BlockedGroupKFoldState = {
+        ...INITIAL_BLOCKED_STATE,
+        cutoffs: ["2023-01"],
+        stratify: "off",
+      };
+      const result = buildSplitConfig(cv, blocked);
+      expect((result.groups as Record<string, unknown>).stratify).toBe(false);
+    });
+
+    it('sets groups.stratify="auto" when blocked.stratify=auto', () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "blocked_group_kfold",
+        folds: 4,
+        timeCol: "date",
+        groupCol: "entity",
+      };
+      const blocked: BlockedGroupKFoldState = {
+        ...INITIAL_BLOCKED_STATE,
+        cutoffs: ["2023-01"],
+        stratify: "auto",
+      };
+      const result = buildSplitConfig(cv, blocked);
+      expect((result.groups as Record<string, unknown>).stratify).toBe("auto");
+    });
+
+    it("includes min_train_rows and min_valid_rows at the split top level", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "blocked_group_kfold",
+        folds: 5,
+        timeCol: "date",
+        groupCol: "entity",
+        minTrainRows: 100,
+        minValidRows: 50,
+      };
+      const result = buildSplitConfig(cv);
+      expect(result.min_train_rows).toBe(100);
+      expect(result.min_valid_rows).toBe(50);
+    });
+
+    it("omits n_splits at split level (BlockedGroupKFoldConfig has no top-level n_splits)", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "blocked_group_kfold",
+        folds: 3,
+        timeCol: "date",
+        groupCol: "entity",
+      };
+      const result = buildSplitConfig(cv);
+      expect(result).not.toHaveProperty("n_splits");
+    });
+
+    it("omits cutoffs from blocks when blocked.cutoffs is empty", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "blocked_group_kfold",
+        folds: 4,
+        timeCol: "date",
+        groupCol: "entity",
       };
       const blocked: BlockedGroupKFoldState = {
         ...INITIAL_BLOCKED_STATE,
         cutoffs: [],
       };
       const result = buildSplitConfig(cv, blocked);
-      expect(result).not.toHaveProperty("cutoffs");
-      expect(result.mode).toBe("expanding");
-    });
-
-    it("omits stratify when set to auto", () => {
-      const cv: CvState = {
-        ...INITIAL_CV_STATE,
-        strategy: "blocked_group_kfold",
-        folds: 4,
-      };
-      const blocked: BlockedGroupKFoldState = {
-        ...INITIAL_BLOCKED_STATE,
-        stratify: "auto",
-      };
-      const result = buildSplitConfig(cv, blocked);
-      expect(result).not.toHaveProperty("stratify");
-    });
-
-    it("sets stratify=false when off", () => {
-      const cv: CvState = {
-        ...INITIAL_CV_STATE,
-        strategy: "blocked_group_kfold",
-        folds: 4,
-      };
-      const blocked: BlockedGroupKFoldState = {
-        ...INITIAL_BLOCKED_STATE,
-        stratify: "off",
-      };
-      const result = buildSplitConfig(cv, blocked);
-      expect(result.stratify).toBe(false);
-    });
-
-    it("falls back to INITIAL_BLOCKED_STATE when blocked is undefined", () => {
-      const cv: CvState = {
-        ...INITIAL_CV_STATE,
-        strategy: "blocked_group_kfold",
-        folds: 5,
-      };
-      const result = buildSplitConfig(cv);
-      expect(result.mode).toBe("expanding");
-      expect(result.train_window).toBe(1);
-      expect(result).not.toHaveProperty("cutoffs");
-      expect(result).not.toHaveProperty("stratify");
+      const blocks = result.blocks as Record<string, unknown>;
+      // BlocksConfig requires cutoffs (min_length=1) — so when the user
+      // hasn't picked any, we must omit `blocks` entirely so the user sees
+      // a clear validation error rather than a confusing "min_length=1"
+      // trap. Same shape as the rest of the optional emission.
+      expect(blocks).toBeUndefined();
     });
 
     it("ignores blocked state for non-blocked strategies", () => {
@@ -364,9 +459,24 @@ describe("buildSplitConfig", () => {
         stratify: "on",
       };
       const result = buildSplitConfig(cv, blocked);
-      expect(result).not.toHaveProperty("mode");
-      expect(result).not.toHaveProperty("train_window");
-      expect(result).not.toHaveProperty("cutoffs");
+      expect(result).not.toHaveProperty("blocks");
+      expect(result).not.toHaveProperty("groups");
+    });
+
+    it("omits blocks/groups when timeCol/groupCol are not set (so the user sees clear errors)", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "blocked_group_kfold",
+        folds: 4,
+        timeCol: null,
+        groupCol: null,
+      };
+      const result = buildSplitConfig(cv);
+      // Without col values, BlocksConfig / GroupCVConfig would fail to
+      // construct anyway. Emitting nothing keeps the rejection cleanly
+      // localised to "blocks: Field required" / "groups: Field required".
+      expect(result).not.toHaveProperty("blocks");
+      expect(result).not.toHaveProperty("groups");
     });
   });
 
@@ -393,6 +503,66 @@ describe("buildSplitConfig", () => {
     };
     const result = buildSplitConfig(cv);
     expect(result).not.toHaveProperty("random_state");
+  });
+
+  describe("fields parameter (H-0076 SSOT)", () => {
+    it("without fields falls back to full conditional-field set", () => {
+      // Before H-0076 buildSplitConfig had no fields param. The
+      // fallback path must keep emitting every conditional field that
+      // the CvState supplies — used while ``uiSchema`` has not loaded
+      // yet or for integration paths that bypass the store.
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "kfold",
+        folds: 5,
+        randomState: 42,
+        shuffle: true,
+      };
+      const result = buildSplitConfig(cv);
+      expect(result).toMatchObject({
+        method: "kfold",
+        n_splits: 5,
+        random_state: 42,
+        shuffle: true,
+      });
+    });
+
+    it("with fields honours SSOT allow-list", () => {
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "time_series",
+        folds: 4,
+        timeCol: "date",
+        gap: 2,
+        trainSizeMax: 500,
+        testSizeMax: 100,
+      };
+      const fields = CV_STRATEGY_FIELDS.time_series;
+      const result = buildSplitConfig(cv, undefined, fields);
+      expect(result).toEqual({
+        method: "time_series",
+        n_splits: 4,
+        gap: 2,
+        train_size_max: 500,
+        test_size_max: 100,
+      });
+    });
+
+    it("skips fields that SSOT does not list even if CvState provides values", () => {
+      // SSOT says only n_splits; embargo value is discarded.
+      const cv: CvState = {
+        ...INITIAL_CV_STATE,
+        strategy: "purged_time_series",
+        folds: 3,
+        embargo: 99,
+      };
+      const result = buildSplitConfig(cv, undefined, ["n_splits"]);
+      expect(result).toEqual({
+        method: "purged_time_series",
+        n_splits: 3,
+      });
+      expect(result).not.toHaveProperty("embargo");
+    });
   });
 });
 
@@ -484,7 +654,10 @@ describe("applyCvDataFields", () => {
     expect(result.group_col).toBe("user_id");
   });
 
-  it("handles unknown strategy without injecting fields", () => {
+  it("handles unknown strategy without injecting fields (fallback map)", () => {
+    // Fallback mode (fields undefined) + unknown strategy → resolveFields
+    // returns ["n_splits"] so neither group_col nor time_col is
+    // injected. This matches the legacy behaviour for safety.
     const data = { path: "/data.csv" };
     const cv: CvState = {
       ...INITIAL_CV_STATE,
@@ -493,12 +666,29 @@ describe("applyCvDataFields", () => {
       timeCol: "t",
     };
     const result = applyCvDataFields(data, cv);
-    // Unknown strategy has no fields defined, so nothing injected
     expect(result).not.toHaveProperty("group_col");
     expect(result).not.toHaveProperty("time_col");
   });
 
-  it("injects blocks_col and groups_col for blocked_group_kfold (not time_col/group_col)", () => {
+  it("with fields honours SSOT allow-list for data injection", () => {
+    const data = { path: "/data.csv" };
+    const cv: CvState = {
+      ...INITIAL_CV_STATE,
+      strategy: "time_series",
+      timeCol: "date",
+      groupCol: "should_be_ignored",
+    };
+    const result = applyCvDataFields(data, cv, CV_STRATEGY_FIELDS.time_series);
+    expect(result.time_col).toBe("date");
+    expect(result).not.toHaveProperty("group_col");
+  });
+
+  it("does NOT inject blocks_col/groups_col into data for blocked_group_kfold (Issue #278)", () => {
+    // Issue #278: BlockedGroupKFoldConfig owns the col names inside
+    // split.blocks.col and split.groups.col, not at the data level.
+    // applyCvDataFields must therefore leave the data object untouched
+    // for this strategy — buildSplitConfig is the single source of
+    // truth for the blocks/groups fields.
     const data = { path: "/data.csv", target: "y" };
     const cv: CvState = {
       ...INITIAL_CV_STATE,
@@ -507,13 +697,15 @@ describe("applyCvDataFields", () => {
       groupCol: "entity",
     };
     const result = applyCvDataFields(data, cv);
-    expect(result.blocks_col).toBe("period");
-    expect(result.groups_col).toBe("entity");
+    expect(result).not.toHaveProperty("blocks_col");
+    expect(result).not.toHaveProperty("groups_col");
     expect(result).not.toHaveProperty("time_col");
     expect(result).not.toHaveProperty("group_col");
+    // data passes through unchanged
+    expect(result).toEqual(data);
   });
 
-  it("does not inject blocks_col/groups_col when null", () => {
+  it("does not mutate data when timeCol/groupCol are null for blocked_group_kfold", () => {
     const data = { path: "/data.csv" };
     const cv: CvState = {
       ...INITIAL_CV_STATE,
@@ -522,7 +714,6 @@ describe("applyCvDataFields", () => {
       groupCol: null,
     };
     const result = applyCvDataFields(data, cv);
-    expect(result).not.toHaveProperty("blocks_col");
-    expect(result).not.toHaveProperty("groups_col");
+    expect(result).toEqual(data);
   });
 });

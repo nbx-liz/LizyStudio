@@ -326,11 +326,11 @@ class TestLizyMLAdapterUiSchema:
         hints = {h["key"]: h for h in schema["parameter_hints"]}
         assert hints["first_metric_only"]["default"] is False
 
-    def test_parameter_hint_balanced_default(self) -> None:
-        """balanced default must be True."""
+    def test_search_space_catalog_balanced_default(self) -> None:
+        """balanced default in search_space_catalog must be True (Issue #265)."""
         schema = LizyMLAdapter().get_ui_schema()
-        hints = {h["key"]: h for h in schema["parameter_hints"]}
-        assert hints["balanced"]["default"] is True
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        assert catalog["balanced"]["default"] is True
 
     def test_search_space_catalog_seed_default(self) -> None:
         """search_space_catalog seed default must be 1120."""
@@ -426,12 +426,21 @@ class TestLizyMLAdapterUiSchema:
 
     # --- Phase 1: Expanded parameter coverage (Widget parity) ---
 
-    def test_parameter_hints_include_balanced(self) -> None:
-        """balanced must be in parameter_hints as a boolean kind."""
+    def test_parameter_hints_exclude_balanced(self) -> None:
+        """balanced must NOT be in parameter_hints (Issue #265).
+
+        balanced is a Smart Params field on LGBMConfig (writes to
+        ``model.balanced``). Including it in parameter_hints caused
+        a duplicate render in the Advanced Model Params section that
+        wrote to ``model.params.balanced`` — silently dropped by lizyml
+        because it reads from ``model_cfg.balanced`` only.
+        """
         schema = LizyMLAdapter().get_ui_schema()
         hints = {h["key"]: h for h in schema["parameter_hints"]}
-        assert "balanced" in hints
-        assert hints["balanced"]["kind"] == "boolean"
+        assert "balanced" not in hints, (
+            "balanced must be rendered exclusively via Smart Params "
+            "(model.balanced), not via parameter_hints (model.params.balanced)"
+        )
 
     def test_parameter_hints_include_num_leaves(self) -> None:
         """num_leaves must be in parameter_hints as an integer kind."""
@@ -559,6 +568,82 @@ class TestLizyMLAdapterUiSchema:
         for strategy in caps["cv_strategies"]:
             assert strategy in fields, f"cv_strategy_fields missing: {strategy}"
             assert isinstance(fields[strategy], list)
+
+    def test_capabilities_cv_strategy_fields_ui_semantics(self) -> None:
+        """H-0076 (C-5b Part 2): ``cv_strategy_fields`` is the SSOT for UI
+        conditional-field rendering. Every strategy enumerates **all**
+        UI-visible inputs — generic (``n_splits``, ``random_state``,
+        ``shuffle``) plus strategy-specific (``time_col``, ``group_col``,
+        ``gap``, ``purge_gap``, ``embargo``, ``train_size_max``,
+        ``test_size_max``, ``min_train_rows``, ``min_valid_rows``).
+
+        Wire-format keys (``max_train_size`` etc.) must NOT leak into
+        this list — the frontend renders UI using these names and writes
+        the same names into ``split`` / ``data``, so they need to match
+        the LizyConfig schema field names (which use ``train_size_max``).
+        """
+        schema = LizyMLAdapter().get_ui_schema()
+        fields = schema["capabilities"]["cv_strategy_fields"]
+
+        # Expected fields per strategy — SSOT for the frontend UI map.
+        # Issue #258 / #259: these lists must match the matching
+        # Pydantic variant (or DataConfig for target/time_col/
+        # group_col). The contract test
+        # ``tests/contract/test_ui_schema_matches_pydantic.py`` locks
+        # this invariant and is the source of truth.
+        expected = {
+            "kfold": ["n_splits", "random_state", "shuffle"],
+            "stratified_kfold": ["n_splits", "random_state"],
+            "group_kfold": ["n_splits", "group_col"],
+            "stratified_group_kfold": [
+                "n_splits",
+                "random_state",
+                "shuffle",
+                "group_col",
+            ],
+            "time_series": [
+                "n_splits",
+                "time_col",
+                "gap",
+                "train_size_max",
+                "test_size_max",
+            ],
+            "purged_time_series": [
+                "n_splits",
+                "time_col",
+                "purge_gap",
+                "embargo",
+                "train_size_max",
+                "test_size_max",
+            ],
+            "group_time_series": [
+                "n_splits",
+                "time_col",
+                "group_col",
+                "gap",
+                "train_size_max",
+                "test_size_max",
+            ],
+            "blocked_group_kfold": [
+                "time_col",
+                "group_col",
+                "min_train_rows",
+                "min_valid_rows",
+            ],
+        }
+        for strategy, expected_fields in expected.items():
+            assert fields[strategy] == expected_fields, (
+                f"cv_strategy_fields[{strategy}] mismatch: "
+                f"got {fields[strategy]}, want {expected_fields}"
+            )
+
+        # Wire-format keys must not appear in cv_strategy_fields.
+        for strategy, strategy_fields in fields.items():
+            for wire_key in ("max_train_size", "max_test_size", "folds"):
+                assert wire_key not in strategy_fields, (
+                    f"cv_strategy_fields[{strategy}] should use UI/LizyConfig "
+                    f"names, not wire-format key {wire_key!r}"
+                )
 
     def test_capabilities_cv_defaults(self) -> None:
         """capabilities must include cv_defaults with n_splits."""
@@ -848,3 +933,24 @@ class TestUiSchemaEndpoint:
         metric = resp.json()["option_sets"]["metric"]
         assert "binary" in metric
         assert "regression" in metric
+
+    def test_get_ui_schema_validates_against_response_model(
+        self, client: TestClient
+    ) -> None:
+        """``response_model=UiSchemaResponse`` (C-5) MUST accept the dict
+        produced by :func:`build_ui_schema` without raising
+        ``ResponseValidationError``.  Endpoint returning 200 already
+        proves this, but we also re-validate the body through the
+        Pydantic model to catch drift if the endpoint ever switches to
+        another backend whose ``get_ui_schema()`` shape differs.
+        """
+        from lizystudio.api.models import UiSchemaResponse
+
+        resp = client.get("/api/backends/ui-schema")
+        assert resp.status_code == 200
+        # Raises ValidationError if any field is missing / wrong type.
+        model = UiSchemaResponse.model_validate(resp.json())
+        assert model.capabilities is not None
+        assert len(model.capabilities.cv_strategies) == 8
+        assert len(model.search_space_catalog) > 0
+        assert len(model.parameter_hints) > 0

@@ -1,4 +1,4 @@
-import { apiFetch } from "./client";
+import { apiClient } from "./client";
 import type {
   ImportanceResponse,
   JobDetail,
@@ -7,79 +7,166 @@ import type {
   SplitSummaryRow,
 } from "./types";
 
-export function fetchJobs(status?: string): Promise<JobSummary[]> {
-  const params = status ? `?status=${status}` : "";
-  return apiFetch(`/jobs${params}`);
+function unwrap<T>(data: T | undefined, endpoint: string): T {
+  if (!data) {
+    throw new Error(`apiClient returned no data for ${endpoint}`);
+  }
+  return data;
 }
 
-export function fetchJob(jobId: string): Promise<JobDetail> {
-  return apiFetch(`/jobs/${jobId}`);
+export async function fetchJobs(status?: string): Promise<JobSummary[]> {
+  const { data } = await apiClient.GET("/api/jobs/", {
+    params: { query: status ? { status } : {} },
+  });
+  // H-0085 (Issue #236): generated type is ``JobSummaryResponse[]`` which is
+  // structurally assignable to the hand-written ``JobSummary``. Cast once via
+  // ``unknown`` — the shape equivalence is verified in api-types-drift CI.
+  // SSOT-EXEMPT: JobSummary is re-exported locally for consumer ergonomics;
+  // the underlying schema is the backend-owned JobSummaryResponse.
+  return unwrap(data, "/api/jobs/") as unknown as JobSummary[];
 }
 
-export function fetchJobImportance(
+export async function fetchJob(jobId: string): Promise<JobDetail> {
+  const { data } = await apiClient.GET("/api/jobs/{job_id}", {
+    params: { path: { job_id: jobId } },
+  });
+  // SSOT-EXEMPT: same as fetchJobs — JobDetail wraps JobDetailResponse.
+  return unwrap(data, "/api/jobs/{job_id}") as unknown as JobDetail;
+}
+
+export async function fetchJobImportance(
   jobId: string,
   kind = "default",
 ): Promise<ImportanceResponse> {
-  return apiFetch(
-    `/jobs/${encodeURIComponent(jobId)}/importance?kind=${encodeURIComponent(kind)}`,
+  const { data } = await apiClient.GET("/api/jobs/{job_id}/importance", {
+    params: { path: { job_id: jobId }, query: { kind } },
+  });
+  // Backend returns ``dict[str, float]`` (no response_model — flat mapping).
+  // SSOT-EXEMPT: #236 — adding a wrapping model would change the wire shape.
+  return unwrap(
+    data,
+    "/api/jobs/{job_id}/importance",
+  ) as unknown as ImportanceResponse;
+}
+
+export async function fetchJobImportanceKinds(
+  jobId: string,
+): Promise<string[]> {
+  const { data } = await apiClient.GET("/api/jobs/{job_id}/importance-kinds", {
+    params: { path: { job_id: jobId } },
+  });
+  // Backend returns ``list[str]`` (no response_model — primitive list).
+  // SSOT-EXEMPT: #236 — tracked as a follow-up, wrapping in a model flips wire shape.
+  return unwrap(
+    data,
+    "/api/jobs/{job_id}/importance-kinds",
+  ) as unknown as string[];
+}
+
+export async function fetchJobLearningCurveMetrics(
+  jobId: string,
+): Promise<string[]> {
+  const { data } = await apiClient.GET(
+    "/api/jobs/{job_id}/learning-curve/metrics",
+    {
+      params: { path: { job_id: jobId } },
+    },
   );
+  // SSOT-EXEMPT: #236 — same primitive-list reason as fetchJobImportanceKinds.
+  return unwrap(
+    data,
+    "/api/jobs/{job_id}/learning-curve/metrics",
+  ) as unknown as string[];
 }
 
-export function fetchJobImportanceKinds(jobId: string): Promise<string[]> {
-  return apiFetch(`/jobs/${jobId}/importance-kinds`);
-}
-
-export function fetchJobLearningCurveMetrics(jobId: string): Promise<string[]> {
-  return apiFetch(`/jobs/${encodeURIComponent(jobId)}/learning-curve/metrics`);
-}
-
-export function fetchJobPlot(
+export async function fetchJobPlot(
   jobId: string,
   plotType: string,
   options?: { metrics?: string | string[]; kind?: string },
 ): Promise<PlotResponse> {
-  const params = new URLSearchParams();
-  if (options?.metrics) {
-    const m = Array.isArray(options.metrics)
-      ? options.metrics.join(",")
-      : options.metrics;
-    if (m) params.set("metrics", m);
+  // Backend accepts a single ``metrics`` string (comma-separated for
+  // multi-select), so normalise the array form into that shape before
+  // handing off to openapi-fetch's query serialiser.
+  const metricsStr = Array.isArray(options?.metrics)
+    ? options.metrics.join(",")
+    : options?.metrics;
+  const query: { metrics?: string; kind?: string } = {};
+  if (metricsStr) {
+    query.metrics = metricsStr;
   }
   if (options?.kind) {
-    params.set("kind", options.kind);
+    query.kind = options.kind;
   }
-  const qs = params.toString();
-  const url = `/jobs/${encodeURIComponent(jobId)}/plot/${encodeURIComponent(plotType)}${qs ? `?${qs}` : ""}`;
-  return apiFetch(url);
+  const { data } = await apiClient.GET("/api/jobs/{job_id}/plot/{plot_type}", {
+    params: { path: { job_id: jobId, plot_type: plotType }, query },
+  });
+  // SSOT-EXEMPT: PlotResponse re-exports the backend PlotResponseModel.
+  return unwrap(
+    data,
+    "/api/jobs/{job_id}/plot/{plot_type}",
+  ) as unknown as PlotResponse;
 }
 
-export function fetchJobPlots(jobId: string): Promise<string[]> {
-  return apiFetch(`/jobs/${jobId}/plots`);
+export async function fetchJobPlots(jobId: string): Promise<string[]> {
+  const { data } = await apiClient.GET("/api/jobs/{job_id}/plots", {
+    params: { path: { job_id: jobId } },
+  });
+  // SSOT-EXEMPT: #236 — primitive list, see fetchJobImportanceKinds.
+  return unwrap(data, "/api/jobs/{job_id}/plots") as unknown as string[];
 }
 
-export function fetchJobSplitSummary(
+export async function fetchJobSplitSummary(
   jobId: string,
 ): Promise<SplitSummaryRow[]> {
-  return apiFetch(`/jobs/${jobId}/split-summary`);
+  const { data } = await apiClient.GET("/api/jobs/{job_id}/split-summary", {
+    params: { path: { job_id: jobId } },
+  });
+  // SSOT-EXEMPT: SplitSummaryRow wraps ``list[dict[str, Any]]`` — backend has
+  // no concrete row schema, the shape depends on the CV strategy.
+  return unwrap(
+    data,
+    "/api/jobs/{job_id}/split-summary",
+  ) as unknown as SplitSummaryRow[];
 }
 
-export function fetchJobLog(jobId: string): Promise<{ log: string }> {
-  return apiFetch(`/jobs/${jobId}/log`);
+export async function fetchJobLog(jobId: string): Promise<{ log: string }> {
+  const { data } = await apiClient.GET("/api/jobs/{job_id}/log", {
+    params: { path: { job_id: jobId } },
+  });
+  // H-0085: backend now returns JobLogResponse; generated type matches the
+  // inline return type exactly so no cast is needed.
+  return unwrap(data, "/api/jobs/{job_id}/log");
 }
 
-export function cancelJob(jobId: string): Promise<{ status: string }> {
-  return apiFetch(`/jobs/${jobId}/cancel`, { method: "POST" });
+export async function cancelJob(jobId: string): Promise<{ status: string }> {
+  const { data } = await apiClient.POST("/api/jobs/{job_id}/cancel", {
+    params: { path: { job_id: jobId } },
+  });
+  // H-0085: backend now returns CancelJobResponse — direct return.
+  return unwrap(data, "/api/jobs/{job_id}/cancel");
 }
 
-export function deleteJob(
+export async function deleteJob(
   jobId: string,
   options: { cascade?: boolean } = {},
-): Promise<{ status: string; removed_job_ids?: string[] }> {
-  const qs = options.cascade ? "?cascade=true" : "";
-  return apiFetch(`/jobs/${jobId}${qs}`, { method: "DELETE" });
+): Promise<{ status: string; removed_job_ids?: string[] | null }> {
+  const query: { cascade?: boolean } = {};
+  if (options.cascade) {
+    query.cascade = true;
+  }
+  const { data } = await apiClient.DELETE("/api/jobs/{job_id}", {
+    params: { path: { job_id: jobId }, query },
+  });
+  // H-0085: backend now returns DeleteJobResponse.
+  return unwrap(data, "/api/jobs/{job_id} (DELETE)");
 }
 
 // --- H-0062: Re-tune / Resume / Lineage ---
+//
+// H-0085 (Issue #236): backend now exposes RetuneJobResponse / LineageResponse
+// as the ``response_model`` so the generated schema contains concrete types.
+// The hand-written interfaces below stay for consumer ergonomics (named
+// fields, JSDoc) but share shape with the generated models.
 
 export interface RetuneRequestBody {
   n_trials: number;
@@ -107,40 +194,57 @@ export interface LineageNode {
    * the tree. The UI should surface this so the user knows the view is
    * incomplete.
    */
-  truncated?: boolean;
+  truncated?: boolean | null;
 }
 
-export function retuneJob(
+export async function retuneJob(
   jobId: string,
   body: RetuneRequestBody,
 ): Promise<RetuneResponse> {
-  return apiFetch(`/jobs/${encodeURIComponent(jobId)}/retune`, {
-    method: "POST",
-    body: JSON.stringify(body),
+  const { data } = await apiClient.POST("/api/jobs/{job_id}/retune", {
+    params: { path: { job_id: jobId } },
+    body,
   });
+  // H-0085: RetuneJobResponse generated type = RetuneResponse shape.
+  return unwrap(data, "/api/jobs/{job_id}/retune");
 }
 
-export function resumeJob(
+export async function resumeJob(
   jobId: string,
   body: ResumeRequestBody = {},
 ): Promise<RetuneResponse> {
-  return apiFetch(`/jobs/${encodeURIComponent(jobId)}/resume`, {
-    method: "POST",
-    body: JSON.stringify(body),
+  const { data } = await apiClient.POST("/api/jobs/{job_id}/resume", {
+    params: { path: { job_id: jobId } },
+    body,
   });
+  // H-0085.
+  return unwrap(data, "/api/jobs/{job_id}/resume");
 }
 
-export function fetchJobLineage(jobId: string): Promise<{ tree: LineageNode }> {
-  return apiFetch(`/jobs/${encodeURIComponent(jobId)}/lineage`);
+export async function fetchJobLineage(
+  jobId: string,
+): Promise<{ tree: LineageNode }> {
+  const { data } = await apiClient.GET("/api/jobs/{job_id}/lineage", {
+    params: { path: { job_id: jobId } },
+  });
+  // H-0085: LineageResponse → { tree: LineageNodeResponse }. Shape matches.
+  // SSOT-EXEMPT: openapi-typescript emits the nested Pydantic forward-ref
+  // as a structurally-compatible but distinct TS type — cast is still needed
+  // to line the two recursive definitions up.
+  return unwrap(data, "/api/jobs/{job_id}/lineage") as unknown as {
+    tree: LineageNode;
+  };
 }
 
-export function exportJob(
+export async function exportJob(
   jobId: string,
   exportType: "model" | "report",
   outputPath: string,
 ): Promise<{ exported_path: string; export_type: string }> {
-  return apiFetch(`/jobs/${jobId}/export`, {
-    method: "POST",
-    body: JSON.stringify({ export_type: exportType, output_path: outputPath }),
+  const { data } = await apiClient.POST("/api/jobs/{job_id}/export", {
+    params: { path: { job_id: jobId } },
+    body: { export_type: exportType, output_path: outputPath },
   });
+  // H-0085: backend now returns ExportJobResponse.
+  return unwrap(data, "/api/jobs/{job_id}/export");
 }

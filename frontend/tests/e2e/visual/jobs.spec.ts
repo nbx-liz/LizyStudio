@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
+import { deleteAllJobs } from "../helpers/api";
 import { dismissOnboarding } from "../helpers/onboarding";
 import { waitForStableUI } from "../helpers/visual";
 
@@ -34,6 +35,15 @@ async function waitForJobDone(
 
 test.describe("Jobs visual regression @visual", () => {
   test.setTimeout(120_000);
+
+  // Nightly reuses /tmp/e2e_jobs across runs. Without a full wipe the
+  // Jobs-list screenshot reflects every job that a previous session
+  // left behind, so diffs fire for reasons unrelated to the PR under
+  // test. Run once per describe so the per-test ``workspace/reset``
+  // still handles workspace state cheaply.
+  test.beforeAll(async ({ request }) => {
+    await deleteAllJobs(request);
+  });
 
   test.beforeEach(async ({ page, request }) => {
     await request.post(`${API}/workspace/reset`);

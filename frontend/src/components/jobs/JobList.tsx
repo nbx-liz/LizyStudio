@@ -16,6 +16,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { getJobNumber } from "@/lib/job-number";
 import { cn } from "@/lib/utils";
 
 type StatusFilter = "all" | "completed" | "running" | "failed";
@@ -39,15 +40,15 @@ function getStatusIcon(status: string): { icon: string; className: string } {
     case "completed":
       return {
         icon: "\u2713",
-        className: "text-green-600 dark:text-green-400",
+        className: "text-success-fg",
       };
     case "running":
       return {
         icon: "\u25CF",
-        className: "text-blue-500 dark:text-blue-400 animate-pulse",
+        className: "text-info-fg animate-pulse",
       };
     case "failed":
-      return { icon: "\u2717", className: "text-red-500 dark:text-red-400" };
+      return { icon: "\u2717", className: "text-danger-fg" };
     case "cancelled":
       return { icon: "\u2717", className: "text-muted-foreground" };
     default:
@@ -72,12 +73,6 @@ function getJobScore(job: JobSummary): string {
   if (job.status === "failed" || job.status === "cancelled") return "\u2014";
   if (job.primary_score != null) return job.primary_score.toFixed(3);
   return "\u2014";
-}
-
-function getJobNumber(job: JobSummary, allJobs: JobSummary[]): number {
-  // Jobs are sorted newest first; job number = total - index
-  const idx = allJobs.findIndex((j) => j.job_id === job.job_id);
-  return allJobs.length - idx;
 }
 
 function formatTimeAgo(dateStr: string): string {

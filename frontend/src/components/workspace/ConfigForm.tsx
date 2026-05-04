@@ -12,6 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useConfigWriteFunnelOptional } from "@/hooks/useConfigWriteFunnelContext";
 
 import { CalibrationSection } from "./CalibrationSection";
 import {
@@ -75,6 +76,47 @@ export function ConfigForm({
     [onChange],
   );
 
+  // P-0092 Q-1: the three auto-reset effects (inner_valid, calibration,
+  // objective/metric) route through the write funnel so their PUTs land
+  // *behind* whichever cv / task / target change triggered them. The
+  // funnel guarantees per-reason serialisation, so a `cv-change` PUT
+  // cannot be silently overwritten by an `auto-reset` PUT that started
+  // from a stale snapshot.
+  //
+  // User-driven field edits still use `handleFieldChange` and the
+  // legacy onChange path — production-side that path also rides the
+  // funnel via the per-hook reasons (config-form-edit, target-select,
+  // cv-change), so the only paths that go directly through onChange
+  // are isolated test/story renders without a Provider.
+  //
+  // We use the *optional* hook so isolated rendering paths (Storybook,
+  // ConfigForm.test.tsx without a provider) keep falling back to
+  // `handleFieldChange`. Production WorkspacePage always mounts the
+  // provider so this fallback never fires under real usage.
+  const funnel = useConfigWriteFunnelOptional();
+  const enqueueAutoReset = useCallback(
+    (path: readonly string[], value: unknown) => {
+      if (funnel === null) {
+        handleFieldChange([...path], value);
+        return;
+      }
+      // Fire-and-forget: the funnel's onWriteCommitted updates the
+      // React Query cache, and the next render of any consumer reads
+      // the saved snapshot via TanStack Query. We deliberately do not
+      // await here — auto-reset effects are React effect callbacks,
+      // and awaiting would change their scheduling semantics in ways
+      // we have not green-lit. Errors surface via the funnel's own
+      // toast/log path (Phase 5 will add it formally).
+      void funnel.enqueueWrite({
+        kind: "patch",
+        path,
+        value,
+        reason: "auto-reset",
+      });
+    },
+    [funnel, handleFieldChange],
+  );
+
   const defs = useMemo(
     () => ((schema as { $defs?: Defs }).$defs ?? {}) as Defs,
     [schema],
@@ -99,9 +141,21 @@ export function ConfigForm({
     : [];
 
   // Training section — inner_valid
+  //
+  // H-2: the canonical Pydantic path is
+  // ``training.early_stopping.inner_valid``. The legacy top-level
+  // ``training.inner_valid`` path is rejected by the backend with
+  // ``Extra inputs are not permitted`` (TrainingConfig has
+  // extra="forbid"). Phase 2's auto-reset effect was migrated to the
+  // correct path, but the user-driven Select / NumberInput below were
+  // missed — splitting the read/write surface so a user pick of
+  // method/ratio silently failed validation. Read AND write through
+  // the early_stopping nesting now so the two paths agree.
   const trainingConfig = (config.training as Record<string, unknown>) ?? {};
+  const earlyStoppingConfig =
+    (trainingConfig.early_stopping as Record<string, unknown>) ?? {};
   const innerValid =
-    (trainingConfig.inner_valid as Record<string, unknown>) ?? {};
+    (earlyStoppingConfig.inner_valid as Record<string, unknown>) ?? {};
   const innerValidRatio = (innerValid.ratio as number) ?? 0.2;
 
   // Filter inner_valid options by CV strategy
@@ -126,12 +180,22 @@ export function ConfigForm({
       filteredInnerValidOptions.length > 0 &&
       !filteredInnerValidOptions.includes(currentInnerValid)
     ) {
-      handleFieldChange(["training", "inner_valid", "method"], "holdout");
+      // P-0092 Phase 2: route through funnel as `auto-reset`. The
+      // wire path moved up to `training.early_stopping.inner_valid`
+      // per useConfigSync.ts:90-103 — the legacy
+      // ["training","inner_valid"] path was the original Issue #272
+      // root cause. Keeping the corrected path here means a Phase
+      // 2-only consumer (no funnel) and a funnel consumer write to
+      // the same backend field.
+      enqueueAutoReset(
+        ["training", "early_stopping", "inner_valid", "method"],
+        "holdout",
+      );
     }
   }, [
     filteredInnerValidOptions,
     currentInnerValid,
-    handleFieldChange,
+    enqueueAutoReset,
     config.config_version,
   ]);
 
@@ -140,6 +204,29 @@ export function ConfigForm({
     config.calibration !== undefined
       ? (config.calibration as Record<string, unknown> | null)
       : null;
+
+  // Issue #269: lizyml only supports calibration for task="binary".
+  // The Calibration UI hides itself for other tasks via
+  // ``conditional_visibility``, but until now the underlying value was
+  // left alone — a user enabling calibration on binary then switching
+  // to regression sneaked a stale calibration object into POST /fit
+  // and the job died ~5s later with CALIBRATION_NOT_SUPPORTED.
+  // Same shape as the inner_valid auto-reset above.
+  //
+  // Issue #272: bail while the snapshot is stale. When the user clicks
+  // a different task radio, ``task`` (prop) updates synchronously but
+  // ``config.task`` (cached server state) lags behind useConfigSync's
+  // PUT. Writing here would PUT a body where ``task`` is still the
+  // previous value, reverting the user's intent. Wait for the next
+  // render after useConfigSync flushes and configRef.current catches up.
+  useEffect(() => {
+    if (!config.config_version) return;
+    if (task && config.task && task !== config.task) return;
+    if (task && task !== "binary" && calibration !== null) {
+      // P-0092 Phase 2: funnel-routed auto-reset.
+      enqueueAutoReset(["calibration"], null);
+    }
+  }, [task, calibration, enqueueAutoReset, config.config_version, config.task]);
 
   // Resolve options for objective/model_metric kinds from option_sets
   const getOptionsForHint = useCallback(
@@ -172,7 +259,10 @@ export function ConfigForm({
     [modelParams],
   );
 
-  // Handle changes from DynParam
+  // Handle changes from DynParam. All branches route through
+  // handleFieldChange so writes merge onto the latest configRef.current
+  // snapshot (Issue #253). Using the per-key path keeps every branch
+  // symmetric and lets setNestedValue do the shallow-copy merge.
   const handleHintChange = useCallback(
     (hint: import("@/api/types").ParameterHint, value: unknown) => {
       if (hint.kind === "objective") {
@@ -180,13 +270,10 @@ export function ConfigForm({
       } else if (hint.kind === "model_metric") {
         handleFieldChange(["model", "params", "metric"], value);
       } else {
-        // numeric/boolean → model.params.<key>
-        const newParams = { ...modelParams, [hint.key]: value };
-        const updated = setNestedValue(config, ["model", "params"], newParams);
-        onChange(updated);
+        handleFieldChange(["model", "params", hint.key], value);
       }
     },
-    [handleFieldChange, modelParams, config, onChange],
+    [handleFieldChange],
   );
 
   // Check which fields should be hidden by conditional_visibility
@@ -227,6 +314,14 @@ export function ConfigForm({
     // required' validation errors. Wait until useDataPanel has seeded a
     // full config (recognised by config_version being set).
     if (!config.config_version) return;
+    // Issue #272: bail while config.task is stale. When the user clicks
+    // a different task radio, the prop updates synchronously but the
+    // cached config still reflects the previous task until useConfigSync
+    // flushes its PUT. Writing here would derive the body from the
+    // pre-flush snapshot (model.params.objective gets reset against the
+    // stale task field), then PUT it — reverting the user's task pick.
+    // Wait for the next render where configRef catches up.
+    if (config.task && task !== config.task) return;
 
     // Objective: single-select. Reset when empty OR when current value
     // is not in the list of objectives valid for the current task.
@@ -236,7 +331,8 @@ export function ConfigForm({
       const objInvalid =
         typeof currentObj === "string" && !objOpts.includes(currentObj);
       if (!currentObj || objInvalid) {
-        handleFieldChange(["model", "params", "objective"], objOpts[0]);
+        // P-0092 Phase 2: funnel-routed auto-reset.
+        enqueueAutoReset(["model", "params", "objective"], objOpts[0]);
       }
     }
 
@@ -268,13 +364,21 @@ export function ConfigForm({
                 typeof m === "string" && metricOpts.includes(m),
             )
           : [];
-        handleFieldChange(
+        // P-0092 Phase 2: funnel-routed auto-reset.
+        enqueueAutoReset(
           ["model", "params", "metric"],
           defaults.length > 0 ? defaults : metricOpts.slice(0, 1),
         );
       }
     }
-  }, [task, uiSchema, modelParams, handleFieldChange, config.config_version]);
+  }, [
+    task,
+    uiSchema,
+    modelParams,
+    enqueueAutoReset,
+    config.config_version,
+    config.task,
+  ]);
 
   if (!rawProperties) return null;
 
@@ -396,12 +500,10 @@ export function ConfigForm({
                         }
                         columns={columns}
                         onChange={(weights) => {
-                          const updated = setNestedValue(
-                            config,
+                          handleFieldChange(
                             ["model", "feature_weights"],
                             weights,
                           );
-                          onChange(updated);
                         }}
                       />
 
@@ -434,15 +536,12 @@ export function ConfigForm({
                       </p>
                       <KeyValueEditor
                         params={modelParams}
-                        additionalParams={uiSchema?.additional_params}
+                        additionalParams={
+                          uiSchema?.additional_params ?? undefined
+                        }
                         stepMap={uiSchema?.step_map}
                         onChange={(newParams) => {
-                          const updated = setNestedValue(
-                            config,
-                            ["model", "params"],
-                            newParams,
-                          );
-                          onChange(updated);
+                          handleFieldChange(["model", "params"], newParams);
                         }}
                         modelName={modelName}
                       />
@@ -459,17 +558,15 @@ export function ConfigForm({
                         description="Inner validation strategy for early stopping"
                       >
                         <Select
-                          value={String(
-                            (
-                              trainingConfig.inner_valid as Record<
-                                string,
-                                unknown
-                              >
-                            )?.method ?? "holdout",
-                          )}
+                          value={String(innerValid.method ?? "holdout")}
                           onValueChange={(v) =>
                             handleFieldChange(
-                              ["training", "inner_valid", "method"],
+                              [
+                                "training",
+                                "early_stopping",
+                                "inner_valid",
+                                "method",
+                              ],
                               v,
                             )
                           }
@@ -500,12 +597,15 @@ export function ConfigForm({
                         <NumberInput
                           value={innerValidRatio}
                           onChange={(v) => {
-                            const updated = setNestedValue(
-                              config,
-                              ["training", "inner_valid", "ratio"],
+                            handleFieldChange(
+                              [
+                                "training",
+                                "early_stopping",
+                                "inner_valid",
+                                "ratio",
+                              ],
                               v ?? 0.2,
                             );
-                            onChange(updated);
                           }}
                           step={0.05}
                           min={0.01}
@@ -528,16 +628,19 @@ export function ConfigForm({
             <AccordionContent>
               <div className="lzs-form pl-[18px] pt-2">
                 <MetricsChips
-                  task={task}
+                  // Issue #272: pass the persisted ``config.task`` (not
+                  // the raw prop) so MetricsChips' task-change auto-reset
+                  // only fires once the regression PUT has actually
+                  // landed. Otherwise it auto-defaults metrics from the
+                  // PROP task while configRef still reads the old task,
+                  // PUTs a body where ``task`` and ``metrics`` disagree,
+                  // and the backend rejects the entire body with
+                  // saved=false (silently reverting the task switch).
+                  task={(config.task as string) || task}
                   selectedMetrics={selectedMetrics}
                   metricsByTask={uiSchema?.option_sets?.metric}
                   onChange={(metrics) => {
-                    const updated = setNestedValue(
-                      config,
-                      ["evaluation", "metrics"],
-                      metrics,
-                    );
-                    onChange(updated);
+                    handleFieldChange(["evaluation", "metrics"], metrics);
                   }}
                   conditionalParams={{
                     precision_at_k: {
@@ -566,10 +669,9 @@ export function ConfigForm({
           <CalibrationSection
             calibration={calibration}
             calibrationDefaults={uiSchema?.defaults?.calibration}
-            calibrationMethods={uiSchema?.calibration_methods}
+            calibrationMethods={uiSchema?.calibration_methods ?? undefined}
             onChange={(cal) => {
-              const updated = { ...config, calibration: cal };
-              onChange(updated);
+              handleFieldChange(["calibration"], cal);
             }}
           />
         )}

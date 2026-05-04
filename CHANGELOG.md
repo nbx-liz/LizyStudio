@@ -9,6 +9,211 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.3.1] - 2026-05-04
+
+The **Stability & Refactor** release. Six weeks of post-v0.3.0 bug
+fixes, internal refactors, and test infrastructure work absorbed into a
+single patch release. Highlights: Workspace ConfigForm cross-hook write
+race fully resolved (P-0092 single write funnel), inference plot type
+hardening (Issue #355 / #373), Tailwind CSS v4 migration (#125), real
+lizyml artefact fixtures with a fit→load round-trip CI gate (P-0095),
+performance baseline harness (P-0094), on-disk `format_version`
+migration chain (H-0081), atomic versioned JSON writes (H-0082), and
+the openapi-fetch frontend client migration (H-0080).
+
+No breaking changes for end users. Workspace state from v0.3.0
+continues to load via the new migration chain. Note: model `pickle`
+artefacts saved by lizyml 0.9.x are intentionally rejected on load
+under the new lizyml 0.10.0 major.minor — re-fit existing jobs to
+regenerate a 0.10.0 artefact.
+
+### Added
+
+- **Workspace write funnel (P-0092)** — `useConfigSync` is now the
+  single PUT serialiser for `/config`. All four upstream writers
+  (`ConfigForm` auto-reset, `useTargetSelection`, `useModelPanelData`,
+  `handleApplyToFit`) route through the funnel hook with explicit
+  state machine transitions. Closes the cross-hook competing-write
+  race that had been patched four times since P-0086.
+- **On-disk `format_version` (H-0081)** — every persisted JSON
+  artefact now carries a `format_version` and is loaded through a
+  migration chain. Sets up forward-compat for v0.4+ schema changes.
+- **Atomic versioned JSON writer (H-0082)** — `write_versioned_json`
+  uses `os.replace` for tear-resistant writes; partial-write states
+  no longer corrupt persisted state across SIGKILL or power loss.
+- **fit→load round-trip CI gate (P-0095, Issue #346)** — fit→artefact
+  → reload integration test promoted to a required CI check, locking
+  the metric-extraction shape evolution that produced #344 / #345.
+  Backed by hand-captured real lizyml artefacts under
+  `tests/fixtures/lizyml/<scenario>/` (4 scenarios).
+- **Performance baseline harness (P-0094, Issue #27 (a))** —
+  `pytest-benchmark` integrated into the test suite (`tests/bench/`),
+  skipped by default (`--benchmark-skip` in addopts), surfaced via
+  Nightly opt-in workflow with JSON artefact upload for future
+  regression detection.
+- **WebSocket terminal-message replay (P-0093, Issue #327)** — late
+  subscribers now receive the cached terminal message so reconnecting
+  clients converge to the correct final state without polling.
+- **Workspace running-lock (Issue #279)** — `PUT/PATCH /config`
+  returns 409 while a Fit/Tune job is active, preventing config
+  drift mid-run. Carve-out for terminal slot holders preserves
+  user undo/retune flow.
+- **`/api/workspace/fit` and `/api/workspace/tune` accept optional
+  `config` body (P-0086, Issue #251)** — frontend can now send the
+  latest merged config in the same request, eliminating the
+  PUT-then-FIT race window. Backward compatible: omitting the body
+  uses the server-side persisted config as before.
+- **Architecture overview docs (`docs/architecture-overview.md`)** —
+  Mermaid diagrams (System Context, Container View, Module Layering,
+  Job Lifecycle State Machine, 4 sequence diagrams) for new-reader
+  onboarding ahead of BLUEPRINT.md.
+- **Visual regression goldens for theme** (H-0078) — committed
+  `__screenshots__` produced on the Nightly runner; raw Tailwind
+  color guard script (B-9 Part 2 / H-0079) blocks regressions.
+- **Issue #346 fixture strategy (Phases A-E)** — 4 scenarios of real
+  fit_result.json / metadata.json captured, fixture-driven coverage
+  added at metric / hook / component layers, contributing-guide
+  section on fixtures published.
+
+### Changed
+
+- **`lizyml` bumped to `>=0.10.0,<0.11.0`** — picks up the
+  TargetEncoder feature (lizyml H-0070 / Issue [#98](https://github.com/nbx-liz/LizyML/issues/98))
+  so non-numeric classification targets (e.g. `species: str` in the
+  penguins dataset) now fit successfully. `Model.predict()` returns
+  predictions in the **original label dtype** (str → str), so
+  `LizyMLAdapter.predict` is updated to split the multiclass 2-D
+  `proba` matrix into per-class `proba_<class>` columns and propagates
+  the original-label `pred` straight through to the inference
+  DataFrame. Existing numeric-target jobs are unchanged.
+- **Tailwind CSS v3 → v4 migration (Issue #125, PR #378)** —
+  `tailwindcss@^4.2.4` with `@tailwindcss/vite` plugin; `@theme`
+  block migrated; build remains on Vite. PostCSS pipeline simplified.
+  Initial install requires `pnpm install --force` once for native
+  binding.
+- **Frontend API client migration to openapi-fetch (H-0080, C-6
+  Phases 1-5)** — `apiFetch` retired across `files.ts`, `inference.ts`,
+  `workspace.ts`, `jobs.ts`. `client.ts` now exports a typed
+  `apiClient`; CI lint rule (`no-apifetch-guard`) blocks regressions.
+- **CORS env allowlist + WS origin cache (H-0083, Issue #233/#234)** —
+  CORS allowlist read from `LIZYSTUDIO_ALLOWED_ORIGINS`; WebSocket
+  origin validation now caches resolved hosts.
+- **Per-app `MetricsRegistry` and `ModelCache` (A-9 / H-0075,
+  H-0084)** — both moved off module-globals onto
+  `app.state` / `JobStore`; eliminates cross-app pollution in tests
+  and embedded deployments.
+- **Job persistence layout centralised in `JobStore.path_for`
+  (A-10, H-0073)** — services no longer hand-construct on-disk paths.
+- **`useDataPanel` split (B-5, H-0077)** — `useTargetSelection`
+  extracted to remove the cross-hook write contention surface that
+  P-0092 then formalised into the funnel.
+- **`ModelPanel` split into hook + 3 sub-components (B-3)** — pure
+  presentational components; data flow through dedicated hooks.
+- **JobSummary / JobDetail / UiSchema typed at API boundary
+  (C-4 / C-5a / H-0071 / H-0072)** — single source of truth from
+  the FastAPI Pydantic models all the way to React props.
+- **CV strategy fields auto-derived from UiSchema (C-5b)** — retires
+  `CV_STRATEGY_FIELDS` / `METRICS_BY_TASK` hardcoded fallbacks.
+- **WebSocket message Pydantic discriminated union (C-3, H-0069)** —
+  WS payloads validated against typed schemas at both ends.
+- **Sdist size 5 MB → 1.8 MB** — `[tool.hatch.build.targets.sdist]`
+  added with explicit `include`/`exclude`; `frontend/`, `tests/`,
+  `.github/`, BLUEPRINT.md / HISTORY.md / PLAN.md no longer
+  shipped to PyPI.
+
+### Fixed
+
+- **Inference `shap-summary` 500 → wired through LizyMLAdapter
+  dispatch (Issue #373, PR #377)** — uses `lizyml`'s built-in
+  `importance_plot(kind="shap")`; previously surfaced as 500 because
+  the adapter raised on the unknown plot type.
+- **Inference upload-mode tempfile path (Issue #374, PR #375)** —
+  `/api/inference/run` now accepts the tempfile path produced by
+  the upload flow rather than rejecting it as out-of-tree.
+- **Inference unknown plot type → 404 not 500 (Issue #355, PR #356)** —
+  unknown plot types now return a normal 404 so the frontend can
+  gate gracefully.
+- **Probability histogram + distribution panel gating (Issue #370)** —
+  no longer triggers a 500 when the distribution data is unavailable.
+- **Load Preset replaced by menu-driven popover (Issue #369)** —
+  removes the `<Select>` form-binding race that mis-applied presets.
+- **DataPanel hydrates from server-persisted state on reload
+  (Issue #363)** — refreshing the workspace tab no longer wipes
+  the loaded data file.
+- **CV strategy latched against stale cache reverts (Issue #358)** —
+  user-picked `cv_strategy` is no longer overwritten by mid-flight
+  cache invalidation.
+- **Inference dropdown derives `#N` from `allJobs` not
+  `completedJobs` (Issue #359)** — running jobs now appear in the
+  dropdown with the correct ordinal.
+- **`oos_std` derivation falls back to `oof_per_fold` (Issue #364)** —
+  variance shows for older artefacts that lack `oof_std`.
+- **Polling-storm after Tune terminal halted (Issue #339, PR #341)** —
+  `useBackgroundNotification` no longer returns a fresh callback
+  each render; post-terminal GETs reduced from 30 to 1.
+- **Tune objective `Choice` empty + WS progress send-after-close
+  (Issues #337, #338)** — empty Choice no longer crashes the Tune
+  flow; WS progress writes guarded against post-close races.
+- **Metrics: unwrap `raw` subtree when calibrated metrics also
+  present (PR #344)** — single-source ROC curve when both raw and
+  calibrated metrics exist.
+- **`InferenceStore.list` skips corrupt records + pred-column guard
+  (Issue #241)** — one bad record no longer breaks the listing API.
+- **Workspace silent-late validation failures surfaced
+  (Issues #268, #269, #270)** — the user now sees the validation
+  error instead of a stuck UI.
+- **`BlockedGroupKFold` payload nests `blocks/groups` (Issue #278)** —
+  matches the server-side Pydantic model shape.
+- **`SearchSpaceRow` button-in-button a11y violation (Issue #274)** —
+  `<button>` wrapper replaced with `<div role="button">`.
+- **Single-PUT task switch via `buildSyncedConfig` (Issue #272)** —
+  task switching no longer fires PUT bursts that race with each other.
+- **`FeatureWeightsEditor` excludes target + excluded features
+  (P-0091, Issue #277)** — picker no longer shows the target column
+  or already-excluded features.
+- **UI schema ↔ Pydantic invariant locked (P-0087, Issues #258/#259)** —
+  contract tests under `tests/contract/` lock the drift; closes the
+  UI Fit 422 class.
+- **Subprocess child stdout redirected to `execution.log`
+  (Issue #328)** — child process logs now reach disk; previously
+  swallowed by the parent.
+- **WS late-subscriber replay (P-0093, Issue #327)** — see Added.
+- **a11y: `aria-label` on `FeatureWeightsEditor` Switch** —
+  screen-reader announces the toggle purpose.
+
+### Deprecated
+
+- **`apiFetch` removal (H-0080 Phase 5)** — no longer exported from
+  `frontend/src/api/client.ts`. New code must use `apiClient`.
+- **`CV_STRATEGY_FIELDS` / `METRICS_BY_TASK` hardcoded fallbacks** —
+  retired in favour of UiSchema-driven SSOT (C-5b).
+
+### Security
+
+- **CORS env allowlist (H-0083)** — origins no longer hardcoded to
+  development defaults; production deployments must set
+  `LIZYSTUDIO_ALLOWED_ORIGINS`.
+- **WebSocket origin validation cache (H-0083)** — guards against
+  origin-spoof reconnect storms.
+- **Atomic JSON writes (H-0082)** — partial-write states from
+  SIGKILL or power loss can no longer corrupt persisted job /
+  workspace state.
+
+### Test Infrastructure
+
+- **Real-artefact fixtures (Issue #346 Phase A)** — `tests/fixtures/
+  lizyml/{binary_no_cal,binary_cal,multiclass,regression}/` ship
+  hand-captured `fit_result.json` / `metadata.json` from a clean
+  `lizyml` run. Fixture loaders under `tests/fixtures/_loader.py`.
+- **fit→load round-trip CI gate (P-0095, Issue #346 Phase C)** — runs
+  on every PR; blocks merge on metric-extraction drift.
+- **`pytest-benchmark` baseline harness (P-0094, Issue #27 (a))** —
+  Nightly-only by default; JSON artefact upload for trend tracking.
+- **Branch protection on develop / main** — 8 required checks
+  (backend 3.10 / 3.11, frontend lint / test / build, e2e
+  functional, type-drift, no-apifetch-guard) enforced as of
+  Issue #346 Phase C kickoff (2026-05-02).
+
 ## [0.3.0] - 2026-04-19
 
 The **Operations & Hardening** release. Builds out the production-
