@@ -1,8 +1,98 @@
+@import "tailwindcss";
 @import "./components/ui/design-tokens.css";
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/*
+ * Tailwind v4 dark mode (Issue #125 migration).
+ *
+ * The v3 ``darkMode: "class"`` config option no longer exists in v4.
+ * Instead we declare a custom ``dark`` variant that activates whenever
+ * any ancestor carries the ``.dark`` class. This matches the v3
+ * behavior we relied on (toggling ``document.documentElement.classList``
+ * to flip the theme), so existing ``dark:*`` utilities keep working.
+ */
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * @theme — register design tokens with the Tailwind compiler so they
+ * generate utility classes (bg-primary, text-foreground, rounded-lg,
+ * etc.). The runtime values still live in ``:root`` / ``.dark`` so
+ * the theme can switch at the CSS-custom-property level without
+ * recompilation. ``hsl(var(--token))`` is used because the runtime
+ * vars store H S L triplets (legacy from the v3 shadcn convention).
+ */
+@theme {
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+
+  --color-sidebar: hsl(var(--sidebar-background));
+  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
+  --color-sidebar-primary: hsl(var(--sidebar-primary));
+  --color-sidebar-primary-foreground: hsl(var(--sidebar-primary-foreground));
+  --color-sidebar-accent: hsl(var(--sidebar-accent));
+  --color-sidebar-accent-foreground: hsl(var(--sidebar-accent-foreground));
+  --color-sidebar-border: hsl(var(--sidebar-border));
+  --color-sidebar-ring: hsl(var(--sidebar-ring));
+
+  --color-chart-1: hsl(var(--chart-1));
+  --color-chart-2: hsl(var(--chart-2));
+  --color-chart-3: hsl(var(--chart-3));
+  --color-chart-4: hsl(var(--chart-4));
+  --color-chart-5: hsl(var(--chart-5));
+
+  /*
+   * H-0078 (B-9): semantic status tokens. Each state has a bg / fg /
+   * border triplet driven by ``--lzs-*`` runtime vars (see
+   * ``src/components/ui/design-tokens.css``) so dark-mode inversion
+   * is centralised.
+   */
+  --color-success: var(--lzs-success-bg);
+  --color-success-fg: var(--lzs-success-fg);
+  --color-success-border: var(--lzs-success-border);
+  --color-success-solid: var(--lzs-success-solid-bg);
+  --color-success-solid-fg: var(--lzs-success-solid-fg);
+
+  --color-warning: var(--lzs-warning-bg);
+  --color-warning-fg: var(--lzs-warning-fg);
+  --color-warning-border: var(--lzs-warning-border);
+
+  --color-danger: var(--lzs-danger-bg);
+  --color-danger-fg: var(--lzs-danger-fg);
+  --color-danger-border: var(--lzs-danger-border);
+
+  --color-info: var(--lzs-info-bg);
+  --color-info-fg: var(--lzs-info-fg);
+  --color-info-strong-fg: var(--lzs-info-strong-fg);
+  --color-info-border: var(--lzs-info-border);
+
+  --color-degraded-fg: var(--lzs-degraded-fg);
+
+  /*
+   * Radius tokens generate ``rounded-{lg,md,sm}`` utilities. v3
+   * borderRadius.{lg,md,sm} is preserved so existing classes like
+   * ``rounded-md`` keep their derived value.
+   */
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
 
 @layer base {
   :root {
@@ -81,6 +171,13 @@
     --sidebar-ring: 217.2 91.2% 59.8%;
   }
 
+  /*
+   * Tailwind v4 changed the default border color from gray-200 to
+   * ``currentColor``. Without this universal selector borders
+   * silently inherit the text color, which broke our shadcn-style
+   * "subtle border" idiom. Issue #125 migration: keep v3 behavior
+   * by re-applying ``border-border`` globally.
+   */
   * {
     @apply border-border;
   }
@@ -93,17 +190,11 @@
   }
 }
 
-/* Issue #126: bridge Tailwind v3 outline-none semantics to match v4. In
-   Tailwind v3, `.outline-none` compiles to `outline: 2px solid transparent;
-   outline-offset: 2px` (a high-contrast-mode hack). With `outline-offset: 2px`
-   the transparent outline sits 2px outside the border and renders as a
-   faint double-border around shadcn/ui controls (SelectTrigger, Input,
-   Button, etc.). Tailwind v4 and the shadcn/ui base classes assume
-   `outline-none` is truly `outline-style: none`. This override bridges the
-   two until the project migrates to Tailwind v4 (Issue #125). */
-@layer utilities {
-  .outline-none {
-    outline-style: none;
-    outline-offset: 0;
-  }
-}
+/*
+ * Issue #126's ``outline-none`` bridge override has been removed.
+ * Tailwind v4 compiles ``outline-none`` to ``outline-style: none``
+ * directly, matching shadcn/ui's expectation. The v3 hack (``2px
+ * solid transparent`` + ``outline-offset: 2px``) that produced the
+ * faint double-border around SelectTrigger / Input / Button is gone
+ * with the v3 → v4 migration.
+ */
