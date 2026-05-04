@@ -316,12 +316,19 @@ async def data_upload(
 @router.get("/data/preview", response_model=PreviewResponseModel)
 def data_preview(
     rows: int = Query(default=50, ge=1, le=10000),
+    max_cols: int | None = Query(default=None, ge=1, le=20000),
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, Any]:
-    """Return first N rows of loaded data."""
+    """Return first N rows of loaded data.
+
+    ``max_cols`` (P-0097) caps the per-row column count so the wide-
+    DataFrame UI (Issue #361) does not have to ship 10k+ columns to the
+    browser on every preview call. ``total_cols`` in the response still
+    reflects the ground-truth column count.
+    """
     if ws.dataframe is None:
         raise WorkspaceNoDataError()
-    return get_preview(ws.dataframe, rows=rows)
+    return get_preview(ws.dataframe, rows=rows, max_cols=max_cols)
 
 
 @router.get("/data/columns", response_model=ColumnsResponseModel)

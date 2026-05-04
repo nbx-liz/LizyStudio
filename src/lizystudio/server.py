@@ -232,6 +232,12 @@ def create_app() -> FastAPI:
     application.include_router(
         metrics_api.router, prefix="/api/metrics", tags=["metrics"]
     )
+    # R-3.4 / P-0097 — Diagnostic export for support attachments
+    from lizystudio.api import diagnostic as _diagnostic_router  # noqa: PLC0415
+
+    application.include_router(
+        _diagnostic_router.router, prefix="/api/diagnostic", tags=["diagnostic"]
+    )
 
     # WebSocket route for job progress (BLUEPRINT §5.5)
     @application.websocket("/ws/jobs/{job_id}/progress")

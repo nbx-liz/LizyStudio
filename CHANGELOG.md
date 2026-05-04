@@ -7,7 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+The **Wide DataFrame** track (Phase B / v0.4.0) starts here.
+Foundation PR for Issue #361.
+
+### Added
+
+- **`max_cols` query on `GET /api/workspace/data/preview` (P-0097)** —
+  optional cap on returned column count so the SPA does not have to
+  ship 10k+ columns to the browser on every preview call.
+  ``total_cols`` in the response always reflects the ground-truth
+  column count. Backward compatible — omitting the parameter returns
+  every column.
+- **`top_n` query on `GET /api/jobs/{id}/importance` (P-0097)** —
+  value-desc-sorted projection without an extra round-trip. Server
+  also enforces a 5MB payload ceiling: when the unbounded response
+  would exceed it, the route falls back to a top-N projection sized
+  to fit and surfaces the truncation via `X-Truncated-By: top_n=<N>`
+  response header.
+- **`GET /api/diagnostic/export?job_id=...` (R-3.4 / P-0097)** —
+  sanitised JSON snapshot a user can attach to a support request.
+  Returns `{schema_version: 1, timestamp, job, system}` with no heavy
+  artefacts inlined and no internal JobStore paths leaked. Heavy data
+  (fit_result.json, model.pkl) stays on disk.
+- **Wide-DataFrame fixture generator** at
+  `tests/fixtures/lizyml/wide/generate.py` (10,000 columns × 1,000
+  rows). The CSV itself is gitignored; CI generates it once at job
+  start. Used by `tests/regression/test_reg_0361_wide_preview.py`.
+
+### Test Infrastructure
+
+- 14 new contract / regression tests under
+  `tests/contract/test_preview_max_cols.py`,
+  `tests/contract/test_importance_top_n.py`,
+  `tests/contract/test_diagnostic_export.py`, and
+  `tests/regression/test_reg_0361_wide_preview.py`.
 
 ## [0.3.1] - 2026-05-04
 

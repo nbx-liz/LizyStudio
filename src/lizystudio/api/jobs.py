@@ -6,11 +6,12 @@ export, delete.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import asdict
 from typing import Any, Literal  # noqa: UP035
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -54,6 +55,13 @@ from lizystudio.services.workspace import WorkspaceState, get_workspace
 
 _MAX_METRICS = 20
 _VALID_PARAM_RE = re.compile(r"^[a-zA-Z0-9_]+$")
+
+# P-0097: hard cap on the JSON-serialised importance payload. When the
+# unbounded response would exceed this many bytes the route falls back
+# to a top-N projection sized to fit and surfaces the truncation via
+# the ``X-Truncated-By`` response header. 5MB matches the
+# v0.4-business-readiness-plan §6 transfer budget.
+IMPORTANCE_PAYLOAD_LIMIT = 5 * 1024 * 1024
 
 router = APIRouter()
 
@@ -268,17 +276,61 @@ def get_job_split_summary_endpoint(
 @router.get("/{job_id}/importance")
 def get_job_importance_endpoint(
     job_id: str,
+    response: Response,
     kind: str = "split",
+    top_n: int | None = Query(default=None, ge=1, le=20000),
     job_store: JobStore = Depends(get_job_store),
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, float]:
-    """Get feature importance."""
+    """Get feature importance.
+
+    ``top_n`` (P-0097) lets the SPA opt in to a value-desc-sorted
+    projection without an extra round-trip. When the unbounded payload
+    would exceed :data:`IMPORTANCE_PAYLOAD_LIMIT`, the route falls back
+    to a server-side top-N projection sized to fit and surfaces the
+    truncation via the ``X-Truncated-By`` response header so the SPA
+    can render an honest "showing top N of M" notice.
+    """
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
     try:
-        return get_importance(job, ws.backend, job_store.model_cache, kind=kind)
+        result = get_importance(
+            job, ws.backend, job_store.model_cache, kind=kind, top_n=top_n
+        )
     except Exception as exc:
         raise BackendError(exc) from exc
+
+    # Server-side payload cap. If the user asked for a specific top_n
+    # the route honours it silently above; the cap below only fires
+    # when the unbounded response would exceed the transfer budget.
+    if top_n is None and len(json.dumps(result)) > IMPORTANCE_PAYLOAD_LIMIT:
+        capped = _cap_importance_payload(result, IMPORTANCE_PAYLOAD_LIMIT)
+        response.headers["X-Truncated-By"] = f"top_n={len(capped)}"
+        return capped
+    return result
+
+
+def _cap_importance_payload(
+    raw: dict[str, float], limit_bytes: int
+) -> dict[str, float]:
+    """Return the longest top-N prefix of ``raw`` whose JSON encoding
+    fits within ``limit_bytes``. Sorted value-desc so the returned
+    subset is always the most informative slice. Always returns at
+    least one entry (the single highest-importance feature) so the
+    SPA can render *something* even at extreme cap pressure.
+    """
+    items = sorted(raw.items(), key=lambda kv: kv[1], reverse=True)
+    # Binary search the largest prefix whose JSON dump fits.
+    lo, hi = 1, len(items)
+    best = 1
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if len(json.dumps(dict(items[:mid]))) <= limit_bytes:
+            best = mid
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return dict(items[:best])
 
 
 @router.get("/{job_id}/importance-kinds")
