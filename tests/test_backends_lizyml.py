@@ -372,6 +372,65 @@ def test_available_plots_with_tuning() -> None:
     assert "tuning" in plots
 
 
+# --- Issue #373: shap-summary plot wiring ---
+
+
+def test_available_plots_includes_shap_summary_when_supported() -> None:
+    """available_plots() advertises 'shap-summary' when the model can
+    compute fold-averaged SHAP importances (Issue #373).
+
+    Mirrors the existing tuning probe pattern: we call
+    ``model.importance(kind='shap')`` defensively and skip when it
+    raises (shap missing, no analysis_context, etc).
+    """
+    adapter = LizyMLAdapter()
+    model = _make_mock_model(task="binary")
+    # Defensive: importance(kind='shap') succeeds → shap is available
+    model.importance.return_value = {"f1": 0.3, "f2": 0.5, "f3": 0.2}
+    plots = adapter.available_plots(model)
+    assert "shap-summary" in plots
+
+
+def test_available_plots_omits_shap_summary_when_not_supported() -> None:
+    """available_plots() omits 'shap-summary' when the SHAP probe raises.
+
+    Replicates the OPTIONAL_DEP_MISSING / MODEL_NOT_FIT cases lizyml
+    raises from importance(kind='shap') when shap is missing or the
+    fit lacks analysis_context.
+    """
+    adapter = LizyMLAdapter()
+    model = _make_mock_model(task="binary")
+    model.importance.side_effect = RuntimeError("OPTIONAL_DEP_MISSING")
+    plots = adapter.available_plots(model)
+    assert "shap-summary" not in plots
+
+
+def test_plot_shap_summary_dispatches_to_importance_plot_with_kind_shap() -> None:
+    """plot('shap-summary') resolves to importance_plot(kind='shap').
+
+    Reuses lizyml's existing ``importance_plot(kind='shap', top_n=20)``
+    method (Model.importance_plot supports kind=split/gain/shap). No
+    new lizyml method is required.
+    """
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_fig = MagicMock()
+    mock_fig.to_json.return_value = "{}"
+    mock_model.importance_plot.return_value = mock_fig
+
+    result = adapter.plot(mock_model, "shap-summary")
+
+    mock_model.importance_plot.assert_called_once_with(kind="shap")
+    assert isinstance(result, PlotData)
+
+
+def test_plot_dispatch_table_includes_shap_summary() -> None:
+    """``shap-summary`` must be a registered key in _PLOT_DISPATCH so
+    PlotNotAvailableError lists it under ``available`` (Issue #373).
+    """
+    assert "shap-summary" in LizyMLAdapter._PLOT_DISPATCH
+
+
 def test_fit_invokes_on_progress() -> None:
     adapter = LizyMLAdapter()
     mock_model = MagicMock()

@@ -90,6 +90,11 @@ class EvaluationMixin:
         "calibration": "calibration_plot",
         "probability-histogram": "probability_histogram_plot",
         "tuning": "tuning_plot",
+        # Issue #373: ``shap-summary`` is an alias of ``importance_plot``
+        # with ``kind="shap"`` baked in. lizyml's importance_plot already
+        # supports kind={"split","gain","shap"} (lizyml.Model.importance_plot
+        # signature, verified against 0.9.1). No new lizyml method needed.
+        "shap-summary": "importance_plot",
     }
 
     def plot(self, model: Any, plot_type: str, **kwargs: Any) -> PlotData:
@@ -104,6 +109,11 @@ class EvaluationMixin:
             call_kwargs["metrics"] = kwargs["metrics"]
         if plot_type == "importance" and "kind" in kwargs:
             call_kwargs["kind"] = kwargs["kind"]
+        if plot_type == "shap-summary":
+            # Force kind="shap" regardless of caller-supplied kwargs;
+            # ``shap-summary`` is the dedicated SHAP-only entry point
+            # (see _PLOT_DISPATCH note on Issue #373).
+            call_kwargs["kind"] = "shap"
         fig = getattr(model, method_name)(**call_kwargs)
         return PlotData(plotly_json=fig.to_json())
 
@@ -126,6 +136,18 @@ class EvaluationMixin:
             plots.append("tuning")
         except Exception:  # noqa: BLE001
             logger.debug("tuning_plot not available", exc_info=True)
+        # Issue #373: probe shap importance defensively. Mirrors the
+        # tuning_plot pattern: lizyml raises LizyMLError when shap is
+        # not installed (OPTIONAL_DEP_MISSING) or when the loaded
+        # model lacks ``analysis_context`` (MODEL_NOT_FIT). We use
+        # ``importance(kind='shap')`` rather than ``importance_plot``
+        # because it returns a small dict, avoiding a full Plotly
+        # figure build for a feature-detection probe.
+        try:
+            model.importance(kind="shap")
+            plots.append("shap-summary")
+        except Exception:  # noqa: BLE001
+            logger.debug("shap importance not available", exc_info=True)
         return plots
 
     def export_model(self, model: Any, path: str) -> str:
