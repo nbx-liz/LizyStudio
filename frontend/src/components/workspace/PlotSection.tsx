@@ -58,6 +58,12 @@ interface PlotSectionProps {
   importanceData?: ImportanceResponse;
   /** Importance plot data (kind-independent, always default/split). */
   importancePlot?: PlotResponse;
+  /**
+   * PR-B2 / P-0097: top-N projection for the importance table. `null`
+   * means "show all" (no top_n forwarded).
+   */
+  importanceTopN?: number | null;
+  onImportanceTopNChange?: (n: number | null) => void;
 }
 
 export function PlotSection({
@@ -76,6 +82,8 @@ export function PlotSection({
   onImportanceKindChange,
   importanceData,
   importancePlot,
+  importanceTopN,
+  onImportanceTopNChange,
 }: PlotSectionProps) {
   // Exclude "tuning" — shown in TuneTrialsSection, not in plot tabs
   const availablePlots = plots.filter((p) => p !== "tuning");
@@ -182,6 +190,25 @@ export function PlotSection({
           plotlyJson={activePlotData.plotly_json}
           height={chartHeight}
         />
+      )}
+
+      {/* PR-B2 / P-0097: Top-N / Show-all toggle for the importance table. */}
+      {isImportance && onImportanceTopNChange && (
+        <div
+          data-testid="importance-topn-toggle"
+          className="mb-2 mt-3 flex items-center gap-2 text-xs text-muted-foreground"
+        >
+          <span>Show:</span>
+          <SegmentGroup
+            options={["30", "100", "all"]}
+            value={importanceTopN === null ? "all" : String(importanceTopN)}
+            onChange={(v) =>
+              onImportanceTopNChange(
+                v === "all" ? null : Number.parseInt(v, 10),
+              )
+            }
+          />
+        </div>
       )}
 
       {/* Importance table (below plot) */}

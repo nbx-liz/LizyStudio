@@ -62,6 +62,8 @@ export function JobResultsBody({
     importance,
     importancePlot,
     isImportancePlotLoading,
+    importanceTopN,
+    setImportanceTopN,
     splitSummary,
     tuningPlot,
     metrics,
@@ -112,6 +114,8 @@ export function JobResultsBody({
           onImportanceKindChange={setImportanceKind}
           importanceData={importance}
           importancePlot={importancePlot}
+          importanceTopN={importanceTopN}
+          onImportanceTopNChange={setImportanceTopN}
         />
       )}
 

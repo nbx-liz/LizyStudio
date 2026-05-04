@@ -197,4 +197,101 @@ describe("PlotSection", () => {
     fireEvent.click(screen.getByRole("radio", { name: "Gain" }));
     expect(onKindChange).toHaveBeenCalledWith("gain");
   });
+
+  describe("importance top-N toggle (PR-B2 / P-0097)", () => {
+    it("renders the toggle when on importance tab and a callback is provided", () => {
+      render(
+        <PlotSection
+          {...defaultProps}
+          selectedPlot="importance"
+          importanceTopN={30}
+          onImportanceTopNChange={vi.fn()}
+        />,
+      );
+      expect(screen.getByTestId("importance-topn-toggle")).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: "30" })).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: "100" })).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: "all" })).toBeInTheDocument();
+    });
+
+    it("does not render the toggle on a non-importance tab", () => {
+      render(
+        <PlotSection
+          {...defaultProps}
+          selectedPlot="roc-curve"
+          importanceTopN={30}
+          onImportanceTopNChange={vi.fn()}
+        />,
+      );
+      expect(screen.queryByTestId("importance-topn-toggle")).toBeNull();
+    });
+
+    it("does not render the toggle when the callback is omitted", () => {
+      render(
+        <PlotSection
+          {...defaultProps}
+          selectedPlot="importance"
+          importanceTopN={30}
+        />,
+      );
+      expect(screen.queryByTestId("importance-topn-toggle")).toBeNull();
+    });
+
+    it("highlights the current value (number) on the toggle", () => {
+      render(
+        <PlotSection
+          {...defaultProps}
+          selectedPlot="importance"
+          importanceTopN={100}
+          onImportanceTopNChange={vi.fn()}
+        />,
+      );
+      // SegmentGroup uses radiogroup semantics; the active option is
+      // marked with aria-checked / data-state. Verify the active radio
+      // by name.
+      const active = screen.getByRole("radio", { name: "100" });
+      expect(active).toHaveAttribute("aria-checked", "true");
+    });
+
+    it("highlights the 'all' value when topN is null", () => {
+      render(
+        <PlotSection
+          {...defaultProps}
+          selectedPlot="importance"
+          importanceTopN={null}
+          onImportanceTopNChange={vi.fn()}
+        />,
+      );
+      const active = screen.getByRole("radio", { name: "all" });
+      expect(active).toHaveAttribute("aria-checked", "true");
+    });
+
+    it("calls onImportanceTopNChange with parsed number on click", () => {
+      const onChange = vi.fn();
+      render(
+        <PlotSection
+          {...defaultProps}
+          selectedPlot="importance"
+          importanceTopN={30}
+          onImportanceTopNChange={onChange}
+        />,
+      );
+      fireEvent.click(screen.getByRole("radio", { name: "100" }));
+      expect(onChange).toHaveBeenCalledWith(100);
+    });
+
+    it("calls onImportanceTopNChange with null when 'all' is picked", () => {
+      const onChange = vi.fn();
+      render(
+        <PlotSection
+          {...defaultProps}
+          selectedPlot="importance"
+          importanceTopN={30}
+          onImportanceTopNChange={onChange}
+        />,
+      );
+      fireEvent.click(screen.getByRole("radio", { name: "all" }));
+      expect(onChange).toHaveBeenCalledWith(null);
+    });
+  });
 });

@@ -295,6 +295,8 @@ export function useDataPanel({
     handleTaskChange,
     handleExcludeToggle: columnOverrides.handleExcludeToggle,
     handleTypeChange: columnOverrides.handleTypeChange,
+    handleBulkExcludeToggle: columnOverrides.handleBulkExcludeToggle,
+    handleBulkTypeChange: columnOverrides.handleBulkTypeChange,
     handleColumnExpand: columnOverrides.handleColumnExpand,
   };
 }

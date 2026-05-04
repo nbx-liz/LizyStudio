@@ -180,6 +180,68 @@ describe("useColumnOverrides", () => {
     expect(result.current.summary.manualCount).toBe(0);
   });
 
+  describe("bulk operations (PR-B2 / wide DataFrame)", () => {
+    it("handleBulkExcludeToggle sets excluded=true on every named column in one update", () => {
+      const { result } = renderHook(() =>
+        useColumnOverrides({ columns: COLUMNS, target: "age" }),
+      );
+
+      act(() => {
+        result.current.handleBulkExcludeToggle(["id", "color"], true);
+      });
+
+      expect(result.current.overrides.id?.excluded).toBe(true);
+      expect(result.current.overrides.color?.excluded).toBe(true);
+      // Untouched column stays at its prior value
+      expect(result.current.overrides.const_col?.excluded).toBeUndefined();
+    });
+
+    it("handleBulkExcludeToggle preserves any prior type override", () => {
+      const { result } = renderHook(() =>
+        useColumnOverrides({ columns: COLUMNS, target: "age" }),
+      );
+
+      act(() => {
+        result.current.setOverrides({
+          color: { excluded: false, type: "numeric" },
+        });
+      });
+      act(() => {
+        result.current.handleBulkExcludeToggle(["color"], true);
+      });
+
+      expect(result.current.overrides.color).toEqual({
+        excluded: true,
+        type: "numeric",
+      });
+    });
+
+    it("handleBulkTypeChange sets type on every named column", () => {
+      const { result } = renderHook(() =>
+        useColumnOverrides({ columns: COLUMNS, target: "age" }),
+      );
+
+      act(() => {
+        result.current.handleBulkTypeChange(["color", "id"], "categorical");
+      });
+
+      expect(result.current.overrides.color?.type).toBe("categorical");
+      expect(result.current.overrides.id?.type).toBe("categorical");
+    });
+
+    it("handleBulkExcludeToggle with empty list is a no-op (no state change)", () => {
+      const { result } = renderHook(() =>
+        useColumnOverrides({ columns: COLUMNS, target: "age" }),
+      );
+      const before = result.current.overrides;
+      act(() => {
+        result.current.handleBulkExcludeToggle([], true);
+      });
+      // Reference equality holds because no setOverrides call should fire.
+      expect(result.current.overrides).toBe(before);
+    });
+  });
+
   it("nonExcludedCols filters out target and excluded columns", () => {
     const { result } = renderHook(() =>
       useColumnOverrides({ columns: COLUMNS, target: "age" }),

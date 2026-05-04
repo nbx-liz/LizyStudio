@@ -90,11 +90,18 @@ describe("queryKeys factory — bit-identical to pre-refactor inline keys", () =
       ]);
     });
 
-    it("jobImportance → ['job-importance', id, kind]", () => {
+    it("jobImportance → ['job-importance', id, kind, topN]", () => {
       expect(queryKeys.jobImportance("job_abc", "split")).toEqual([
         "job-importance",
         "job_abc",
         "split",
+        null,
+      ]);
+      expect(queryKeys.jobImportance("job_abc", "split", 30)).toEqual([
+        "job-importance",
+        "job_abc",
+        "split",
+        30,
       ]);
     });
 

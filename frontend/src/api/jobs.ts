@@ -37,9 +37,14 @@ export async function fetchJob(jobId: string): Promise<JobDetail> {
 export async function fetchJobImportance(
   jobId: string,
   kind = "default",
+  options?: { topN?: number },
 ): Promise<ImportanceResponse> {
+  const query: { kind: string; top_n?: number } = { kind };
+  if (typeof options?.topN === "number") {
+    query.top_n = options.topN;
+  }
   const { data } = await apiClient.GET("/api/jobs/{job_id}/importance", {
-    params: { path: { job_id: jobId }, query: { kind } },
+    params: { path: { job_id: jobId }, query },
   });
   // Backend returns ``dict[str, float]`` (no response_model — flat mapping).
   // SSOT-EXEMPT: #236 — adding a wrapping model would change the wire shape.

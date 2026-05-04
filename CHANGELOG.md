@@ -34,6 +34,34 @@ Foundation PR for Issue #361.
   rows). The CSV itself is gitignored; CI generates it once at job
   start. Used by `tests/regression/test_reg_0361_wide_preview.py`.
 
+### Frontend (PR-B2 — Wide DataFrame UI)
+
+- **Column Settings virtualization** — `@tanstack/react-virtual`
+  windows the per-column row list once the visible (non-target,
+  filter-matched) count crosses 200. The Workspace can now show the
+  configuration UI for 10,000-column workspaces without freezing
+  scroll on first paint.
+- **Searchable Target combobox** (`SearchableSelect`) — replaces the
+  shadcn Select used for Target column with a cmdk-backed combobox.
+  Substring filter, full keyboard navigation, scales to thousands of
+  options. The Task radios and the rest of the Data Panel are
+  unchanged.
+- **Importance top-N toggle** — Plots panel now exposes a
+  Show 30 / 100 / all toggle for the Importance table. Default is the
+  server-side top-30 projection (uses the new `top_n` query) so the
+  table fits well under the 5MB payload cap; users can opt back into
+  the unbounded list per job.
+- **Bulk Exclude / Include / Set type** — when the Column Settings
+  filter matches one or more columns, a toolbar above the row list
+  lets the user apply Exclude / Include / Set Numeric / Set
+  Categorical to every filtered column in a single state update,
+  collapsing N PUT-coalesce events into one.
+- **Feature Weights 1k-column guard** — the Feature Weights toggle is
+  disabled (with an inline explanatory message) when the workspace
+  has more than 1,000 non-excluded columns. The per-feature weight
+  picker is not the right interaction model at that scale; the guard
+  surfaces the limit instead of silently breaking the UI.
+
 ### Test Infrastructure
 
 - 14 new contract / regression tests under
@@ -41,6 +69,11 @@ Foundation PR for Issue #361.
   `tests/contract/test_importance_top_n.py`,
   `tests/contract/test_diagnostic_export.py`, and
   `tests/regression/test_reg_0361_wide_preview.py`.
+- Frontend Vitest coverage for the wide-DataFrame UI: 28 cases on
+  `ColumnSettingsSection` (virtualization branch + bulk toolbar),
+  9 on `SearchableSelect`, 6 on the importance top-N toggle, 4 on
+  the FeatureWeightsEditor 1k-column guard, and 4 bulk-handler cases
+  on `useColumnOverrides`.
 
 ## [0.3.1] - 2026-05-04
 
