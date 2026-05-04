@@ -47,15 +47,23 @@ def test_evaluation_mixin_unknown_plot_raises_typed_error() -> None:
     "client asked for an unsupported plot" from "the underlying
     plot-generating code blew up". A typed exception lets the API map
     the former to 404 while leaving genuine backend failures as 500.
+
+    Issue #373: the original test used ``"shap-summary"`` as the
+    deliberately-unknown sample, but #373 added that key to the
+    dispatch (lizyml ``importance_plot(kind="shap")`` alias). We now
+    use a string that is structurally guaranteed to never become a
+    real plot type so this regression test stays meaningful.
     """
     mixin = EvaluationMixin()
     fake_model = MagicMock()
+    unknown_plot = "definitely-not-a-real-plot-type"
+    assert unknown_plot not in EvaluationMixin._PLOT_DISPATCH  # sanity
 
     with pytest.raises(PlotNotAvailableError) as exc_info:
-        mixin.plot(fake_model, "shap-summary")
+        mixin.plot(fake_model, unknown_plot)
 
     err = exc_info.value
-    assert err.plot_type == "shap-summary"
+    assert err.plot_type == unknown_plot
     assert isinstance(err.available, list)
     assert "learning-curve" in err.available  # known supported plot
     # Bare ValueError must NOT be raised — that was the old behaviour
