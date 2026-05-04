@@ -3139,4 +3139,49 @@ frontend で virtualization / top-N を入れても、転送する payload 自�
 
 - 2026-05-04 **Proposed** — Phase B (v0.4.0) 起点として起票。Acceptance criteria を満たす実装は同 PR に含める。**ユーザ承認済** (auto mode で Phase B 実装着手)
 
+### P-0098: load_dataframe チャンク化による fail-fast メモリガード（PR-B3 / R-5.2）
+
+- **Date:** 2026-05-05 起票
+- **Related:** Issue #383 (g) Large Dataset memory profiling, `docs/v0.4-business-readiness-plan.md` §6 (Phase R-5.2), PR-B1 P-0097 (Wide DataFrame data path)
+
+#### Motivation
+
+現状の `load_dataframe(path)` は `pd.read_csv(path)` で全行を一度にメモリに展開し、その**後**に `check_dataframe_memory(df)` で `LIZYSTUDIO_MAX_DF_MEMORY` ガードを発火する。5 GB 級の CSV が `data/path` 経由で渡されると pandas が読み終わる前に worker が OOM し、ガードが意味を成さない。Issue #383 (g) の bench / memory profiling は「ガードが先に fire して FileInvalidError 4xx を返す」ことを保証したいが、現状の単発 read ではそれが破れる。
+
+#### Purpose
+
+- CSV ファイルサイズ > 50MB のとき、`pd.read_csv(chunksize=100_000)` で row-batch ストリームし、各チャンク後に累積 `memory_usage(deep=True)` を加算
+- 累積メモリが `LIZYSTUDIO_MAX_DF_MEMORY` を超えた瞬間に `FileInvalidError` を raise して残りのチャンクを読まない
+- 既存 `pd.read_csv` 呼び出し挙動は閾値以下のファイルで完全に維持
+
+#### Impact
+
+- Public API 不変: `load_dataframe(path: str) -> pd.DataFrame` シグネチャ・戻り値・例外型 (FileInvalidError) は変わらない
+- 失敗タイミングの精緻化: 巨大ファイル = OOM crash → FileInvalidError 4xx に格上げ
+- 新 module-level 定数: `CHUNKED_LOAD_THRESHOLD_BYTES = 50 * 1024 * 1024`
+
+#### Compatibility
+
+- 50MB 以下の CSV (= MAX_UPLOAD_BYTES 100MB の半分以下、典型ユースケース): 直 read で完全互換
+- 50MB 超: チャンク読み + 最終 `pd.concat`。dtype 推論が pandas のチャンク境界で違う可能性は理論上あるが `pd.read_csv(chunksize=...)` 内部仕様で各チャンクが同じ dtype 推論を経るため、結合後の DataFrame は単発 read と同値
+- Parquet 経路: 変更なし (列ストアは push-down で十分、チャンク化不要)
+
+#### Acceptance criteria
+
+- [x] `tests/test_load_dataframe_chunked.py`: 8 cases (small/large/threshold/parquet/double-load 防止/named tempfile)
+- [x] `tests/bench/test_bench_large_dataset_memory.py`: ガードが LIZYSTUDIO_MAX_DF_MEMORY=1 で必ず fire することを invariant test として固定
+- [x] 既存 `tests/test_dataframe_memory.py` / `tests/test_data_api.py` regression なし
+
+#### Alternatives considered
+
+- **(a) pyarrow streaming**: 拒否。新依存、pandas との dtype 互換性検証コスト、現フェーズの scope 外 (handoff §3 で決定済)
+- **(b) polars 切替**: 拒否。同上、API/Adapter 層の書き換え量が桁違い
+- **(c) 何もしない (現状の OOM crash を放置)**: 拒否。Issue #383 (g) の Acceptance Criteria を満たせない
+
+→ 採用は **(d) pandas chunksize + 累積メモリ guard**。最小依存・既存 dtype 互換性維持・閾値以下は完全な後方互換
+
+#### Decision
+
+- 2026-05-05 **Proposed** — PR-B3 で実装。auto mode で Phase B 実装中、Change Gate scope は `load_dataframe` の失敗タイミング精緻化のみ。**ユーザ承認済** (Phase B 全体着手承認)
+
 
