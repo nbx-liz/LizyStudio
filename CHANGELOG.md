@@ -62,6 +62,19 @@ Foundation PR for Issue #361.
   picker is not the right interaction model at that scale; the guard
   surfaces the limit instead of silently breaking the UI.
 
+### Backend (PR-B3 — Large CSV scaling + #383 stress tests)
+
+- **Chunked CSV load with fail-fast memory guard (P-0098)** —
+  `load_dataframe(path)` now routes CSVs above
+  `CHUNKED_LOAD_THRESHOLD_BYTES = 50 MiB` through
+  `pd.read_csv(chunksize=100_000)`. Between chunks it sums the deep
+  memory usage and raises `FileInvalidError` as soon as the running
+  total exceeds `LIZYSTUDIO_MAX_DF_MEMORY` — without waiting for
+  pandas to materialise the rest of the file. Smaller files and all
+  parquet files keep the existing single-shot read path. Public
+  signature unchanged; only the failure timing is tightened so
+  oversized uploads return a 4xx instead of OOM-crashing the worker.
+
 ### Test Infrastructure
 
 - 14 new contract / regression tests under
@@ -74,6 +87,16 @@ Foundation PR for Issue #361.
   9 on `SearchableSelect`, 6 on the importance top-N toggle, 4 on
   the FeatureWeightsEditor 1k-column guard, and 4 bulk-handler cases
   on `useColumnOverrides`.
+- 8 new cases on `tests/test_load_dataframe_chunked.py` pinning the
+  fail-fast threshold + double-load prevention + parquet-passthrough
+  invariants.
+- 4 new cases on `tests/regression/test_reg_0027h_upload_concurrency.py`
+  covering #383 (h): tempfile distinctness, no-loss tracking under
+  contention, internally-consistent winner state, no 5xx surfaces.
+- 6 new cases on `tests/bench/test_bench_large_dataset_memory.py`:
+  3 latency benches (preview / describe / load_csv on the 100k-row
+  fixture, opt-in via `--benchmark-only`) plus 3 invariants that
+  enforce the memory guard contract regardless of bench mode.
 
 ## [0.3.1] - 2026-05-04
 
