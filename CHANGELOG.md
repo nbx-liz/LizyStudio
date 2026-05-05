@@ -7,26 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+## [0.4.1] - 2026-05-05
 
-- **`POST /fit` and `POST /tune` no longer 422 on warning-only configs
-  (PR-D1, Issue #394 follow-up)** — PR-C2 wired severity-aware gating
-  into `POST /api/workspace/config/validate`, `PUT /api/workspace/config`,
-  and `POST /api/workspace/config/upload`, but the four `if errors:
-  raise ValidationError(errors)` sites in `workspace_fit` /
-  `workspace_tune` still rejected any non-empty errors list. A config
-  the SPA legally saved (yellow advisory banner only) would 422 when
-  the user clicked Fit. Both endpoints now filter through the shared
-  `_blocking_errors` helper so only `severity="error"` entries block
-  the run; pre-PR-B4 entries with no severity continue to default to
-  blocking. Regression covered by `tests/contract/test_fit_tune_severity_filter.py`.
-- **`_workspace_metric_compatibility_errors` now restricts the
-  `mape` / `rmsle` / `r2` watchlist to `task=regression`** — previously
-  a binary or multiclass config with a numeric target could surface a
-  misleading R² warning when its distribution happened to look
-  constant from the validator's point of view. The watchlist is
-  regression-specific by construction, so the validator now
-  short-circuits on non-regression tasks.
+The **Validate clarity** patch release. Bundles three follow-ups to the
+v0.4.0 Wide DataFrame release surfaced during GUI verification (#393,
+#394) plus the v0.4.1 quality-gate fix that restored the warning-only
+fit path (PR-D1). Adopts upstream lizyml 0.11.0 so the SPA can
+recommend zero-tolerant sMAPE / WAPE alternatives when MAPE is
+incompatible with the loaded target.
+
+No breaking changes. All new behaviours degrade cleanly on pre-PR-B4
+backends (entries without a `severity` field default to `"error"`,
+preserving the legacy "any error blocks" semantics).
 
 ### Added
 
@@ -59,13 +51,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tuning.optuna.params.direction` chips and learning curve filters
   list `smape` / `wape` for `task=regression` without further wiring.
   Defensive fallback list in `lizystudio.backends.lizyml_metrics`
-  extended to include the two new metrics for parity. Unblocks the
-  PR-C2 (#394) `severity=warning` + `suggested_fix` work, which can
-  now propose `smape` as a zero-tolerant replacement for `mape` when
-  the dataset target contains zeros.
+  extended to include the two new metrics for parity.
 
 ### Fixed
 
+- **`POST /fit` and `POST /tune` no longer 422 on warning-only configs
+  (PR-D1, Issue #394 follow-up)** — the four `if errors: raise
+  ValidationError(errors)` sites in `workspace_fit` / `workspace_tune`
+  rejected any non-empty errors list, so a config the SPA legally saved
+  (yellow advisory banner only) would 422 when the user clicked Fit.
+  Both endpoints now filter through the shared `_blocking_errors`
+  helper so only `severity="error"` entries block the run; pre-PR-B4
+  entries with no severity continue to default to blocking. Regression
+  covered by `tests/contract/test_fit_tune_severity_filter.py`.
+- **`_workspace_metric_compatibility_errors` now restricts the
+  `mape` / `rmsle` / `r2` watchlist to `task=regression`** — previously
+  a binary or multiclass config with a numeric target could surface a
+  misleading R² warning when its distribution happened to look
+  constant from the validator's point of view. The watchlist is
+  regression-specific by construction, so the validator now
+  short-circuits on non-regression tasks.
 - **Hide redundant `SHAP Summary` tab in Workspace Plot panel (#393)** —
   Workspace previously surfaced SHAP both as a standalone `SHAP Summary`
   tab and as `Importance` with `kind=shap`, which rendered identical
