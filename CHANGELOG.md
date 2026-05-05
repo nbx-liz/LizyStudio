@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-05
+
+The **Validate clarity** patch release. Bundles three follow-ups to the
+v0.4.0 Wide DataFrame release surfaced during GUI verification (#393,
+#394) plus the v0.4.1 quality-gate fix that restored the warning-only
+fit path (PR-D1). Adopts upstream lizyml 0.11.0 so the SPA can
+recommend zero-tolerant sMAPE / WAPE alternatives when MAPE is
+incompatible with the loaded target.
+
+No breaking changes. All new behaviours degrade cleanly on pre-PR-B4
+backends (entries without a `severity` field default to `"error"`,
+preserving the legacy "any error blocks" semantics).
+
+### Added
+
+- **Validate API auto-disable for incompatible regression metrics
+  (#394)** — `POST /api/workspace/config/validate` and
+  `PUT /api/workspace/config` now return `severity="warning"` entries
+  when the loaded dataset's target column makes a configured metric
+  mathematically impossible: `mape` on a target that contains zeros,
+  `rmsle` on a target with negative values, and `r2` on a constant
+  target. Each entry carries a `suggested_fix` naming the metric to
+  remove; for `mape` the suggestion also points at the new `smape`
+  and `wape` metrics shipped in lizyml 0.11.0 as zero-tolerant
+  replacements. The frontend renders these advisories in a new yellow
+  banner above ConfigForm with the suggestion as a second line, while
+  the existing red banner keeps surfacing blocking errors.
+
+### Changed
+
+- **Validate response `valid` flag and PUT `saved` flag now honor
+  severity (#394)** — only `severity="error"` entries flip
+  `valid=false` / `saved=false`. Pre-PR-B4 entries with no severity
+  default to `"error"` for backward compatibility, so existing
+  consumers (legacy frontends, scripts piping JSON) see no change.
+  Warnings advise but neither block persistence nor the Fit button —
+  which now gates on `severity=error` count instead of total error
+  count.
+- **Bump `lizyml` minimum to `0.11.0` (<0.12.0)** — adopts upstream
+  sMAPE / WAPE regression metrics (LizyML H-0071 / #101). The new
+  metrics surface automatically through `MetricRegistry` lookup, so
+  `tuning.optuna.params.direction` chips and learning curve filters
+  list `smape` / `wape` for `task=regression` without further wiring.
+  Defensive fallback list in `lizystudio.backends.lizyml_metrics`
+  extended to include the two new metrics for parity.
+
+### Fixed
+
+- **`POST /fit` and `POST /tune` no longer 422 on warning-only configs
+  (PR-D1, Issue #394 follow-up)** — the four `if errors: raise
+  ValidationError(errors)` sites in `workspace_fit` / `workspace_tune`
+  rejected any non-empty errors list, so a config the SPA legally saved
+  (yellow advisory banner only) would 422 when the user clicked Fit.
+  Both endpoints now filter through the shared `_blocking_errors`
+  helper so only `severity="error"` entries block the run; pre-PR-B4
+  entries with no severity continue to default to blocking. Regression
+  covered by `tests/contract/test_fit_tune_severity_filter.py`.
+- **`_workspace_metric_compatibility_errors` now restricts the
+  `mape` / `rmsle` / `r2` watchlist to `task=regression`** — previously
+  a binary or multiclass config with a numeric target could surface a
+  misleading R² warning when its distribution happened to look
+  constant from the validator's point of view. The watchlist is
+  regression-specific by construction, so the validator now
+  short-circuits on non-regression tasks.
+- **Hide redundant `SHAP Summary` tab in Workspace Plot panel (#393)** —
+  Workspace previously surfaced SHAP both as a standalone `SHAP Summary`
+  tab and as `Importance` with `kind=shap`, which rendered identical
+  figures. The Workspace tab strip now filters out `shap-summary` so
+  SHAP is reachable only via the `Importance` tab's kind selector.
+  Inference's `SHAP Summary` accordion (#373) is unaffected — it does
+  not consume `PlotSection` and continues to render the dedicated
+  surface. `docs/plot-matrix.md` symmetry rule 1 generalised to allow
+  the `{tuning, shap-summary}` Workspace exclusion set.
+
 ## [0.4.0] - 2026-05-05
 
 The **Wide DataFrame** release. Phase B (PR-B1 — PR-B5) closes the

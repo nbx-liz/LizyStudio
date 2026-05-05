@@ -101,9 +101,32 @@ export interface ConfigUpdateResponse {
   saved: boolean;
 }
 
+/**
+ * Validation entry returned by the workspace config validators.
+ *
+ * PR-B4 / R-3.4 introduced ``severity`` and ``suggested_fix``:
+ *
+ * - ``severity`` — ``"error"`` blocks Fit/Tune; ``"warning"`` advises
+ *   but does not block (#394). Both schema-level Pydantic errors and
+ *   the ``n_splits > n_rows`` validator emit ``"error"``; the metric
+ *   compatibility validator emits ``"warning"``.
+ * - ``suggested_fix`` — optional human-readable next-action string.
+ *   ``null`` when the validator does not know how to repair the field.
+ *
+ * Both fields are optional in the type so frontends running against an
+ * older backend still type-check; consumers that gate on severity must
+ * default missing values to ``"error"`` for backward compatibility.
+ */
 export interface ConfigError {
   path: string;
   message: string;
+  severity?: "error" | "warning" | "info";
+  suggested_fix?: string | null;
+}
+
+/** True when the entry should block Fit/Tune (legacy default = error). */
+export function isBlockingError(err: ConfigError): boolean {
+  return (err.severity ?? "error") === "error";
 }
 
 // --- Job types — re-exported from the generated schema (C-4).

@@ -222,6 +222,80 @@ describe("useModelPanelData", () => {
     expect(result.current.disabledReason).toBe("Load data first");
   });
 
+  // PR-C2 / Issue #394: warnings advise but do not block Fit. Only
+  // severity="error" entries (or pre-PR-B4 entries with no severity)
+  // disable the Fit button. Warnings reach the hook's ``errors`` state
+  // through the debounced validateConfig call after a successful save.
+  it("fitEnabled stays true when only severity=warning entries are present", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(validateConfig).mockResolvedValueOnce({
+      errors: [
+        {
+          path: "evaluation.metrics",
+          message: "MAPE undefined when target contains zeros.",
+          severity: "warning",
+          suggested_fix: "Remove 'mape' from evaluation.metrics.",
+        },
+      ],
+      // biome-ignore lint/suspicious/noExplicitAny: test fixture shape
+    } as any);
+
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(
+      () => useModelPanelData({ hasData: true, running: false }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.config).toBeDefined());
+
+    await act(async () => {
+      await result.current.handleConfigChange({ model: { name: "X" } });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
+    });
+
+    expect(result.current.errors).toHaveLength(1);
+    expect(result.current.errors[0]?.severity).toBe("warning");
+    expect(result.current.fitEnabled).toBe(true);
+    expect(result.current.disabledReason).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("fitEnabled is false when at least one severity=error entry is present", async () => {
+    vi.mocked(updateConfig).mockResolvedValueOnce({
+      config: { model: {} },
+      errors: [
+        {
+          path: "split.n_splits",
+          message: "n_splits=1000 > n_rows=50",
+          severity: "error",
+          suggested_fix: "Set Folds to 50 or fewer.",
+        },
+        {
+          path: "evaluation.metrics",
+          message: "MAPE undefined when target contains zeros.",
+          severity: "warning",
+          suggested_fix: "Remove 'mape' from evaluation.metrics.",
+        },
+      ],
+      saved: false,
+      // biome-ignore lint/suspicious/noExplicitAny: test fixture shape
+    } as any);
+
+    const { wrapper } = makeWrapper();
+    const { result } = renderHook(
+      () => useModelPanelData({ hasData: true, running: false }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.config).toBeDefined());
+    await act(async () => {
+      await result.current.handleConfigChange({ model: { name: "X" } });
+    });
+
+    expect(result.current.fitEnabled).toBe(false);
+    expect(result.current.disabledReason).toBe("Fix validation errors first");
+  });
+
   it("tuneEnabled requires a non-empty search space when capability disallows empty", async () => {
     const { wrapper } = makeWrapper();
     const { result } = renderHook(

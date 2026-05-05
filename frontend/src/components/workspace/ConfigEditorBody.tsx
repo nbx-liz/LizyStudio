@@ -6,8 +6,8 @@
  * state + change handlers flow in via props.
  */
 
-import { Info } from "lucide-react";
-import type { ConfigError } from "@/api/types";
+import { AlertTriangle, Info } from "lucide-react";
+import { type ConfigError, isBlockingError } from "@/api/types";
 import { ConfigForm } from "./ConfigForm";
 import { TuneTab } from "./TuneTab";
 
@@ -46,6 +46,12 @@ export function ConfigEditorBody({
   columns,
 }: ConfigEditorBodyProps) {
   const visibleErrors = errors.filter((err) => err.path || err.message);
+  // Issue #394 / PR-C2: split entries by severity so warnings (advisory)
+  // render in a yellow banner separate from blocking errors. Pre-PR-B4
+  // backends do not emit ``severity``; ``isBlockingError`` defaults to
+  // "error" in that case, so the existing red banner keeps working.
+  const blockingErrors = visibleErrors.filter(isBlockingError);
+  const warningErrors = visibleErrors.filter((err) => !isBlockingError(err));
   const showEmptyChoiceBanner =
     activeTab === "tune" && emptyChoiceKeys.length > 0;
 
@@ -70,13 +76,42 @@ export function ConfigEditorBody({
           </p>
         </output>
       )}
-      {hasData && visibleErrors.length > 0 && (
-        <div className="mb-4 rounded-md border border-destructive/50 bg-destructive/10 p-3">
-          {visibleErrors.map((err, i) => (
+      {hasData && blockingErrors.length > 0 && (
+        <div
+          className="mb-4 rounded-md border border-destructive/50 bg-destructive/10 p-3"
+          data-testid="config-error-banner"
+          role="alert"
+        >
+          {blockingErrors.map((err, i) => (
             <p key={`err-${i}`} className="text-xs text-destructive">
               {[err.path, err.message].filter(Boolean).join(": ")}
             </p>
           ))}
+        </div>
+      )}
+      {hasData && warningErrors.length > 0 && (
+        <div
+          className="mb-4 rounded-md border border-warning-border bg-warning p-3"
+          data-testid="config-warning-banner"
+          role="status"
+        >
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning-fg" />
+            <div className="flex-1 space-y-2">
+              {warningErrors.map((err, i) => (
+                <div key={`warn-${i}`} className="text-xs">
+                  <p className="font-medium text-warning-fg">
+                    {[err.path, err.message].filter(Boolean).join(": ")}
+                  </p>
+                  {err.suggested_fix && (
+                    <p className="mt-0.5 text-warning-fg/80">
+                      Suggestion: {err.suggested_fix}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
       {showEmptyChoiceBanner && (

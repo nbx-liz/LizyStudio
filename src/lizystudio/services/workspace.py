@@ -194,6 +194,12 @@ def validate_config(ws: WorkspaceState, config: dict[str, Any]) -> list[dict[str
     # Surfacing it here lets the existing "Fix validation errors first"
     # banner block the user before they even click Fit.
     normalized.extend(_workspace_split_errors(ws, config))
+    # Issue #394: regression metrics that the loaded target column makes
+    # mathematically impossible (MAPE on zero targets, RMSLE on negative
+    # targets, R² on a constant target). Returned as severity="warning"
+    # so the banner advises but does not block — the user can still fit
+    # if they accept that lizyml will skip those metrics mid-fold.
+    normalized.extend(_workspace_metric_compatibility_errors(ws, config))
     return normalized
 
 
@@ -231,6 +237,133 @@ def _workspace_split_errors(
             "suggested_fix": (f"Set Folds (split.n_splits) to {n_rows} or fewer."),
         }
     ]
+
+
+def _metric_entry_name(metric: Any) -> str | None:
+    """Return the metric name from a MetricEntry (str or {name: params}).
+
+    Mirrors the frontend's ``metricEntryName`` helper: a metric is either
+    a plain string ``"auc"`` or a single-key dict ``{"precision_at_k":
+    {"k": 20}}``. Anything else (None, multi-key dict, non-string key)
+    returns None so callers can defensively skip malformed entries
+    without raising.
+    """
+    if isinstance(metric, str):
+        return metric
+    if isinstance(metric, dict) and len(metric) == 1:
+        key = next(iter(metric.keys()))
+        if isinstance(key, str):
+            return key
+    return None
+
+
+def _workspace_metric_compatibility_errors(
+    ws: WorkspaceState, config: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Issue #394: warn before Fit when a configured regression metric
+    is incompatible with the loaded dataset's target column.
+
+    Each entry returns ``severity="warning"`` (not ``"error"``) so the
+    banner advises but does not gate Fit — the underlying lizyml fit
+    path may either skip the metric or surface a clearer mid-fold
+    error, but no data is destroyed by attempting it. The
+    ``suggested_fix`` names the metric to remove and, where applicable,
+    points at upstream lizyml 0.11.0's sMAPE / WAPE as zero-tolerant
+    alternatives.
+
+    Currently detected (regression task only):
+
+    * ``mape``  — undefined when ``y_true`` contains zeros
+                  (lizyml/metrics/regression.py raises mid-fit)
+    * ``rmsle`` — undefined when ``y_true`` contains negative values
+    * ``r2``    — degenerate (NaN / +∞) when the target is constant
+                  (variance == 0)
+
+    Short-circuits to an empty list when no data is loaded, when the
+    target column is missing or non-numeric, or when ``evaluation`` is
+    not a dict. Defensive on every layer because ``validate_config``
+    runs against arbitrary user input that the schema layer may also
+    have rejected.
+    """
+    if ws.dataframe is None:
+        return []
+    if not isinstance(config, dict):
+        return []
+    # PR-D1 / Issue #394 follow-up (code-review HIGH-1): the watchlist
+    # (mape / rmsle / r2) is regression-specific. A binary or multiclass
+    # config with a numeric target whose distribution happens to satisfy
+    # one of the triggers (e.g. constant 0/1 target) would otherwise
+    # surface a misleading R² warning. ``task`` lives at the top level
+    # of LizyMLConfig (see backends/lizyml/config_mixin.py:44); restrict
+    # to ``task=regression``.
+    if config.get("task") != "regression":
+        return []
+    data = config.get("data")
+    if not isinstance(data, dict):
+        return []
+    target = data.get("target")
+    if not isinstance(target, str) or target not in ws.dataframe.columns:
+        return []
+    evaluation = config.get("evaluation")
+    metrics = evaluation.get("metrics") if isinstance(evaluation, dict) else None
+    if not isinstance(metrics, list) or not metrics:
+        return []
+    target_series = ws.dataframe[target]
+    if not pd.api.types.is_numeric_dtype(target_series):
+        return []
+
+    metric_names: set[str] = set()
+    for entry in metrics:
+        name = _metric_entry_name(entry)
+        if name is not None:
+            metric_names.add(name)
+
+    errors: list[dict[str, Any]] = []
+    if "mape" in metric_names and bool((target_series == 0).any()):
+        errors.append(
+            {
+                "path": "evaluation.metrics",
+                "message": (
+                    f"MAPE is undefined when target column '{target}' contains zeros."
+                ),
+                "severity": "warning",
+                "suggested_fix": (
+                    "Remove 'mape' from evaluation.metrics — or replace it "
+                    "with 'smape' / 'wape' which tolerate zero targets "
+                    "(lizyml >= 0.11.0)."
+                ),
+            }
+        )
+    if "rmsle" in metric_names and bool((target_series < 0).any()):
+        errors.append(
+            {
+                "path": "evaluation.metrics",
+                "message": (
+                    f"RMSLE is undefined when target column '{target}' "
+                    f"contains negative values."
+                ),
+                "severity": "warning",
+                "suggested_fix": "Remove 'rmsle' from evaluation.metrics.",
+            }
+        )
+    if "r2" in metric_names:
+        # Constant target → variance == 0. Use std() to skip NaNs; pandas
+        # returns NaN when there is < 2 non-null observations, which we
+        # also treat as "cannot compute R²".
+        std = target_series.std(skipna=True)
+        if pd.isna(std) or float(std) == 0.0:
+            errors.append(
+                {
+                    "path": "evaluation.metrics",
+                    "message": (
+                        f"R² is undefined when target column '{target}' is "
+                        f"constant (variance == 0)."
+                    ),
+                    "severity": "warning",
+                    "suggested_fix": "Remove 'r2' from evaluation.metrics.",
+                }
+            )
+    return errors
 
 
 def load_config_from_file(
