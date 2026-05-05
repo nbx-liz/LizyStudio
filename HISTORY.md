@@ -3184,11 +3184,96 @@ frontend で virtualization / top-N を入れても、転送する payload 自�
 
 - 2026-05-05 **Proposed** — PR-B3 で実装。auto mode で Phase B 実装中、Change Gate scope は `load_dataframe` の失敗タイミング精緻化のみ。**ユーザ承認済** (Phase B 全体着手承認)
 
-### P-0099: (採番予約) v0.5 R-1 状態整合性 invariants + `paused` job state（Change Gate）
+### P-0099: v0.5 R-1 状態整合性 invariants + `paused` job state（Change Gate）
 
-- **Status:** 🟡 採番予約のみ。Day 4 で本文起票予定
-- **Scope:** v0.5 R-1.1〜R-1.4 で導入する job state machine 不変条件の宣言、および R-1.4 (#360) で必要となる `paused` 状態の Change Gate
-- **Reference:** `docs/pre-v05-handoff-2026-05-05.md` §3.1 M-2
+- **Date:** 2026-05-06 起票
+- **Related:** Issue #360 (Tune long-run resumability), Issue #358 (BlockedGroup race), Issue #359 (job-num drift), Issue #384 (Server Restart Recovery), LizyML #105 (Optuna persistent storage), `docs/v0.4-business-readiness-plan.md` §2 (R-1), `~/.claude/rules/common/invariants-first.md`
+
+#### Motivation
+
+v0.4 リリースまでの slot release / cancel race 系列バグ (P-0086〜P-0089 周辺) はいずれも「不変条件が事前に文章化されていない」ことが根本原因だった (memory `feedback_count_budget_assertions` の lesson 系列)。v0.5 で R-1.4 (Tune long-run resumability, 24h+) を実装すると job state machine が **`paused` 状態を新たに持つ** ため、現状の slot release / cancel / subprocess crash の各経路に新しい遷移が増える。先に invariants を declare → invariant test を RED phase で書く → 実装、の順を強制する。
+
+CLAUDE.md §2 Change Gate 対象（state machine 変更 / 並行性・所有権の設計 / shared state の不変条件）にすべて該当するため Proposal-first で承認を取る。
+
+#### Purpose
+
+- v0.5 R-1.1〜R-1.4 全体の不変条件を **R-1.x 着手前に invariant test として encode** し、リファクタ中に regression を「Test failed」で即座に発見できるようにする
+- `paused` 状態を job lifecycle に追加（`pending → running → paused → running → succeeded|failed|cancelled` の遷移を許可、illegal transitions は assert で reject）
+- `meta.json` の atomic write (tmpfile + fsync + rename) を invariant 化し、subprocess crash 中のファイル破損を構造的に防ぐ
+- 上記すべてを各 R-1.x phase の Acceptance criteria に紐付ける
+
+#### Invariants
+
+以下を v0.5 R-1 期間中の **不変条件** として宣言する。各 INV-N は対応する invariant test を `tests/regression/` または `tests/e2e/` に持ち、code には possible なら `assert` / runtime guard / branded type で encode する。
+
+- **INV-1**: `active_job_id` holds at most one running-or-paused job at any time — released on **completion OR cancel OR exception OR SIGKILL OR WebSocket disconnect OR browser close** (6 termination paths). 違反シナリオ: terminal write 後に release が漏れる、subprocess crash で release callback が呼ばれない
+- **INV-2**: `meta.json` is written atomically (tmpfile + fsync + rename) — `kill -9` mid-write でも整合性が破れない。違反シナリオ: 親プロセスが部分書き込み中に強制終了 → 子の load_job が JSON parse error
+- **INV-3**: state machine transitions は明示宣言、illegal transitions は assert で reject。許可される遷移は以下のみ:
+  - `[*] → pending`（POST /fit / /tune）
+  - `pending → running` (worker thread が claim_active)
+  - `pending → cancelled` (DELETE / cancel before start)
+  - `running → succeeded` (terminal write OK)
+  - `running → failed` (exception or subprocess died)
+  - `running → cancelled` (cancel signal observed mid-run)
+  - **`running → paused`** (Tune trial 完了時に user pause OR scheduled checkpoint, R-1.4 で導入)
+  - **`paused → running`** (Resume button or auto-resume on restart)
+  - **`paused → cancelled`** (cancel during paused state)
+  - **`paused → failed`** (storage corruption detected on resume)
+- **INV-4**: `paused` 状態の job は **trial-level checkpoint + `meta.json` から完全復元可能** — Optuna study を re-attach して trial.number / best_value / trial.state が一致する。違反シナリオ: journal file が corrupted で resume 不能、勝手に新 trial が走る
+- **INV-5**: cancel observation is monotonic — `is_cancel_requested(job_id)` が一度 True を返したら、その後 (job 完了まで) 連続 True を返す。違反シナリオ: race で `clear_cancel` が早く走り、worker が「キャンセルされてない」と判断して terminal write を上書き
+- **INV-6**: subprocess crash recovery — 子 process が `SIGKILL` で死ぬと、親 watchdog が **bounded time window 以内** に `failed (reason="subprocess died")` で terminal write + slot release。違反シナリオ: 子が消えても active_slot がぶら下がり続けて次の job を block
+- **INV-7**: WebSocket disconnect は active slot を release **しない** — 進行中 job は subscriber 数に依らず completion または terminal failure まで走る。違反シナリオ: ブラウザを閉じたら fit が止まる、reload で resume できない
+
+#### Impact
+
+**Public API (Change Gate scope):**
+- `meta.json` schema に `"paused"` を追加。`status: Literal["pending","running","succeeded","failed","cancelled","paused"]`
+- `format_version` を `1` → `2` (P-0095 round-trip CI gate に組み込み)
+- `POST /api/jobs/{job_id}/pause` (新規, R-1.4): running Tune を paused に遷移
+- `POST /api/jobs/{job_id}/resume` 既存と統合: paused state を resume するロジックを既存の retune-resume 経路と並行サポート (H-0062 Phase B 拡張)
+- WebSocket message に `{"type":"paused", "trial_number": N, "checkpoint_path": "..."}` を追加
+- Frontend: Jobs UI に "Pause" / "Resume" ボタン (paused 状態のみ表示)
+
+**Internal (no API change):**
+- `services/jobs.py:JobStore` に `pause(job_id)` / `unpause(job_id)` 追加
+- `services/training.py` の Tune loop で trial 完了 callback に "should_pause" check を挿入
+- `backends/lizyml/lifecycle_mixin.py` で Optuna study の `storage` パラメタを passthrough (LizyML #105 待ち)
+
+#### Compatibility
+
+- v0.4 までで作成した `meta.json` (format_version=1) は `paused` フィールドを持たない → migration で `paused: false` を default に挿入。read-only で読める
+- POST /api/jobs/{job_id}/pause は新規追加なのでクライアント側で 404 をハンドルする legacy path は不要
+- WebSocket `paused` メッセージは未知タイプとして無視されるよう既存 client の switch に default branch を追加 (R-2.1 で別途扱う)
+- LizyML 0.11.x で `storage=` パラメタが無いため、LizyML #105 が merged するまでは `paused` 経路を feature flag (`LIZYSTUDIO_TUNE_RESUME_ENABLED=0`) で off にする
+
+#### Acceptance criteria
+
+R-1.1〜R-1.5b の各 phase に invariant test を割り当てる。本 Proposal の DoD は「invariant declaration が PLAN.md の各 phase に reflectee されている」こと。実装は phase 単位で行う。
+
+- [ ] PLAN.md v3-17 (R-1.1) に **INV-1 / INV-5** の invariant test を Acceptance criteria として明記
+- [ ] PLAN.md v3-18 (R-1.2) に **INV-5** + #358 の regression test を明記
+- [ ] PLAN.md v3-19 (R-1.3) に **INV-2 / INV-6** の invariant test を明記
+- [ ] PLAN.md v3-20 (R-1.4) に **INV-3 / INV-4** の invariant test + LizyML #105 dependency を明記
+- [ ] PLAN.md v3-21 (R-1.5) に Issue #359 (job-num drift) の regression test を明記
+- [ ] PLAN.md v3-22 (R-1.5b) に **INV-7** + Issue #384 の regression test を明記
+- [ ] BLUEPRINT.md §3.4 (Job lifecycle) に上記 INV-1〜INV-7 を明記
+- [ ] CHANGELOG.md (v0.5.0 release notes drafting 時) に `paused` 状態追加を Breaking 寸前 (Added) で記述
+- [ ] Issues #358 / #359 / #360 / #384 を本 Proposal の child Issue として label
+
+#### Alternatives considered
+
+- **(a) Invariant 宣言なし、phase 別に都度 PR 単位で書く**: 拒否。slot release 系の regression 5回連発の実績 (memory `feedback_symmetry_audit_on_fixes`) は事前 invariant declaration 不在が原因
+- **(b) `paused` の代わりに既存 `running` のサブステートとして表現**: 拒否。状態遷移が暗黙化され client / DB / WS 全層で「実は走っていない running」が解釈の余地として残る
+- **(c) Optuna 永続化を LizyStudio 側で wrap (LizyML #105 を待たない)**: 拒否。`Tuner.tune()` を bypass すると round_number / prior_trials / expanded_dims tracking (LizyML H-0068) を re-implement する必要、保守コストで割に合わない
+- **(d) format_version を bump せず paused を後付け**: 拒否。P-0095 の round-trip CI gate が format_version を読むので migration matrix に明示的に乗せる方が安全
+
+→ 採用は **(e) Invariants 7 件を Proposal で declare、phase 単位で invariant test を RED phase に強制、`paused` を state machine の正規 1st-class member にする**。
+
+#### Decision
+
+- 2026-05-06 **Proposed** — v0.5 R-1.1 着手前に user 承認を取り、PLAN.md に v3-17〜v3-22 を追加した時点で **Approved**。実装は phase 単位、各 phase の PR が invariant test を含む
+
+
 
 ### P-0100: severity envelope の正式化（PR-B4 → PR-C2/PR-D1, Issue #394）
 

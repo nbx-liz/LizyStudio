@@ -1233,8 +1233,280 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 
 ---
 
-## 採番ガイダンス（v3-17 以降）
+## Phase v3-17: v0.5 R-1.1 — Slot release invariant 6 経路検証（P-0099 INV-1 / INV-5）
 
-- 新規 Proposal は **P-0095** 以降を起票（P-0094 = 2026-05-01 pytest-benchmark）。
-- 仕様変更を伴う作業は HISTORY.md に Proposal → 本 PLAN.md にフェーズ追加（`v3-17`...）の順で進める。
+**期間:** v0.5 着手後 1 週間（LizyML #105 と独立）
+
+**対象 Proposal:** P-0099
+
+**Entry criteria:**
+- HISTORY.md P-0099 が **Approved**（user 承認）
+- Issues #358 / #359 / #360 / #384 に P-0099 の child label が貼られている
+
+**動機:** v0.4 までで slot release 系 regression が 5 連続発生（P-0086〜P-0091 周辺）した根本原因は不変条件の事前文書化不在。v0.5 R-1.4 で `paused` 状態を追加する前に、6 経路（normal / cancel / exception / SIGKILL / WebSocket切断 / browser閉じる）すべてで `active_job_id` が release されることを invariant test で固定する。
+
+**サブフェーズ:**
+
+| サブフェーズ | 内容 | 状態 | PR |
+|---|---|---|---|
+| v3-17a | INV-1 / INV-5 の invariant test を `tests/regression/test_inv_slot_release.py` に書く（RED phase） | 🟡 | — |
+| v3-17b | 既存 release 経路の audit + 抜け落ちを修正（GREEN phase） | 🟡 | — |
+| v3-17c | Playwright で WS切断 / browser閉じる経路を E2E 化 | 🟡 | — |
+
+**DoD:**
+- [ ] `tests/regression/test_inv_slot_release.py` で 6 経路すべてが green、各 path に `assert active_job_id is None` がある
+- [ ] `tests/regression/test_inv_cancel_monotonic.py` で `is_cancel_requested` の monotonic 性が確認される（INV-5）
+- [ ] Playwright `tests/e2e/slot-release-paths.spec.ts` で WS切断 + browser閉じるの 2 経路を実機 verification
+- [ ] `services/jobs.py:JobStore` に `assert _active_job_id is None or _active_job_id == job_id` 等の runtime guard が encode 済
+
+**Exit criteria:** 上記 DoD すべて green。次は v3-18。
+
+---
+
+## Phase v3-18: v0.5 R-1.2 — Cancel race の修復（P-0099 INV-5 / Issue #358）
+
+**期間:** v3-17 完了後 1 週間
+
+**対象 Proposal:** P-0099, Issue #358 (BlockedGroup race)
+
+**動機:** Cancel + 完了通知の競合で「キャンセル押下後の `cancelled` 状態が completion で上書きされる」regression を構造的に閉じる。memory `feedback_count_budget_assertions` の lesson を踏まえ、count-based assertion で証明する。
+
+**Entry criteria:** v3-17 完了。
+
+**サブフェーズ:**
+
+| サブフェーズ | 内容 | 状態 | PR |
+|---|---|---|---|
+| v3-18a | Issue #358 の reproducer を `tests/regression/test_reg_358_blocked_group_cancel_race.py` に固定 | 🟡 | — |
+| v3-18b | cancel + terminal write の race を count-based assertion で test | 🟡 | — |
+| v3-18c | services/training.py で cancel observation を pre-terminal-write に固定 | 🟡 | — |
+
+**DoD:**
+- [ ] Issue #358 が close 済（reproducer green）
+- [ ] count-based assertion: 100 並行 cancel-during-completion で `cancelled` 状態が常に observable 1 件以上
+- [ ] INV-5 の monotonic 性が cancel race のすべての interleaving で破れない
+
+---
+
+## Phase v3-19: v0.5 R-1.3 — Subprocess crash 復旧 + atomic meta.json（P-0099 INV-2 / INV-6）
+
+**期間:** v3-18 完了後 1 週間
+
+**対象 Proposal:** P-0099
+
+**動機:** OpenMP detection で subprocess に行く経路は kill -9 で死ぬと親が状態を見失う既知のリスク。`meta.json` の atomic write も子プロセスが mid-write で死ぬと file が壊れる。R-1.4 (Tune resume) で trial-level checkpoint を書く前に、書き込み一貫性を保証する。
+
+**Entry criteria:** v3-18 完了。
+
+**サブフェーズ:**
+
+| サブフェーズ | 内容 | 状態 | PR |
+|---|---|---|---|
+| v3-19a | `services/jobs.py:_write_meta_atomic` で tmpfile + fsync + rename を実装 | 🟡 | — |
+| v3-19b | `tests/regression/test_inv_meta_json_atomic.py` で kill -9 mid-write の simulate test (INV-2) | 🟡 | — |
+| v3-19c | subprocess crash watchdog を `services/training.py` に追加（INV-6） | 🟡 | — |
+| v3-19d | `tests/regression/test_inv_subprocess_crash_recovery.py` で kill -9 → bounded time → failed terminal の test | 🟡 | — |
+
+**DoD:**
+- [ ] INV-2 / INV-6 の invariant test green
+- [ ] `meta.json` write 経路すべてが `_write_meta_atomic` 経由（grep で hand-rolled `open(...,"w")` がない）
+- [ ] watchdog が `polling interval <= 5s` で subprocess の生存確認、死亡検知から terminal write までが <= 10s
+
+---
+
+## Phase v3-20: v0.5 R-1.4 — Tune long-run resumability（P-0099 INV-3 / INV-4 / Issue #360）
+
+**期間:** v3-19 完了後 3 週間。**LizyML #105 (Optuna persistent storage) merged が前提。**
+
+**対象 Proposal:** P-0099 + Issue #360
+
+**動機:** v0.4 で識別された最大の業務リスク (`docs/v0.4-business-readiness-plan.md` §0)。24h+ Tune 中に SIGKILL / network 切断 / browser リロードで進捗が完全消失する問題を構造的に解消する。
+
+**Entry criteria:**
+- v3-19 完了
+- LizyML #105 merged + LizyStudio 側 `pyproject.toml` で対応 minor version へ bump
+- `LIZYSTUDIO_TUNE_RESUME_ENABLED=1` を default に切り替え可能
+
+**サブフェーズ:**
+
+| サブフェーズ | 内容 | 状態 | PR |
+|---|---|---|---|
+| v3-20a | `meta.json` schema に `status="paused"` 追加 + format_version 1 → 2 migration（INV-3） | 🟡 | — |
+| v3-20b | `backends/lizyml/lifecycle_mixin.py` で `tune(storage=...)` passthrough | 🟡 | — |
+| v3-20c | `services/jobs.py` に `pause(job_id)` / `unpause(job_id)`、API `POST /api/jobs/{job_id}/pause` 追加 | 🟡 | — |
+| v3-20d | WebSocket message に `paused` type 追加 + frontend ハンドリング | 🟡 | — |
+| v3-20e | Frontend Jobs UI に Pause / Resume ボタン（paused 状態のみ表示） | 🟡 | — |
+| v3-20f | `tests/regression/test_inv_paused_roundtrip.py` で trial-level checkpoint round-trip (INV-4) | 🟡 | — |
+| v3-20g | Playwright `tests/e2e/tune-resume.spec.ts` で 24h 模擬 (時間圧縮 mock) の resume シナリオ | 🟡 | — |
+
+**DoD:**
+- [ ] INV-3 / INV-4 の invariant test green
+- [ ] Issue #360 が close 済
+- [ ] format_version=2 への migration が P-0095 round-trip CI gate に組み込まれている
+- [ ] CHANGELOG (v0.5 draft) に `paused` 状態が Added で記載
+- [ ] `LIZYSTUDIO_TUNE_RESUME_ENABLED` を `1` で default 化、feature flag 経由で off にも切替可
+
+---
+
+## Phase v3-21: v0.5 R-1.5 — Issue #359 job-num drift 解消
+
+**期間:** v3-20 と並行可（state machine 変更を含まない）、0.5 週間
+
+**対象:** Issue #359
+
+**動機:** `job_num` を frontend 側で計算せず API レスポンスに含めることで、削除や cancel 後の番号 drift を解消。
+
+**Entry criteria:** v3-17 完了（slot release が安定したら着手可）。
+
+**サブフェーズ:**
+
+| サブフェーズ | 内容 | 状態 | PR |
+|---|---|---|---|
+| v3-21a | `meta.json` に不変 `job_num: int` を保存（format_version=2 と同 PR が望ましい） | 🟡 | — |
+| v3-21b | API `GET /api/jobs` / `GET /api/jobs/{id}` レスポンスに `job_num` 追加（openapi-typescript 再生成） | 🟡 | — |
+| v3-21c | Frontend で `job_num` を index 計算から API レスポンス参照に切替 | 🟡 | — |
+
+**DoD:**
+- [ ] Issue #359 が close 済
+- [ ] `tests/regression/test_reg_359_job_num_stable.py` で削除 + 新規作成サイクル後の番号 stability 確認
+
+---
+
+## Phase v3-22: v0.5 R-1.5b — Server Restart Recovery（P-0099 INV-7 / Issue #384）
+
+**期間:** v3-20 完了後 1 週間
+
+**対象:** P-0099 + Issue #384 (#360 ブロック解除後)
+
+**動機:** サーバ再起動後に running / paused job が UI に正しく復元されること。LizyML #105 + R-1.4 が完了している前提で、再起動シナリオを E2E 化する。
+
+**Entry criteria:** v3-20 完了 (#360 解消)。
+
+**サブフェーズ:**
+
+| サブフェーズ | 内容 | 状態 | PR |
+|---|---|---|---|
+| v3-22a | server lifespan startup で paused jobs を `meta.json` から再 attach | 🟡 | — |
+| v3-22b | `tests/regression/test_inv_ws_disconnect_does_not_release.py` で INV-7 検証 | 🟡 | — |
+| v3-22c | Playwright `tests/e2e/server-restart-recovery.spec.ts` で実 restart シナリオ | 🟡 | — |
+
+**DoD:**
+- [ ] Issue #384 が close 済
+- [ ] INV-7 の invariant test green
+
+---
+
+## Phase v3-23: v0.5 R-2.1 — WebSocket 再接続戦略
+
+**期間:** v3-22 完了後 1 週間
+
+**対象:** `docs/v0.4-business-readiness-plan.md` §3.1
+
+**動機:** Long-run Tune (24h) でネットワーク断絶からの復帰を確実にする。exponential backoff、最大 reconnect interval 5min。
+
+**Entry criteria:** v3-22 完了。
+
+**サブフェーズ:**
+
+| サブフェーズ | 内容 | 状態 | PR |
+|---|---|---|---|
+| v3-23a | Frontend `useJobProgress` hook の reconnect ロジックを exponential backoff 化 | 🟡 | — |
+| v3-23b | Backend WebSocket handler で resume token を発行 → reconnect で missed messages を replay | 🟡 | — |
+| v3-23c | Playwright で 10s 切断 → 復帰の progress 続行 verification | 🟡 | — |
+
+**DoD:**
+- [ ] 10s 切断後 progress 続行、最終 status 一致
+- [ ] 5min 切断後でも reconnect 試行は継続、復帰時に missed messages 受信
+
+---
+
+## Phase v3-24: v0.5 R-2.2 — ブラウザリロード状態復元
+
+**期間:** v3-23 完了後 1 週間
+
+**対象:** `docs/v0.4-business-readiness-plan.md` §3.2
+
+**動機:** リロード時に data + config + 進行中 job がそのまま見える状態を実現。1 名利用前提なので multi-tab 衝突制御は scope 外。
+
+**Entry criteria:** v3-23 完了。
+
+**サブフェーズ:**
+
+| サブフェーズ | 内容 | 状態 | PR |
+|---|---|---|---|
+| v3-24a | Frontend で workspace state を localStorage / IndexedDB に persist（or 既存 GET /status を活用） | 🟡 | — |
+| v3-24b | `beforeunload` で form ダーティ警告（dirty config を保存しないとロストする旨） | 🟡 | — |
+| v3-24c | Playwright で reload 後の data + config + running job 復元を Visual diff verification | 🟡 | — |
+
+**DoD:**
+- [ ] reload 後 30s 以内に form / data / progress が前と同じ状態
+- [ ] dirty config がある状態で reload 試行 → confirm ダイアログ表示
+
+---
+
+## Phase v3-25: v0.5 R-4.1 — format_version migration matrix CI gate
+
+**期間:** v3-20 完了後（並行可）、1 週間
+
+**対象:** P-0095 拡張 + `docs/v0.4-business-readiness-plan.md` §5.1
+
+**動機:** R-1.4 で format_version を 1→2 に bump する。過去 workspace を新 CLI が壊さない保証を CI で gating する。
+
+**Entry criteria:** v3-20 完了 (format_version=2 が定義済)。
+
+**サブフェーズ:**
+
+| サブフェーズ | 内容 | 状態 | PR |
+|---|---|---|---|
+| v3-25a | `tests/regression/test_format_version_migration_matrix.py` で v0 → v1 → v2 の round-trip | 🟡 | — |
+| v3-25b | CI workflow で過去 fixture (v0 / v1) を fetch + load + 新 release で save → load → 同値 assertion | 🟡 | — |
+| v3-25c | 古い format_version を read-only で開く保護 (CLI の write モードで明示的にエラー) | 🟡 | — |
+
+**DoD:**
+- [ ] CI で migration matrix が gating
+- [ ] 古い workspace を新 CLI で開いても `LIZYSTUDIO_ALLOW_LEGACY_READ=1` 無しに data destruction が起きない
+
+---
+
+## Phase v3-26: v0.5 R-4.2 — Pickle compatibility test（P-0095 拡張）
+
+**期間:** v3-25 と並行可、1 週間
+
+**対象:** `docs/v0.4-business-readiness-plan.md` §5.2
+
+**動機:** lizyml minor バンプ時に Pickle 互換切れが起きると過去のモデルが load できなくなる。Nightly CI で過去 N=3 minor version の互換性を確認する。
+
+**Entry criteria:** v3-25 完了。
+
+**サブフェーズ:**
+
+| サブフェーズ | 内容 | 状態 | PR |
+|---|---|---|---|
+| v3-26a | `.github/workflows/nightly.yml` に pickle compat job 追加 | 🟡 | — |
+| v3-26b | `tests/bench/test_bench_pickle_compat.py` で過去 lizyml 版で fit → 現行で load の round-trip | 🟡 | — |
+| v3-26c | `cloudpickle` 互換切れ検出時の明示エラー (`PICKLE_INCOMPATIBLE`) | 🟡 | — |
+
+**DoD:**
+- [ ] Nightly CI で過去 3 minor version すべて green
+- [ ] 互換切れ時のエラーメッセージが recovery_hint と suggested_fix を含む（P-0100 envelope を再利用）
+
+---
+
+## v0.5 Exit Criteria
+
+`docs/v0.4-business-readiness-plan.md` §7 を本 v3-17〜v3-26 で消化する。すべての DoD が green、かつ:
+
+- [ ] 24h Tune が SIGKILL / network 切断 / browser リロードで再開可能（INV-3 / INV-4）
+- [ ] ブラウザリロード後に data + config + 進行中 job が完全復元（v3-24）
+- [ ] format_version migration matrix が CI で gating（v3-25）
+- [ ] Slot release が 6 経路全てで test カバー済（INV-1）
+- [ ] 業務利用 KPI (`docs/business-use-definition.md` v0.2 §16) 達成
+
+---
+
+## 採番ガイダンス（v3-27 以降）
+
+- 新規 Proposal は **P-0102** 以降を起票（P-0101 = 2026-05-05 metric-compat watchlist Decision、P-0099 = 2026-05-06 R-1 invariants）。
+- 仕様変更を伴う作業は HISTORY.md に Proposal → 本 PLAN.md にフェーズ追加（`v3-27`...）の順で進める。
 - 詳細な未着手バックログは `docs/ROADMAP.md` を参照。
+- v0.6+ 候補: 第 2 backend (Issue #403)、Tailwind v4 (#125)、P-0087 Phase 3、LLM 統合、PyTorch backend、監査ログ・認証。
