@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Bump `lizyml` minimum to `0.11.0` (<0.12.0)** — adopts upstream
+  sMAPE / WAPE regression metrics (LizyML H-0071 / #101). The new
+  metrics surface automatically through `MetricRegistry` lookup, so
+  `tuning.optuna.params.direction` chips and learning curve filters
+  list `smape` / `wape` for `task=regression` without further wiring.
+  Defensive fallback list in `lizystudio.backends.lizyml_metrics`
+  extended to include the two new metrics for parity. Unblocks the
+  PR-C2 (#394) `severity=warning` + `suggested_fix` work, which can
+  now propose `smape` as a zero-tolerant replacement for `mape` when
+  the dataset target contains zeros.
+
 ## [0.4.0] - 2026-05-05
 
 The **Wide DataFrame** release. Phase B (PR-B1 — PR-B5) closes the
