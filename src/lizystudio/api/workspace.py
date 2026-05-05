@@ -480,9 +480,10 @@ def config_update(
     """
     _check_workspace_lock(job_store)
     errors = validate_config(ws, body)
-    if not errors:
+    blocking = [e for e in errors if e.get("severity", "error") == "error"]
+    if not blocking:
         ws.set_config(body)
-    return {"config": body, "errors": errors, "saved": len(errors) == 0}
+    return {"config": body, "errors": errors, "saved": len(blocking) == 0}
 
 
 @router.patch("/config", response_model=ConfigPatchResponse)
@@ -524,7 +525,13 @@ def config_validate(
     if not config:
         raise WorkspaceNoConfigError()
     errors = validate_config(ws, config)
-    return {"valid": len(errors) == 0, "errors": errors}
+    # Issue #394 / PR-C2: warnings advise but do not invalidate a
+    # config — only ``severity="error"`` entries flip ``valid`` to
+    # False. Entries without an explicit severity default to ``"error"``
+    # for backward compatibility (pre-PR-B4 callers still see the
+    # legacy semantics).
+    blocking = [e for e in errors if e.get("severity", "error") == "error"]
+    return {"valid": len(blocking) == 0, "errors": errors}
 
 
 @router.post("/config/upload", response_model=ConfigUpdateResponse)
@@ -543,9 +550,10 @@ async def config_upload(
     except Exception as exc:
         raise ConfigImportError(str(exc)) from exc
     errors = validate_config(ws, config)
-    if not errors:
+    blocking = [e for e in errors if e.get("severity", "error") == "error"]
+    if not blocking:
         ws.set_config(config)
-    return {"config": config, "errors": errors, "saved": len(errors) == 0}
+    return {"config": config, "errors": errors, "saved": len(blocking) == 0}
 
 
 @router.get("/config/download")

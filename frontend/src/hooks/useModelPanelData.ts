@@ -23,7 +23,7 @@ import {
   useUiSchema,
 } from "@/api/queries";
 import { queryKeys } from "@/api/queryKeys";
-import type { ConfigError } from "@/api/types";
+import { type ConfigError, isBlockingError } from "@/api/types";
 import { updateConfig, uploadConfig, validateConfig } from "@/api/workspace";
 import { findEmptyChoiceKeys } from "@/components/workspace/search-space-utils";
 import { useConfigHistory } from "@/hooks/useConfigHistory";
@@ -342,7 +342,13 @@ export function useModelPanelData({
   // --------------------------------------------------------------------
   // Derived enable/disable state
   // --------------------------------------------------------------------
-  const fitEnabled = hasData && !!config && !running && errors.length === 0;
+  // Issue #394 / PR-C2: only severity="error" entries block Fit/Tune.
+  // Warnings (e.g. metric-vs-target compatibility) advise but do not
+  // gate the run. Pre-PR-B4 backends do not emit severity, so missing
+  // values default to "error" via ``isBlockingError``.
+  const blockingErrors = errors.filter(isBlockingError);
+  const fitEnabled =
+    hasData && !!config && !running && blockingErrors.length === 0;
   const allowEmptySpace =
     uiSchema?.capabilities?.tune?.allow_empty_space === true;
   const tuningSpace =
@@ -367,7 +373,7 @@ export function useModelPanelData({
     if (running) return "A job is currently running";
     if (!hasData) return "Load data first";
     if (!config) return "Loading configuration...";
-    if (errors.length > 0) return "Fix validation errors first";
+    if (blockingErrors.length > 0) return "Fix validation errors first";
     if (activeTab === "tune" && emptyChoiceKeys.length > 0) {
       return `Add at least one choice to: ${emptyChoiceKeys.join(", ")}`;
     }
