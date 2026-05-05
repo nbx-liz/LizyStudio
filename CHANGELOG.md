@@ -7,8 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-The **Wide DataFrame** track (Phase B / v0.4.0) starts here.
-Foundation PR for Issue #361.
+## [0.4.0] - 2026-05-05
+
+The **Wide DataFrame** release. Phase B (PR-B1 — PR-B5) closes the
+v0.4.0 business-readiness Exit Criteria around 10,000-column workspace
+support: the API ships value-bounded preview/importance payloads and a
+diagnostic export, the SPA renders 10k-column Workspaces without
+freezing, the upload path fails fast on oversize CSVs instead of
+OOM-crashing the worker, and the validate envelope carries actionable
+`severity` + `suggested_fix` fields the SPA can render directly.
+
+No breaking changes. The new query parameters (`max_cols`, `top_n`)
+default to the pre-v0.4.0 behaviour when omitted. The error dicts
+returned by `POST /api/workspace/config/validate` add two fields
+without removing the legacy `path` / `message` keys, so older
+frontend builds keep working unchanged.
 
 ### Added
 
@@ -61,6 +74,24 @@ Foundation PR for Issue #361.
   has more than 1,000 non-excluded columns. The per-feature weight
   picker is not the right interaction model at that scale; the guard
   surfaces the limit instead of silently breaking the UI.
+
+### Backend (PR-B4 — Plot symmetric audit + Validate API enhancement)
+
+- **Validate API now carries `severity` + `suggested_fix` (R-3.4)** —
+  `POST /api/workspace/config/validate` and the inline validation in
+  `PUT /api/workspace/config` now return error dicts with two new
+  fields: `severity` (`"error" | "warning" | "info"`) and
+  `suggested_fix` (string or `null`). Backend Pydantic errors default
+  to `severity="error"` and `suggested_fix=null`; the workspace-aware
+  `n_splits > n_rows` validator surfaces a concrete fix string
+  (e.g. `"Set Folds (split.n_splits) to 100 or fewer."`). The legacy
+  `path` and `message` fields are unchanged so older frontend builds
+  continue to work.
+- **Plot symmetric audit (R-3.3)** — added `docs/plot-matrix.md`, the
+  single source of truth for the plot inventory across the LizyML
+  adapter, the API, and the frontend. The audit caught `shap-summary`
+  missing from `PLOT_LABELS` (rendered as raw kebab-case in the tab
+  strip); fixed in this PR with the symmetry rule pinned in the doc.
 
 ### Backend (PR-B3 — Large CSV scaling + #383 stress tests)
 
