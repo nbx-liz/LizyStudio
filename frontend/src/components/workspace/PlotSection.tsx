@@ -24,6 +24,13 @@ import { SegmentGroup } from "./SegmentGroup";
 // docs/plot-matrix.md tracks the full inventory + symmetry checks;
 // any new plot type added on either side must land in both maps in
 // the same PR.
+//
+// Two backend plot IDs are intentionally absent from this map:
+//   - tuning       — rendered by TuneTrialsSection, not the tab strip.
+//   - shap-summary — Workspace exposes SHAP via `Importance kind=shap`
+//                    (Issue #393). Inference renders SHAP via a
+//                    dedicated accordion (Issue #373) which does not
+//                    use this component.
 const PLOT_LABELS: Record<string, string> = {
   "learning-curve": "Learning Curve",
   "oof-distribution": "OOF Dist",
@@ -32,9 +39,6 @@ const PLOT_LABELS: Record<string, string> = {
   "probability-histogram": "Prob Hist",
   residuals: "Residuals",
   importance: "Importance",
-  "shap-summary": "SHAP Summary",
-  // tuning is intentionally omitted — it is rendered by
-  // TuneTrialsSection, not the per-plot tab strip.
 };
 
 const KIND_LABELS: Record<string, string> = {
@@ -93,8 +97,14 @@ export function PlotSection({
   importanceTopN,
   onImportanceTopNChange,
 }: PlotSectionProps) {
-  // Exclude "tuning" — shown in TuneTrialsSection, not in plot tabs
-  const availablePlots = plots.filter((p) => p !== "tuning");
+  // Exclude "tuning" — shown in TuneTrialsSection, not in plot tabs.
+  // Exclude "shap-summary" (#393) — SHAP is reachable via the
+  // Importance tab's `kind=shap` selector; the standalone tab is
+  // redundant in Workspace. Inference renders SHAP via a dedicated
+  // accordion (#373) and does not consume this component.
+  const availablePlots = plots.filter(
+    (p) => p !== "tuning" && p !== "shap-summary",
+  );
 
   // Resolve which data to display
   const isLearningCurve = selectedPlot === "learning-curve";
