@@ -56,6 +56,29 @@ describe("PlotSection", () => {
     expect(screen.getByText("Importance")).toBeInTheDocument();
   });
 
+  // Issue #393: Workspace exposes SHAP through Importance kind=shap;
+  // the standalone shap-summary tab would be redundant. Inference uses
+  // a separate accordion (#373) and does not consume this component.
+  it('filters out "shap-summary" from plot tabs (use Importance kind=shap instead)', () => {
+    render(
+      <PlotSection
+        {...defaultProps}
+        plots={["roc-curve", "importance", "shap-summary"]}
+      />,
+    );
+    expect(screen.queryByText("SHAP Summary")).toBeNull();
+    expect(screen.queryByText("shap-summary")).toBeNull();
+    expect(screen.getByText("ROC")).toBeInTheDocument();
+    expect(screen.getByText("Importance")).toBeInTheDocument();
+  });
+
+  it("returns null when plots array only contains excluded ids", () => {
+    const { container } = render(
+      <PlotSection {...defaultProps} plots={["tuning", "shap-summary"]} />,
+    );
+    expect(container.innerHTML).toBe("");
+  });
+
   it("shows loading message when isLoading is true", () => {
     render(<PlotSection {...defaultProps} isLoading={true} />);
     expect(screen.getByText("Loading plot...")).toBeInTheDocument();
