@@ -7,8 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Validate API auto-disable for incompatible regression metrics
+  (#394)** — `POST /api/workspace/config/validate` and
+  `PUT /api/workspace/config` now return `severity="warning"` entries
+  when the loaded dataset's target column makes a configured metric
+  mathematically impossible: `mape` on a target that contains zeros,
+  `rmsle` on a target with negative values, and `r2` on a constant
+  target. Each entry carries a `suggested_fix` naming the metric to
+  remove; for `mape` the suggestion also points at the new `smape`
+  and `wape` metrics shipped in lizyml 0.11.0 as zero-tolerant
+  replacements. The frontend renders these advisories in a new yellow
+  banner above ConfigForm with the suggestion as a second line, while
+  the existing red banner keeps surfacing blocking errors.
+
 ### Changed
 
+- **Validate response `valid` flag and PUT `saved` flag now honor
+  severity (#394)** — only `severity="error"` entries flip
+  `valid=false` / `saved=false`. Pre-PR-B4 entries with no severity
+  default to `"error"` for backward compatibility, so existing
+  consumers (legacy frontends, scripts piping JSON) see no change.
+  Warnings advise but neither block persistence nor the Fit button —
+  which now gates on `severity=error` count instead of total error
+  count.
 - **Bump `lizyml` minimum to `0.11.0` (<0.12.0)** — adopts upstream
   sMAPE / WAPE regression metrics (LizyML H-0071 / #101). The new
   metrics surface automatically through `MetricRegistry` lookup, so
