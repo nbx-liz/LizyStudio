@@ -7,8 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-The **Wide DataFrame** track (Phase B / v0.4.0) starts here.
-Foundation PR for Issue #361.
+## [0.4.0] - 2026-05-05
+
+The **Wide DataFrame** release. Phase B (PR-B1 — PR-B5) closes the
+v0.4.0 business-readiness Exit Criteria around 10,000-column workspace
+support: the API ships value-bounded preview/importance payloads and a
+diagnostic export, the SPA renders 10k-column Workspaces without
+freezing, the upload path fails fast on oversize CSVs instead of
+OOM-crashing the worker, and the validate envelope carries actionable
+`severity` + `suggested_fix` fields the SPA can render directly.
+
+No breaking changes. The new query parameters (`max_cols`, `top_n`)
+default to the pre-v0.4.0 behaviour when omitted. The error dicts
+returned by `POST /api/workspace/config/validate` add two fields
+without removing the legacy `path` / `message` keys, so older
+frontend builds keep working unchanged.
 
 ### Added
 
