@@ -2385,6 +2385,41 @@ Workspace の `workspace_result` は完了時に自動更新される。
 
 **Active-job lock (P-0089 / Issue #279):** ジョブが running 中は `PUT /api/workspace/config` / `PATCH /api/workspace/config` が `WORKSPACE_LOCKED` (409) を返す。詳細は §3.4。
 
+#### Validate response envelope (P-0100 / P-0101 / Issue #394)
+
+`POST /api/workspace/config/validate` / `PUT /api/workspace/config` / `POST /api/workspace/upload` の `errors[]` 各要素は以下の envelope を返す:
+
+```json
+{
+  "valid": false,
+  "errors": [
+    {
+      "loc": "evaluation.metrics",
+      "msg": "MAPE is undefined when target contains zeros (3 rows). Use 'smape' or 'wape' instead (lizyml 0.11.0+).",
+      "severity": "warning",
+      "suggested_fix": "Use 'smape' or 'wape' instead (lizyml 0.11.0+)"
+    }
+  ]
+}
+```
+
+| フィールド | 型 | 説明 |
+|---|---|---|
+| `severity` | `"error" \| "warning" \| "info"` (default `"error"`) | block 判定に使う。`"error"` のみ `valid=false` / `saved=false` を flip。`"warning"` / `"info"` は advisory のみ |
+| `suggested_fix` | `str \| null` (default `null`) | 警告に対する具体的な置換アクション。Frontend では yellow banner の二行目に表示 |
+
+**Block 判定ルール (P-0100):** `_blocking_errors([entry, ...])` ヘルパが Service / API 層共通で `severity == "error"` のみを抽出し、`POST /fit` / `POST /tune` / `PUT /config` / `POST /upload` の 4xx 判定に使う。`severity` 未設定の旧 ValidationError は backward-compat のため `"error"` 扱い。
+
+**Metric-compat watchlist (P-0101):** `task=regression` のとき以下の組み合わせは `severity="warning"` で auto-disable される:
+
+| Metric | Trigger | suggested_fix |
+|---|---|---|
+| `mape` | target に 0 が 1 件以上 | `"Use 'smape' or 'wape' instead (lizyml 0.11.0+)"` |
+| `rmsle` | target に負値が 1 件以上 | `"Remove 'rmsle' from evaluation.metrics"` |
+| `r2` | target が定数 (`nunique() == 1`) | `"Remove 'r2' from evaluation.metrics"` |
+
+警告だが block しないため、ユーザは無視して fit を実行できる（実行時に該当 metric は nan を返す可能性）。後続バックエンドが増えたときの抽象化は Issue #403 で予定。
+
 ### 5.3 Jobs API
 
 永続化されたジョブを管理する。
