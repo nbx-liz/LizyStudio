@@ -3184,4 +3184,122 @@ frontend で virtualization / top-N を入れても、転送する payload 自�
 
 - 2026-05-05 **Proposed** — PR-B3 で実装。auto mode で Phase B 実装中、Change Gate scope は `load_dataframe` の失敗タイミング精緻化のみ。**ユーザ承認済** (Phase B 全体着手承認)
 
+### P-0099: (採番予約) v0.5 R-1 状態整合性 invariants + `paused` job state（Change Gate）
+
+- **Status:** 🟡 採番予約のみ。Day 4 で本文起票予定
+- **Scope:** v0.5 R-1.1〜R-1.4 で導入する job state machine 不変条件の宣言、および R-1.4 (#360) で必要となる `paused` 状態の Change Gate
+- **Reference:** `docs/pre-v05-handoff-2026-05-05.md` §3.1 M-2
+
+### P-0100: severity envelope の正式化（PR-B4 → PR-C2/PR-D1, Issue #394）
+
+- **Date:** 2026-05-05 起票 / 同日 Decision
+- **Related:** PR #399 (PR-C2 feat/validate-metric-compat-394), PR #400 (PR-D1 fix/fit-tune-severity-filter-394), Issue #394, P-0097 (Wide DataFrame), CHANGELOG v0.4.1
+
+#### Motivation
+
+PR-B4 で `ValidationError` payload に `severity: Literal["error", "warning", "info"]` と `suggested_fix: str | None` が導入されたが、Pydantic Literal の正式宣言と「どこで `severity` を見るか」のセマンティクスが HISTORY 未記録のまま v0.4.1 リリースに乗った。PR-C2 と PR-D1 で raise sites が確定したため、後続 R-1 / R-3 が同 envelope を使い続ける前提として正式化する。
+
+#### Purpose
+
+- `severity="error"` 以外は `valid=true` / `saved=true` を維持し block しない
+- `severity` 未設定の旧 ValidationError は `"error"` として扱い backward compatible
+- `_blocking_errors` 共通ヘルパで「block 判定 = `severity != "warning|info"`」を一箇所に集約
+- `suggested_fix` は警告を「具体的な置換アクション」に紐付ける recovery hint slot として API 仕様に組み込む
+
+#### Impact
+
+- Public API: `POST /api/workspace/config/validate` / `PUT /api/workspace/config` / `POST /api/workspace/upload` の `errors[]` 各要素に `severity` (default `"error"`) と `suggested_fix` (default `null`) が必須キーとして登場
+- `POST /api/workspace/fit` / `POST /api/workspace/tune` は warning-only config (= severity != "error") を 422 で返さなくなる（PR-D1 #400 で修正）
+- Frontend: yellow warning banner が ConfigForm 上部に追加 (ConfigEditorBody.tsx)、blocking と非 blocking を視覚分離
+- 既存 ValidationError 使用箇所はキー追加のみで挙動不変
+
+#### Compatibility
+
+- 旧 ValidationError (severity 未設定) は default `"error"` で従来挙動を維持
+- Frontend `isBlockingError(entry)` ヘルパが `entry.severity ?? "error"` で wrap
+- `_blocking_errors([entry, ...])` ヘルパが Service / API 層共通で severity フィルタ
+- 全フィールド optional 追加 → JSON Schema 後方互換
+
+#### Acceptance criteria
+
+- [x] `tests/contract/test_validate_severity_and_suggested_fix.py` で envelope shape を契約化
+- [x] `tests/contract/test_fit_tune_severity_filter.py` で fit/tune が warning-only config を受け入れることを 7 cases pin（PR-D1 #400）
+- [x] `frontend/src/api/types.ts` に `isBlockingError` ヘルパ + 単体テストへの落とし込みは S-1 / O-1 で追加（#404 / #405）
+- [x] CHANGELOG v0.4.1 で公開挙動を記述
+
+#### Alternatives considered
+
+- **(a) 別フィールド `level: "fatal" | "warn"` を使う**: 拒否。`severity` がすでに WCAG / RFC 用語と整合、Toast / aria-live にもそのまま流用可能
+- **(b) HTTP status を 422 / 200 で分離**: 拒否。同一エンドポイントの一覧に warning と error が混在するケースで status を分けると複雑化、UI が両方をマージできない
+- **(c) suggested_fix を別 endpoint に切り出す**: 拒否。round-trip が増え UX 悪化
+
+→ 採用は **(d) 同 envelope で severity + suggested_fix を inline**。
+
+#### Decision
+
+- 2026-05-05 **Decided (post-hoc)** — PR-C2 / PR-D1 で実装済、本 Decision 記録は v0.4.1 リリース後の reconciliation。後続 R-1 / R-3 / R-3.4.2 (Diagnostic export) はこの envelope を前提に拡張する
+
+### P-0101: metric-compat watchlist による uncomputable metric の auto-disable（PR-C2, Issue #394）
+
+- **Date:** 2026-05-05 起票 / 同日 Decision
+- **Related:** PR #399 (PR-C2 feat/validate-metric-compat-394), PR #400 (PR-D1), Issue #394, P-0100 (severity envelope), CHANGELOG v0.4.1, LizyML 0.11.0 (sMAPE / WAPE)
+
+#### Motivation
+
+`mape` / `rmsle` / `r2` は target 列の値域が条件を満たさないと数学的に計算できない:
+
+- `mape`: target に 0 が含まれると ZeroDivisionError 相当
+- `rmsle`: target に負値が含まれると `log(1+x)` で nan
+- `r2`: target が定数だと分散 0 で nan
+
+ユーザがこれらを Tuning 設定の `evaluation.metrics` に入れたまま fit すると、結果として nan / 例外で失敗するか、ジョブ完走後に metric が表示されない。事前に `validate` レイヤで「この target だと計算不能なので外しますね」と返したい。
+
+#### Purpose
+
+- Service 層の `_workspace_metric_compatibility_errors(config, df)` で target 列を inspect し、watchlist 該当 metric があれば `severity="warning"` の ValidationError を返す
+- `suggested_fix` で具体的な置換 metric 名を返す (例: `mape` 該当時は LizyML 0.11.0 で追加された `smape` / `wape` を提案)
+- `task=regression` のときだけ作動（binary / multiclass は対象外、HIGH-1 として PR-D1 で task ガード追加）
+- 検出ルールはこの Decision で固定し、後続バックエンドが増えたときは [Issue #403](https://github.com/nbx-liz/LizyStudio/issues/403) で BackendAdapter 抽象化
+
+#### Impact
+
+- 新 helper: `_workspace_metric_compatibility_errors(config, df) -> list[ValidationError]`
+- 呼び出しタイミング: `POST /api/workspace/config/validate` / `PUT /api/workspace/config` / `POST /api/workspace/upload`
+- Frontend 影響: yellow banner に `suggested_fix` を二行目で表示 (P-0100 で導入された envelope を流用)
+- 検出は **non-blocking** (severity=warning)。ユーザはそのまま fit を実行可能だが、metric は実行時に nan を返す可能性
+
+#### Watchlist 仕様
+
+| Metric | Trigger | suggested_fix |
+|---|---|---|
+| `mape` | target に 0 が 1 件以上 | "Use `smape` or `wape` instead (lizyml 0.11.0+)" |
+| `rmsle` | target に負値が 1 件以上 | "Remove `rmsle` from evaluation.metrics" |
+| `r2` | target の `nunique() == 1` (定数) | "Remove `r2` from evaluation.metrics" |
+
+#### Compatibility
+
+- watchlist は backward-compat: 警告だが block しない、既存 fit の挙動は不変
+- 旧バックエンド (lizyml 0.10.x) で sMAPE / WAPE が無くても suggested_fix は文字列のみ → クライアントは盲目に表示するだけで壊れない
+- task != "regression" のときは作動しない (binary classification で `r2` を入れるとそもそも metric registry でエラーになる別経路)
+
+#### Acceptance criteria
+
+- [x] `src/lizystudio/services/workspace.py` で `_workspace_metric_compatibility_errors` 実装
+- [x] PR #399 で 3 endpoints (`validate` / `PUT /config` / `upload`) に組み込み
+- [x] PR #400 で `task=regression` ガード + fit/tune raise sites の severity フィルタ
+- [x] `tests/contract/test_validate_metric_compatibility.py` で 9 cases (今後 #404 で 7 cases 追加して 16 cases へ)
+- [x] CHANGELOG v0.4.1 で公開挙動を記述
+
+#### Alternatives considered
+
+- **(a) Backend 任せ (fit 実行時に nan を返す)**: 拒否。ユーザが trial を浪費した後に気づく、UX 悪化
+- **(b) Hard error (severity="error" で block)**: 拒否。数学的不能でも MAPE を許容したい上級ユーザもいる、過剰な強制
+- **(c) BackendAdapter abstract method として最初から抽象化**: defer。第二 backend が見えるまで抽象化は YAGNI、Issue #403 として後送り
+
+→ 採用は **(d) Service 層 helper + watchlist 定義 + non-blocking warning**。Adapter 抽象化は #403 で別途。
+
+#### Decision
+
+- 2026-05-05 **Decided (post-hoc)** — PR-C2 / PR-D1 で実装済、本 Decision 記録は v0.4.1 リリース後の reconciliation。Issue #403 で BackendAdapter 抽象化、#404 で異常系 7 cases 追加が follow-up
+
 

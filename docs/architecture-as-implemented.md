@@ -258,6 +258,44 @@ stateDiagram-v2
 
 ---
 
+## 5.4 Validate envelope flow (P-0100 / P-0101, v0.4.1 で確立)
+
+`POST /api/workspace/config/validate` / `PUT /api/workspace/config` / `POST /api/workspace/upload` の `errors[]` 各要素は `severity: Literal["error", "warning", "info"]`（default `"error"`）と `suggested_fix: str | None` を持つ envelope を返す。
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant C as Client (React)
+  participant R as api/workspace.py
+  participant SVC as services/workspace.py
+  participant ADP as BackendAdapter
+
+  C->>R: POST /api/workspace/config/validate {config}
+  R->>ADP: validate_config(cfg)
+  ADP-->>R: list[ValidationError]   # severity defaults to "error"
+  R->>SVC: _workspace_metric_compatibility_errors(cfg, df)
+  SVC-->>R: list[ValidationError]   # severity="warning" + suggested_fix
+  R->>R: errors = adapter_errors + watchlist_errors
+  R->>R: valid = len(_blocking_errors(errors)) == 0
+  R-->>C: {valid, errors[]}
+
+  Note over R,SVC: _blocking_errors filters severity=="error"<br/>fit/tune 4 raise sites use the same helper (PR-D1 #400)
+```
+
+Block 判定の hop:
+
+| 呼び出し元 | 判定ヘルパ | block する severity |
+|---|---|---|
+| `POST /workspace/config/validate` | `valid = len(_blocking_errors(errors)) == 0` | `"error"` |
+| `PUT /workspace/config` | `saved = len(_blocking_errors(errors)) == 0`、422 raise | `"error"` |
+| `POST /workspace/upload` | 同上 | `"error"` |
+| `POST /workspace/fit` `/tune` | 4 raise sites が `_blocking_errors` 経由（PR-D1 #400） | `"error"` |
+| Frontend `isBlockingError(entry)` | `(entry.severity ?? "error") === "error"` | `"error"` |
+
+Frontend は `useModelPanelData` で `errors[]` を `blockingErrors` / `warningEntries` の 2 グループに分割し、ConfigEditorBody が red banner（block）と yellow banner（advisory + suggested_fix）を二段重ねで描画する。
+
+---
+
 ## 6. "fit" Request End-to-End Flow
 
 ```mermaid
