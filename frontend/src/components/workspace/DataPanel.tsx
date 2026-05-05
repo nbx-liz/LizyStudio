@@ -9,13 +9,6 @@ import {
 } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { buildSyncedConfig } from "@/hooks/buildSyncedConfig";
 import {
   TASK_OPTIONS,
@@ -26,6 +19,7 @@ import { ColumnSettingsSection } from "./ColumnSettingsSection";
 import { CvSection } from "./CvSection";
 import { DataSourceSection } from "./DataSourceSection";
 import { FoldPreview } from "./FoldPreview";
+import { SearchableSelect } from "./SearchableSelect";
 import { SegmentGroup } from "./SegmentGroup";
 
 interface DataPanelProps {
@@ -104,6 +98,8 @@ export const DataPanel = forwardRef<DataPanelHandle, DataPanelProps>(
       handleTaskChange,
       handleExcludeToggle,
       handleTypeChange,
+      handleBulkExcludeToggle,
+      handleBulkTypeChange,
       handleColumnExpand,
       hydrateFromServer,
     } = useDataPanel({ onDataChanged, onTaskChanged, uiSchema });
@@ -182,25 +178,17 @@ export const DataPanel = forwardRef<DataPanelHandle, DataPanelProps>(
                 <div className="lzs-form space-y-3 pl-4">
                   <div className="flex items-center gap-2">
                     <Label className="min-w-[60px] text-xs">Target</Label>
-                    <Select
-                      value={target ?? ""}
-                      onValueChange={handleTargetChange}
-                      disabled={allColumnNames.length === 0 || running}
-                    >
-                      <SelectTrigger
-                        aria-label="Target column"
-                        className="h-8 flex-1"
-                      >
-                        <SelectValue placeholder="Select target column" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {allColumnNames.map((name) => (
-                          <SelectItem key={name} value={name}>
-                            {name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <div className="flex-1">
+                      <SearchableSelect
+                        value={target ?? ""}
+                        options={allColumnNames}
+                        onChange={handleTargetChange}
+                        placeholder="Select target column"
+                        ariaLabel="Target column"
+                        disabled={allColumnNames.length === 0 || running}
+                        emptyMessage="No matching columns."
+                      />
+                    </div>
                   </div>
                   <div className="flex items-start gap-2">
                     <Label className="mt-1 min-w-[60px] text-xs">Task</Label>
@@ -249,6 +237,8 @@ export const DataPanel = forwardRef<DataPanelHandle, DataPanelProps>(
                   summary={summary}
                   onExcludeToggle={handleExcludeToggle}
                   onTypeChange={handleTypeChange}
+                  onBulkExcludeToggle={handleBulkExcludeToggle}
+                  onBulkTypeChange={handleBulkTypeChange}
                   onColumnExpand={handleColumnExpand}
                   disabled={running}
                 />

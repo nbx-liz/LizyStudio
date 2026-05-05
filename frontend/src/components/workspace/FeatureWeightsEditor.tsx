@@ -1,5 +1,5 @@
 import { Plus, X } from "lucide-react";
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -18,12 +18,24 @@ interface FeatureWeightsEditorProps {
   onChange: (weights: Record<string, number> | null) => void;
 }
 
+/**
+ * PR-B2 / P-0097: per-feature weights become unusable in the wide-
+ * DataFrame regime — the Add-feature picker would render thousands of
+ * SelectItems and the typical "type the column name" interaction does
+ * not scale. Lock the toggle above this column count and surface an
+ * inline guard message so users learn the limit instead of getting a
+ * silently-broken UI.
+ */
+const FEATURE_WEIGHTS_COLUMN_LIMIT = 1000;
+
 export function FeatureWeightsEditor({
   weights,
   columns,
   onChange,
 }: FeatureWeightsEditorProps) {
   const enabled = weights !== null;
+  const guardActive = columns.length > FEATURE_WEIGHTS_COLUMN_LIMIT;
+  const guardMessageId = useId();
   const entries = useMemo(
     () => (weights ? Object.entries(weights) : []),
     [weights],
@@ -68,8 +80,18 @@ export function FeatureWeightsEditor({
           checked={enabled}
           onCheckedChange={handleToggle}
           aria-label="Enable feature weights"
+          disabled={guardActive}
+          aria-describedby={guardActive ? guardMessageId : undefined}
         />
       </FormField>
+
+      {guardActive && (
+        <p id={guardMessageId} className="mt-1 text-xs text-muted-foreground">
+          Feature Weights is disabled when the workspace has more than{" "}
+          {FEATURE_WEIGHTS_COLUMN_LIMIT} columns. Reduce the active column count
+          via Column Settings to enable per-feature weighting.
+        </p>
+      )}
 
       {enabled && (
         <div className="mt-2 space-y-1.5">

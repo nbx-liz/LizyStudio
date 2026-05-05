@@ -107,10 +107,30 @@ def get_importance(
     backend: BackendAdapter,
     cache: ModelCache,
     kind: str = "split",
+    *,
+    top_n: int | None = None,
 ) -> dict[str, float]:
-    """Get feature importance for a completed job."""
+    """Get feature importance for a completed job.
+
+    ``top_n`` (P-0097) caps the response to the N most important
+    features sorted by value descending. ``None`` (the pre-P-0097
+    default) returns the full backend response unchanged.
+    """
     model = cache.load(job, backend)
-    return backend.importance(model, kind=kind)
+    raw = backend.importance(model, kind=kind)
+    if top_n is None or top_n >= len(raw):
+        return raw
+    return _project_top_n(raw, top_n)
+
+
+def _project_top_n(raw: dict[str, float], top_n: int) -> dict[str, float]:
+    """Return the ``top_n`` highest-importance entries, value-desc sorted.
+
+    Stable ordering on ties: first occurrence wins (Python dict iteration
+    order is preserved by insertion, ``sorted`` is stable).
+    """
+    items = sorted(raw.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+    return dict(items)
 
 
 def get_importance_kinds(

@@ -7,7 +7,127 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+## [0.4.0] - 2026-05-05
+
+The **Wide DataFrame** release. Phase B (PR-B1 — PR-B5) closes the
+v0.4.0 business-readiness Exit Criteria around 10,000-column workspace
+support: the API ships value-bounded preview/importance payloads and a
+diagnostic export, the SPA renders 10k-column Workspaces without
+freezing, the upload path fails fast on oversize CSVs instead of
+OOM-crashing the worker, and the validate envelope carries actionable
+`severity` + `suggested_fix` fields the SPA can render directly.
+
+No breaking changes. The new query parameters (`max_cols`, `top_n`)
+default to the pre-v0.4.0 behaviour when omitted. The error dicts
+returned by `POST /api/workspace/config/validate` add two fields
+without removing the legacy `path` / `message` keys, so older
+frontend builds keep working unchanged.
+
+### Added
+
+- **`max_cols` query on `GET /api/workspace/data/preview` (P-0097)** —
+  optional cap on returned column count so the SPA does not have to
+  ship 10k+ columns to the browser on every preview call.
+  ``total_cols`` in the response always reflects the ground-truth
+  column count. Backward compatible — omitting the parameter returns
+  every column.
+- **`top_n` query on `GET /api/jobs/{id}/importance` (P-0097)** —
+  value-desc-sorted projection without an extra round-trip. Server
+  also enforces a 5MB payload ceiling: when the unbounded response
+  would exceed it, the route falls back to a top-N projection sized
+  to fit and surfaces the truncation via `X-Truncated-By: top_n=<N>`
+  response header.
+- **`GET /api/diagnostic/export?job_id=...` (R-3.4 / P-0097)** —
+  sanitised JSON snapshot a user can attach to a support request.
+  Returns `{schema_version: 1, timestamp, job, system}` with no heavy
+  artefacts inlined and no internal JobStore paths leaked. Heavy data
+  (fit_result.json, model.pkl) stays on disk.
+- **Wide-DataFrame fixture generator** at
+  `tests/fixtures/lizyml/wide/generate.py` (10,000 columns × 1,000
+  rows). The CSV itself is gitignored; CI generates it once at job
+  start. Used by `tests/regression/test_reg_0361_wide_preview.py`.
+
+### Frontend (PR-B2 — Wide DataFrame UI)
+
+- **Column Settings virtualization** — `@tanstack/react-virtual`
+  windows the per-column row list once the visible (non-target,
+  filter-matched) count crosses 200. The Workspace can now show the
+  configuration UI for 10,000-column workspaces without freezing
+  scroll on first paint.
+- **Searchable Target combobox** (`SearchableSelect`) — replaces the
+  shadcn Select used for Target column with a cmdk-backed combobox.
+  Substring filter, full keyboard navigation, scales to thousands of
+  options. The Task radios and the rest of the Data Panel are
+  unchanged.
+- **Importance top-N toggle** — Plots panel now exposes a
+  Show 30 / 100 / all toggle for the Importance table. Default is the
+  server-side top-30 projection (uses the new `top_n` query) so the
+  table fits well under the 5MB payload cap; users can opt back into
+  the unbounded list per job.
+- **Bulk Exclude / Include / Set type** — when the Column Settings
+  filter matches one or more columns, a toolbar above the row list
+  lets the user apply Exclude / Include / Set Numeric / Set
+  Categorical to every filtered column in a single state update,
+  collapsing N PUT-coalesce events into one.
+- **Feature Weights 1k-column guard** — the Feature Weights toggle is
+  disabled (with an inline explanatory message) when the workspace
+  has more than 1,000 non-excluded columns. The per-feature weight
+  picker is not the right interaction model at that scale; the guard
+  surfaces the limit instead of silently breaking the UI.
+
+### Backend (PR-B4 — Plot symmetric audit + Validate API enhancement)
+
+- **Validate API now carries `severity` + `suggested_fix` (R-3.4)** —
+  `POST /api/workspace/config/validate` and the inline validation in
+  `PUT /api/workspace/config` now return error dicts with two new
+  fields: `severity` (`"error" | "warning" | "info"`) and
+  `suggested_fix` (string or `null`). Backend Pydantic errors default
+  to `severity="error"` and `suggested_fix=null`; the workspace-aware
+  `n_splits > n_rows` validator surfaces a concrete fix string
+  (e.g. `"Set Folds (split.n_splits) to 100 or fewer."`). The legacy
+  `path` and `message` fields are unchanged so older frontend builds
+  continue to work.
+- **Plot symmetric audit (R-3.3)** — added `docs/plot-matrix.md`, the
+  single source of truth for the plot inventory across the LizyML
+  adapter, the API, and the frontend. The audit caught `shap-summary`
+  missing from `PLOT_LABELS` (rendered as raw kebab-case in the tab
+  strip); fixed in this PR with the symmetry rule pinned in the doc.
+
+### Backend (PR-B3 — Large CSV scaling + #383 stress tests)
+
+- **Chunked CSV load with fail-fast memory guard (P-0098)** —
+  `load_dataframe(path)` now routes CSVs above
+  `CHUNKED_LOAD_THRESHOLD_BYTES = 50 MiB` through
+  `pd.read_csv(chunksize=100_000)`. Between chunks it sums the deep
+  memory usage and raises `FileInvalidError` as soon as the running
+  total exceeds `LIZYSTUDIO_MAX_DF_MEMORY` — without waiting for
+  pandas to materialise the rest of the file. Smaller files and all
+  parquet files keep the existing single-shot read path. Public
+  signature unchanged; only the failure timing is tightened so
+  oversized uploads return a 4xx instead of OOM-crashing the worker.
+
+### Test Infrastructure
+
+- 14 new contract / regression tests under
+  `tests/contract/test_preview_max_cols.py`,
+  `tests/contract/test_importance_top_n.py`,
+  `tests/contract/test_diagnostic_export.py`, and
+  `tests/regression/test_reg_0361_wide_preview.py`.
+- Frontend Vitest coverage for the wide-DataFrame UI: 28 cases on
+  `ColumnSettingsSection` (virtualization branch + bulk toolbar),
+  9 on `SearchableSelect`, 6 on the importance top-N toggle, 4 on
+  the FeatureWeightsEditor 1k-column guard, and 4 bulk-handler cases
+  on `useColumnOverrides`.
+- 8 new cases on `tests/test_load_dataframe_chunked.py` pinning the
+  fail-fast threshold + double-load prevention + parquet-passthrough
+  invariants.
+- 4 new cases on `tests/regression/test_reg_0027h_upload_concurrency.py`
+  covering #383 (h): tempfile distinctness, no-loss tracking under
+  contention, internally-consistent winner state, no 5xx surfaces.
+- 6 new cases on `tests/bench/test_bench_large_dataset_memory.py`:
+  3 latency benches (preview / describe / load_csv on the 100k-row
+  fixture, opt-in via `--benchmark-only`) plus 3 invariants that
+  enforce the memory guard contract regardless of bench mode.
 
 ## [0.3.1] - 2026-05-04
 

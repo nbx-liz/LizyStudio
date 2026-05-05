@@ -19,6 +19,11 @@ import {
 import { PlotlyChart } from "./PlotlyChart";
 import { SegmentGroup } from "./SegmentGroup";
 
+// PR-B4 / R-3.3: PLOT_LABELS must mirror the backend's
+// _PLOT_DISPATCH (src/lizystudio/backends/lizyml/evaluation_mixin.py).
+// docs/plot-matrix.md tracks the full inventory + symmetry checks;
+// any new plot type added on either side must land in both maps in
+// the same PR.
 const PLOT_LABELS: Record<string, string> = {
   "learning-curve": "Learning Curve",
   "oof-distribution": "OOF Dist",
@@ -27,6 +32,9 @@ const PLOT_LABELS: Record<string, string> = {
   "probability-histogram": "Prob Hist",
   residuals: "Residuals",
   importance: "Importance",
+  "shap-summary": "SHAP Summary",
+  // tuning is intentionally omitted — it is rendered by
+  // TuneTrialsSection, not the per-plot tab strip.
 };
 
 const KIND_LABELS: Record<string, string> = {
@@ -58,6 +66,12 @@ interface PlotSectionProps {
   importanceData?: ImportanceResponse;
   /** Importance plot data (kind-independent, always default/split). */
   importancePlot?: PlotResponse;
+  /**
+   * PR-B2 / P-0097: top-N projection for the importance table. `null`
+   * means "show all" (no top_n forwarded).
+   */
+  importanceTopN?: number | null;
+  onImportanceTopNChange?: (n: number | null) => void;
 }
 
 export function PlotSection({
@@ -76,6 +90,8 @@ export function PlotSection({
   onImportanceKindChange,
   importanceData,
   importancePlot,
+  importanceTopN,
+  onImportanceTopNChange,
 }: PlotSectionProps) {
   // Exclude "tuning" — shown in TuneTrialsSection, not in plot tabs
   const availablePlots = plots.filter((p) => p !== "tuning");
@@ -182,6 +198,25 @@ export function PlotSection({
           plotlyJson={activePlotData.plotly_json}
           height={chartHeight}
         />
+      )}
+
+      {/* PR-B2 / P-0097: Top-N / Show-all toggle for the importance table. */}
+      {isImportance && onImportanceTopNChange && (
+        <div
+          data-testid="importance-topn-toggle"
+          className="mb-2 mt-3 flex items-center gap-2 text-xs text-muted-foreground"
+        >
+          <span>Show:</span>
+          <SegmentGroup
+            options={["30", "100", "all"]}
+            value={importanceTopN === null ? "all" : String(importanceTopN)}
+            onChange={(v) =>
+              onImportanceTopNChange(
+                v === "all" ? null : Number.parseInt(v, 10),
+              )
+            }
+          />
+        </div>
       )}
 
       {/* Importance table (below plot) */}

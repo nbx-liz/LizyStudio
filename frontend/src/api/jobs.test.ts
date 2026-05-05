@@ -106,6 +106,30 @@ describe("fetchJobImportance", () => {
     await fetchJobImportance("j1", "gain");
     expect(capturedKind).toBe("gain");
   });
+
+  it("forwards top_n when provided (PR-B2 / P-0097)", async () => {
+    let capturedTopN: string | null = null;
+    server.use(
+      http.get("/api/jobs/:jobId/importance", ({ request }) => {
+        capturedTopN = new URL(request.url).searchParams.get("top_n");
+        return HttpResponse.json({});
+      }),
+    );
+    await fetchJobImportance("j1", "gain", { topN: 30 });
+    expect(capturedTopN).toBe("30");
+  });
+
+  it("omits top_n when not provided", async () => {
+    let capturedTopN: string | null = null;
+    server.use(
+      http.get("/api/jobs/:jobId/importance", ({ request }) => {
+        capturedTopN = new URL(request.url).searchParams.get("top_n");
+        return HttpResponse.json({});
+      }),
+    );
+    await fetchJobImportance("j1", "gain");
+    expect(capturedTopN).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------

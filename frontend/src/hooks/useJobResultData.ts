@@ -60,6 +60,13 @@ export interface UseJobResultData {
   importance: ImportanceResponse | undefined;
   importancePlot: PlotResponse | undefined;
   isImportancePlotLoading: boolean;
+  /**
+   * PR-B2 / P-0097: top-N projection state for the importance table.
+   * `null` means "show all" (no top_n forwarded). The default of 30
+   * keeps the wide-DataFrame UX responsive.
+   */
+  importanceTopN: number | null;
+  setImportanceTopN: (n: number | null) => void;
   /** Fold split summary. */
   splitSummary: SplitSummaryRow[] | undefined;
   /** Tuning plot (only populated for tune jobs). */
@@ -166,6 +173,11 @@ export function useJobResultData({
   // --------------------------------------------------------------------
   const importanceEnabled = plots?.includes("importance") ?? false;
   const [importanceKind, setImportanceKind] = useState("split");
+  // PR-B2 / P-0097: default to the server-side top-30 projection so the
+  // wide-DataFrame importance table stays under the 5MB payload cap and
+  // renders in a single frame. Users opt back into the unbounded list
+  // via the "Show all" toggle in PlotSection.
+  const [importanceTopN, setImportanceTopN] = useState<number | null>(30);
 
   const { data: importanceKinds } = useQuery({
     queryKey: queryKeys.jobImportanceKinds(job.job_id),
@@ -184,8 +196,17 @@ export function useJobResultData({
   }, [importanceKinds, importanceKind]);
 
   const { data: importance } = useQuery({
-    queryKey: queryKeys.jobImportance(job.job_id, importanceKind),
-    queryFn: () => fetchJobImportance(job.job_id, importanceKind),
+    queryKey: queryKeys.jobImportance(
+      job.job_id,
+      importanceKind,
+      importanceTopN,
+    ),
+    queryFn: () =>
+      fetchJobImportance(
+        job.job_id,
+        importanceKind,
+        importanceTopN != null ? { topN: importanceTopN } : undefined,
+      ),
     enabled: importanceEnabled,
   });
 
@@ -259,6 +280,8 @@ export function useJobResultData({
     importance,
     importancePlot,
     isImportancePlotLoading,
+    importanceTopN,
+    setImportanceTopN,
     splitSummary,
     tuningPlot,
     metrics,

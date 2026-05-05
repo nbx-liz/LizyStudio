@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 import pandas as pd
 
+from lizystudio.api.errors import FileInvalidError
 from lizystudio.backends.types import (
     ColumnInfo,
     ColumnsResponse,
@@ -16,13 +17,73 @@ from lizystudio.backends.types import (
     FoldInfo,
     SplitPreview,
 )
+from lizystudio.security import get_max_df_memory
+
+# PR-B3 / R-5.2: above this on-disk size, route CSV reads through a
+# chunked iterator that monitors deep memory usage between chunks. The
+# 50 MB threshold is well below the 100 MB ``MAX_UPLOAD_BYTES`` ceiling,
+# so most uploads still take the fast direct-read path; files that
+# arrive via ``data/path`` from disk (no upload size cap) get the
+# fail-fast guarantee.
+CHUNKED_LOAD_THRESHOLD_BYTES = 50 * 1024 * 1024
+# Tuned for ~50 MB of typical numeric data per chunk so memory
+# accounting catches an oversize file within one extra chunk of slack.
+_CSV_CHUNK_ROWS = 100_000
+
+
+def _load_csv_chunked(p: Path) -> pd.DataFrame:
+    """Stream a CSV in row-batches with a fail-fast memory guard.
+
+    The function accumulates pandas chunks into a list and concatenates
+    them at the end. Between chunks it sums each chunk's deep memory
+    usage and raises ``FileInvalidError`` as soon as the running total
+    exceeds the configured ``LIZYSTUDIO_MAX_DF_MEMORY`` limit — without
+    waiting for ``check_dataframe_memory`` to run on the fully
+    materialised frame.
+    """
+    max_bytes = get_max_df_memory()
+    chunks: list[pd.DataFrame] = []
+    running_bytes = 0
+    for chunk in pd.read_csv(p, chunksize=_CSV_CHUNK_ROWS):
+        running_bytes += int(chunk.memory_usage(deep=True).sum())
+        if running_bytes > max_bytes:
+            mem_mb = running_bytes / (1024 * 1024)
+            limit_mb = max_bytes / (1024 * 1024)
+            raise FileInvalidError(
+                f"DataFrame memory usage ({mem_mb:.1f} MB) "
+                f"exceeds limit ({limit_mb:.1f} MB). "
+                f"Set LIZYSTUDIO_MAX_DF_MEMORY to increase."
+            )
+        chunks.append(chunk)
+    if not chunks:
+        # An empty CSV (header-only) still needs a DataFrame with the
+        # declared columns. Re-read directly so the column dtypes match
+        # what pandas would have inferred.
+        return pd.read_csv(p)
+    return pd.concat(chunks, ignore_index=True)
 
 
 def load_dataframe(path: str) -> pd.DataFrame:
-    """Load a CSV or Parquet file into a DataFrame."""
+    """Load a CSV or Parquet file into a DataFrame.
+
+    Files above ``CHUNKED_LOAD_THRESHOLD_BYTES`` are read through a
+    chunked iterator that fails fast when the running deep-memory
+    total would exceed ``LIZYSTUDIO_MAX_DF_MEMORY``. Smaller files,
+    and parquet files of any size, take the direct ``pd.read_csv`` /
+    ``pd.read_parquet`` path because the chunked overhead is wasted
+    when there is no risk of OOM.
+    """
     p = Path(path)
     if p.suffix == ".parquet":
         return pd.read_parquet(p)
+    try:
+        size = p.stat().st_size
+    except OSError:
+        # Stat failures (broken symlinks, permission denied) are best
+        # surfaced by pandas itself — fall through to the direct path.
+        size = 0
+    if size > CHUNKED_LOAD_THRESHOLD_BYTES:
+        return _load_csv_chunked(p)
     return pd.read_csv(p)
 
 
@@ -45,14 +106,37 @@ def make_data_ref(
     )
 
 
-def get_preview(df: pd.DataFrame, rows: int = 50) -> dict[str, Any]:
-    """Return first N rows as JSON-serializable dict."""
-    preview = df.head(rows)
+def get_preview(
+    df: pd.DataFrame,
+    rows: int = 50,
+    max_cols: int | None = None,
+) -> dict[str, Any]:
+    """Return first N rows as a JSON-serialisable dict.
+
+    Parameters
+    ----------
+    df:
+        Source DataFrame.
+    rows:
+        Number of leading rows to include.
+    max_cols:
+        Optional column cap (P-0097). When provided, only the first
+        ``max_cols`` columns are emitted in ``columns`` and ``data``;
+        ``total_cols`` always reports the ground-truth column count so
+        the SPA can show "showing N of M" without an extra round-trip.
+        ``None`` preserves the pre-P-0097 behaviour of returning every
+        column.
+    """
+    total_cols = len(df.columns)
+    if max_cols is not None and max_cols < total_cols:
+        preview = df.iloc[:rows, :max_cols]
+    else:
+        preview = df.head(rows)
     return {
         "columns": list(preview.columns),
         "data": preview.fillna("").to_dict("records"),
         "total_rows": len(df),
-        "total_cols": len(df.columns),
+        "total_cols": total_cols,
     }
 
 

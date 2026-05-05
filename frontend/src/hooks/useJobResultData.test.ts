@@ -237,7 +237,9 @@ describe("useJobResultData", () => {
 
     await waitFor(() => {
       expect(fetchJobImportanceKinds).toHaveBeenCalledWith("j1");
-      expect(fetchJobImportance).toHaveBeenCalledWith("j1", "split");
+      expect(fetchJobImportance).toHaveBeenCalledWith("j1", "split", {
+        topN: 30,
+      });
       expect(fetchJobPlot).toHaveBeenCalledWith("j1", "importance", {
         kind: "split",
       });
