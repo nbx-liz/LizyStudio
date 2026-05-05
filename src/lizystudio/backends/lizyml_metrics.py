@@ -47,7 +47,17 @@ def get_eval_metrics_by_task() -> dict[str, list[str]]:
             # Fallback for older LizyML versions
             metrics = {
                 "regression": _sort_with_preferred(
-                    ["mae", "mape", "rmse", "huber", "r2", "rmsle"], "regression"
+                    [
+                        "mae",
+                        "mape",
+                        "rmse",
+                        "huber",
+                        "r2",
+                        "rmsle",
+                        "smape",
+                        "wape",
+                    ],
+                    "regression",
                 ),
                 "binary": _sort_with_preferred(
                     [
