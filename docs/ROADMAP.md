@@ -6,7 +6,7 @@
 - このファイルは **横串インデックス** であり、詳細はリンク先で確認すること。
 - 着手する際は HISTORY に Proposal を起票（変更ゲート対象の場合）→ PLAN にフェーズ追加 → 実装、の順で進める。
 
-最終更新: 2026-05-01（直近 PR #329-#335 反映完了：P-0093 / #328 / cleanup / Tier 3 docs / P-0094 Proposal+impl / BLUEPRINT audit）
+最終更新: 2026-05-05（v0.4.1 リリース反映：CHANGELOG / HISTORY P-0095..P-0098 / Open Issues #403..#405 / v0.5 R-1 Next Action）
 
 ---
 
@@ -103,6 +103,16 @@
 
 | 完了日 | ID | タイトル | 主要 PR |
 |---|---|---|---|
+| 2026-05-05 | **v0.4.1 release** | Validate clarity patch — severity envelope + auto-disable uncomputable metrics + lizyml 0.11.0 (sMAPE/WAPE) | #397 / #398 / #399 / #400 / #401 / #402 (release merge) |
+| 2026-05-05 | PR-D1 (#400) | fit/tune raise sites filter on `severity="error"`; warning-only configs no longer 422 | #400 |
+| 2026-05-05 | PR-C2 (#399) | `_workspace_metric_compatibility_errors` auto-disables `mape`/`rmsle`/`r2` via severity=warning + suggested_fix | #399 |
+| 2026-05-05 | LizyML 0.11.0 bump | adopt sMAPE / WAPE (zero-tolerant MAPE alternatives) | #398 |
+| 2026-05-05 | PR-C1 (#397) | hide redundant SHAP Summary tab in Workspace Plot panel | #397 |
+| 2026-05-05 | **v0.4.0 release** | Wide DataFrame — data/preview & importance payload caps, chunked CSV fail-fast | (multiple, #395 release merge) |
+| 2026-05-05 | P-0098 | `load_dataframe` chunk-based fail-fast memory guard (PR-B3) | (in v0.4.0) |
+| 2026-05-05 | P-0097 | Wide DataFrame data/preview + importance payload caps (#361 / R-5.1) | (in v0.4.0) |
+| 2026-05-04 | P-0096 | 業務利用 (business-use) 定義の確定と v0.4 Exit Criteria への反映 | (docs) |
+| 2026-05-03 | P-0095 | Backend fit→load round-trip integration test as required CI gate (#346 Phase C) | #348..#354 |
 | 2026-05-01 | BLUEPRINT audit | P-0086..P-0094 の Decisions を BLUEPRINT.md §3.3/§3.4/§5.2/§5.5/§6.1/§8.1 に反映 | #335 |
 | 2026-05-01 | P-0094 (impl) | pytest-benchmark perf baseline (`tests/bench/` + nightly job) | #334 |
 | 2026-05-01 | P-0094 (proposal) | pytest-benchmark introduction Proposal-only | #333 |
@@ -123,6 +133,14 @@
 ---
 
 ## 3. アクティブ：仕様変更を伴う Proposal
+
+### 3.-1 v0.5 R-1 invariants Proposal（採番予約：P-0099, P-0100, P-0101）
+
+- **状態**: 🟡 未起票（v0.5 R-1 着手直前に書く。`docs/pre-v05-handoff-2026-05-05.md` §3.1 M-2 / M-3 参照）
+- **P-0099**: Job state machine invariants + `paused` state（R-1 全体の Change Gate）
+- **P-0100**: severity envelope formalization (PR-B4) — Pydantic Literal 化、`_blocking_errors` セマンティクス（PR-D1 #400 で確立、未記録）
+- **P-0101**: metric-compat watchlist — `_workspace_metric_compatibility_errors` の検出ルール（PR-C2 #399 / PR-D1 #400 で確立、未記録）
+- **次回採番**: P-0102 以降
 
 ### 3.0 P-0094 (済)：pytest-benchmark performance baseline（Issue #27 (a)）
 
@@ -228,11 +246,16 @@
 
 ## 5. アクティブ：Open Issues
 
-直近 4 件（#327 / #328 / #298 / #304）はすべて closed 済み。Tier 4 戦略課題のみ残存。
+v0.4.1 リリース後の Open Issue は 5 件。
 
 | Issue | タイトル | priority | 推奨アクション |
 |---|---|---|---|
-| **#27** | [Testing] Add load and concurrency tests | medium / tier-4 | (a) `pytest-benchmark` 100k-row microbench を tier-3 で先行マージ可 / (b) 並行 fit stress harness は tier-4 |
+| **#360** | feat(tune): long-run resumability (24h+, all termination paths) | tier-4 / high | **v0.5 core (R-1.4, 3 週間)**。LizyML 上流対応待ち（M-1 で起票予定） |
+| **#384** | [Testing] #28 follow-up — Server Restart Recovery (blocked on #360) | tier-3 / medium | **R-1.5b (v0.5)** — #360 解消後 |
+| **#403** | refactor(backend): move metric-compat watchlist behind BackendAdapter abstraction (HIGH-2) | tier-3 / medium | **v0.6 defer 推奨** — 第 2 backend が見えてから |
+| **#404** | test: add edge-case coverage for `_workspace_metric_compatibility_errors` | tier-2 / medium | **S-1 (Day 3 着手)** — 7 cases (NaN/inf/dtype/dedup/malformed) |
+| **#405** | test(frontend): integration coverage for validate-debounce → warning banner | tier-3 / medium | **O-1 (並行可)** — frontend 単独 |
+| **#27** | [Testing] Add load and concurrency tests | medium / tier-4 | (a) `pytest-benchmark` baseline は P-0094 で完了。(b) 並行 fit stress harness は実機要件あり |
 | **#28** | [Testing] Add offline/resume resilience tests | medium / tier-4 | `current_job_id` ライフサイクル契約決定が前提。post-completion deep-link は #143 でカバー済み、during-run reload が gap |
 | **#125** | chore(frontend): migrate Tailwind CSS v3 → v4 | medium / tier-4 | Owner status: `Button` で spike → 専用 sprint。即着手は推奨しない |
 
@@ -242,36 +265,63 @@
 
 | 対象 | 最終更新 | リスク | 対応 |
 |---|---|---|---|
-| `BLUEPRINT.md` | ✅ 2026-05-01 reconciled | — | P-0086 / P-0088 / P-0089 / P-0093 / `JOB_CONFLICT` / `preflight_checkpoint_dir` / P-0094 perf bench の drift を反映済み |
+| `BLUEPRINT.md` | 🟡 2026-05-01 (P-0094 まで反映) | 中 | P-0095..P-0098 と v0.4.1 severity envelope（PR-B4 / PR-C2 / PR-D1）が未反映。**M-4 (Day 2) で §5 (API) に severity / suggested_fix を追記** |
+| `HISTORY.md` Decision 記録 | 🟡 2026-05-04 P-0098 まで | 中 | v0.4.1 で導入された severity envelope / metric-compat watchlist が Decision 未記録。**M-3 (Day 2) で P-0100 / P-0101 を起票** |
+| `PLAN.md` v3-N | 🟡 2026-05-01 v3-15 まで | 中 | v0.4.0 / v0.4.1 phase が未確定、v0.5 R-1〜R-2 phase が未追加。**M-5 (Day 4) で v3-16 以降を追加** |
 | `docs/architecture.md` / `api.md` / `adapter-guide.md` | ✅ 2026-05-01 reconciled | — | 棚卸し完了。`tests/contract/test_adapter_guide_method_names.py` で adapter-guide.md ↔ Protocol の drift を gating |
-| `PLAN.md` v3-13/14/15 | ✅ 反映済み（2026-04-30, 2026-05-01） | — | — |
-| `HISTORY.md` P-0092 follow-ups | ✅ 反映済み（2026-04-30、PR #303 周辺で追記） | — | — |
-| `MEMORY.md` 古いノート | ✅ 直近セッションで更新（`project_coupling_refactor_progress` 等は post-#271 / P-0092 完了以降に上書き済み） | — | — |
+| `docs/architecture-as-implemented.md` | 🟡 2026-04-17 | 中 | severity filter / `_blocking_errors` の hop 図が未更新。**S-4 (Day 3) で更新** |
+| `docs/v0.4-business-readiness-plan.md` | 🟡 2026-04 | 低 | R-3.4 (Validate API) は v0.4.0 / v0.4.1 で完了。**S-3 (Day 1 午後) でレビュー → header に shipped 記載** |
+| `MEMORY.md` 古いノート | ✅ 直近セッションで更新 | — | `project_v041_shipped` / `project_pre_v05_work_plan` 反映済み |
 | `analysis/` 削除済み | 2026-04 期間 | `python-analyst` ↔ `lizystudio-analyst` パイプライン成果物の置き場が無い | 🟡 意図的削除か要確認、別 issue 検討 |
 
 ---
 
 ## 7. 推奨 Next Action（ROI 順 / 1 PR 単位）
 
-> 旧 Tier 0 / Tier 1 / Tier 2 のアイテムは 2026-04-30〜2026-05-01 に解消済み（B-4/B-5/B-6/B-2 → PR #312-#315、B-1 → PR #316、Phase C generator + wave 1〜8 → PR #317-#325、B-8 → PR #318、#327/#328 → PR #329/#330）。残るは Tier 3 戦略課題と Tier 4 長期計画。
+> v0.4.1 リリース完了 (2026-05-05)。詳細な v0.5 着手前の作業内訳は `docs/pre-v05-handoff-2026-05-05.md` 参照（MUST 6 + SHOULD 4 + OPTIONAL 3 = 13 件、計 4-7 日）。
 
-### Tier 3：戦略課題
+### Tier 1：v0.5 着手前必須（MUST、4-6 日）
 
-1. **P-0094 implementation**: pytest-benchmark microbench — Proposal accept 後の実装 PR（`feat/pytest-benchmark-baseline-p0094` で着手予定）
-2. **P-0095 として P-0087 Phase 3 を Proposal 化**（`cv_strategy_fields` の Pydantic 自動派生）— lizyml 側で構造化フィールドメタデータ export が前提のためリポジトリ間調整必要
-3. **#28** offline/resume resilience tests — `current_job_id` ライフサイクル契約決定が前提
+1. **M-1**: LizyML 側に Optuna persistent storage Issue を起票（`/home/rem/repos/LizyML`、cross-repo）— v0.5 R-1.4 (#360) のクリティカルパス
+2. **M-2**: HISTORY.md P-0099 起票（R-1 invariants + `paused` state Change Gate）
+3. **M-3**: HISTORY.md P-0100 / P-0101 起票（severity envelope / metric-compat watchlist Decision）
+4. **M-4**: BLUEPRINT.md §5 (API) に severity / suggested_fix を反映
+5. **M-5**: PLAN.md v3-N (R-1 〜 R-2) phase 追加 + v0.4.0 / v0.4.1 phase 確定
+6. **M-6**: handoff docs cleanup（5 ファイル削除） — 一部完了（3 ファイル削除済、本 ROADMAP 更新後 `pre-v05-handoff-2026-05-05.md` 削除予定）
 
-### Tier 4：要長期計画
+### Tier 2：高 ROI 準備（SHOULD、1-2 日）
 
-5. **#27 (b)** 並行 fit stress harness — 実機マシン要件あり
-6. **#125** Tailwind v4 — Button で spike → 専用 sprint
-7. ML Backend 2nd 実装による Adapter 抽象検証 — 候補 backend 選定が未決
+7. **S-1**: #404 異常系テスト 7 cases 追加（`tests/contract/test_validate_metric_compatibility.py` + `frontend/src/api/types.test.ts`）
+8. **S-2**: 本 ROADMAP の post-v0.4.1 reconciliation — 進行中（本コミット）
+9. **S-3**: `docs/v0.4-business-readiness-plan.md` レビュー + shipped 状態確定
+10. **S-4**: `docs/architecture-as-implemented.md` 更新（severity filter / `_blocking_errors` hop 図）
+
+### Tier 3：v0.5 と並行可（OPTIONAL、3-5 日）
+
+11. **O-1**: #405 integration test (validate-debounce → warning banner) — frontend 単独
+12. **O-2**: #403 BackendAdapter metric-compat refactor — 第 2 backend が見えるまで defer 推奨
+13. **O-3**: P-0087 Phase 3 (`cv_strategy_fields` 自動派生) — LizyML 構造化 export 待ち、defer 推奨
+
+### Tier 4：v0.5 core（着手後 8-12 週間）
+
+- **#360** Tune long-run resumability (R-1.4, 3 週間) — M-1 上流対応待ち
+- **#384** Server Restart Recovery (R-1.5b, 1 週間) — #360 解消後
+- **#358** BlockedGroup race (R-1.2)
+- **#359** job-num drift (R-1.5)
+- WS 再接続 / ブラウザリロード復元 (R-2)
+
+### Tier 5：要長期計画（v0.6 以降）
+
+- **#27 (b)** 並行 fit stress harness — 実機マシン要件あり
+- **#125** Tailwind v4 — Button で spike → 専用 sprint
+- ML Backend 2nd 実装による Adapter 抽象検証 — 候補 backend 選定が未決
 
 ---
 
 ## 8. 運用メモ
 
-- 新規 Proposal を起票するときは **P-0095 から採番**（P-0094 = pytest-benchmark Proposal 起票は 2026-05-01 に消化）。`H-XXXX` 採番は終了。
+- 新規 Proposal を起票するときは **P-0099 から採番**（P-0098 = `load_dataframe` chunked CSV、2026-05-04 で消化済）。`H-XXXX` 採番は終了。
+- v0.5 R-1 着手時は P-0099 (invariants + `paused` state)、v0.4.1 機能の Decision 記録は P-0100 / P-0101 を予約済み。
 - E2E 単独追加（仕様変更なし）は HISTORY 起票不要、本 ROADMAP の §3 を更新するだけで OK。
 - 本 ROADMAP はステータス変更時に都度更新。タスク完了時は §1 へ移動、新規着手時は §2/§3/§4 へ追加する。
 - 古い ID（B-N coupling、A.M Phase A など）は履歴参照のためそのまま残す。検索性のため改名はしない。

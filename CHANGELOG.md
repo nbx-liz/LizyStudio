@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-05-06
+
+The **v0.5 prep** maintenance release. **No user-facing behaviour
+changes** — the on-disk job format, REST API surface, and frontend UX
+are byte-for-byte identical to v0.4.1. This release exists so
+downstream consumers can pin against a stable artifact while the v0.5
+R-1 reliability sprint lands phase by phase over the coming weeks.
+
+Bundles:
+
+1. Post-v0.4.1 spec reconciliation — locks the severity envelope
+   introduced by PR-B4 / PR-C2 / PR-D1 as a documented Decision.
+2. Edge-case + integration test coverage for the metric-compat
+   watchlist and the validate-debounce → warning banner render path.
+3. The v0.5 R-1 Change Gate Proposal (P-0099) declaring the seven
+   invariants and the new `paused` job state that v3-17 through v3-26
+   will encode as invariant tests before implementation.
+
+### Documentation
+
+- **HISTORY P-0100** — formalises the `severity` envelope (PR-B4)
+  post-hoc: `severity: Literal["error","warning","info"]`, default
+  `"error"` for backward compatibility with pre-PR-B4 backends, and
+  the `_blocking_errors` filter semantics that PR-D1 (#400) wired into
+  all four `/fit` and `/tune` raise sites.
+- **HISTORY P-0101** — documents the metric-compat watchlist
+  (`mape` / `rmsle` / `r2`) and the `task=regression` guard introduced
+  by PR-C2 (#399) and PR-D1 (#400).
+- **HISTORY P-0099** — declares the seven invariants (INV-1 through
+  INV-7) and the new `paused` job state that the v0.5 R-1 sprint will
+  encode as invariant tests before implementation. **Proposal-only
+  Change Gate; no runtime change in this release.**
+- **BLUEPRINT §5.2** — Validate response envelope spec (severity
+  Literal, `suggested_fix` nullability, watchlist trigger table,
+  `_blocking_errors` semantics, frontend `isBlockingError` mapping).
+- **PLAN.md** — adds 10 new phases (`v3-17` through `v3-26`) covering
+  R-1.1 through R-4.2 with explicit Entry / Exit criteria and DoD
+  pointing at the corresponding INV-N invariant tests.
+- `docs/v0.4-business-readiness-plan.md` v0.2 — status PARTIAL; R-3.4.1
+  and R-5 marked shipped; R-1 / R-2 / R-4 carried over to v0.5.
+- `docs/architecture-as-implemented.md` §5.4 — Validate envelope hop
+  diagram + frontend `isBlockingError` mapping.
+- `docs/ROADMAP.md` post-v0.4.1 reconciliation (recent shipped, open
+  issues, v0.5 R-1 Next Actions, drift flags for PLAN / BLUEPRINT
+  follow-ups already addressed by this release).
+
+### Tests
+
+- 6 new backend cases on `tests/contract/test_validate_metric_compatibility.py`
+  (9 → 15) covering all-NaN target, ±inf target, int64 vs float64
+  consistency, duplicate metric dedup, malformed metric entries, and
+  non-dict `evaluation` field defensive handling (#404).
+- 4 new frontend cases on `frontend/src/api/types.test.ts` locking the
+  `isBlockingError` severity-default rule (#404).
+- 2 new frontend integration cases on
+  `frontend/src/components/workspace/ConfigEditorBody.integration.test.tsx`
+  exercising the validate-debounce → `setErrors` → warning banner render
+  path end-to-end with a mocked workspace API (#405).
+
+### Cross-repo
+
+- [`LizyML #105`](https://github.com/nbx-liz/LizyML/issues/105) filed —
+  Optuna persistent storage (`JournalStorage`) for resumable tuning.
+  Critical path for v0.5 R-1.4 (`#360`); LizyStudio v3-20 cannot start
+  until this lands upstream.
+
+### Internal follow-ups (no user impact)
+
+- `#403` (BackendAdapter metric-compat refactor) — deferred to v0.6
+  alongside the second `BackendAdapter` implementation. Watchlist
+  behaviour stays locked by the contract suite.
+
 ## [0.4.1] - 2026-05-05
 
 The **Validate clarity** patch release. Bundles three follow-ups to the

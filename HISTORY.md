@@ -3184,4 +3184,207 @@ frontend で virtualization / top-N を入れても、転送する payload 自�
 
 - 2026-05-05 **Proposed** — PR-B3 で実装。auto mode で Phase B 実装中、Change Gate scope は `load_dataframe` の失敗タイミング精緻化のみ。**ユーザ承認済** (Phase B 全体着手承認)
 
+### P-0099: v0.5 R-1 状態整合性 invariants + `paused` job state（Change Gate）
+
+- **Date:** 2026-05-06 起票
+- **Related:** Issue #360 (Tune long-run resumability), Issue #358 (BlockedGroup race), Issue #359 (job-num drift), Issue #384 (Server Restart Recovery), LizyML #105 (Optuna persistent storage), `docs/v0.4-business-readiness-plan.md` §2 (R-1), `~/.claude/rules/common/invariants-first.md`
+
+#### Motivation
+
+v0.4 リリースまでの slot release / cancel race 系列バグ (P-0086〜P-0089 周辺) はいずれも「不変条件が事前に文章化されていない」ことが根本原因だった (memory `feedback_count_budget_assertions` の lesson 系列)。v0.5 で R-1.4 (Tune long-run resumability, 24h+) を実装すると job state machine が **`paused` 状態を新たに持つ** ため、現状の slot release / cancel / subprocess crash の各経路に新しい遷移が増える。先に invariants を declare → invariant test を RED phase で書く → 実装、の順を強制する。
+
+CLAUDE.md §2 Change Gate 対象（state machine 変更 / 並行性・所有権の設計 / shared state の不変条件）にすべて該当するため Proposal-first で承認を取る。
+
+#### Purpose
+
+- v0.5 R-1.1〜R-1.4 全体の不変条件を **R-1.x 着手前に invariant test として encode** し、リファクタ中に regression を「Test failed」で即座に発見できるようにする
+- `paused` 状態を job lifecycle に追加（`pending → running → paused → running → succeeded|failed|cancelled` の遷移を許可、illegal transitions は assert で reject）
+- `meta.json` の atomic write (tmpfile + fsync + rename) を invariant 化し、subprocess crash 中のファイル破損を構造的に防ぐ
+- 上記すべてを各 R-1.x phase の Acceptance criteria に紐付ける
+
+#### Invariants
+
+以下を v0.5 R-1 期間中の **不変条件** として宣言する。各 INV-N は対応する invariant test を `tests/regression/` または `tests/e2e/` に持ち、code には possible なら `assert` / runtime guard / branded type で encode する。
+
+- **INV-1**: `active_job_id` holds at most one running-or-paused job at any time — released on **completion OR cancel OR exception OR SIGKILL OR WebSocket disconnect OR browser close** (6 termination paths). 違反シナリオ: terminal write 後に release が漏れる、subprocess crash で release callback が呼ばれない
+- **INV-2**: `meta.json` is written atomically (tmpfile + fsync + rename) — `kill -9` mid-write でも整合性が破れない。違反シナリオ: 親プロセスが部分書き込み中に強制終了 → 子の load_job が JSON parse error
+- **INV-3**: state machine transitions は明示宣言、illegal transitions は assert で reject。許可される遷移は以下のみ:
+  - `[*] → pending`（POST /fit / /tune）
+  - `pending → running` (worker thread が claim_active)
+  - `pending → cancelled` (DELETE / cancel before start)
+  - `running → succeeded` (terminal write OK)
+  - `running → failed` (exception or subprocess died)
+  - `running → cancelled` (cancel signal observed mid-run)
+  - **`running → paused`** (Tune trial 完了時に user pause OR scheduled checkpoint, R-1.4 で導入)
+  - **`paused → running`** (Resume button or auto-resume on restart)
+  - **`paused → cancelled`** (cancel during paused state)
+  - **`paused → failed`** (storage corruption detected on resume)
+- **INV-4**: `paused` 状態の job は **trial-level checkpoint + `meta.json` から完全復元可能** — Optuna study を re-attach して trial.number / best_value / trial.state が一致する。違反シナリオ: journal file が corrupted で resume 不能、勝手に新 trial が走る
+- **INV-5**: cancel observation is monotonic — `is_cancel_requested(job_id)` が一度 True を返したら、その後 (job 完了まで) 連続 True を返す。違反シナリオ: race で `clear_cancel` が早く走り、worker が「キャンセルされてない」と判断して terminal write を上書き
+- **INV-6**: subprocess crash recovery — 子 process が `SIGKILL` で死ぬと、親 watchdog が **bounded time window 以内** に `failed (reason="subprocess died")` で terminal write + slot release。違反シナリオ: 子が消えても active_slot がぶら下がり続けて次の job を block
+- **INV-7**: WebSocket disconnect は active slot を release **しない** — 進行中 job は subscriber 数に依らず completion または terminal failure まで走る。違反シナリオ: ブラウザを閉じたら fit が止まる、reload で resume できない
+
+#### Impact
+
+**Public API (Change Gate scope):**
+- `meta.json` schema に `"paused"` を追加。`status: Literal["pending","running","succeeded","failed","cancelled","paused"]`
+- `format_version` を `1` → `2` (P-0095 round-trip CI gate に組み込み)
+- `POST /api/jobs/{job_id}/pause` (新規, R-1.4): running Tune を paused に遷移
+- `POST /api/jobs/{job_id}/resume` 既存と統合: paused state を resume するロジックを既存の retune-resume 経路と並行サポート (H-0062 Phase B 拡張)
+- WebSocket message に `{"type":"paused", "trial_number": N, "checkpoint_path": "..."}` を追加
+- Frontend: Jobs UI に "Pause" / "Resume" ボタン (paused 状態のみ表示)
+
+**Internal (no API change):**
+- `services/jobs.py:JobStore` に `pause(job_id)` / `unpause(job_id)` 追加
+- `services/training.py` の Tune loop で trial 完了 callback に "should_pause" check を挿入
+- `backends/lizyml/lifecycle_mixin.py` で Optuna study の `storage` パラメタを passthrough (LizyML #105 待ち)
+
+#### Compatibility
+
+- v0.4 までで作成した `meta.json` (format_version=1) は `paused` フィールドを持たない → migration で `paused: false` を default に挿入。read-only で読める
+- POST /api/jobs/{job_id}/pause は新規追加なのでクライアント側で 404 をハンドルする legacy path は不要
+- WebSocket `paused` メッセージは未知タイプとして無視されるよう既存 client の switch に default branch を追加 (R-2.1 で別途扱う)
+- LizyML 0.11.x で `storage=` パラメタが無いため、LizyML #105 が merged するまでは `paused` 経路を feature flag (`LIZYSTUDIO_TUNE_RESUME_ENABLED=0`) で off にする
+
+#### Acceptance criteria
+
+R-1.1〜R-1.5b の各 phase に invariant test を割り当てる。本 Proposal の DoD は「invariant declaration が PLAN.md の各 phase に reflectee されている」こと。実装は phase 単位で行う。
+
+- [ ] PLAN.md v3-17 (R-1.1) に **INV-1 / INV-5** の invariant test を Acceptance criteria として明記
+- [ ] PLAN.md v3-18 (R-1.2) に **INV-5** + #358 の regression test を明記
+- [ ] PLAN.md v3-19 (R-1.3) に **INV-2 / INV-6** の invariant test を明記
+- [ ] PLAN.md v3-20 (R-1.4) に **INV-3 / INV-4** の invariant test + LizyML #105 dependency を明記
+- [ ] PLAN.md v3-21 (R-1.5) に Issue #359 (job-num drift) の regression test を明記
+- [ ] PLAN.md v3-22 (R-1.5b) に **INV-7** + Issue #384 の regression test を明記
+- [ ] BLUEPRINT.md §3.4 (Job lifecycle) に上記 INV-1〜INV-7 を明記
+- [ ] CHANGELOG.md (v0.5.0 release notes drafting 時) に `paused` 状態追加を Breaking 寸前 (Added) で記述
+- [ ] Issues #358 / #359 / #360 / #384 を本 Proposal の child Issue として label
+
+#### Alternatives considered
+
+- **(a) Invariant 宣言なし、phase 別に都度 PR 単位で書く**: 拒否。slot release 系の regression 5回連発の実績 (memory `feedback_symmetry_audit_on_fixes`) は事前 invariant declaration 不在が原因
+- **(b) `paused` の代わりに既存 `running` のサブステートとして表現**: 拒否。状態遷移が暗黙化され client / DB / WS 全層で「実は走っていない running」が解釈の余地として残る
+- **(c) Optuna 永続化を LizyStudio 側で wrap (LizyML #105 を待たない)**: 拒否。`Tuner.tune()` を bypass すると round_number / prior_trials / expanded_dims tracking (LizyML H-0068) を re-implement する必要、保守コストで割に合わない
+- **(d) format_version を bump せず paused を後付け**: 拒否。P-0095 の round-trip CI gate が format_version を読むので migration matrix に明示的に乗せる方が安全
+
+→ 採用は **(e) Invariants 7 件を Proposal で declare、phase 単位で invariant test を RED phase に強制、`paused` を state machine の正規 1st-class member にする**。
+
+#### Decision
+
+- 2026-05-06 **Proposed** — v0.5 R-1.1 着手前に user 承認を取り、PLAN.md に v3-17〜v3-22 を追加した時点で **Approved**。実装は phase 単位、各 phase の PR が invariant test を含む
+
+
+
+### P-0100: severity envelope の正式化（PR-B4 → PR-C2/PR-D1, Issue #394）
+
+- **Date:** 2026-05-05 起票 / 同日 Decision
+- **Related:** PR #399 (PR-C2 feat/validate-metric-compat-394), PR #400 (PR-D1 fix/fit-tune-severity-filter-394), Issue #394, P-0097 (Wide DataFrame), CHANGELOG v0.4.1
+
+#### Motivation
+
+PR-B4 で `ValidationError` payload に `severity: Literal["error", "warning", "info"]` と `suggested_fix: str | None` が導入されたが、Pydantic Literal の正式宣言と「どこで `severity` を見るか」のセマンティクスが HISTORY 未記録のまま v0.4.1 リリースに乗った。PR-C2 と PR-D1 で raise sites が確定したため、後続 R-1 / R-3 が同 envelope を使い続ける前提として正式化する。
+
+#### Purpose
+
+- `severity="error"` 以外は `valid=true` / `saved=true` を維持し block しない
+- `severity` 未設定の旧 ValidationError は `"error"` として扱い backward compatible
+- `_blocking_errors` 共通ヘルパで「block 判定 = `severity != "warning|info"`」を一箇所に集約
+- `suggested_fix` は警告を「具体的な置換アクション」に紐付ける recovery hint slot として API 仕様に組み込む
+
+#### Impact
+
+- Public API: `POST /api/workspace/config/validate` / `PUT /api/workspace/config` / `POST /api/workspace/upload` の `errors[]` 各要素に `severity` (default `"error"`) と `suggested_fix` (default `null`) が必須キーとして登場
+- `POST /api/workspace/fit` / `POST /api/workspace/tune` は warning-only config (= severity != "error") を 422 で返さなくなる（PR-D1 #400 で修正）
+- Frontend: yellow warning banner が ConfigForm 上部に追加 (ConfigEditorBody.tsx)、blocking と非 blocking を視覚分離
+- 既存 ValidationError 使用箇所はキー追加のみで挙動不変
+
+#### Compatibility
+
+- 旧 ValidationError (severity 未設定) は default `"error"` で従来挙動を維持
+- Frontend `isBlockingError(entry)` ヘルパが `entry.severity ?? "error"` で wrap
+- `_blocking_errors([entry, ...])` ヘルパが Service / API 層共通で severity フィルタ
+- 全フィールド optional 追加 → JSON Schema 後方互換
+
+#### Acceptance criteria
+
+- [x] `tests/contract/test_validate_severity_and_suggested_fix.py` で envelope shape を契約化
+- [x] `tests/contract/test_fit_tune_severity_filter.py` で fit/tune が warning-only config を受け入れることを 7 cases pin（PR-D1 #400）
+- [x] `frontend/src/api/types.ts` に `isBlockingError` ヘルパ + 単体テストへの落とし込みは S-1 / O-1 で追加（#404 / #405）
+- [x] CHANGELOG v0.4.1 で公開挙動を記述
+
+#### Alternatives considered
+
+- **(a) 別フィールド `level: "fatal" | "warn"` を使う**: 拒否。`severity` がすでに WCAG / RFC 用語と整合、Toast / aria-live にもそのまま流用可能
+- **(b) HTTP status を 422 / 200 で分離**: 拒否。同一エンドポイントの一覧に warning と error が混在するケースで status を分けると複雑化、UI が両方をマージできない
+- **(c) suggested_fix を別 endpoint に切り出す**: 拒否。round-trip が増え UX 悪化
+
+→ 採用は **(d) 同 envelope で severity + suggested_fix を inline**。
+
+#### Decision
+
+- 2026-05-05 **Decided (post-hoc)** — PR-C2 / PR-D1 で実装済、本 Decision 記録は v0.4.1 リリース後の reconciliation。後続 R-1 / R-3 / R-3.4.2 (Diagnostic export) はこの envelope を前提に拡張する
+
+### P-0101: metric-compat watchlist による uncomputable metric の auto-disable（PR-C2, Issue #394）
+
+- **Date:** 2026-05-05 起票 / 同日 Decision
+- **Related:** PR #399 (PR-C2 feat/validate-metric-compat-394), PR #400 (PR-D1), Issue #394, P-0100 (severity envelope), CHANGELOG v0.4.1, LizyML 0.11.0 (sMAPE / WAPE)
+
+#### Motivation
+
+`mape` / `rmsle` / `r2` は target 列の値域が条件を満たさないと数学的に計算できない:
+
+- `mape`: target に 0 が含まれると ZeroDivisionError 相当
+- `rmsle`: target に負値が含まれると `log(1+x)` で nan
+- `r2`: target が定数だと分散 0 で nan
+
+ユーザがこれらを Tuning 設定の `evaluation.metrics` に入れたまま fit すると、結果として nan / 例外で失敗するか、ジョブ完走後に metric が表示されない。事前に `validate` レイヤで「この target だと計算不能なので外しますね」と返したい。
+
+#### Purpose
+
+- Service 層の `_workspace_metric_compatibility_errors(config, df)` で target 列を inspect し、watchlist 該当 metric があれば `severity="warning"` の ValidationError を返す
+- `suggested_fix` で具体的な置換 metric 名を返す (例: `mape` 該当時は LizyML 0.11.0 で追加された `smape` / `wape` を提案)
+- `task=regression` のときだけ作動（binary / multiclass は対象外、HIGH-1 として PR-D1 で task ガード追加）
+- 検出ルールはこの Decision で固定し、後続バックエンドが増えたときは [Issue #403](https://github.com/nbx-liz/LizyStudio/issues/403) で BackendAdapter 抽象化
+
+#### Impact
+
+- 新 helper: `_workspace_metric_compatibility_errors(config, df) -> list[ValidationError]`
+- 呼び出しタイミング: `POST /api/workspace/config/validate` / `PUT /api/workspace/config` / `POST /api/workspace/upload`
+- Frontend 影響: yellow banner に `suggested_fix` を二行目で表示 (P-0100 で導入された envelope を流用)
+- 検出は **non-blocking** (severity=warning)。ユーザはそのまま fit を実行可能だが、metric は実行時に nan を返す可能性
+
+#### Watchlist 仕様
+
+| Metric | Trigger | suggested_fix |
+|---|---|---|
+| `mape` | target に 0 が 1 件以上 | "Use `smape` or `wape` instead (lizyml 0.11.0+)" |
+| `rmsle` | target に負値が 1 件以上 | "Remove `rmsle` from evaluation.metrics" |
+| `r2` | target の `nunique() == 1` (定数) | "Remove `r2` from evaluation.metrics" |
+
+#### Compatibility
+
+- watchlist は backward-compat: 警告だが block しない、既存 fit の挙動は不変
+- 旧バックエンド (lizyml 0.10.x) で sMAPE / WAPE が無くても suggested_fix は文字列のみ → クライアントは盲目に表示するだけで壊れない
+- task != "regression" のときは作動しない (binary classification で `r2` を入れるとそもそも metric registry でエラーになる別経路)
+
+#### Acceptance criteria
+
+- [x] `src/lizystudio/services/workspace.py` で `_workspace_metric_compatibility_errors` 実装
+- [x] PR #399 で 3 endpoints (`validate` / `PUT /config` / `upload`) に組み込み
+- [x] PR #400 で `task=regression` ガード + fit/tune raise sites の severity フィルタ
+- [x] `tests/contract/test_validate_metric_compatibility.py` で 9 cases (今後 #404 で 7 cases 追加して 16 cases へ)
+- [x] CHANGELOG v0.4.1 で公開挙動を記述
+
+#### Alternatives considered
+
+- **(a) Backend 任せ (fit 実行時に nan を返す)**: 拒否。ユーザが trial を浪費した後に気づく、UX 悪化
+- **(b) Hard error (severity="error" で block)**: 拒否。数学的不能でも MAPE を許容したい上級ユーザもいる、過剰な強制
+- **(c) BackendAdapter abstract method として最初から抽象化**: defer。第二 backend が見えるまで抽象化は YAGNI、Issue #403 として後送り
+
+→ 採用は **(d) Service 層 helper + watchlist 定義 + non-blocking warning**。Adapter 抽象化は #403 で別途。
+
+#### Decision
+
+- 2026-05-05 **Decided (post-hoc)** — PR-C2 / PR-D1 で実装済、本 Decision 記録は v0.4.1 リリース後の reconciliation。Issue #403 で BackendAdapter 抽象化、#404 で異常系 7 cases 追加が follow-up
+
 
