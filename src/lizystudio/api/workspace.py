@@ -80,6 +80,18 @@ router = APIRouter()
 _log = logging.getLogger(__name__)
 
 
+def _blocking_errors(errors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return only ``severity="error"`` entries (#394 / PR-D1).
+
+    PR-B4 introduced ``severity`` on validation entries; PR-C2 added
+    ``severity="warning"`` advisories that must not block Fit/Tune.
+    Pre-PR-B4 callers omit the field entirely, so we default missing
+    values to ``"error"`` to preserve the legacy "any error blocks"
+    semantics.
+    """
+    return [e for e in errors if e.get("severity", "error") == "error"]
+
+
 # --- Status / Reset ---
 
 
@@ -480,7 +492,7 @@ def config_update(
     """
     _check_workspace_lock(job_store)
     errors = validate_config(ws, body)
-    blocking = [e for e in errors if e.get("severity", "error") == "error"]
+    blocking = _blocking_errors(errors)
     if not blocking:
         ws.set_config(body)
     return {"config": body, "errors": errors, "saved": len(blocking) == 0}
@@ -525,13 +537,7 @@ def config_validate(
     if not config:
         raise WorkspaceNoConfigError()
     errors = validate_config(ws, config)
-    # Issue #394 / PR-C2: warnings advise but do not invalidate a
-    # config — only ``severity="error"`` entries flip ``valid`` to
-    # False. Entries without an explicit severity default to ``"error"``
-    # for backward compatibility (pre-PR-B4 callers still see the
-    # legacy semantics).
-    blocking = [e for e in errors if e.get("severity", "error") == "error"]
-    return {"valid": len(blocking) == 0, "errors": errors}
+    return {"valid": len(_blocking_errors(errors)) == 0, "errors": errors}
 
 
 @router.post("/config/upload", response_model=ConfigUpdateResponse)
@@ -550,7 +556,7 @@ async def config_upload(
     except Exception as exc:
         raise ConfigImportError(str(exc)) from exc
     errors = validate_config(ws, config)
-    blocking = [e for e in errors if e.get("severity", "error") == "error"]
+    blocking = _blocking_errors(errors)
     if not blocking:
         ws.set_config(config)
     return {"config": config, "errors": errors, "saved": len(blocking) == 0}
@@ -597,16 +603,23 @@ def workspace_fit(
     if body.config is not None:
         candidate = body.config
         errors = validate_config(ws, candidate)
-        if errors:
-            raise ValidationError(errors)
+        # PR-D1 / Issue #394: only severity="error" entries block Fit;
+        # severity="warning" advisories (e.g. mape on zero target) must
+        # not raise here — the user has already seen the yellow banner
+        # and chosen to proceed. ``_blocking_errors`` defaults missing
+        # severity to "error" for pre-PR-B4 backward compatibility.
+        blocking = _blocking_errors(errors)
+        if blocking:
+            raise ValidationError(blocking)
         ws.set_config(candidate)
     if not ws.config:
         raise WorkspaceNoConfigError()
     if ws.dataframe is None or ws.data_ref is None:
         raise WorkspaceNoDataError()
     errors = validate_config(ws, ws.config)
-    if errors:
-        raise ValidationError(errors)
+    blocking = _blocking_errors(errors)
+    if blocking:
+        raise ValidationError(blocking)
     # CRITICAL-2: atomically claim the active slot and create the job
     # metadata in a single critical section so two concurrent
     # /fit requests cannot race past the has_active_job check and
@@ -667,8 +680,11 @@ def workspace_tune(
     if body.config is not None:
         candidate = body.config
         errors = validate_config(ws, candidate)
-        if errors:
-            raise ValidationError(errors)
+        # PR-D1 / Issue #394: severity-aware gating — see workspace_fit
+        # above for the full rationale.
+        blocking = _blocking_errors(errors)
+        if blocking:
+            raise ValidationError(blocking)
         ws.set_config(candidate)
     if not ws.config:
         raise WorkspaceNoConfigError()
@@ -695,8 +711,9 @@ def workspace_tune(
         }
         ws.set_config(config_with_tuning)
     errors = validate_config(ws, ws.config)
-    if errors:
-        raise ValidationError(errors)
+    blocking = _blocking_errors(errors)
+    if blocking:
+        raise ValidationError(blocking)
     # CRITICAL-2: atomic create + slot claim, see workspace_fit above.
     job = job_store.create_and_claim_active(
         backend_name=get_backend_name(ws),

@@ -289,8 +289,19 @@ def _workspace_metric_compatibility_errors(
         return []
     if not isinstance(config, dict):
         return []
+    # PR-D1 / Issue #394 follow-up (code-review HIGH-1): the watchlist
+    # (mape / rmsle / r2) is regression-specific. A binary or multiclass
+    # config with a numeric target whose distribution happens to satisfy
+    # one of the triggers (e.g. constant 0/1 target) would otherwise
+    # surface a misleading R² warning. ``task`` lives at the top level
+    # of LizyMLConfig (see backends/lizyml/config_mixin.py:44); restrict
+    # to ``task=regression``.
+    if config.get("task") != "regression":
+        return []
     data = config.get("data")
-    target = data.get("target") if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        return []
+    target = data.get("target")
     if not isinstance(target, str) or target not in ws.dataframe.columns:
         return []
     evaluation = config.get("evaluation")
