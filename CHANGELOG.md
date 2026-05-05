@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Hide redundant `SHAP Summary` tab in Workspace Plot panel (#393)** —
+  Workspace previously surfaced SHAP both as a standalone `SHAP Summary`
+  tab and as `Importance` with `kind=shap`, which rendered identical
+  figures. The Workspace tab strip now filters out `shap-summary` so
+  SHAP is reachable only via the `Importance` tab's kind selector.
+  Inference's `SHAP Summary` accordion (#373) is unaffected — it does
+  not consume `PlotSection` and continues to render the dedicated
+  surface. `docs/plot-matrix.md` symmetry rule 1 generalised to allow
+  the `{tuning, shap-summary}` Workspace exclusion set.
+
 ## [0.4.0] - 2026-05-05
 
 The **Wide DataFrame** release. Phase B (PR-B1 — PR-B5) closes the

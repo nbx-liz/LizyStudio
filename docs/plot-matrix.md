@@ -33,7 +33,7 @@ same PR.
 | `probability-histogram`    | `probability_histogram_plot`| `Prob Hist`       | binary + cal enabled | |
 | `residuals`                | `residuals_plot`            | `Residuals`       | regression          | |
 | `importance`               | `importance_plot`           | `Importance`      | all                 | accepts `kind={split,gain,shap}`; `top_n` query (P-0097) |
-| `shap-summary`             | `importance_plot`           | `SHAP Summary`    | all + shap installed| alias of `importance_plot(kind="shap")` (Issue #373) |
+| `shap-summary`             | `importance_plot`           | _(see notes)_     | all + shap installed| alias of `importance_plot(kind="shap")` (Issue #373). NOT in Workspace `PLOT_LABELS` (Issue #393): Workspace surfaces SHAP via `Importance kind=shap`; Inference renders the SHAP Summary accordion (`ResultsPredOnly` / `ResultsWithGT`) which does not consume `PlotSection`. |
 | `tuning`                   | `tuning_plot`               | _(in TuneTrialsSection)_ | tune jobs    | NOT in `PLOT_LABELS` — rendered by `TuneTrialsSection`, intentionally absent from the tab strip |
 
 ### Source map
@@ -51,9 +51,11 @@ same PR.
 
 ## Symmetry rules (must hold)
 
-1. **Adapter ⊇ frontend (with one exception)**: every key in `PLOT_LABELS` must be a key in `_PLOT_DISPATCH`. The lone exception is `tuning`, which is dispatched by the adapter but rendered by `TuneTrialsSection` rather than the tab strip — the inverse direction (`_PLOT_DISPATCH \ {tuning} ⊆ PLOT_LABELS`) holds.
+1. **Adapter ⊇ frontend (with documented exclusions)**: every key in `PLOT_LABELS` must be a key in `_PLOT_DISPATCH`. The inverse direction (`_PLOT_DISPATCH \ EXCLUDED ⊆ PLOT_LABELS`) holds, where `EXCLUDED = {tuning, shap-summary}`. Both are dispatched by the adapter but intentionally absent from the Workspace tab strip:
+   - `tuning` is rendered by `TuneTrialsSection`.
+   - `shap-summary` is reachable from Workspace via `Importance kind=shap` (Issue #393); Inference renders SHAP via a dedicated accordion (Issue #373) which does not consume `PlotSection`. Both exclusions are enforced by the `availablePlots` filter in `PlotSection.tsx`.
 2. **availability_plots ⊆ _PLOT_DISPATCH**: every plot ID returned by `available_plots()` must dispatch correctly. `shap-summary` is conditionally probed via a try/except on `importance(kind="shap")` because shap is an optional dependency.
-3. **Frontend always falls back to kebab-case**: when `PLOT_LABELS[id]` is missing, the tab strip renders `id` directly (`PlotSection.tsx:147`). This is graceful, but invisible — anyone shipping a plot must update the label table to keep the UI polished.
+3. **Frontend always falls back to kebab-case**: when `PLOT_LABELS[id]` is missing, the tab strip renders `id` directly. This is graceful, but invisible — anyone shipping a plot must update the label table to keep the UI polished. (Excluded ids in rule 1 never reach the rendering branch because they are filtered out before lookup.)
 
 ### Verification
 
@@ -84,3 +86,4 @@ The adapter side is unit-tested in `tests/test_lizyml_evaluation_mixin.py` (one 
 ## History
 
 - **2026-05-05** — file created as part of PR-B4 (R-3.3 audit). `shap-summary` was missing from `PLOT_LABELS` and rendered as raw kebab-case in the tab strip; PR-B4 fixed the label and pinned the symmetry rule above.
+- **2026-05-05 (later, PR-C1 / Issue #393)** — `shap-summary` removed from `PLOT_LABELS` and added to the Workspace exclusion filter. SHAP is now reachable via `Importance kind=shap` only on the Workspace surface; Inference's SHAP Summary accordion (Issue #373) is unaffected because it does not consume `PlotSection`. Symmetry rule 1 generalised: the exclusion set is `{tuning, shap-summary}`.
