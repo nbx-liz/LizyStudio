@@ -1331,30 +1331,41 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 
 **動機:** v0.4 で識別された最大の業務リスク (`docs/v0.4-business-readiness-plan.md` §0)。24h+ Tune 中に SIGKILL / network 切断 / browser リロードで進捗が完全消失する問題を構造的に解消する。
 
+**設計レビュー資料:** `docs/v3-20-tune-resume-design.md` (Approved 2026-05-06、推奨案 5 件すべて採用)
+
+**採用された設計判断:**
+- API: 案 B — 既存 `/resume` (failed→child job, H-0062) は変更せず、新規 `POST /jobs/{id}/unpause` を追加
+- paused 中の Cancel UX: 案 a — UI 明示 + Cancel 経路は INV-1 release path として有効
+- format_version: v3-20 で v1→v2 を導入し v3-25 で migration matrix CI gate
+- Playwright: 1 trial=1s mock で resume シナリオを E2E、24h 実機は defer
+- Optuna storage: SQLite (`sqlite:///`) で着手、lock 競合は実装中に再評価
+
 **Entry criteria:**
 - v3-19 完了
 - ✅ lizyml 0.12.0 + LizyStudio `pyproject.toml` `>=0.12.0,<0.13.0` bump 済（本 phase 開始前に bundle 済）
 - ✅ `Tuner` / `Model.tune()` の `storage` / `study_name` 引数経由で永続化可能（LizyML H-0072）
 - ~~`LIZYSTUDIO_TUNE_RESUME_ENABLED` feature flag~~ → **不要に縮退**（lizyml 0.12.0 で常時利用可能）
 
-**サブフェーズ:**
+**サブフェーズ:** (各 PR で develop に積む)
 
 | サブフェーズ | 内容 | 状態 | PR |
 |---|---|---|---|
-| v3-20a | `meta.json` schema に `status="paused"` 追加 + format_version 1 → 2 migration（INV-3） | 🟡 | — |
-| v3-20b | `backends/lizyml/lifecycle_mixin.py` で `tune(storage=...)` passthrough | 🟡 | — |
-| v3-20c | `services/jobs.py` に `pause(job_id)` / `unpause(job_id)`、API `POST /api/jobs/{job_id}/pause` 追加 | 🟡 | — |
-| v3-20d | WebSocket message に `paused` type 追加 + frontend ハンドリング | 🟡 | — |
-| v3-20e | Frontend Jobs UI に Pause / Resume ボタン（paused 状態のみ表示） | 🟡 | — |
-| v3-20f | `tests/regression/test_inv_paused_roundtrip.py` で trial-level checkpoint round-trip (INV-4) | 🟡 | — |
-| v3-20g | Playwright `tests/e2e/tune-resume.spec.ts` で 24h 模擬 (時間圧縮 mock) の resume シナリオ | 🟡 | — |
+| v3-20-prep | 設計レビュー資料を `docs/v3-20-tune-resume-design.md` に landing | 🟢 | feat/v3-20-prep-design-doc |
+| v3-20a | format_version 1→2 migration + `Job.status` に `"paused"` 追加 + Pydantic `JobStatus` Literal 拡張 | 🟡 | — |
+| v3-20b | `backends/lizyml/lifecycle_mixin.py` で `tune(storage=, study_name=)` passthrough + `BackendAdapter` Protocol に新引数 | 🟡 | — |
+| v3-20c | `JobStore.request_pause/is_pause_requested/clear_pause` + `PausedError` + `_run_job_core` の paused 分岐 (finally で release_active を skip) | 🟡 | — |
+| v3-20d | `POST /api/jobs/{id}/pause` + `POST /api/jobs/{id}/unpause` API + service layer wiring | 🟡 | — |
+| v3-20e | `WsPaused` message + frontend WS `case "paused"` handler + openapi-typescript 再生成 | 🟡 | — |
+| v3-20f | Frontend Jobs UI Pause/Resume buttons + Storybook story + component test | 🟡 | — |
+| v3-20g | INV-3 / INV-4 invariant tests + Playwright `tests/e2e/tune-resume.spec.ts` (1 trial=1s mock) | 🟡 | — |
 
 **DoD:**
-- [ ] INV-3 / INV-4 の invariant test green
+- [ ] INV-3 / INV-4 の invariant test green (`tests/regression/test_inv_paused_roundtrip.py` + `tests/regression/test_inv_state_machine.py`)
 - [ ] Issue #360 が close 済
-- [ ] format_version=2 への migration が P-0095 round-trip CI gate に組み込まれている
+- [ ] format_version=2 への migration が CI で round-trip 検証 (v3-25 phase で gate に昇格)
 - [ ] CHANGELOG (v0.5 draft) に `paused` 状態が Added で記載
-- [ ] `Model.tune(storage=..., study_name=...)` 経由で trial 永続化、process kill → restart で同 study_name へ resume が e2e 検証済
+- [ ] `Model.tune(storage=, study_name=)` 経由で trial 永続化、process kill → restart で同 study_name へ resume が e2e 検証済 (v3-22 R-1.5b で server restart も併せて確認)
+- [ ] BLUEPRINT.md §3.4 (Job lifecycle) に `paused` 状態と新 API endpoint が反映
 
 ---
 

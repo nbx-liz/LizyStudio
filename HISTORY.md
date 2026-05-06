@@ -3273,6 +3273,10 @@ R-1.1〜R-1.5b の各 phase に invariant test を割り当てる。本 Proposal
 
 - 2026-05-06 **Proposed** — v0.5 R-1.1 着手前に user 承認を取り、PLAN.md に v3-17〜v3-22 を追加した時点で **Approved**。実装は phase 単位、各 phase の PR が invariant test を含む
 - 2026-05-06 **Approved** — user 承認 (LizyML 0.12.0 リリース受領後)。PLAN.md v3-17〜v3-26 は #408 で既に追加済。本 Proposal の DoD (invariant declaration が PLAN.md の各 phase に reflectee されている) は満了。R-1.4 の上流ブロッカー (LizyML #105) も解消したため、v3-17 (R-1.1) から phase 単位の実装に着手可
+- 2026-05-06 **R-1.4 (v3-20) 設計確定** — `docs/v3-20-tune-resume-design.md` Approved。Impact section の修正点:
+  - **API 構成変更 (案 B 採用)**: 既存 `POST /api/jobs/{id}/resume` (H-0062 Phase B、failed→child job) は **変更しない**。`paused → running` 用に **新規 `POST /api/jobs/{id}/unpause`** を追加して semantically 別の操作を別 URL に分離。理由: 既存 frontend 実装 (`ResumeActionButton`) と child job creation 経路を破壊しない、新機能を opt-in で導入できる
+  - **paused 中の Cancel UX**: paused 状態でも `POST /api/jobs/{id}/cancel` を有効化し INV-1 release path として活用 (slot 占有による usability 低下の緩和)
+  - 残りの impact (format_version 1→2、`WsPaused` message、`paused → cancelled|failed` 遷移、Pause/Resume UI) は当初の Impact 通り
 
 
 
