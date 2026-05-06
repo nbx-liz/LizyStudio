@@ -1,4 +1,4 @@
-"""INV-3 job state-machine invariants (P-0099 v3-20a / R-1.4).
+"""INV-3 job state-machine invariants (P-0099 v3-20a / v3-20c / R-1.4).
 
 INV-3 declares the legal transitions for the Job state machine:
 
@@ -14,10 +14,10 @@ INV-3 declares the legal transitions for the Job state machine:
     paused   -> failed        # NEW (R-1.4, v3-20)
 
 This module pins the table itself as the canonical contract. The
-runtime assertion that rejects illegal transitions lands in v3-20c
-together with the ``request_pause`` / ``PausedError`` plumbing — at
-that point the matching xfail tests below flip to green and a new
-xfail can be added for any further phase.
+runtime assertion that rejects illegal transitions landed in v3-20c
+together with the ``request_pause`` / ``PausedError`` plumbing — see
+``JobStore.set_status`` and the matching test in
+``tests/regression/test_inv_pause_keeps_slot.py``.
 
 Why a table-as-test instead of a single big assertion: each entry in
 the LEGAL_TRANSITIONS set is one row of P-0099's INV-3 declaration.
@@ -30,11 +30,13 @@ sharp.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal, get_args
 
 import pytest
 
-from lizystudio.services.jobs import Job
+from lizystudio.backends.types import DataRef
+from lizystudio.services.jobs import Job, JobStore
 
 pytestmark = pytest.mark.unit
 
@@ -194,24 +196,37 @@ def test_no_self_loop_in_legal_transitions() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Runtime assertion (xfail until v3-20c lands the JobStore guard).
+# Runtime assertion (v3-20c: JobStore.set_status enforces LEGAL_TRANSITIONS).
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    reason="v3-20c (R-1.4): runtime guard for illegal transitions not yet implemented",
-    strict=True,
-)
-def test_runtime_guard_rejects_illegal_transitions() -> None:
-    """When v3-20c lands ``JobStore.set_status(job_id, new_status)``,
-    illegal transitions must raise instead of silently writing.
+def test_runtime_guard_rejects_illegal_transitions(tmp_path: Path) -> None:
+    """``JobStore.set_status`` must raise ``AssertionError`` for any
+    transition not present in :data:`LEGAL_TRANSITIONS`.
 
-    The placeholder below mirrors the v3-19 path-4 xfail pattern —
-    it pins v3-20c's entry contract so the missing implementation is
-    observable in CI. v3-20c flips this to green by replacing the
-    raise with the actual guard call.
+    Deeper coverage of the legal/illegal axes lives in
+    ``tests/regression/test_inv_pause_keeps_slot.py``; this test exists
+    so the state-machine matrix module owns at least one runtime-guard
+    smoke check. Removing the guard or weakening it to a warning
+    rewrites this contract and must surface in this test failing first.
     """
-    raise NotImplementedError(
-        "v3-20c must provide a JobStore.set_status method (or equivalent) "
-        "that asserts (current_status, new_status) is in LEGAL_TRANSITIONS"
+    store = JobStore(tmp_path / "jobs")
+    job = store.create(
+        backend_name="lizyml",
+        config={"task": "binary", "data": {"target": "y"}},
+        data_ref=DataRef(
+            source_type="path",
+            path="/data/x.csv",
+            filename="x.csv",
+            fingerprint="f",
+            shape=(10, 2),
+        ),
+        job_type="tune",
     )
+
+    # Legal: pending -> running.
+    store.set_status(job.job_id, "running")
+
+    # Illegal: running -> pending (audit-trail rewind).
+    with pytest.raises(AssertionError):
+        store.set_status(job.job_id, "pending")

@@ -24,6 +24,23 @@ class CancelledError(Exception):
     """
 
 
+class PausedError(Exception):
+    """Raised when a long-running backend operation observes a pause request.
+
+    Pause is the first non-terminal mid-flight unwind in the Job state
+    machine (P-0099 R-1.4 / v3-20).  ``_run_job_core`` catches this in a
+    dedicated except-branch that writes ``status="paused"`` and KEEPS
+    ownership of ``active_job_id`` so the same job id can be resumed in
+    place via the /unpause endpoint — pre-fix the cancel/failure finally
+    block would have released the slot, defeating in-place resume.
+
+    Adapters raise this from a progress-callback bridge when
+    :meth:`JobStore.is_pause_requested` returns ``True``, mirroring the
+    cancel observation point so the subprocess child's fresh JobStore can
+    react via the on-disk PAUSE flag.
+    """
+
+
 class CheckpointIncompatibleError(Exception):
     """Raised when a previously-saved checkpoint cannot be loaded.
 
@@ -94,5 +111,6 @@ __all__ = [
     "CheckpointIncompatibleError",
     "CheckpointPreflightError",
     "IncompatibleFormatVersionError",
+    "PausedError",
     "PlotNotAvailableError",
 ]

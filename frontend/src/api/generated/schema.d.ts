@@ -548,7 +548,19 @@ export interface paths {
         put?: never;
         /**
          * Cancel Job
-         * @description Cancel a running job (H-0011).
+         * @description Cancel a running or paused job (H-0011, P-0099 v3-20c).
+         *
+         *     For ``running`` jobs the cancel signal is delivered via the cancel
+         *     flag and the cooperative callback (cancel-aware-cb) unwinds through
+         *     :class:`CancelledError` — the worker's finally-block writes
+         *     ``status="cancelled"`` and releases the slot.
+         *
+         *     For ``paused`` jobs there is no worker to observe a flag, so the
+         *     transition is performed directly here: ``paused -> cancelled`` is a
+         *     legal edge per :data:`LEGAL_TRANSITIONS`, and we explicitly release
+         *     the slot + clear the pause flag so the workspace is unblocked
+         *     immediately (case 案 a in P-0099 §6 — paused-as-zombie is worse UX
+         *     than just letting Cancel be a fast exit).
          */
         post: operations["cancel_job_api_jobs__job_id__cancel_post"];
         delete?: never;

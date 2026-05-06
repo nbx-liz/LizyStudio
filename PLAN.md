@@ -1351,9 +1351,9 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 | サブフェーズ | 内容 | 状態 | PR |
 |---|---|---|---|
 | v3-20-prep | 設計レビュー資料を `docs/v3-20-tune-resume-design.md` に landing | 🟢 | feat/v3-20-prep-design-doc |
-| v3-20a | format_version 1→2 migration + `Job.status` に `"paused"` 追加 + Pydantic `JobStatus` Literal 拡張 | 🟡 | — |
-| v3-20b | `backends/lizyml/lifecycle_mixin.py` で `tune(storage=, study_name=)` passthrough + `BackendAdapter` Protocol に新引数 | 🟡 | — |
-| v3-20c | `JobStore.request_pause/is_pause_requested/clear_pause` + `PausedError` + `_run_job_core` の paused 分岐 (finally で release_active を skip) | 🟡 | — |
+| v3-20a | format_version 1→2 migration + `Job.status` に `"paused"` 追加 + Pydantic `JobStatus` Literal 拡張 | 🟢 | #417 |
+| v3-20b | `backends/lizyml/lifecycle_mixin.py` で `tune(storage=, study_name=)` passthrough + `BackendAdapter` Protocol に新引数 | 🟢 | #418 |
+| v3-20c | `JobStore.request_pause/is_pause_requested/clear_pause` + `PausedError` + `_run_job_core` の paused 分岐 (finally で release_active を skip) + `JobStore.set_status` runtime guard + `cancel_job` paused 対応 + `has_active_children` paused 包含 | 🟢 | feat/v3-20c-pause-primitives |
 | v3-20d | `POST /api/jobs/{id}/pause` + `POST /api/jobs/{id}/unpause` API + service layer wiring | 🟡 | — |
 | v3-20e | `WsPaused` message + frontend WS `case "paused"` handler + openapi-typescript 再生成 | 🟡 | — |
 | v3-20f | Frontend Jobs UI Pause/Resume buttons + Storybook story + component test | 🟡 | — |

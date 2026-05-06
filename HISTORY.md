@@ -3277,6 +3277,16 @@ R-1.1〜R-1.5b の各 phase に invariant test を割り当てる。本 Proposal
   - **API 構成変更 (案 B 採用)**: 既存 `POST /api/jobs/{id}/resume` (H-0062 Phase B、failed→child job) は **変更しない**。`paused → running` 用に **新規 `POST /api/jobs/{id}/unpause`** を追加して semantically 別の操作を別 URL に分離。理由: 既存 frontend 実装 (`ResumeActionButton`) と child job creation 経路を破壊しない、新機能を opt-in で導入できる
   - **paused 中の Cancel UX**: paused 状態でも `POST /api/jobs/{id}/cancel` を有効化し INV-1 release path として活用 (slot 占有による usability 低下の緩和)
   - 残りの impact (format_version 1→2、`WsPaused` message、`paused → cancelled|failed` 遷移、Pause/Resume UI) は当初の Impact 通り
+- 2026-05-06 **v3-20c (R-1.4 pause primitives) 実装** — `feat/v3-20c-pause-primitives` ブランチで以下を実装、`tests/regression/test_inv_pause_keeps_slot.py` (12 件) + `test_inv_state_machine.py` xfail flip で INV-pause 1〜5 + INV-3 runtime guard を green に固定:
+  - `lizystudio.backends.exceptions.PausedError` 新例外（`CancelledError` と同じ identity / re-export 戦略）
+  - `JobStore.request_pause` / `is_pause_requested` / `clear_pause` — cancel と同じ in-memory set + `<job_dir>/PAUSE` IPC flag pattern (subprocess child 用)
+  - `JobStore.set_status(job_id, new_status)` — INV-3 LEGAL_TRANSITIONS を runtime assert (illegal transitions が AssertionError を raise)
+  - `_make_cancel_aware_cb`: cancel check の後に pause check 追加、True なら `PausedError` raise（broadcaster の send_progress を short-circuit）
+  - `_run_job_core`: `except PausedError` 分岐で `status="paused"` + `completed_at=None` を書き込み、finally では **status=="paused" の場合に release_active / clear_cancel を skip** (INV-1 拡張: paused は slot を保持)
+  - `JobStore.has_active_children`: paused を active 扱いに拡張（cascade-delete guard で paused child の rmtree を防ぐ）
+  - `api/jobs.py:cancel_job`: paused job も accept、direct transition で `paused → cancelled` + slot release + clear_pause（worker がいないため signal pass-through ではなく明示遷移）
+  - `api/jobs.py:delete_job` cascade: paused child は worker がいないので request_cancel ではなく release_active + clear_pause を直接呼ぶ
+  - 後段 (v3-20d 以降): `POST /pause` / `POST /unpause` API、`WsPaused` message、frontend Pause/Resume button、Playwright tune-resume E2E は本 PR の scope 外
 
 
 
