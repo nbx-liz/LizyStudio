@@ -560,7 +560,7 @@ wheels = [
 
 [[package]]
 name = "lizyml"
-version = "0.11.0"
+version = "0.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "joblib" },
@@ -574,9 +574,9 @@ dependencies = [
     { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0e/42/5f01ee21c9614b719b5fc2539ea2c9e7a83ef80cbb762be6fa445c7525d0/lizyml-0.11.0.tar.gz", hash = "sha256:0e7a388d5926e16e14cd7ea9b8cedc6f85ac4718bc311bd44675f81be646ed09", size = 658004, upload-time = "2026-05-05T06:29:46.325Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/87/df/06d74bfea3920dfc7e78d59f8b434d889c610ddcc270caac54819ca006e1/lizyml-0.12.0.tar.gz", hash = "sha256:ee8e09f253571e471b903b58a72c0f8cd090938ba9c0b170bf37cec2ec983ef8", size = 666099, upload-time = "2026-05-06T06:38:55.859Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/52/08/44d7be636c38f5b1edc2fa6cedee8da872ea02cf99eecfdc62aa1face2db/lizyml-0.11.0-py3-none-any.whl", hash = "sha256:0380a67fc87398ad0e2bec453393aab59a9aba2e9c0d5a2bee4546114dbe7e97", size = 157480, upload-time = "2026-05-05T06:29:44.466Z" },
+    { url = "https://files.pythonhosted.org/packages/4e/a7/e1bb82e0c03255861a6fe2e97c2677fba3284e4321a3d00fc61e6971f561/lizyml-0.12.0-py3-none-any.whl", hash = "sha256:3b6f8ba39d635678fd46534dffb31df8a3dfcc3f3efa1915a4c9fc1d821bcd5b", size = 158117, upload-time = "2026-05-06T06:38:54.15Z" },
 ]
 
 [package.optional-dependencies]
@@ -628,7 +628,7 @@ dev = [
 requires-dist = [
     { name = "cloudpickle", specifier = ">=3.0" },
     { name = "fastapi", specifier = ">=0.115" },
-    { name = "lizyml", extras = ["calibration", "explain", "plots", "tuning"], specifier = ">=0.11.0,<0.12.0" },
+    { name = "lizyml", extras = ["calibration", "explain", "plots", "tuning"], specifier = ">=0.12.0,<0.13.0" },
     { name = "prometheus-client", specifier = ">=0.20" },
     { name = "python-multipart", specifier = ">=0.0.18" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },

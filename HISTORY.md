@@ -3186,8 +3186,8 @@ frontend で virtualization / top-N を入れても、転送する payload 自�
 
 ### P-0099: v0.5 R-1 状態整合性 invariants + `paused` job state（Change Gate）
 
-- **Date:** 2026-05-06 起票
-- **Related:** Issue #360 (Tune long-run resumability), Issue #358 (BlockedGroup race), Issue #359 (job-num drift), Issue #384 (Server Restart Recovery), LizyML #105 (Optuna persistent storage), `docs/v0.4-business-readiness-plan.md` §2 (R-1), `~/.claude/rules/common/invariants-first.md`
+- **Date:** 2026-05-06 起票 / 同日 Approved
+- **Related:** Issue #360 (Tune long-run resumability), Issue #358 (BlockedGroup race), Issue #359 (job-num drift), Issue #384 (Server Restart Recovery), LizyML #105 (Optuna persistent storage, shipped in lizyml 0.12.0 / 2026-05-06), `docs/v0.4-business-readiness-plan.md` §2 (R-1), `~/.claude/rules/common/invariants-first.md`
 
 #### Motivation
 
@@ -3244,7 +3244,7 @@ CLAUDE.md §2 Change Gate 対象（state machine 変更 / 並行性・所有権�
 - v0.4 までで作成した `meta.json` (format_version=1) は `paused` フィールドを持たない → migration で `paused: false` を default に挿入。read-only で読める
 - POST /api/jobs/{job_id}/pause は新規追加なのでクライアント側で 404 をハンドルする legacy path は不要
 - WebSocket `paused` メッセージは未知タイプとして無視されるよう既存 client の switch に default branch を追加 (R-2.1 で別途扱う)
-- LizyML 0.11.x で `storage=` パラメタが無いため、LizyML #105 が merged するまでは `paused` 経路を feature flag (`LIZYSTUDIO_TUNE_RESUME_ENABLED=0`) で off にする
+- LizyML #105 (Optuna persistent storage) は lizyml 0.12.0 (2026-05-06) で shipped。LizyStudio 側は `pyproject.toml` を `>=0.12.0,<0.13.0` に bump 済 (本 PR)。当初検討していた feature flag (`LIZYSTUDIO_TUNE_RESUME_ENABLED`) は **不要に縮退** — `paused` 経路を default で有効化する
 
 #### Acceptance criteria
 
@@ -3272,6 +3272,7 @@ R-1.1〜R-1.5b の各 phase に invariant test を割り当てる。本 Proposal
 #### Decision
 
 - 2026-05-06 **Proposed** — v0.5 R-1.1 着手前に user 承認を取り、PLAN.md に v3-17〜v3-22 を追加した時点で **Approved**。実装は phase 単位、各 phase の PR が invariant test を含む
+- 2026-05-06 **Approved** — user 承認 (LizyML 0.12.0 リリース受領後)。PLAN.md v3-17〜v3-26 は #408 で既に追加済。本 Proposal の DoD (invariant declaration が PLAN.md の各 phase に reflectee されている) は満了。R-1.4 の上流ブロッカー (LizyML #105) も解消したため、v3-17 (R-1.1) から phase 単位の実装に着手可
 
 
 
