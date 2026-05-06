@@ -152,35 +152,90 @@ def test_inv1_path3_exception_releases_slot(job_store: JobStore) -> None:
 # ---------------------------------------------------------------------------
 # INV-1 path 4: SIGKILL of subprocess child eventually releases the slot.
 #
-# v3-17 (R-1.1) does not implement the watchdog yet — that lands in
-# v3-19 (R-1.3, INV-6 subprocess crash recovery). This test pins the
-# acceptance criterion so the missing watchdog is observable in CI.
+# Audit conducted at v3-19 kickoff (2026-05-06):
+# - ``run_job_in_subprocess`` already reconciles a kill -9 child by
+#   reloading the persisted job after ``proc.wait()`` and rewriting
+#   ``status="failed"`` when the child died without persisting a
+#   terminal — see ``services/subprocess_runner.py:run_job_in_subprocess``
+#   lines 250-275.
+# - ``_run_subprocess_job.finally`` then unconditionally calls
+#   ``release_active`` — see ``services/_training_core.py:362-363``.
+#
+# The xfail placeholder originally lived here because the v3-17 (R-1.1)
+# scope did not extend to subprocess simulation. v3-19 (R-1.3) lands the
+# concrete invariant assertion: a mocked ``run_job_in_subprocess`` that
+# emulates the parent observing a -9 exit MUST drive ``_run_subprocess_job``
+# to release the slot within a bounded time window. INV-6 deeper coverage
+# (real Popen + os.kill) lives in
+# ``tests/regression/test_inv_subprocess_crash_recovery.py``.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    reason="v3-19 (R-1.3, INV-6): subprocess crash watchdog not yet implemented",
-    strict=True,
-)
+def _make_ws_mock_for_subprocess() -> Any:
+    """Helper used by path 4 — returns a workspace double that
+    satisfies ``_run_subprocess_job`` without a real backend."""
+    from unittest.mock import MagicMock
+
+    ws = MagicMock()
+    ws.data_ref = DataRef(
+        source_type="path",
+        path="/data/x.csv",
+        filename="x.csv",
+        fingerprint="f",
+        shape=(10, 2),
+    )
+    ws.backend.info.name = "lizyml"
+    ws._lock = MagicMock()
+    ws._lock.__enter__ = MagicMock(return_value=None)
+    ws._lock.__exit__ = MagicMock(return_value=None)
+    return ws
+
+
 def test_inv1_path4_sigkill_subprocess_releases_slot_within_bounded_time(
     job_store: JobStore,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _claim_job(job_store)
+    """A child dying without persisting a terminal must release the slot.
 
-    # The watchdog contract from PLAN.md v3-19c: bounded recovery time
-    # window after the subprocess dies. We pin a generous 15s budget
-    # here — the actual implementation target is < 10s but the test
-    # should not flake on slow CI runners. The key invariant is "slot
-    # eventually releases", not the exact polling interval.
+    The mock simulates the parent's view of a kill -9: the subprocess
+    runner returns the job unchanged (still ``pending``/``running``
+    on disk because the child never reached ``_run_job_core.finally``).
+    ``_run_subprocess_job.finally`` MUST still call ``release_active``,
+    and the bounded time check exists so a future regression that
+    blocks the parent thread on a dead PID is caught immediately.
+    """
+    from unittest.mock import MagicMock
+
+    from lizystudio.services import training as training_module
+
+    job = _claim_job(job_store)
+    assert job_store.active_job_id == job.job_id
+
     bounded_time_window_s = 15.0
 
-    # The watchdog hook is intentionally not yet defined on JobStore.
-    # When v3-19 adds it (e.g. ``job_store.simulate_subprocess_crash``
-    # or the watchdog observing a missing child PID), this test
-    # becomes the entry assertion for that PR.
-    raise NotImplementedError(
-        "v3-19 must provide a way to simulate child PID death and "
-        f"observe slot release within {bounded_time_window_s}s"
+    def fake_run_subprocess(**kwargs: Any) -> Any:
+        # Return the job unchanged to simulate a child that died
+        # mid-run without writing a terminal status. The parent's
+        # _run_subprocess_job.finally is what we are testing here.
+        return kwargs["job"]
+
+    monkeypatch.setattr(
+        "lizystudio.services.subprocess_runner.run_job_in_subprocess",
+        fake_run_subprocess,
+    )
+
+    ws = _make_ws_mock_for_subprocess()
+    start = time.monotonic()
+    training_module._run_subprocess_job(ws, job, job_store, broadcaster=MagicMock())
+    elapsed = time.monotonic() - start
+
+    assert elapsed < bounded_time_window_s, (
+        f"INV-6: slot release after subprocess crash must complete within "
+        f"{bounded_time_window_s}s; took {elapsed:.2f}s"
+    )
+    assert job_store.active_job_id is None, (
+        "INV-1 path 4: subprocess crash must release the slot via "
+        "_run_subprocess_job.finally"
     )
 
 

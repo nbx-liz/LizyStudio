@@ -56,14 +56,57 @@ def write_versioned_json(path: Path, payload: dict[str, Any]) -> None:
     on POSIX and Windows. ``Path.write_text`` is *not* atomic — it
     opens-truncates-writes, leaving a window during which a reader sees
     an empty file and raises ``JSONDecodeError`` (Issue #232).
+
+    INV-2 (P-0099 v3-19 / R-1.3): kill -9 mid-write does not corrupt
+    the canonical path. The tmp file is ``flush()``-ed and
+    ``os.fsync``-ed before ``os.replace`` so the kernel page cache is
+    durably on disk before the rename commits. Without fsync, a crash
+    between ``write`` and ``replace`` could land a renamed file whose
+    contents are still in cache, leaving a zero- or partial-byte file
+    after reboot — the very corruption v3-19 is designed to prevent.
+    The parent directory itself is also fsynced (best-effort — silently
+    skipped on platforms that reject directory fds) so the rename's
+    metadata reaches the disk inode table before the function returns.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     versioned: dict[str, Any] = {_FORMAT_VERSION_KEY: STUDIO_FORMAT_VERSION}
     versioned.update(payload)
     text = json.dumps(versioned, ensure_ascii=False, default=str)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
+    # Open-write-flush-fsync explicitly so the kernel commits the data
+    # to disk BEFORE os.replace. Path.write_text returns before the
+    # OS has committed the bytes; that combined with the rename below
+    # is the (a)tomic-name + (n)on-durable-bytes hazard INV-2 closes.
+    with tmp.open("w", encoding="utf-8") as fh:
+        fh.write(text)
+        fh.flush()
+        os.fsync(fh.fileno())
     os.replace(tmp, path)
+    _fsync_parent_dir(path)
+
+
+def _fsync_parent_dir(path: Path) -> None:
+    """Best-effort fsync of *path*'s parent directory.
+
+    On POSIX this commits the directory entry change from os.replace
+    so the rename's metadata survives a crash. On Windows the dir-fd
+    open is rejected with ``PermissionError`` / ``OSError``; we
+    silently skip — the os.replace is itself transactional under
+    NTFS and writes the directory entry synchronously for a renamed
+    file. Errors are suppressed because the canonical write has
+    already succeeded; an inability to fsync the directory is a soft
+    durability issue, not a correctness issue.
+    """
+    try:
+        dir_fd = os.open(path.parent, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(dir_fd)
+    except OSError:
+        pass
+    finally:
+        os.close(dir_fd)
 
 
 def read_versioned_json(path: Path) -> tuple[int, dict[str, Any]]:
