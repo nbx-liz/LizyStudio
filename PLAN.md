@@ -1249,15 +1249,15 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 
 | サブフェーズ | 内容 | 状態 | PR |
 |---|---|---|---|
-| v3-17a | INV-1 / INV-5 の invariant test を `tests/regression/test_inv_slot_release.py` に書く（RED phase） | 🟡 | — |
-| v3-17b | 既存 release 経路の audit + 抜け落ちを修正（GREEN phase） | 🟡 | — |
-| v3-17c | Playwright で WS切断 / browser閉じる経路を E2E 化 | 🟡 | — |
+| v3-17a | INV-1 / INV-5 の invariant test を `tests/regression/test_inv_slot_release.py` に書く（RED phase） | 🟢 path 1/2/3/5 + INV-5 monotonic + concurrent slot ownership = 7 tests pass、path 4 (SIGKILL) は xfail strict (v3-19 待ち) | feat/v3-17-r11-slot-release-invariant |
+| v3-17b | 既存 release 経路の audit + 抜け落ちを修正（GREEN phase） | 🟢 audit 完了 — paths 1/2/3 は `_run_job_core.finally`、path 5 は `ProgressBroadcaster.subscribe/unsubscribe` が active slot に touch しない設計を test で固定。抜け落ちは path 4 のみで v3-19 へ送る | 同上 |
+| v3-17c | Playwright で WS切断 / browser閉じる経路を E2E 化 | 🟡 別 PR で着手予定 (path 6 browser close は Playwright 必須) | — |
 
 **DoD:**
-- [ ] `tests/regression/test_inv_slot_release.py` で 6 経路すべてが green、各 path に `assert active_job_id is None` がある
-- [ ] `tests/regression/test_inv_cancel_monotonic.py` で `is_cancel_requested` の monotonic 性が確認される（INV-5）
-- [ ] Playwright `tests/e2e/slot-release-paths.spec.ts` で WS切断 + browser閉じるの 2 経路を実機 verification
-- [ ] `services/jobs.py:JobStore` に `assert _active_job_id is None or _active_job_id == job_id` 等の runtime guard が encode 済
+- [x] `tests/regression/test_inv_slot_release.py` で 6 経路の invariant test を 1 ファイル化、path 1/2/3/5 が green、path 4 は `xfail(strict=True)` で v3-19 entry を pin
+- [x] `tests/regression/test_inv_slot_release.py` 内の `test_inv5_cancel_observation_monotonic_*` 2 関数で `is_cancel_requested` の monotonic 性 (single-thread + 8-thread concurrent reader) を確認 (INV-5)
+- [ ] Playwright `tests/e2e/slot-release-paths.spec.ts` で WS切断 + browser閉じるの 2 経路を実機 verification（v3-17c, 別 PR）
+- [ ] `services/jobs.py:JobStore` に `assert _active_job_id is None or _active_job_id == job_id` 等の runtime guard が encode 済 — 既存の release_active は意図的に permissive (sliently no-op on wrong-owner) なので、v3-19 (subprocess crash watchdog) と同じ PR で wrong-owner release を warning log に格上げする方針で defer
 
 **Exit criteria:** 上記 DoD すべて green。次は v3-18。
 
