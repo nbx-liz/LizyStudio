@@ -193,14 +193,17 @@ def delete_job(
     if job.status == "running":
         raise JobRunningError(job_id)
 
-    # H-0062: guard against orphaning in-flight children on a non-cascade
-    # delete. Collect the direct active descendants first so the error
-    # details list exactly what would be lost.
+    # H-0062 / P-0099 v3-20c: guard against orphaning in-flight or paused
+    # children on a non-cascade delete. Collect the direct active
+    # descendants first so the error details list exactly what would be
+    # lost. ``paused`` joins ``pending`` / ``running`` here because a
+    # paused tune still holds the workspace slot and owns the Optuna
+    # sqlite that feeds /unpause.
     if not cascade and job_store.has_active_children(job_id):
         active: list[str] = []
         for cid in job_store.get_child_job_ids(job_id):
             child = job_store.get(cid)
-            if child is not None and child.status in ("pending", "running"):
+            if child is not None and child.status in ("pending", "running", "paused"):
                 active.append(cid)
         raise ParentHasActiveChildrenError(job_id, active)
 
@@ -209,11 +212,19 @@ def delete_job(
         # rmtree their directories. Cancel flags are best-effort; the
         # actual subprocess may still be running when rmtree fires, but
         # the run_tune wrapper tolerates a missing job dir via its finally
-        # block.
+        # block.  Paused children have no worker to observe a cancel
+        # flag, so the slot is released directly here (P-0099 v3-20c) —
+        # status persistence is skipped because the job dir is rmtree'd
+        # immediately below.
         for cid in job_store.get_child_job_ids(job_id):
             child = job_store.get(cid)
-            if child is not None and child.status in ("pending", "running"):
+            if child is None:
+                continue
+            if child.status in ("pending", "running"):
                 job_store.request_cancel(cid)
+            elif child.status == "paused":
+                job_store.release_active(cid)
+                job_store.clear_pause(cid)
         removed = job_store.delete(job_id, cascade=True)
     else:
         removed = job_store.delete(job_id)
@@ -228,16 +239,37 @@ def cancel_job(
     job_id: str,
     job_store: JobStore = Depends(get_job_store),
 ) -> dict[str, str]:
-    """Cancel a running job (H-0011)."""
+    """Cancel a running or paused job (H-0011, P-0099 v3-20c).
+
+    For ``running`` jobs the cancel signal is delivered via the cancel
+    flag and the cooperative callback (cancel-aware-cb) unwinds through
+    :class:`CancelledError` — the worker's finally-block writes
+    ``status="cancelled"`` and releases the slot.
+
+    For ``paused`` jobs there is no worker to observe a flag, so the
+    transition is performed directly here: ``paused -> cancelled`` is a
+    legal edge per :data:`LEGAL_TRANSITIONS`, and we explicitly release
+    the slot + clear the pause flag so the workspace is unblocked
+    immediately (case 案 a in P-0099 §6 — paused-as-zombie is worse UX
+    than just letting Cancel be a fast exit).
+    """
     job = _get_job_or_404(job_id, job_store)
-    if job.status != "running":
-        raise StudioError(
-            "JOB_NOT_RUNNING",
-            f"Job {job_id} is not running (status: {job.status})",
-            400,
-        )
-    job_store.request_cancel(job_id)
-    return {"status": "cancelled"}
+    if job.status == "running":
+        job_store.request_cancel(job_id)
+        return {"status": "cancelled"}
+    if job.status == "paused":
+        # Direct transition: no worker observing the flag, so the
+        # worker-side terminal write that normally rides on the cancel
+        # flag will never fire.
+        job_store.set_status(job_id, "cancelled")
+        job_store.release_active(job_id)
+        job_store.clear_pause(job_id)
+        return {"status": "cancelled"}
+    raise StudioError(
+        "JOB_NOT_RUNNING",
+        f"Job {job_id} is not running or paused (status: {job.status})",
+        400,
+    )
 
 
 # --- Result viewing ---

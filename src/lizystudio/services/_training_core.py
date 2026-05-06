@@ -45,7 +45,13 @@ _JOIN_TIMEOUT = 30  # seconds — generous to allow subprocess cleanup
 # the service and backend layers catch the exact same class.  Keeping
 # the name importable here preserves ``except CancelledError`` catches
 # scattered through training code and tests without an identity break.
-from lizystudio.backends.exceptions import CancelledError  # noqa: E402, F401
+# P-0099 v3-20c: ``PausedError`` joins the same re-export so
+# ``_run_job_core`` and the cancel-aware callback share one identity
+# across in-process and subprocess workers.
+from lizystudio.backends.exceptions import (  # noqa: E402, F401
+    CancelledError,
+    PausedError,
+)
 
 
 class PreviousJobStillRunningError(Exception):
@@ -57,7 +63,17 @@ def _make_cancel_aware_cb(
     job_store: JobStore,
     broadcaster: ProgressBroadcaster | None,
 ) -> ProgressCallback:
-    """Create a progress callback that checks for cancellation (H-0011)."""
+    """Create a progress callback that checks for cancellation (H-0011)
+    and pause (P-0099 v3-20c, R-1.4).
+
+    Both observations short-circuit the broadcaster emit so a pending
+    Pause click does not leak a "trial 7/100" frame after the user
+    has already requested the unwind. Cancel is checked first because
+    the user's intent on a co-pending cancel+pause click is "stop now",
+    not "stop here so I can resume" — a paused job that the user has
+    also cancelled wastes the slot until the next /unpause+/cancel
+    round-trip, while the cancelled branch terminates at once.
+    """
 
     def callback(
         *,
@@ -68,6 +84,8 @@ def _make_cancel_aware_cb(
     ) -> None:
         if job_store.is_cancel_requested(job_id):
             raise CancelledError
+        if job_store.is_pause_requested(job_id):
+            raise PausedError
         if broadcaster is not None:
             broadcaster.send_progress(
                 job_id,
@@ -169,6 +187,19 @@ def _run_job_core(
         job_store.update(job)
         if broadcaster is not None:
             broadcaster.send_completed(job.job_id)
+    except PausedError:
+        # P-0099 v3-20c (R-1.4): paused is a NON-terminal unwind. The
+        # finally-block below preserves slot ownership AND the cancel
+        # flag so a co-pending cancel survives into the resume worker.
+        # The terminal-metric emit is also skipped — pause is not a
+        # terminal transition.
+        job.status = "paused"
+        job.completed_at = None
+        job_store.update(job)
+        # WS notification lands in v3-20e (WsPaused message).  Until
+        # then the frontend observes the status flip via the next jobs
+        # list refresh; this is acceptable because pause is a user-
+        # initiated action so the click already updates the UI.
     except (CancelledError, KeyboardInterrupt):
         job.status = "cancelled"
         job.completed_at = datetime.now(timezone.utc).isoformat()
@@ -184,8 +215,13 @@ def _run_job_core(
             safe_msg = f"{type(exc).__name__}: {exc}"
             broadcaster.send_error(job.job_id, safe_msg)
     finally:
-        job_store.release_active(job.job_id)
-        job_store.clear_cancel(job.job_id)
+        # P-0099 v3-20c: paused is non-terminal — KEEP slot ownership and
+        # KEEP the cancel flag so the resume worker can short-circuit if
+        # the user cancelled while paused.  Every other branch (completed
+        # / cancelled / failed) is terminal and must release.
+        if job.status != "paused":
+            job_store.release_active(job.job_id)
+            job_store.clear_cancel(job.job_id)
         elapsed = time.monotonic() - start_time
         _emit_terminal_metric(job_store, job, duration=elapsed)  # H-0065 / H-0066
         job_logger.removeHandler(handler)
@@ -373,6 +409,7 @@ def _run_subprocess_job(
 
 __all__ = [
     "CancelledError",
+    "PausedError",
     "PreviousJobStillRunningError",
     "_JOIN_TIMEOUT",
     "_emit_terminal_metric",
