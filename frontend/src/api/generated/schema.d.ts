@@ -1530,7 +1530,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "pending" | "running" | "completed" | "failed" | "cancelled";
+            status: "pending" | "running" | "completed" | "failed" | "cancelled" | "paused";
             /** Backend Name */
             backend_name: string;
             /**
@@ -1589,7 +1589,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "pending" | "running" | "completed" | "failed" | "cancelled";
+            status: "pending" | "running" | "completed" | "failed" | "cancelled" | "paused";
             /** Backend Name */
             backend_name: string;
             /**

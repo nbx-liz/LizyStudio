@@ -29,7 +29,7 @@ from typing import Any
 
 from lizystudio.backends.exceptions import IncompatibleFormatVersionError
 
-STUDIO_FORMAT_VERSION: int = 1
+STUDIO_FORMAT_VERSION: int = 2
 """Current on-disk JSON format version for Studio-owned artefacts.
 
 Bump this when introducing a structural change to any of the JSON
@@ -37,6 +37,19 @@ artefacts that flow through :func:`write_versioned_json` /
 :func:`read_versioned_json`, and add a migration function to
 :data:`lizystudio.storage.migrations.MIGRATIONS` from the previous
 version to this one.
+
+Version history:
+
+- v0: pre-C-9 workspaces (no ``format_version`` key).
+- v1: C-9 / H-0081. ``format_version`` is the first key on disk.
+- v2: P-0099 v3-20a. ``Job.status`` literal extended with
+  ``"paused"`` for R-1.4 (Tune long-run resumability, Issue #360).
+  Migration is byte-identity — v1 artefacts cannot contain
+  ``"paused"`` so the schema-shape transform is a no-op. The bump
+  exists so a future LizyStudio runtime that drops support for
+  ``"paused"`` (e.g. a hypothetical re-design that splits Tune
+  state across multiple files) can still detect a v2 artefact and
+  refuse to load it via :class:`IncompatibleFormatVersionError`.
 """
 
 _FORMAT_VERSION_KEY = "format_version"
