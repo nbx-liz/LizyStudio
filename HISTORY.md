@@ -3250,15 +3250,15 @@ CLAUDE.md §2 Change Gate 対象（state machine 変更 / 並行性・所有権�
 
 R-1.1〜R-1.5b の各 phase に invariant test を割り当てる。本 Proposal の DoD は「invariant declaration が PLAN.md の各 phase に reflectee されている」こと。実装は phase 単位で行う。
 
-- [ ] PLAN.md v3-17 (R-1.1) に **INV-1 / INV-5** の invariant test を Acceptance criteria として明記
-- [ ] PLAN.md v3-18 (R-1.2) に **INV-5** + #358 の regression test を明記
+- [x] PLAN.md v3-17 (R-1.1) に **INV-1 / INV-5** の invariant test を Acceptance criteria として明記 — PR #408 で起票、PR #412 (Python) / #413 (Playwright) で実装
+- [x] PLAN.md v3-18 (R-1.2) を **INV-5 write-side defense-in-depth** へ rescope — Issue #358 は cancel race ではなく frontend cv.strategy revert (PR #368 で 2026-05-03 close 済) と判明したため `tests/regression/test_inv_cancel_completion_interleaving.py` の 3 件 (cooperative cancel deterministic / 16 並行 count balance / post-terminal non-mutation) で write-side coverage を強化、0.5 週へ短縮
 - [ ] PLAN.md v3-19 (R-1.3) に **INV-2 / INV-6** の invariant test を明記
-- [ ] PLAN.md v3-20 (R-1.4) に **INV-3 / INV-4** の invariant test + LizyML #105 dependency を明記
-- [ ] PLAN.md v3-21 (R-1.5) に Issue #359 (job-num drift) の regression test を明記
+- [ ] PLAN.md v3-20 (R-1.4) に **INV-3 / INV-4** の invariant test + LizyML 0.12.0 (H-0072 storage) dependency を明記
+- [x] ~~PLAN.md v3-21 (R-1.5)~~ — Issue #359 は PR #366 (`fix(inference): derive dropdown #N from allJobs`, 2026-05-03 close) で実装済のため subsumed、v3-21 は欠番として保持
 - [ ] PLAN.md v3-22 (R-1.5b) に **INV-7** + Issue #384 の regression test を明記
 - [ ] BLUEPRINT.md §3.4 (Job lifecycle) に上記 INV-1〜INV-7 を明記
 - [ ] CHANGELOG.md (v0.5.0 release notes drafting 時) に `paused` 状態追加を Breaking 寸前 (Added) で記述
-- [ ] Issues #358 / #359 / #360 / #384 を本 Proposal の child Issue として label
+- [x] Issues #358 / #359 は本 Proposal の child から外す (drift 解消)、#360 / #384 のみ child として保持
 
 #### Alternatives considered
 
