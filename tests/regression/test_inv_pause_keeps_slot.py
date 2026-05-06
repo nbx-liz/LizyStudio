@@ -352,3 +352,59 @@ def test_has_active_children_counts_paused_as_active(job_store: JobStore) -> Non
     assert job_store.has_active_children(parent.job_id) is True, (
         "INV-pause-5: paused children block non-cascade parent delete"
     )
+
+
+# ---------------------------------------------------------------------------
+# INV-pause-6 (v3-20d): subprocess parent finally MUST also skip release
+# when the child wrote ``status="paused"``.
+#
+# v3-20c covered the in-process branch (``_run_job_core.finally``) but
+# missed the subprocess wrapper (``_run_subprocess_job.finally``), which
+# unconditionally calls ``release_active`` after the child exits. With
+# the bug live, /pause in subprocess mode would correctly write paused
+# to disk in the child but the parent process would immediately drop
+# slot ownership — defeating in-place /unpause because the next /tune
+# could steal the slot before the user clicks Resume.
+# ---------------------------------------------------------------------------
+
+
+def test_subprocess_finally_keeps_slot_when_child_wrote_paused(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from lizystudio.services import _training_core as tc
+
+    job_store = JobStore(tmp_path / "jobs")
+    job = _claim_job(job_store)
+    # Simulate the subprocess child having persisted paused status.
+    job_store.set_status(job.job_id, "running")
+    job_store.set_status(job.job_id, "paused")
+    assert job_store.active_job_id == job.job_id
+
+    # Stub the actual subprocess run so the test stays in-process.
+    def _fake_run_job_in_subprocess(*_args: Any, **_kwargs: Any) -> Job:
+        reloaded = job_store.get(job.job_id)
+        assert reloaded is not None
+        return reloaded
+
+    from lizystudio.services import subprocess_runner
+
+    monkeypatch.setattr(
+        subprocess_runner,
+        "run_job_in_subprocess",
+        _fake_run_job_in_subprocess,
+    )
+
+    # Mock workspace so _run_subprocess_job sees a valid data_ref.
+    from unittest.mock import MagicMock
+
+    ws = MagicMock()
+    ws.data_ref = _make_data_ref()
+    ws.record_completion = MagicMock()
+
+    tc._run_subprocess_job(ws, job, job_store, broadcaster=None)
+
+    assert job_store.active_job_id == job.job_id, (
+        "INV-pause-6: subprocess parent finally must NOT release the slot "
+        "when the child wrote status=paused on disk"
+    )

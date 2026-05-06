@@ -396,12 +396,19 @@ def _run_subprocess_job(
         )
         return finished
     finally:
-        job_store.release_active(job.job_id)
         # H-0065 / H-0066: subprocess child writes the terminal status
         # on disk; re-read it here so the parent emits exactly one
         # counter increment per job in either mode.
-        if not terminal_already_recorded:
-            latest = job_store.get(job.job_id)
+        #
+        # P-0099 v3-20d: ``paused`` is non-terminal — the parent must
+        # KEEP slot ownership so the user's /unpause click can resume
+        # in place. v3-20c handled this on the in-process branch
+        # (``_run_job_core.finally``); the subprocess wrapper missed
+        # the same skip and would otherwise drop ``active_job_id`` to
+        # ``None`` after the child exited via PausedError.
+        latest = job_store.get(job.job_id) if not terminal_already_recorded else None
+        if latest is None or latest.status != "paused":
+            job_store.release_active(job.job_id)
             if latest is not None:
                 duration = _subprocess_duration_seconds(latest)
                 _emit_terminal_metric(job_store, latest, duration=duration)

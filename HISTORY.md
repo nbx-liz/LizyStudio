@@ -3277,6 +3277,12 @@ R-1.1〜R-1.5b の各 phase に invariant test を割り当てる。本 Proposal
   - **API 構成変更 (案 B 採用)**: 既存 `POST /api/jobs/{id}/resume` (H-0062 Phase B、failed→child job) は **変更しない**。`paused → running` 用に **新規 `POST /api/jobs/{id}/unpause`** を追加して semantically 別の操作を別 URL に分離。理由: 既存 frontend 実装 (`ResumeActionButton`) と child job creation 経路を破壊しない、新機能を opt-in で導入できる
   - **paused 中の Cancel UX**: paused 状態でも `POST /api/jobs/{id}/cancel` を有効化し INV-1 release path として活用 (slot 占有による usability 低下の緩和)
   - 残りの impact (format_version 1→2、`WsPaused` message、`paused → cancelled|failed` 遷移、Pause/Resume UI) は当初の Impact 通り
+- 2026-05-06 **v3-20d (R-1.4 pause/unpause API) 実装** — `feat/v3-20d-pause-unpause-api` ブランチで HTTP エントリーポイント + subprocess parent finally の paused-skip を実装:
+  - `POST /api/jobs/{id}/pause` — tune-only、status=running を要求、`request_pause` を呼ぶ。エラーコード: `JOB_NOT_PAUSEABLE` (fit ジョブ拒否) / `JOB_NOT_RUNNING` (paused/completed 等)
+  - `POST /api/jobs/{id}/unpause` — tune-only、status=paused を要求、ws.dataframe 再ロード必須、`clear_pause` 後に `start_tune_async` を **同 job_id** で呼び（in-place 復帰）。lizyml の Optuna `load_if_exists=True` で trial 継続。エラーコード: `JOB_NOT_PAUSED` / `WORKSPACE_NO_DATA`
+  - `_run_subprocess_job.finally` を修正: child が `status="paused"` を書き込んだ場合は `release_active` を skip (v3-20c の in-process 修正と対称、subprocess mode で見落としていた INV-pause-1 violation を修復)
+  - `tests/test_jobs_api.py` に 10 件の HTTP コントラクトテスト + `tests/regression/test_inv_pause_keeps_slot.py::test_subprocess_finally_keeps_slot_when_child_wrote_paused` 追加
+  - 後続 (v3-20e 以降): `WsPaused` WS message、frontend Pause/Resume button、Playwright tune-resume E2E は本 PR の scope 外
 - 2026-05-06 **v3-20c (R-1.4 pause primitives) 実装** — `feat/v3-20c-pause-primitives` ブランチで以下を実装、`tests/regression/test_inv_pause_keeps_slot.py` (12 件) + `test_inv_state_machine.py` xfail flip で INV-pause 1〜5 + INV-3 runtime guard を green に固定:
   - `lizystudio.backends.exceptions.PausedError` 新例外（`CancelledError` と同じ identity / re-export 戦略）
   - `JobStore.request_pause` / `is_pause_requested` / `clear_pause` — cancel と同じ in-memory set + `<job_dir>/PAUSE` IPC flag pattern (subprocess child 用)
