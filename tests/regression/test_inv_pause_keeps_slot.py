@@ -368,6 +368,42 @@ def test_has_active_children_counts_paused_as_active(job_store: JobStore) -> Non
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# INV-pause-7 (v3-20e): _run_job_core notifies the broadcaster on PausedError.
+# Pre-fix the paused branch only persisted to disk — the frontend would not
+# observe the transition until the next jobs list refresh, leaving the user
+# staring at a "running" state for the WS retention window.
+# ---------------------------------------------------------------------------
+
+
+def test_paused_branch_invokes_broadcaster_send_paused(
+    job_store: JobStore,
+) -> None:
+    from unittest.mock import MagicMock
+
+    job = _claim_job(job_store)
+    broadcaster = MagicMock()
+
+    def execute_pause(_cb: Any) -> tuple[FitSummary, None, str]:
+        raise PausedError
+
+    _run_job_core(
+        job=job,
+        job_store=job_store,
+        broadcaster=broadcaster,
+        execute_fn=execute_pause,
+    )
+
+    broadcaster.send_paused.assert_called_once()
+    call = broadcaster.send_paused.call_args
+    assert call.args[0] == job.job_id or call.kwargs.get("job_id") == job.job_id, (
+        "INV-pause-7: the broadcaster must observe the paused job_id"
+    )
+    # Slot still held + terminal-emit pathways unused (paused is non-terminal).
+    broadcaster.send_completed.assert_not_called()
+    broadcaster.send_error.assert_not_called()
+
+
 def test_subprocess_finally_keeps_slot_when_child_wrote_paused(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
