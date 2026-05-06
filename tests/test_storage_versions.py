@@ -46,8 +46,14 @@ class TestReadVersionedJson:
         assert data["job_id"] == "j1"
         assert data["status"] == "completed"
 
-    def test_v1_round_trip(self, tmp_path: Path) -> None:
-        """A workspace written at v1 is read back at v1 with identical content."""
+    def test_current_version_round_trip(self, tmp_path: Path) -> None:
+        """A workspace written at the current version is read back at the same version.
+
+        Drift-proof: this test does NOT pin a specific format version,
+        so a future bump (vN -> vN+1) only requires updating
+        :data:`STUDIO_FORMAT_VERSION` and adding the migration. The
+        invariant is "writer + reader agree on the current version".
+        """
         from lizystudio.storage.versions import (
             STUDIO_FORMAT_VERSION,
             read_versioned_json,
@@ -60,8 +66,7 @@ class TestReadVersionedJson:
 
         detected, data = read_versioned_json(path)
 
-        assert detected == 1
-        assert STUDIO_FORMAT_VERSION == 1
+        assert detected == STUDIO_FORMAT_VERSION
         assert data["job_id"] == "j1"
         # The version sentinel should NOT leak back to the caller — the
         # returned dict is the domain payload only.
@@ -135,8 +140,81 @@ class TestMigrationPipeline:
         migrated = MIGRATIONS[0](dict(original))
         assert migrated == original
 
+    def test_v1_to_v2_is_identity(self) -> None:
+        """v1 -> v2 (P-0099 v3-20a) is a byte-identity migration.
+
+        v1 artefacts on disk cannot contain ``status="paused"`` because
+        no v1 LizyStudio runtime ever wrote it; the bump exists solely
+        so a future runtime that drops or reshapes ``paused`` can
+        detect the v2 artefact via ``format_version`` and refuse to
+        load it.
+        """
+        from lizystudio.storage.migrations import MIGRATIONS
+
+        assert 1 in MIGRATIONS
+        original = {
+            "job_id": "j1",
+            "status": "completed",
+            "config": {"foo": "bar"},
+        }
+        migrated = MIGRATIONS[1](dict(original))
+        assert migrated == original
+
+    def test_v0_to_current_chain_traverses_every_known_version(self) -> None:
+        """The chain must reach the current version by stepping through every bump."""
+        from lizystudio.storage.migrations import MIGRATIONS, migrate_to_current
+        from lizystudio.storage.versions import STUDIO_FORMAT_VERSION
+
+        # Every version from 0 up to (current - 1) must have a
+        # registered migration.
+        for v in range(STUDIO_FORMAT_VERSION):
+            assert v in MIGRATIONS, (
+                f"v{v} -> v{v + 1} migration missing from MIGRATIONS table; "
+                f"STUDIO_FORMAT_VERSION is {STUDIO_FORMAT_VERSION}"
+            )
+
+        # The chain reaches the current version without raising.
+        data = {"job_id": "j1", "status": "completed"}
+        migrated = migrate_to_current(dict(data), from_version=0)
+        assert migrated["job_id"] == "j1"
+        # Identity through both v0 -> v1 and v1 -> v2.
+        assert migrated["status"] == "completed"
+
+    def test_paused_status_round_trips_at_v2(self, tmp_path: Path) -> None:
+        """A v2 meta.json with ``status="paused"`` round-trips losslessly.
+
+        Pin for P-0099 v3-20a: the ``paused`` literal travels through
+        the storage layer without being normalised, replaced, or
+        rejected. The actual write side is exercised in v3-20c when
+        ``_run_job_core`` learns to emit ``status="paused"``; this
+        test only proves the storage round-trip is friendly to it.
+        """
+        from lizystudio.storage.versions import (
+            read_versioned_json,
+            write_versioned_json,
+        )
+
+        path = tmp_path / "meta.json"
+        payload = {
+            "job_id": "j-paused",
+            "status": "paused",
+            "job_type": "tune",
+        }
+        write_versioned_json(path, payload)
+
+        detected, data = read_versioned_json(path)
+        assert detected >= 2
+        assert data["status"] == "paused"
+        assert data["job_id"] == "j-paused"
+
     def test_migrate_covers_v0_to_current(self) -> None:
-        """``migrate_to_current`` walks the chain from any known older version."""
+        """``migrate_to_current`` walks the chain from any known older version.
+
+        Drift-proof: this test does NOT pin a specific
+        :data:`STUDIO_FORMAT_VERSION`. The invariant is "the chain
+        reaches the current version without raising", which the
+        registered MIGRATIONS table must satisfy at every bump.
+        """
         from lizystudio.storage.migrations import migrate_to_current
         from lizystudio.storage.versions import STUDIO_FORMAT_VERSION
 
@@ -147,8 +225,11 @@ class TestMigrationPipeline:
         # should rely on the file's format_version key, not on a
         # version field being injected into the returned dict.
         assert migrated["job_id"] == "j1"
-        # STUDIO_FORMAT_VERSION is currently 1; the chain reaches it.
-        assert STUDIO_FORMAT_VERSION == 1
+        # The chain must reach STUDIO_FORMAT_VERSION at any version
+        # bump. The previous form pinned this to 1 and broke each time
+        # the constant moved; the assertion below is an invariant
+        # statement instead of a value pin.
+        assert STUDIO_FORMAT_VERSION >= 1
 
     def test_migrations_are_pure_functions(self) -> None:
         """Each migration takes a dict and returns a new/mutated dict only.

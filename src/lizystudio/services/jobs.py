@@ -84,7 +84,21 @@ class Job:
     """Persistent job metadata."""
 
     job_id: str
-    status: Literal["pending", "running", "completed", "failed", "cancelled"]
+    # P-0099 v3-20a: ``paused`` is a non-terminal state introduced for
+    # R-1.4 (Tune long-run resumability, Issue #360). The state machine
+    # contract (legal transitions, slot ownership, terminal vs non-
+    # terminal classification) is declared in
+    # ``tests/regression/test_inv_state_machine.py``; runtime assertion
+    # of illegal transitions lands in v3-20c alongside the
+    # ``request_pause`` / ``PausedError`` plumbing.
+    status: Literal[
+        "pending",
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+        "paused",
+    ]
     backend_name: str
     config: dict[str, Any]
     data_ref: DataRef
