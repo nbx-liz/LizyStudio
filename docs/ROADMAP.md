@@ -6,7 +6,7 @@
 - このファイルは **横串インデックス** であり、詳細はリンク先で確認すること。
 - 着手する際は HISTORY に Proposal を起票（変更ゲート対象の場合）→ PLAN にフェーズ追加 → 実装、の順で進める。
 
-最終更新: 2026-05-06（v0.5 R-1 進行中：v3-17 完了 (PR #412/#413), v3-18 完了 (PR #414), v3-19 INV-2 fsync + INV-6 crash recovery PR drafting, v3-21 subsumed by #366）
+最終更新: 2026-05-06（v0.5 R-1 進行中：v3-17 / v3-18 / v3-19 すべて完了 (PR #412 / #413 / #414 / #415)、v3-21 subsumed by #366、v3-20 設計レビュー Approved (`docs/v3-20-tune-resume-design.md`) → 7 sub-phase で実装開始）
 
 ---
 
@@ -310,8 +310,8 @@ v0.4.1 リリース後の Open Issue は 5 件。
 |---|---|---|---|
 | ~~v3-17~~ | R-1.1 Slot release 6 経路 invariant test (INV-1/INV-5) | 1 週 | ✅ 完了 (PR #412 + #413) |
 | ~~v3-18~~ | R-1.2 Cancel + completion interleaving defense-in-depth (INV-5 write-side) | 0.5 週 (rescoped) | ✅ 完了 (PR #414) |
-| v3-19 | R-1.3 INV-2 fsync durability + INV-6 crash recovery test coverage | 0.5 週 (rescoped — watchdog 不要と audit) — 進行中 | — |
-| v3-20 | R-1.4 Tune resume (INV-3/INV-4 / #360) | 3 週 | ✅ 上流解消（lizyml 0.12.0） |
+| ~~v3-19~~ | R-1.3 INV-2 fsync durability + INV-6 crash recovery test coverage | 0.5 週 (rescoped — watchdog 不要と audit) | ✅ 完了 (PR #415) |
+| v3-20 | R-1.4 Tune resume (INV-3/INV-4 / #360) — `docs/v3-20-tune-resume-design.md` Approved | 3 週 (7 sub-phase: prep + a〜g) — 進行中 | — |
 | ~~v3-21~~ | ~~R-1.5 #359 job-num drift~~ | — | ❌ subsumed by PR #366 (closed 2026-05-03), 欠番 |
 | v3-22 | R-1.5b Server Restart Recovery (INV-7 / #384) | 1 週 | v3-20 後 |
 | v3-23 | R-2.1 WS 再接続 | 1 週 | v3-22 後 |
@@ -319,7 +319,7 @@ v0.4.1 リリース後の Open Issue は 5 件。
 | v3-25 | R-4.1 format_version migration matrix | 1 週 | v3-20 完了後並行可 |
 | v3-26 | R-4.2 Pickle compatibility | 1 週 | v3-25 と並行可 |
 
-直近の next: **v3-20 (R-1.4)** — Tune long-run resumability 実装。`backends/lizyml/lifecycle_mixin.py` で `Model.tune(storage=, study_name=)` (lizyml 0.12.0 H-0072) を pass-through、`paused` job state 追加、`POST /api/jobs/{id}/pause` API、Frontend Pause/Resume UI、INV-3/INV-4 invariant test。
+直近の next: **v3-20 (R-1.4)** — `docs/v3-20-tune-resume-design.md` (Approved 2026-05-06) に従い 7 sub-phase で実装開始。**v3-20-prep** (本 PR) で設計資料を develop に landing → **v3-20a** で format_version 1→2 migration + `Job.status` に `"paused"` 追加。
 
 ### Tier 5：要長期計画（v0.6 以降）
 
