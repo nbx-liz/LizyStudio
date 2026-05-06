@@ -3277,6 +3277,14 @@ R-1.1〜R-1.5b の各 phase に invariant test を割り当てる。本 Proposal
   - **API 構成変更 (案 B 採用)**: 既存 `POST /api/jobs/{id}/resume` (H-0062 Phase B、failed→child job) は **変更しない**。`paused → running` 用に **新規 `POST /api/jobs/{id}/unpause`** を追加して semantically 別の操作を別 URL に分離。理由: 既存 frontend 実装 (`ResumeActionButton`) と child job creation 経路を破壊しない、新機能を opt-in で導入できる
   - **paused 中の Cancel UX**: paused 状態でも `POST /api/jobs/{id}/cancel` を有効化し INV-1 release path として活用 (slot 占有による usability 低下の緩和)
   - 残りの impact (format_version 1→2、`WsPaused` message、`paused → cancelled|failed` 遷移、Pause/Resume UI) は当初の Impact 通り
+- 2026-05-07 **v3-20g (R-1.4 INV-4 round-trip + Playwright tune-resume E2E) 実装** — `feat/v3-20g-playwright-tune-resume-e2e` ブランチ:
+  - `tests/integration/test_tune_resume_round_trip.py` (新規): INV-4 を直接実証 — 同 `(storage, study_name)` で 2-trial tune を 2回連続実行し SQLite に 4 trial が monotonic な番号 (0,1,2,3) で蓄積されることを assert。lizyml `load_if_exists=True` の round-trip 契約を CI で gate
+  - `frontend/tests/e2e/tune-resume.spec.ts` (新規 3 spec):
+    - `API: tune -> pause -> paused -> unpause -> completed (in-place resume)` — 実 lizyml + n_trials=4 で full HTTP cycle を回し、paused 中の `/tune` が JOB_CONFLICT (INV-1+INV-pause-1)、最終 trial 数が 4 (INV-4 in-place resume) を確認
+    - `API: pause on fit job is rejected with JOB_NOT_PAUSEABLE`
+    - `API: unpause on a non-paused job is rejected with JOB_NOT_PAUSED`
+  - **R-1.4 完了** — v3-20a〜g 全 7 sub-phase shipped、v0.5 の Tune long-run resumability invariants が確定
+  - 後続 (v3-22): server restart で paused 状態を復元 (R-1.5b、別 Proposal で Issue #384 child として進める)
 - 2026-05-07 **v3-20f (R-1.4 frontend Pause/Resume buttons) 実装** — `feat/v3-20f-frontend-pause-resume-buttons` ブランチ:
   - `frontend/src/api/jobs.ts`: `pauseJob(jobId)` / `unpauseJob(jobId)` API helpers 追加
   - `frontend/src/api/queries/usePauseJob.ts` + `useUnpauseJob.ts`: TanStack Query mutation hooks (jobs / job(id) invalidation)

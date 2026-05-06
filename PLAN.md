@@ -1357,7 +1357,7 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 | v3-20d | `POST /api/jobs/{id}/pause` + `POST /api/jobs/{id}/unpause` API + service layer wiring + subprocess parent finally paused-skip | 🟢 | feat/v3-20d-pause-unpause-api |
 | v3-20e | `WsPaused` message + frontend WS `case "paused"` handler + openapi-typescript 再生成 | 🟢 | feat/v3-20e-wspaused-message |
 | v3-20f | Frontend Jobs UI Pause/Resume buttons + component test (PauseActionButton + UnpauseActionButton + JobDetail isPaused branch) | 🟢 | feat/v3-20f-frontend-pause-resume-buttons |
-| v3-20g | INV-3 / INV-4 invariant tests + Playwright `tests/e2e/tune-resume.spec.ts` (1 trial=1s mock) | 🟡 | — |
+| v3-20g | INV-4 backend round-trip integration test + Playwright `tests/e2e/tune-resume.spec.ts` (3 scenarios: pause→unpause→completed, pause-on-fit-rejected, unpause-on-completed-rejected) | 🟢 | feat/v3-20g-playwright-tune-resume-e2e |
 
 **DoD:**
 - [ ] INV-3 / INV-4 の invariant test green (`tests/regression/test_inv_paused_roundtrip.py` + `tests/regression/test_inv_state_machine.py`)
