@@ -3277,6 +3277,14 @@ R-1.1〜R-1.5b の各 phase に invariant test を割り当てる。本 Proposal
   - **API 構成変更 (案 B 採用)**: 既存 `POST /api/jobs/{id}/resume` (H-0062 Phase B、failed→child job) は **変更しない**。`paused → running` 用に **新規 `POST /api/jobs/{id}/unpause`** を追加して semantically 別の操作を別 URL に分離。理由: 既存 frontend 実装 (`ResumeActionButton`) と child job creation 経路を破壊しない、新機能を opt-in で導入できる
   - **paused 中の Cancel UX**: paused 状態でも `POST /api/jobs/{id}/cancel` を有効化し INV-1 release path として活用 (slot 占有による usability 低下の緩和)
   - 残りの impact (format_version 1→2、`WsPaused` message、`paused → cancelled|failed` 遷移、Pause/Resume UI) は当初の Impact 通り
+- 2026-05-07 **v3-20f (R-1.4 frontend Pause/Resume buttons) 実装** — `feat/v3-20f-frontend-pause-resume-buttons` ブランチ:
+  - `frontend/src/api/jobs.ts`: `pauseJob(jobId)` / `unpauseJob(jobId)` API helpers 追加
+  - `frontend/src/api/queries/usePauseJob.ts` + `useUnpauseJob.ts`: TanStack Query mutation hooks (jobs / job(id) invalidation)
+  - `frontend/src/components/jobs/PauseActionButton.tsx`: running tune に対する小型ボタン (dialog なし、PauseCircle icon、`onPauseRequested` callback)
+  - `frontend/src/components/jobs/UnpauseActionButton.tsx`: paused tune に対する Resume ボタン (dialog なし、PlayCircle icon、`disabledReason` 対応、`onUnpauseStarted` callback)。**注**: 既存 `ResumeActionButton` (failed→child job) とは責務が分離 (in-place vs lineage)
+  - `JobDetail.tsx` に `isPaused` 分岐 + paused 状態の説明文 + Pause/Resume/Cancel アクションバー条件分岐。Cancel 確認 dialog の本文も paused 状態用に切り替え
+  - tests: `PauseActionButton.test.tsx` (4 件)、`UnpauseActionButton.test.tsx` (5 件)、`JobDetail.test.tsx` に paused branch + running tune Pause + running fit no-Pause の 3 件追加
+  - 後続 (v3-20g): Playwright tune-resume E2E + INV-4 round-trip
 - 2026-05-06 **v3-20e (R-1.4 WsPaused WS message + frontend handler) 実装** — `feat/v3-20e-wspaused-message` ブランチ:
   - `lizystudio.ws.messages.WsPaused` 新 Pydantic モデル (`type="paused"`, `job_id`, `trial_number: int | None`, `message: str`, `extra="forbid"`)
   - `WsMessage` discriminated union に `WsPaused` を追加

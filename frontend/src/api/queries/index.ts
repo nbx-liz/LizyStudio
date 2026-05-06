@@ -24,9 +24,11 @@ export { useJobLog } from "./useJobLog";
 export { useJobPlots } from "./useJobPlots";
 export { useJobsInvalidator } from "./useJobsInvalidator";
 export { useJobsList } from "./useJobsList";
+export { usePauseJob } from "./usePauseJob";
 export { useResumeJob } from "./useResumeJob";
 export { useRetuneJob } from "./useRetuneJob";
 export { useRunInference } from "./useRunInference";
+export { useUnpauseJob } from "./useUnpauseJob";
 // Workspace config
 export {
   useBackends,

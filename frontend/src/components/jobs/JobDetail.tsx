@@ -40,6 +40,8 @@ import { CompletedContent } from "./CompletedContent";
 import { ConfigTreeView } from "./ConfigTreeView";
 import { DeleteDialog } from "./DeleteDialog";
 import { ExportDialog } from "./ExportDialog";
+import { PauseActionButton } from "./PauseActionButton";
+import { UnpauseActionButton } from "./UnpauseActionButton";
 
 interface JobDetailProps {
   jobId: string;
@@ -153,6 +155,10 @@ export function JobDetailPanel({
   const isFailed = job.status === "failed";
   const isRunning = job.status === "running";
   const isCancelled = job.status === "cancelled";
+  // P-0099 v3-20f: paused is non-terminal — the job still owns the
+  // workspace's training slot and can be resumed in place via
+  // POST /api/jobs/{id}/unpause OR cancelled outright.
+  const isPaused = job.status === "paused";
 
   return (
     <div className="flex h-full flex-col">
@@ -177,6 +183,18 @@ export function JobDetailPanel({
         {isCancelled && (
           <p className="text-sm text-muted-foreground">
             This job was cancelled before completion.
+          </p>
+        )}
+
+        {/* Paused state — non-terminal; the user must click Resume or
+         Cancel to free the workspace's training slot. */}
+        {isPaused && (
+          <p
+            className="text-sm text-muted-foreground"
+            data-testid="paused-notice"
+          >
+            This tune is paused. Click <strong>Resume</strong> to continue from
+            the next trial, or <strong>Cancel</strong> to discard.
           </p>
         )}
 
@@ -283,6 +301,29 @@ export function JobDetailPanel({
             onStarted={handleRetuneStarted}
           />
         )}
+        {/* P-0099 v3-20f: Pause for running tune jobs. Pause is a
+         tune-only action — fit jobs are short-running by design and
+         have no useful resume target. */}
+        {isRunning && job.job_type === "tune" && (
+          <PauseActionButton jobId={job.job_id} />
+        )}
+        {/* P-0099 v3-20f: Resume + Cancel for paused tune jobs. The
+         user is reminded by HTTP 400 + JOB_NOT_PAUSED that the
+         resume action is in-place (same job_id), distinct from the
+         /resume child-job lineage on failed parents. */}
+        {isPaused && job.job_type === "tune" && (
+          <>
+            <UnpauseActionButton jobId={job.job_id} />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCancelConfirm(true)}
+            >
+              <X className="mr-1 h-3 w-3" />
+              Cancel
+            </Button>
+          </>
+        )}
         {isRunning && (
           <Button
             variant="outline"
@@ -293,7 +334,7 @@ export function JobDetailPanel({
             Cancel
           </Button>
         )}
-        {!isRunning && (
+        {!isRunning && !isPaused && (
           // text-danger-fg maps onto --lzs-danger-fg (hsl(0 63% 31%)
           // light / hsl(0 94% 75%) dark), which matches the previous
           // red-700/red-400 pair and preserves WCAG 2 AA contrast
@@ -320,7 +361,9 @@ export function JobDetailPanel({
             <DialogTitle>Cancel job?</DialogTitle>
           </DialogHeader>
           <p className="text-sm">
-            Are you sure you want to cancel this running job?
+            {isPaused
+              ? "Are you sure you want to cancel this paused job? The saved Optuna study will be discarded."
+              : "Are you sure you want to cancel this running job?"}
           </p>
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={() => setCancelConfirm(false)}>
