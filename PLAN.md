@@ -1299,21 +1299,27 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 
 **動機:** OpenMP detection で subprocess に行く経路は kill -9 で死ぬと親が状態を見失う既知のリスク。`meta.json` の atomic write も子プロセスが mid-write で死ぬと file が壊れる。R-1.4 (Tune resume) で trial-level checkpoint を書く前に、書き込み一貫性を保証する。
 
+**Audit (2026-05-06):**
+- 既存の `meta.json` 書き込みは `lizystudio/storage/versions.py:write_versioned_json` (`tmp + os.replace`) に集約済 (H-0082, Issue #232)。**fsync が欠けていた** ため kill -9 でカーネル buffer flush 前にプロセスが死ねば canonical path が空 / 部分のまま rename される。
+- subprocess crash recovery は既に `services/subprocess_runner.py:run_job_in_subprocess` の post-`proc.wait()` reconcile 経路 (lines 250-274) + `_run_subprocess_job.finally` の `release_active` (`services/_training_core.py:362-363`) で構造的に正しい。新たな active polling watchdog の追加は不要 — `proc.wait()` が OS の child reap を同期点として機能するため。
+
 **Entry criteria:** v3-18 完了。
 
 **サブフェーズ:**
 
 | サブフェーズ | 内容 | 状態 | PR |
 |---|---|---|---|
-| v3-19a | `services/jobs.py:_write_meta_atomic` で tmpfile + fsync + rename を実装 | 🟡 | — |
-| v3-19b | `tests/regression/test_inv_meta_json_atomic.py` で kill -9 mid-write の simulate test (INV-2) | 🟡 | — |
-| v3-19c | subprocess crash watchdog を `services/training.py` に追加（INV-6） | 🟡 | — |
-| v3-19d | `tests/regression/test_inv_subprocess_crash_recovery.py` で kill -9 → bounded time → failed terminal の test | 🟡 | — |
+| v3-19a | `lizystudio/storage/versions.py:write_versioned_json` に `fh.flush() + os.fsync(fd) + os.replace + parent-dir fsync` を追加 (INV-2 durable bytes 強化、当初の "services/jobs.py:_write_meta_atomic" は audit で誤参照と判明) | 🟢 完了 | feat/v3-19-r13-subprocess-crash-recovery |
+| v3-19b | `tests/regression/test_inv_meta_json_atomic.py` で fsync ordering + crash simulation (5 + parent-dir tolerance) の 6 件テストを landing | 🟢 完了 | 同上 |
+| ~~v3-19c~~ | ~~subprocess crash watchdog を services/training.py に追加~~ | ❌ 不要 — audit で既存 reconcile path が INV-6 を満たすと判明 | — |
+| v3-19d | `tests/regression/test_inv_subprocess_crash_recovery.py` で 3 件テスト (abnormal exit reconcile / real Popen + os.kill / cancel-before-kill = cancelled wins)、加えて `test_inv_slot_release.py::test_inv1_path4_*` の `xfail(strict=True)` を green に flip | 🟢 完了 | 同上 |
 
 **DoD:**
-- [ ] INV-2 / INV-6 の invariant test green
-- [ ] `meta.json` write 経路すべてが `_write_meta_atomic` 経由（grep で hand-rolled `open(...,"w")` がない）
-- [ ] watchdog が `polling interval <= 5s` で subprocess の生存確認、死亡検知から terminal write までが <= 10s
+- [x] INV-2 invariant test green — `test_inv_meta_json_atomic.py` 6 件すべて pass
+- [x] INV-6 invariant test green — `test_inv_subprocess_crash_recovery.py` 3 件 + `test_inv_slot_release.py` path 4 が xfail から green へ flip
+- [x] `meta.json` write 経路がすべて `write_versioned_json` 経由 (grep で confirm)、新 fsync は同関数 1 箇所に集中
+- [x] subprocess crash recovery の bounded time = 既存 `proc.wait(_WAIT_TIMEOUT)` + reconcile で 15s 以内 (path 4 + INV-6 real Popen test で確認)
+- [ ] ~~watchdog polling interval~~ — 不要に縮退 (audit 結論)
 
 ---
 
