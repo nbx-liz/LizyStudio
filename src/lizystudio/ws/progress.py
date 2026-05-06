@@ -26,7 +26,13 @@ from typing import TYPE_CHECKING, Any
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from lizystudio.ws.messages import WsCompleted, WsError, WsPing, WsProgress
+from lizystudio.ws.messages import (
+    WsCompleted,
+    WsError,
+    WsPaused,
+    WsPing,
+    WsProgress,
+)
 
 # ``functools.lru_cache`` wraps ``get_allowed_ws_origins`` below (H-0083).
 
@@ -315,6 +321,30 @@ class ProgressBroadcaster:
     ) -> None:
         """Convenience: send an error message (H-0069)."""
         model = WsError(type="error", job_id=job_id, message=message, code=code)
+        self.send(job_id, model.model_dump(exclude_none=True))
+
+    def send_paused(
+        self,
+        job_id: str,
+        *,
+        trial_number: int | None = None,
+        message: str = "Paused.",
+    ) -> None:
+        """Convenience: send a non-terminal paused message (P-0099 v3-20e).
+
+        Pause is intentionally NOT in :data:`_TERMINAL_TYPES` so the
+        in-flight WebSocket connection stays open AND the message is
+        not stashed in :attr:`_last_terminal` for late-subscriber
+        replay.  A user who reconnects after the worker has resumed
+        must observe the live progress stream, not a stale paused
+        frame from a previous session.
+        """
+        model = WsPaused(
+            type="paused",
+            job_id=job_id,
+            trial_number=trial_number,
+            message=message,
+        )
         self.send(job_id, model.model_dump(exclude_none=True))
 
     def make_callback(self, job_id: str) -> Any:

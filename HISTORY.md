@@ -3277,6 +3277,15 @@ R-1.1〜R-1.5b の各 phase に invariant test を割り当てる。本 Proposal
   - **API 構成変更 (案 B 採用)**: 既存 `POST /api/jobs/{id}/resume` (H-0062 Phase B、failed→child job) は **変更しない**。`paused → running` 用に **新規 `POST /api/jobs/{id}/unpause`** を追加して semantically 別の操作を別 URL に分離。理由: 既存 frontend 実装 (`ResumeActionButton`) と child job creation 経路を破壊しない、新機能を opt-in で導入できる
   - **paused 中の Cancel UX**: paused 状態でも `POST /api/jobs/{id}/cancel` を有効化し INV-1 release path として活用 (slot 占有による usability 低下の緩和)
   - 残りの impact (format_version 1→2、`WsPaused` message、`paused → cancelled|failed` 遷移、Pause/Resume UI) は当初の Impact 通り
+- 2026-05-06 **v3-20e (R-1.4 WsPaused WS message + frontend handler) 実装** — `feat/v3-20e-wspaused-message` ブランチ:
+  - `lizystudio.ws.messages.WsPaused` 新 Pydantic モデル (`type="paused"`, `job_id`, `trial_number: int | None`, `message: str`, `extra="forbid"`)
+  - `WsMessage` discriminated union に `WsPaused` を追加
+  - `ProgressBroadcaster.send_paused(job_id, *, trial_number=None, message="Paused.")` 追加。`_TERMINAL_TYPES` には**含まない** — pause は resumable なので late-subscriber replay cache に載せない (INV-WS-5)
+  - `_run_job_core.except PausedError` 分岐に `broadcaster.send_paused(job.job_id)` を追加 (v3-20c で deferred していた WS notification を完成)
+  - Frontend: `connectJobProgress` に `onPaused` callback 追加、`case "paused"` で **jobDone を立てない** (WS 接続を維持して unpause 復帰時の live stream 継続を保証)
+  - Frontend: `useJobProgress` に `onPaused` ハンドラ追加 — `setProgress(null)` + jobs/job query invalidate のみ、`fireTerminal` は呼ばない
+  - openapi-typescript 再生成で `WsMessage` union が自動的に `paused` variant を含む (frontend の hand-written 重複なし)
+  - tests: `test_ws_messages.py` に 5 件 (round-trip / wire-format / send_paused / cache-exclusion / extra-field reject)、`test_inv_pause_keeps_slot.py` に 1 件 (`test_paused_branch_invokes_broadcaster_send_paused` for INV-pause-7)
 - 2026-05-06 **v3-20d (R-1.4 pause/unpause API) 実装** — `feat/v3-20d-pause-unpause-api` ブランチで HTTP エントリーポイント + subprocess parent finally の paused-skip を実装:
   - `POST /api/jobs/{id}/pause` — tune-only、status=running を要求、`request_pause` を呼ぶ。エラーコード: `JOB_NOT_PAUSEABLE` (fit ジョブ拒否) / `JOB_NOT_RUNNING` (paused/completed 等)
   - `POST /api/jobs/{id}/unpause` — tune-only、status=paused を要求、ws.dataframe 再ロード必須、`clear_pause` 後に `start_tune_async` を **同 job_id** で呼び（in-place 復帰）。lizyml の Optuna `load_if_exists=True` で trial 継続。エラーコード: `JOB_NOT_PAUSED` / `WORKSPACE_NO_DATA`

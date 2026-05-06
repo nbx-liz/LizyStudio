@@ -196,10 +196,14 @@ def _run_job_core(
         job.status = "paused"
         job.completed_at = None
         job_store.update(job)
-        # WS notification lands in v3-20e (WsPaused message).  Until
-        # then the frontend observes the status flip via the next jobs
-        # list refresh; this is acceptable because pause is a user-
-        # initiated action so the click already updates the UI.
+        # P-0099 v3-20e: notify subscribers via WsPaused so the
+        # frontend Jobs UI flips state without waiting for the next
+        # jobs list refresh. The broadcaster does NOT cache this
+        # message for late-subscriber replay — pause is resumable, so
+        # a stale paused frame from a previous session would mislead a
+        # subscriber that connects after the user clicked Resume.
+        if broadcaster is not None:
+            broadcaster.send_paused(job.job_id)
     except (CancelledError, KeyboardInterrupt):
         job.status = "cancelled"
         job.completed_at = datetime.now(timezone.utc).isoformat()

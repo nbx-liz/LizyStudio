@@ -2153,6 +2153,41 @@ export interface components {
             [key: string]: unknown;
         };
         /**
+         * WsPaused
+         * @description Non-terminal pause notification (P-0099 v3-20e, R-1.4).
+         *
+         *     Emitted when ``_run_job_core`` catches :class:`PausedError`.  Unlike
+         *     :class:`WsCompleted` / :class:`WsError`, this message is **NOT**
+         *     cached for late-subscriber replay — pause is a resumable state, so
+         *     a subscriber that connects after the user clicked Resume must
+         *     observe the live progress stream rather than a stale "you were
+         *     paused at trial 7" frame from a previous session.
+         *
+         *     Frontends switch on ``msg.type === "paused"`` and update the Jobs
+         *     list / detail view to show the Resume / Cancel actions.  The WS
+         *     connection itself stays open: pause is non-terminal, so the
+         *     reconnect / suppress logic must NOT close the channel here.
+         */
+        WsPaused: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "paused";
+            /** Job Id */
+            job_id: string;
+            /**
+             * Trial Number
+             * @default null
+             */
+            trial_number: number | null;
+            /**
+             * Message
+             * @default Paused.
+             */
+            message: string;
+        };
+        /**
          * WsPing
          * @description 30-second keepalive ping (H-0058).
          *
@@ -2213,7 +2248,7 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        WsMessage: components["schemas"]["WsProgress"] | components["schemas"]["WsCompleted"] | components["schemas"]["WsError"] | components["schemas"]["WsPing"];
+        WsMessage: components["schemas"]["WsProgress"] | components["schemas"]["WsCompleted"] | components["schemas"]["WsError"] | components["schemas"]["WsPing"] | components["schemas"]["WsPaused"];
     };
     responses: never;
     parameters: never;

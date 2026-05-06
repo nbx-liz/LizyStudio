@@ -35,9 +35,16 @@ def test_ws_messages_module_exports_union() -> None:
     import importlib
 
     mod = importlib.import_module("lizystudio.ws.messages")
-    for name in ("WsProgress", "WsCompleted", "WsError", "WsPing", "WsMessage"):
+    for name in (
+        "WsProgress",
+        "WsCompleted",
+        "WsError",
+        "WsPing",
+        "WsPaused",
+        "WsMessage",
+    ):
         assert hasattr(mod, name), (
-            f"lizystudio.ws.messages must expose `{name}` (H-0069)"
+            f"lizystudio.ws.messages must expose `{name}` (H-0069 / P-0099 v3-20e)"
         )
 
 
@@ -332,3 +339,103 @@ def test_frontend_no_handwritten_ws_message_types() -> None:
         "frontend/src/api/types.ts must not hand-write the WS message "
         f"variants. Import from the generated schema instead. Offenders: {offenders}"
     )
+
+
+# --- P-0099 v3-20e: WsPaused message + send_paused -------------------------
+
+
+def test_ws_paused_round_trips_through_ws_message_union() -> None:
+    """A ``paused`` payload parses as :class:`WsPaused` via the union.
+
+    INV-WS-5 (v3-20e): the discriminated union accepts ``type="paused"``
+    so frontends switching on ``msg.type`` see a typed branch instead of
+    falling through the unhandled-type path.
+    """
+    from pydantic import TypeAdapter
+
+    from lizystudio.ws.messages import WsMessage, WsPaused
+
+    payload = {
+        "type": "paused",
+        "job_id": "job_paused_1",
+        "trial_number": 7,
+        "message": "Paused at trial 7.",
+    }
+    parsed = TypeAdapter(WsMessage).validate_python(payload)
+    assert isinstance(parsed, WsPaused)
+    assert parsed.job_id == "job_paused_1"
+    assert parsed.trial_number == 7
+    assert parsed.message == "Paused at trial 7."
+
+
+def test_ws_paused_wire_format_bit_identical() -> None:
+    """Wire format pins the canonical paused dict (no surprise keys)."""
+    from lizystudio.ws.messages import WsPaused
+
+    legacy = {
+        "type": "paused",
+        "job_id": "j",
+        "trial_number": 5,
+        "message": "Paused.",
+    }
+    produced = WsPaused(
+        type="paused", job_id="j", trial_number=5, message="Paused."
+    ).model_dump(exclude_none=True)
+    assert produced == legacy
+
+
+def test_broadcaster_send_paused_round_trips() -> None:
+    """``ProgressBroadcaster.send_paused`` enqueues a parseable WsPaused."""
+    from pydantic import TypeAdapter
+
+    from lizystudio.ws.messages import WsMessage, WsPaused
+    from lizystudio.ws.progress import ProgressBroadcaster
+
+    captured: list[dict[str, Any]] = []
+
+    class _Capture(ProgressBroadcaster):
+        def send(self, job_id: str, message: dict[str, Any]) -> None:  # type: ignore[override]
+            captured.append(message)
+
+    _Capture().send_paused("job_p", trial_number=12, message="Paused.")
+    parsed = TypeAdapter(WsMessage).validate_python(captured[0])
+    assert isinstance(parsed, WsPaused)
+    assert parsed.trial_number == 12
+    assert parsed.message == "Paused."
+
+
+def test_send_paused_does_not_populate_terminal_replay_cache() -> None:
+    """Pause is non-terminal — it must NOT be stashed for late-subscriber replay.
+
+    Cached terminal replay exists so a subscriber that connects after a
+    short-lived job sees the final state.  Pause is deliberately
+    resumable, so the user resuming and reconnecting MUST observe the
+    live progress stream (or whatever state the worker has reached by
+    then), not a stale "you were paused at trial 7" frame from a
+    previous session.
+    """
+    from lizystudio.ws.progress import ProgressBroadcaster
+
+    b = ProgressBroadcaster()
+    b.send_paused("job_no_replay", trial_number=3, message="Paused.")
+    # Internal field is private, but the contract is "no entry for this
+    # job_id in the terminal cache after a paused send".
+    assert "job_no_replay" not in b._last_terminal, (  # noqa: SLF001
+        "INV-WS-5: paused must NOT enter the terminal-replay cache"
+    )
+
+
+def test_extra_field_rejected_on_paused() -> None:
+    """``WsPaused`` uses ``extra='forbid'`` like its siblings."""
+    from pydantic import ValidationError
+
+    from lizystudio.ws.messages import WsPaused
+
+    with pytest.raises(ValidationError):
+        WsPaused(  # type: ignore[call-arg]
+            type="paused",
+            job_id="j",
+            trial_number=1,
+            message="m",
+            mystery_field="not allowed",
+        )

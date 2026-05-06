@@ -7,6 +7,11 @@ const MAX_DELAY = 30000;
 /**
  * Connect to job progress WebSocket with exponential backoff
  * reconnection (H-0035).
+ *
+ * P-0099 v3-20e: ``paused`` is a NON-terminal message — the WS
+ * connection stays open so the frontend can observe the live progress
+ * stream after the user clicks Resume.  Only ``completed`` / ``error``
+ * suppress the reconnect path.
  */
 export function connectJobProgress(
   jobId: string,
@@ -14,6 +19,7 @@ export function connectJobProgress(
     onProgress?: (msg: WsMessage & { type: "progress" }) => void;
     onCompleted?: (msg: WsMessage & { type: "completed" }) => void;
     onError?: (msg: WsMessage & { type: "error" }) => void;
+    onPaused?: (msg: WsMessage & { type: "paused" }) => void;
     onReconnect?: () => void;
   },
 ): () => void {
@@ -21,7 +27,8 @@ export function connectJobProgress(
   let retryCount = 0;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let closed = false;
-  // Suppress reconnection after terminal messages (completed/error)
+  // Suppress reconnection after terminal messages (completed/error).
+  // Pause is non-terminal — see the case "paused" branch below.
   let jobDone = false;
 
   function connect() {
@@ -48,6 +55,11 @@ export function connectJobProgress(
           case "error":
             jobDone = true;
             callbacks.onError?.(msg);
+            break;
+          case "paused":
+            // Non-terminal: do NOT set jobDone, keep the WS open so
+            // the live stream resumes when the user clicks Resume.
+            callbacks.onPaused?.(msg);
             break;
         }
       } catch {

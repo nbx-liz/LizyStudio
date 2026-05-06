@@ -132,6 +132,21 @@ export function useJobProgress({
         invalidateOnce();
         fireTerminal();
       },
+      onPaused: () => {
+        // P-0099 v3-20e: paused is non-terminal — invalidate the
+        // cached job state so the UI flips to the Resume / Cancel
+        // affordances, but do NOT call fireTerminal: the WebSocket
+        // stays open and the user can /unpause back to running on
+        // the same connection.
+        setProgress(null);
+        if (trackFoldLog) setFoldLog([]);
+        // Reset invalidation guard so a subsequent /unpause -> running
+        // -> completed cycle still fires the terminal invalidation
+        // exactly once for the new run.
+        terminalInvalidatedRef.current = null;
+        queryClient.invalidateQueries({ queryKey: queryKeys.job(jobId) });
+        queryClient.invalidateQueries({ queryKey: queryKeys.jobs() });
+      },
     });
 
     return () => disconnect();
