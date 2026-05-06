@@ -17,6 +17,7 @@ from __future__ import annotations
 import copy
 import logging
 import threading
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from lizystudio.backends.base import BackendAdapter, ProgressCallback
@@ -183,6 +184,32 @@ def _prepare_tune_config(config: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _build_optuna_storage_url(job_dir: Path) -> str:
+    """Build the per-job Optuna SQLite URL (P-0099 v3-20b / R-1.4).
+
+    Each tune job owns its own SQLite database at
+    ``{job_dir}/optuna.db`` so concurrent jobs cannot race on a
+    shared store, and so deleting a job directory cleans up its
+    persistent tune state with no extra bookkeeping. The URL form is
+    ``sqlite:///{absolute_path}`` (three slashes — Optuna treats the
+    fourth character as the start of the path).
+    """
+    db_path = job_dir / "optuna.db"
+    return f"sqlite:///{db_path.resolve()}"
+
+
+def _build_optuna_study_name(job_id: str) -> str:
+    """Build the Optuna study identifier (P-0099 v3-20b / R-1.4).
+
+    The ``studio-tune-`` prefix lets a casual SQLite inspection
+    distinguish LizyStudio's studies from any user-created ones in
+    the same database (we do not share a database across jobs, but
+    the prefix is cheap insurance against accidental cross-pollution
+    if a future deployment chooses a single shared store).
+    """
+    return f"studio-tune-{job_id}"
+
+
 def run_tune(
     *,
     job: Job,
@@ -198,6 +225,12 @@ def run_tune(
     # H-0062: checkpoint directory for incremental trial persistence.
     checkpoint_dir = job_store.job_dir(job.job_id)
     _run_pickle_preflight(backend, checkpoint_dir)
+    # P-0099 v3-20b: persistent Optuna storage per job. The job
+    # directory is created lazily by the JobStore, so by the time
+    # we hit lizyml's tuner the parent dir already exists for
+    # SQLite to populate.
+    storage_url = _build_optuna_storage_url(checkpoint_dir)
+    study_name = _build_optuna_study_name(job.job_id)
 
     def execute(cb: ProgressCallback) -> tuple[FitSummary, TuningSummary | None, str]:
         model = backend.create_model(tune_config, dataframe)
@@ -206,6 +239,8 @@ def run_tune(
             on_progress=cb,
             re_tune=re_tune,
             checkpoint_dir=checkpoint_dir,
+            storage=storage_url,
+            study_name=study_name,
         )
 
         # Capture tuning plot from the tune model before creating model2.

@@ -56,9 +56,35 @@ class LifecycleMixin:
         re_tune: dict[str, Any] | None = None,
         checkpoint_dir: Path | None = None,
         resume: bool = False,
+        storage: str | None = None,
+        study_name: str | None = None,
     ) -> TuningSummary:
-        """Run hyperparameter tuning via lizyml's Model.tune()."""
+        """Run hyperparameter tuning via lizyml's Model.tune().
+
+        ``storage`` and ``study_name`` (P-0099 v3-20b / R-1.4) are
+        forwarded to ``model.tune`` (lizyml >= 0.12.0, H-0072). When
+        provided together, Optuna persists trial state to the URL
+        after every completed trial; re-invoking ``tune`` with the
+        same identifiers re-attaches via ``load_if_exists=True`` and
+        picks up where the prior run stopped. When both arguments are
+        ``None`` (default), the legacy in-memory study path is used,
+        so existing callers and re-tune flows continue to behave
+        exactly as before.
+        """
         n_rounds, extra_kwargs = parse_re_tune(re_tune)
+        # P-0099 v3-20b: storage / study_name are pass-through kwargs
+        # for lizyml's persistent-storage path. They are added to
+        # every model.tune() call (first round + every re-tune round)
+        # so a multi-round resume sees the same study identity across
+        # rounds. lizyml 0.12.0 accepts None to mean "use the in-memory
+        # default" — the local dict guarantees we only inject the
+        # kwargs when both are set, which keeps the call signature
+        # compatible with hypothetical future lizyml releases that add
+        # a non-None default.
+        storage_kwargs: dict[str, Any] = {}
+        if storage is not None or study_name is not None:
+            storage_kwargs["storage"] = storage
+            storage_kwargs["study_name"] = study_name
 
         lizyml_callback: Any = None
         accumulated_trials: list[dict[str, Any]] = []
@@ -150,6 +176,7 @@ class LifecycleMixin:
             first_round_kwargs.update(extra_kwargs)
         tune_result = model.tune(
             progress_callback=lizyml_callback,
+            **storage_kwargs,
             **first_round_kwargs,
         )
         for round_idx in range(2, n_rounds + 1):
@@ -165,6 +192,7 @@ class LifecycleMixin:
             tune_result = model.tune(
                 progress_callback=lizyml_callback,
                 resume=True,
+                **storage_kwargs,
                 **extra_kwargs,
             )
 

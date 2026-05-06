@@ -91,8 +91,25 @@ class BackendCore(Protocol):
         re_tune: dict[str, Any] | None = None,
         checkpoint_dir: Any = None,
         resume: bool = False,
+        storage: str | None = None,
+        study_name: str | None = None,
     ) -> TuningSummary:
-        """Run hyperparameter tuning.  See H-0061 / H-0062 for kwargs."""
+        """Run hyperparameter tuning.
+
+        See H-0061 / H-0062 for ``re_tune`` / ``checkpoint_dir`` / ``resume``.
+
+        ``storage`` and ``study_name`` (P-0099 v3-20b / R-1.4) are passed
+        through to the backend's tuner so trial state is persisted to a
+        durable, on-disk Optuna storage instead of an in-memory study.
+        ``None`` (default) preserves the legacy in-memory behavior so
+        existing callers and tests remain unchanged.
+
+        Adapters that do not support persistent storage MUST raise
+        :class:`NotImplementedError` when *storage* is non-None and
+        document the limitation in their adapter README. The lizyml
+        adapter accepts any URL form supported by Optuna 0.12.0+
+        (e.g. ``"sqlite:///path/to.db"``).
+        """
         ...
 
     def predict(
