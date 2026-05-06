@@ -463,6 +463,239 @@ def test_cancel_job_not_found(client: TestClient) -> None:
     assert res.status_code == 404
 
 
+def test_cancel_paused_tune_transitions_to_cancelled(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    """POST cancel on a paused job transitions it to cancelled and frees the slot.
+
+    P-0099 v3-20c §6 (案 a): paused-as-zombie is worse UX than letting
+    Cancel be a fast exit, so /cancel accepts paused.
+    """
+    app = client.app  # type: ignore[union-attr]
+    job_store: JobStore = app.state.job_store
+    job = job_store.create(
+        backend_name="lizyml",
+        config={"task": "binary"},
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )
+    job_store.set_status(job.job_id, "running")
+    job_store.set_status(job.job_id, "paused")
+    job_store.claim_active(job.job_id)
+    assert job_store.active_job_id == job.job_id
+
+    res = client.post(f"/api/jobs/{job.job_id}/cancel")
+    assert res.status_code == 200
+    assert res.json()["status"] == "cancelled"
+
+    reloaded = job_store.get(job.job_id)
+    assert reloaded is not None
+    assert reloaded.status == "cancelled"
+    assert job_store.active_job_id is None, (
+        "Cancel on paused must release the active slot directly"
+    )
+
+
+# --- Pause / Unpause (P-0099 v3-20d, R-1.4) ---
+
+
+def test_pause_running_tune_returns_pause_requested(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    app = client.app  # type: ignore[union-attr]
+    job_store: JobStore = app.state.job_store
+    job = job_store.create(
+        backend_name="lizyml",
+        config={"task": "binary"},
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )
+    job_store.set_status(job.job_id, "running")
+
+    res = client.post(f"/api/jobs/{job.job_id}/pause")
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "pause_requested"
+    assert job_store.is_pause_requested(job.job_id) is True
+
+
+def test_pause_fit_job_rejected(client: TestClient, sample_data_ref: DataRef) -> None:
+    """Pause is a tune-only action — fit jobs are short-running by design."""
+    app = client.app  # type: ignore[union-attr]
+    job_store: JobStore = app.state.job_store
+    job = job_store.create(
+        backend_name="lizyml",
+        config={"task": "binary"},
+        data_ref=sample_data_ref,
+        job_type="fit",
+    )
+    job_store.set_status(job.job_id, "running")
+
+    res = client.post(f"/api/jobs/{job.job_id}/pause")
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "JOB_NOT_PAUSEABLE"
+
+
+def test_pause_non_running_tune_rejected(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    """Pausing a tune that is not currently running is rejected."""
+    app = client.app  # type: ignore[union-attr]
+    job_store: JobStore = app.state.job_store
+    job = job_store.create(
+        backend_name="lizyml",
+        config={"task": "binary"},
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )  # status defaults to pending
+
+    res = client.post(f"/api/jobs/{job.job_id}/pause")
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "JOB_NOT_RUNNING"
+
+
+def test_pause_already_paused_rejected(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    app = client.app  # type: ignore[union-attr]
+    job_store: JobStore = app.state.job_store
+    job = job_store.create(
+        backend_name="lizyml",
+        config={"task": "binary"},
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )
+    job_store.set_status(job.job_id, "running")
+    job_store.set_status(job.job_id, "paused")
+
+    res = client.post(f"/api/jobs/{job.job_id}/pause")
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "JOB_NOT_RUNNING"
+
+
+def test_pause_job_not_found(client: TestClient) -> None:
+    res = client.post("/api/jobs/nonexistent/pause")
+    assert res.status_code == 404
+
+
+def test_unpause_paused_tune_clears_flag_and_starts_worker(
+    client: TestClient,
+    sample_data_ref: DataRef,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /unpause clears the pause flag and re-launches the tune worker.
+
+    The worker thread spawn is mocked here — full Optuna trial-resume
+    coverage lives in the v3-20g Playwright spec.  This test pins the
+    contract that the API endpoint (a) clears the on-disk PAUSE flag and
+    (b) calls ``start_tune_async`` with the original job id (in-place
+    resume, NOT a new child job like /resume).
+    """
+    from lizystudio.api import workspace as workspace_api
+
+    app = client.app  # type: ignore[union-attr]
+    job_store: JobStore = app.state.job_store
+    ws = app.state.workspace
+    ws.set_data(_make_tiny_dataframe(), sample_data_ref)
+
+    job = job_store.create(
+        backend_name="lizyml",
+        config={"task": "binary"},
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )
+    job_store.set_status(job.job_id, "running")
+    job_store.set_status(job.job_id, "paused")
+    job_store.claim_active(job.job_id)
+    job_store.request_pause(job.job_id)
+    assert job_store.is_pause_requested(job.job_id) is True
+
+    captured: dict[str, object] = {}
+
+    def _fake_start_tune_async(**kwargs: object) -> str:
+        captured.update(kwargs)
+        return str(kwargs["job"].job_id)  # type: ignore[union-attr]
+
+    monkeypatch.setattr(
+        workspace_api, "start_tune_async", _fake_start_tune_async, raising=False
+    )
+    # The unpause endpoint imports the launcher from services.training too;
+    # patch both to be safe.
+    from lizystudio.api import jobs as jobs_api
+
+    monkeypatch.setattr(
+        jobs_api, "start_tune_async", _fake_start_tune_async, raising=False
+    )
+
+    res = client.post(f"/api/jobs/{job.job_id}/unpause")
+    assert res.status_code == 200, res.text
+    assert res.json()["status"] == "unpause_started"
+
+    assert job_store.is_pause_requested(job.job_id) is False, (
+        "Unpause must clear the pause flag before the worker re-runs"
+    )
+    assert "job" in captured
+    assert captured["job"].job_id == job.job_id  # type: ignore[union-attr]
+
+
+def test_unpause_non_paused_rejected(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    app = client.app  # type: ignore[union-attr]
+    job_store: JobStore = app.state.job_store
+    job = job_store.create(
+        backend_name="lizyml",
+        config={"task": "binary"},
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )
+    job_store.set_status(job.job_id, "running")
+
+    res = client.post(f"/api/jobs/{job.job_id}/unpause")
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "JOB_NOT_PAUSED"
+
+
+def test_unpause_without_loaded_data_rejected(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    """Unpause requires the workspace data to still be loaded (matching data_ref).
+
+    Pre-fix risk: a paused tune resumed against a different dataset
+    would silently corrupt the Optuna study (best_value compared across
+    different data).
+    """
+    app = client.app  # type: ignore[union-attr]
+    job_store: JobStore = app.state.job_store
+    ws = app.state.workspace
+    ws.dataframe = None
+    ws.data_ref = None
+
+    job = job_store.create(
+        backend_name="lizyml",
+        config={"task": "binary"},
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )
+    job_store.set_status(job.job_id, "running")
+    job_store.set_status(job.job_id, "paused")
+
+    res = client.post(f"/api/jobs/{job.job_id}/unpause")
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "WORKSPACE_NO_DATA"
+
+
+def test_unpause_job_not_found(client: TestClient) -> None:
+    res = client.post("/api/jobs/nonexistent/unpause")
+    assert res.status_code == 404
+
+
+def _make_tiny_dataframe() -> object:
+    """Minimal DataFrame for unpause tests — not used for actual training."""
+    import pandas as pd
+
+    return pd.DataFrame({"y": [0, 1, 0, 1], "x": [1.0, 2.0, 3.0, 4.0]})
+
+
 # --- Shared mock-backend helper ---
 
 

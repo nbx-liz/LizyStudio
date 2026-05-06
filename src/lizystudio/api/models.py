@@ -261,6 +261,19 @@ class CancelJobResponse(BaseModel):
     status: str
 
 
+class PauseJobResponse(BaseModel):
+    """POST /api/jobs/{job_id}/pause (P-0099 v3-20d, R-1.4)."""
+
+    status: str
+
+
+class UnpauseJobResponse(BaseModel):
+    """POST /api/jobs/{job_id}/unpause (P-0099 v3-20d, R-1.4)."""
+
+    status: str
+    job_id: str
+
+
 class DeleteJobResponse(BaseModel):
     """DELETE /api/jobs/{job_id}."""
 
