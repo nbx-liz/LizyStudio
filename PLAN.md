@@ -1316,7 +1316,7 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 
 ## Phase v3-20: v0.5 R-1.4 — Tune long-run resumability（P-0099 INV-3 / INV-4 / Issue #360）
 
-**期間:** v3-19 完了後 3 週間。**LizyML #105 (Optuna persistent storage) merged が前提。**
+**期間:** v3-19 完了後 3 週間。**上流ブロッカー (LizyML #105) は lizyml 0.12.0 (2026-05-06) で解消済。**
 
 **対象 Proposal:** P-0099 + Issue #360
 
@@ -1324,8 +1324,9 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 
 **Entry criteria:**
 - v3-19 完了
-- LizyML #105 merged + LizyStudio 側 `pyproject.toml` で対応 minor version へ bump
-- `LIZYSTUDIO_TUNE_RESUME_ENABLED=1` を default に切り替え可能
+- ✅ lizyml 0.12.0 + LizyStudio `pyproject.toml` `>=0.12.0,<0.13.0` bump 済（本 phase 開始前に bundle 済）
+- ✅ `Tuner` / `Model.tune()` の `storage` / `study_name` 引数経由で永続化可能（LizyML H-0072）
+- ~~`LIZYSTUDIO_TUNE_RESUME_ENABLED` feature flag~~ → **不要に縮退**（lizyml 0.12.0 で常時利用可能）
 
 **サブフェーズ:**
 
@@ -1344,7 +1345,7 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 - [ ] Issue #360 が close 済
 - [ ] format_version=2 への migration が P-0095 round-trip CI gate に組み込まれている
 - [ ] CHANGELOG (v0.5 draft) に `paused` 状態が Added で記載
-- [ ] `LIZYSTUDIO_TUNE_RESUME_ENABLED` を `1` で default 化、feature flag 経由で off にも切替可
+- [ ] `Model.tune(storage=..., study_name=...)` 経由で trial 永続化、process kill → restart で同 study_name へ resume が e2e 検証済
 
 ---
 
