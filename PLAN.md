@@ -1263,13 +1263,15 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 
 ---
 
-## Phase v3-18: v0.5 R-1.2 — Cancel race の修復（P-0099 INV-5 / Issue #358）
+## Phase v3-18: v0.5 R-1.2 — Cancel + completion interleaving defense-in-depth（P-0099 INV-5）
 
-**期間:** v3-17 完了後 1 週間
+**期間:** v3-17 完了後 0.5 週間（rescope 済 — 当初 1 週間想定）
 
-**対象 Proposal:** P-0099, Issue #358 (BlockedGroup race)
+**対象 Proposal:** P-0099 INV-5（write-side defense-in-depth）
 
-**動機:** Cancel + 完了通知の競合で「キャンセル押下後の `cancelled` 状態が completion で上書きされる」regression を構造的に閉じる。memory `feedback_count_budget_assertions` の lesson を踏まえ、count-based assertion で証明する。
+**動機 (rescope, 2026-05-06):** 当初 v3-18 は Issue #358 を cancel race の reproducer として固定する想定だったが、audit 結果 #358 は frontend の cv.strategy revert (config-sync race、cancel race ではない) で 2026-05-03 に PR #368 で close 済。実装コードの cancel-write は cooperative cancel として構造的に正しい（`_run_job_core` の cb が `CancelledError` を raise → `except` で `status="cancelled"`、completion 経路と排他、`clear_cancel` は finally 内で `release_active` の後 → INV-5 monotonic は structural 保証）。v3-17 で read-side INV-5 は既にカバー済。
+
+このため v3-18 は **cancel + completion interleaving の write-side を defense-in-depth で test pin する 0.5 週フェーズ** に再 scope する。memory `feedback_count_budget_assertions` の lesson を踏まえ count-based assertion を採用、「storm/race の test は count しろ、eventually settle で済ませるな」。
 
 **Entry criteria:** v3-17 完了。
 
@@ -1277,14 +1279,15 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 
 | サブフェーズ | 内容 | 状態 | PR |
 |---|---|---|---|
-| v3-18a | Issue #358 の reproducer を `tests/regression/test_reg_358_blocked_group_cancel_race.py` に固定 | 🟡 | — |
-| v3-18b | cancel + terminal write の race を count-based assertion で test | 🟡 | — |
-| v3-18c | services/training.py で cancel observation を pre-terminal-write に固定 | 🟡 | — |
+| v3-18a | `tests/regression/test_inv_cancel_completion_interleaving.py` で 3 件の interleaving test を pin（cb 間 cancel→cancelled / 16 並行 count-balance / post-terminal cancel non-mutation） | 🟢 完了 | feat/v3-18-r12-cancel-race-rescope |
+| ~~v3-18b~~ | ~~Issue #358 reproducer~~ | ❌ 不要 — #358 は別バグ系で PR #368 で close 済 | — |
+| ~~v3-18c~~ | ~~services/training.py で cancel observation を pre-terminal-write に固定~~ | ❌ 不要 — 既存の cooperative cancel 設計で structural 保証済（audit 結果） | — |
 
 **DoD:**
-- [ ] Issue #358 が close 済（reproducer green）
-- [ ] count-based assertion: 100 並行 cancel-during-completion で `cancelled` 状態が常に observable 1 件以上
-- [ ] INV-5 の monotonic 性が cancel race のすべての interleaving で破れない
+- [x] cancel-between-cb-calls の cooperative-cancel が `status="cancelled"` を produce する deterministic test
+- [x] 16 並行 cancel-during-completion で `count(cancelled) + count(completed) == n_runs` の count-based assertion
+- [x] post-terminal `request_cancel` が persisted `completed` を mutate しない negative test
+- [x] PLAN.md / ROADMAP.md / HISTORY.md の Issue #358 / #359 drift 整理（#358 = frontend bug, fixed by #368; #359 = job-num drift, fixed by #366）
 
 ---
 
@@ -1349,27 +1352,11 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 
 ---
 
-## Phase v3-21: v0.5 R-1.5 — Issue #359 job-num drift 解消
+## ~~Phase v3-21: v0.5 R-1.5 — Issue #359 job-num drift 解消~~（subsumed）
 
-**期間:** v3-20 と並行可（state machine 変更を含まない）、0.5 週間
+**状態:** ❌ 不要 — Issue #359 は 2026-05-03 に PR #366 (`fix(inference): derive dropdown #N from allJobs not completedJobs`) で close 済。当初 v3-21 は `meta.json` に不変 `job_num` を保存する v0.5 path を想定していたが、PR #366 は **frontend 側の dropdown 番号導出を `completedJobs` から `allJobs` に切替える**ことで failed/cancelled job 含む全 job を一貫した番号で扱うアプローチを採用済。実装が既に問題を解決しているため、本フェーズは v0.5 の作業対象から除外する。
 
-**対象:** Issue #359
-
-**動機:** `job_num` を frontend 側で計算せず API レスポンスに含めることで、削除や cancel 後の番号 drift を解消。
-
-**Entry criteria:** v3-17 完了（slot release が安定したら着手可）。
-
-**サブフェーズ:**
-
-| サブフェーズ | 内容 | 状態 | PR |
-|---|---|---|---|
-| v3-21a | `meta.json` に不変 `job_num: int` を保存（format_version=2 と同 PR が望ましい） | 🟡 | — |
-| v3-21b | API `GET /api/jobs` / `GET /api/jobs/{id}` レスポンスに `job_num` 追加（openapi-typescript 再生成） | 🟡 | — |
-| v3-21c | Frontend で `job_num` を index 計算から API レスポンス参照に切替 | 🟡 | — |
-
-**DoD:**
-- [ ] Issue #359 が close 済
-- [ ] `tests/regression/test_reg_359_job_num_stable.py` で削除 + 新規作成サイクル後の番号 stability 確認
+**正式番号は欠番として保持** — 後続 phase の参照 (v3-22 / v3-23 / v3-24 / v3-25 / v3-26) はそのまま使用可。新規 phase は v3-27 以降を採番（採番ガイダンス参照）。
 
 ---
 

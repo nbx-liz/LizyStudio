@@ -6,7 +6,7 @@
 - このファイルは **横串インデックス** であり、詳細はリンク先で確認すること。
 - 着手する際は HISTORY に Proposal を起票（変更ゲート対象の場合）→ PLAN にフェーズ追加 → 実装、の順で進める。
 
-最終更新: 2026-05-06（v0.4.2 リリース + lizyml 0.12.0 受領反映：P-0099 Approved / R-1.4 上流ブロッカー解消 / Open Issues #403..#405 / v0.5 R-1 Next Action）
+最終更新: 2026-05-06（v0.5 R-1 着手：v3-17 完了 (PR #412/#413), v3-18 rescoped to 0.5 週 (PR drafting), v3-21 closed as subsumed by #366）
 
 ---
 
@@ -308,18 +308,18 @@ v0.4.1 リリース後の Open Issue は 5 件。
 
 | Phase | 内容 | 期間 | 並行可否 |
 |---|---|---|---|
-| v3-17 | R-1.1 Slot release 6 経路 invariant test (INV-1/INV-5) | 1 週 | — |
-| v3-18 | R-1.2 Cancel race + #358 | 1 週 | — |
+| ~~v3-17~~ | R-1.1 Slot release 6 経路 invariant test (INV-1/INV-5) | 1 週 | ✅ 完了 (PR #412 + #413) |
+| v3-18 | R-1.2 Cancel + completion interleaving defense-in-depth (INV-5 write-side) | **0.5 週 (rescoped)** — 進行中 | — |
 | v3-19 | R-1.3 Subprocess crash + atomic meta.json (INV-2/INV-6) | 1 週 | — |
 | v3-20 | R-1.4 Tune resume (INV-3/INV-4 / #360) | 3 週 | ✅ 上流解消（lizyml 0.12.0） |
-| v3-21 | R-1.5 #359 job-num drift | 0.5 週 | v3-17 完了後並行可 |
+| ~~v3-21~~ | ~~R-1.5 #359 job-num drift~~ | — | ❌ subsumed by PR #366 (closed 2026-05-03), 欠番 |
 | v3-22 | R-1.5b Server Restart Recovery (INV-7 / #384) | 1 週 | v3-20 後 |
 | v3-23 | R-2.1 WS 再接続 | 1 週 | v3-22 後 |
 | v3-24 | R-2.2 ブラウザリロード復元 | 1 週 | v3-23 後 |
 | v3-25 | R-4.1 format_version migration matrix | 1 週 | v3-20 完了後並行可 |
 | v3-26 | R-4.2 Pickle compatibility | 1 週 | v3-25 と並行可 |
 
-直近の next: **v3-17 (R-1.1)** — `tests/regression/test_inv_slot_release.py` で 6 経路の invariant test を RED phase で書く。
+直近の next: **v3-19 (R-1.3)** — subprocess crash watchdog の実装で `tests/regression/test_inv_slot_release.py::test_inv1_path4_*` の `xfail(strict=True)` を green に flip。
 
 ### Tier 5：要長期計画（v0.6 以降）
 
