@@ -474,6 +474,14 @@ def _forward_progress(
             msg.get("message", "Unknown error"),
             code=msg.get("code", "BACKEND_ERROR"),
         )
+    elif msg_type == "paused":
+        # P-0099 v3-20e: forward the child's paused notification to
+        # live WS subscribers via the parent's ProgressBroadcaster.
+        broadcaster.send_paused(
+            job_id,
+            trial_number=msg.get("trial_number"),
+            message=msg.get("message", "Paused."),
+        )
 
 
 # --- Child process entry point ---
@@ -665,6 +673,29 @@ class _FileBroadcaster:
             self._path,
             {"type": "error", "message": message, "code": code},
         )
+
+    def send_paused(
+        self,
+        job_id: str,
+        *,
+        trial_number: int | None = None,
+        message: str = "Paused.",
+    ) -> None:
+        """P-0099 v3-20e: WsPaused written to the JSONL stream.
+
+        The parent's ``_drain_progress_pipe`` re-reads the JSONL file
+        and forwards ``paused`` messages to the live broadcaster, which
+        in turn dispatches them to subscribed WS clients. Without this
+        method the subprocess child crashes with AttributeError when
+        ``_run_job_core`` catches ``PausedError`` and tries to notify.
+        """
+        msg: dict[str, Any] = {
+            "type": "paused",
+            "message": message,
+        }
+        if trial_number is not None:
+            msg["trial_number"] = trial_number
+        _write_progress(self._path, msg)
 
 
 def _write_progress(path: str, msg: dict[str, Any]) -> None:

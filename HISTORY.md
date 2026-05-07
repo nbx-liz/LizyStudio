@@ -3285,6 +3285,12 @@ R-1.1〜R-1.5b の各 phase に invariant test を割り当てる。本 Proposal
     - `API: unpause on a non-paused job is rejected with JOB_NOT_PAUSED`
   - **R-1.4 完了** — v3-20a〜g 全 7 sub-phase shipped、v0.5 の Tune long-run resumability invariants が確定
   - 後続 (v3-22): server restart で paused 状態を復元 (R-1.5b、別 Proposal で Issue #384 child として進める)
+- 2026-05-07 **v3-23 (R-2.1 WebSocket 再接続戦略) 実装** — `feat/v3-23-ws-reconnect-strategy` ブランチ:
+  - **v3-23a frontend `connectJobProgress` 改良**: `MAX_DELAY` を 30s → **5min (300s)** に拡張、`MAX_RETRIES` の hard cap (10) を **削除**して indefinite retry に変更、**±15% jitter** を追加 (thundering herd 回避)。pre-fix: 5min disconnect で `WS_RECONNECT_FAILED` を発火していた → 再試行は continued
+  - **v3-23b**: "missed messages 受信" 要件は新 resume token なしで満たす — backend `_last_terminal` cache (5min TTL) は既に late subscriber に terminal を replay、frontend `useJobProgress` の polling fallback が terminal transition を jobs cache invalidate で picks up。**No code change**, doc-only
+  - **v3-23c**: `tests/e2e/ws-reconnect.spec.ts` 新規 spec で Playwright `context.setOffline()` を使った 10s disconnect simulation。INV-7 (worker thread が job lifetime を所有、WS 状態に非依存) + INV-4 (n_trials=4 が disconnect 越しに維持) を gate
+  - tests: `websocket.test.ts` の既存 backoff test を新スケジュールに合わせて更新、追加 4 件 (5min ceiling, no max-retries cap, no onError fire, jitter ±15% range) — 17 passed total
+  - DoD 満了: 10s 切断後 progress 続行 + 最終 status 一致、5min 切断後でも reconnect 試行 continued
 - 2026-05-07 **v3-22b (R-1.5b INV-7 unified test) 実装** — `feat/v3-22b-inv7-ws-disconnect-test` ブランチ:
   - `tests/regression/test_inv_ws_disconnect_does_not_release.py` 新規 4 件で INV-7 (WebSocket disconnect は active slot を release しない) を multi-scenario で gate:
     - Scenario A baseline: same-process subscribe→unsubscribe round-trip で paused job の slot が touched しない
