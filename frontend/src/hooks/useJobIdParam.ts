@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 /**
@@ -17,6 +17,11 @@ import { useSearchParams } from "react-router-dom";
  *   URL hasn't been rewritten yet).
  * - Let callers `filter` URL candidates (e.g. InferencePage only
  *   accepts a job_id once the job appears in the completed list).
+ * - Let callers provide a `fallbackJobId` (P-0102 v3-24a): when the URL
+ *   carries no param, fall back to a server-derived id (typically
+ *   `workspaceStatus.current_job_id`) so a browser reload re-attaches
+ *   the Workspace to the previously-running job. Consumed at most once
+ *   per mount; the URL remains the source of truth otherwise.
  * - Expose `setJobId(next, { writeUrl })` so the caller can update
  *   local state AND optionally push the new value back to
  *   `setSearchParams` in one call.
@@ -37,6 +42,16 @@ export interface UseJobIdParamOptions {
    * to require that the id already appears in the completed-jobs list.
    */
   filter?: (jobId: string) => boolean;
+  /**
+   * Optional server-derived fallback id (P-0102 v3-24a). Consumed only
+   * when the URL carries no `?job_id=` param AND no local override has
+   * been applied yet. Hydrated at most once per mount so a later
+   * `setJobId(null)` does not re-pull the fallback. `suppress` and
+   * `filter` apply to the fallback the same way they apply to the URL
+   * value, so a freshly-started fit (suppress=true) cannot be
+   * back-filled by a stale workspace status.
+   */
+  fallbackJobId?: string | null;
 }
 
 export interface UseJobIdParamResult {
@@ -58,11 +73,17 @@ function readParam(params: URLSearchParams): string | null {
 export function useJobIdParam(
   options: UseJobIdParamOptions = {},
 ): UseJobIdParamResult {
-  const { suppress = false, filter } = options;
+  const { suppress = false, filter, fallbackJobId = null } = options;
   const [searchParams, setSearchParams] = useSearchParams();
   const [jobId, setJobIdState] = useState<string | null>(() =>
     readParam(searchParams),
   );
+
+  // INV-reload-3 (P-0102): the fallback is consumed at most once per
+  // mount. After the user explicitly clears the id (setJobId(null)) or
+  // a fresh fit/tune writes a new value, a later workspaceStatus
+  // refetch must not re-hydrate from the now-stale fallback.
+  const fallbackConsumedRef = useRef(false);
 
   // Re-sync state when the URL param changes after mount (e.g. user
   // clicks a "view in Workspace" link while already on the page).
@@ -72,13 +93,27 @@ export function useJobIdParam(
   useEffect(() => {
     if (suppress) return;
     const candidate = readParam(searchParams);
-    if (candidate === null) return;
-    if (filter && !filter(candidate)) return;
-    setJobIdState(candidate);
-  }, [searchParams, suppress, filter]);
+    if (candidate !== null) {
+      if (filter && !filter(candidate)) return;
+      setJobIdState(candidate);
+      return;
+    }
+    // URL is empty — try the fallback once. The fallback is async
+    // (workspaceStatus arrives after mount), so we keep re-running
+    // until either the URL takes over or the fallback fires.
+    if (fallbackConsumedRef.current) return;
+    if (!fallbackJobId) return;
+    if (filter && !filter(fallbackJobId)) return;
+    fallbackConsumedRef.current = true;
+    setJobIdState(fallbackJobId);
+  }, [searchParams, suppress, filter, fallbackJobId]);
 
   const setJobId = useCallback(
     (next: string | null, opts?: { writeUrl?: boolean }) => {
+      // Lock the fallback latch on any explicit user write so a later
+      // workspaceStatus refetch cannot re-hydrate after the user
+      // intentionally cleared or replaced the id.
+      fallbackConsumedRef.current = true;
       setJobIdState(next);
       if (opts?.writeUrl) {
         setSearchParams(

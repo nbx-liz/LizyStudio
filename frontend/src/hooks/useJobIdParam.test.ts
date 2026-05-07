@@ -77,6 +77,86 @@ describe("useJobIdParam", () => {
     expect(result.current.jobId).toBe("job_local");
   });
 
+  it("fallbackJobId hydrates state when the URL has no ?job_id=", () => {
+    // P-0102 v3-24a: a server-derived fallback (workspaceStatus.current_job_id)
+    // takes over when the URL is empty, so a browser reload re-attaches
+    // the Workspace to the previously-running job without a deep link.
+    const { result } = renderHook(
+      ({ fallback }: { fallback: string | null }) =>
+        useJobIdParam({ fallbackJobId: fallback }),
+      {
+        wrapper: wrapperWith("/"),
+        initialProps: { fallback: null as string | null },
+      },
+    );
+    expect(result.current.jobId).toBeNull();
+  });
+
+  it("fallbackJobId arriving asynchronously is consumed once the value flips", () => {
+    // workspaceStatus is fetched async on mount, so the fallback is
+    // null at first render and becomes non-null on the next render.
+    type Props = { fallback: string | null };
+    const { result, rerender } = renderHook(
+      ({ fallback }: Props) => useJobIdParam({ fallbackJobId: fallback }),
+      {
+        wrapper: wrapperWith("/"),
+        initialProps: { fallback: null as string | null },
+      },
+    );
+    expect(result.current.jobId).toBeNull();
+    rerender({ fallback: "job_xyz" });
+    expect(result.current.jobId).toBe("job_xyz");
+  });
+
+  it("URL ?job_id= takes precedence over fallbackJobId", () => {
+    const { result } = renderHook(
+      () => useJobIdParam({ fallbackJobId: "job_fallback" }),
+      { wrapper: wrapperWith("/?job_id=job_url") },
+    );
+    expect(result.current.jobId).toBe("job_url");
+  });
+
+  it("fallbackJobId is consumed at most once — explicit clear sticks", () => {
+    // INV-reload-3: after the user clears the id (or a fresh fit
+    // writes a new one) a later workspaceStatus refetch must not
+    // re-pull the stale fallback.
+    type Props = { fallback: string | null };
+    const { result, rerender } = renderHook(
+      ({ fallback }: Props) => useJobIdParam({ fallbackJobId: fallback }),
+      {
+        wrapper: wrapperWith("/"),
+        initialProps: { fallback: "job_first" as string | null },
+      },
+    );
+    expect(result.current.jobId).toBe("job_first");
+    act(() => result.current.setJobId(null));
+    expect(result.current.jobId).toBeNull();
+    rerender({ fallback: "job_second" });
+    // Latch is locked — the new fallback is ignored.
+    expect(result.current.jobId).toBeNull();
+  });
+
+  it("suppress=true blocks fallbackJobId hydration", () => {
+    // A freshly-started fit/tune sets running=true (= suppress) before
+    // setCurrentJobId fires. A stale workspaceStatus fallback arriving
+    // mid-window must not back-fill the slot before the new id lands.
+    type Props = { suppress: boolean; fallback: string | null };
+    const { result, rerender } = renderHook(
+      ({ suppress, fallback }: Props) =>
+        useJobIdParam({ suppress, fallbackJobId: fallback }),
+      {
+        wrapper: wrapperWith("/"),
+        initialProps: {
+          suppress: true,
+          fallback: "job_stale" as string | null,
+        },
+      },
+    );
+    expect(result.current.jobId).toBeNull();
+    rerender({ suppress: false, fallback: "job_stale" });
+    expect(result.current.jobId).toBe("job_stale");
+  });
+
   it("filter change re-evaluates and promotes a previously-rejected id", () => {
     // Simulates the InferencePage flow: the URL already carries a
     // job_id on mount, but `completedJobs` is initially empty so the
