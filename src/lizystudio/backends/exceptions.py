@@ -14,6 +14,8 @@ match the same class.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 
 class CancelledError(Exception):
     """Raised when a long-running backend operation is cancelled.
@@ -104,7 +106,7 @@ class LegacyFormatProtectionError(Exception):
     env var set after explicitly backing up the legacy workspace.
     """
 
-    def __init__(self, path: object, detected_version: int) -> None:
+    def __init__(self, path: Path | str, detected_version: int) -> None:
         super().__init__(
             f"Refusing to overwrite legacy artefact at {path} "
             f"(format_version={detected_version}). Set "

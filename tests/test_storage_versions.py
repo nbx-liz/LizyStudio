@@ -494,3 +494,40 @@ class TestLegacyFormatProtection:
         _write_raw_json(path, {"job_id": "j1"})  # v0 fixture
         with pytest.raises(LegacyFormatProtectionError):
             write_versioned_json(path, {"job_id": "j1"})
+
+    @pytest.mark.parametrize(
+        "tampered",
+        ["not-a-number", "v2", None, [], {}, 1.5],
+    )
+    def test_non_integer_format_version_does_not_crash_writer(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        tampered: object,
+    ) -> None:
+        """Writer tolerates a non-integer ``format_version`` on disk.
+
+        A tampered or hand-edited workspace can carry a string,
+        float, list, or null in the version slot. The peek helper
+        must NOT raise out of write_versioned_json — the docstring
+        promises the read errors are swallowed. Regression for the
+        post-v3-25c review finding (bare ``int()`` was raising
+        ValueError on non-numeric stamps and propagating out of the
+        protection gate).
+        """
+        from lizystudio.storage.versions import (
+            STUDIO_FORMAT_VERSION,
+            read_versioned_json,
+            write_versioned_json,
+        )
+
+        monkeypatch.delenv("LIZYSTUDIO_ALLOW_LEGACY_WRITE", raising=False)
+        path = tmp_path / "meta.json"
+        _write_raw_json(path, {"format_version": tampered, "job_id": "j1"})
+
+        # Should NOT raise — the non-integer stamp is treated as
+        # "unknown / no legacy file" and the writer proceeds.
+        write_versioned_json(path, {"job_id": "j1", "status": "running"})
+        # Post-condition: file now carries the current version.
+        detected, _ = read_versioned_json(path)
+        assert detected == STUDIO_FORMAT_VERSION

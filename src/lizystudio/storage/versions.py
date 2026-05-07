@@ -58,12 +58,12 @@ def _legacy_write_allowed() -> bool:
 def _peek_existing_format_version(path: Path) -> int | None:
     """Return the on-disk ``format_version`` of ``path`` without migrating.
 
-    Returns ``None`` when the file does not exist, is unreadable, or
-    is not valid JSON — the caller treats those as "no legacy artefact
-    to protect" and the writer proceeds to overwrite normally. Read
-    errors are deliberately swallowed because the writer's own retry
-    loop will surface a meaningful failure if the path is genuinely
-    corrupt.
+    Returns ``None`` when the file does not exist, is unreadable, is
+    not valid JSON, or carries a non-integer ``format_version`` — the
+    caller treats those as "no legacy artefact to protect" and the
+    writer proceeds to overwrite normally. Read errors are deliberately
+    swallowed because the writer's own retry loop will surface a
+    meaningful failure if the path is genuinely corrupt.
     """
     if not path.exists():
         return None
@@ -73,7 +73,17 @@ def _peek_existing_format_version(path: Path) -> int | None:
         return None
     if not isinstance(raw, dict):
         return None
-    return int(raw.get(_FORMAT_VERSION_KEY, 0))
+    # Accept only true Python int values (and reject ``bool``, which
+    # is technically an int subclass but never a legitimate version
+    # stamp). A tampered file with a string, float, list, or null in
+    # the slot returns ``None`` so the protection gate treats it as
+    # "unknown / no legacy file" instead of raising or silently
+    # truncating (e.g. ``int(1.5) == 1`` would mis-classify a tampered
+    # float as v1).
+    raw_version: Any = raw.get(_FORMAT_VERSION_KEY, 0)
+    if isinstance(raw_version, bool) or not isinstance(raw_version, int):
+        return None
+    return int(raw_version)
 
 
 STUDIO_FORMAT_VERSION: int = 2
