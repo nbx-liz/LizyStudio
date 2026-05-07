@@ -27,7 +27,54 @@ import os
 from pathlib import Path
 from typing import Any
 
-from lizystudio.backends.exceptions import IncompatibleFormatVersionError
+from lizystudio.backends.exceptions import (
+    IncompatibleFormatVersionError,
+    LegacyFormatProtectionError,
+)
+
+LEGACY_WRITE_OVERRIDE_ENV = "LIZYSTUDIO_ALLOW_LEGACY_WRITE"
+"""Env var to opt in to overwriting a legacy artefact (P-0103 v3-25c).
+
+Without this env set, ``write_versioned_json`` refuses to overwrite a
+file whose existing on-disk version is older than the current
+``STUDIO_FORMAT_VERSION``. The check protects v0 / v1 customer
+workspaces against silent destruction during an in-place release
+upgrade. New files (no existing artefact) and same-version overwrites
+are always permitted.
+"""
+
+
+def _legacy_write_allowed() -> bool:
+    """True when the operator has opted in via the env var.
+
+    Empty string and ``"0"`` are treated as opt-out — the only opt-in
+    surface is the canonical truthy value ``"1"``. This avoids
+    confusing semantics where ``LIZYSTUDIO_ALLOW_LEGACY_WRITE=0`` would
+    paradoxically enable the override on a naive ``bool(os.environ[...])``.
+    """
+    return os.environ.get(LEGACY_WRITE_OVERRIDE_ENV, "").strip() == "1"
+
+
+def _peek_existing_format_version(path: Path) -> int | None:
+    """Return the on-disk ``format_version`` of ``path`` without migrating.
+
+    Returns ``None`` when the file does not exist, is unreadable, or
+    is not valid JSON — the caller treats those as "no legacy artefact
+    to protect" and the writer proceeds to overwrite normally. Read
+    errors are deliberately swallowed because the writer's own retry
+    loop will surface a meaningful failure if the path is genuinely
+    corrupt.
+    """
+    if not path.exists():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    return int(raw.get(_FORMAT_VERSION_KEY, 0))
+
 
 STUDIO_FORMAT_VERSION: int = 2
 """Current on-disk JSON format version for Studio-owned artefacts.
@@ -81,6 +128,20 @@ def write_versioned_json(path: Path, payload: dict[str, Any]) -> None:
     skipped on platforms that reject directory fds) so the rename's
     metadata reaches the disk inode table before the function returns.
     """
+    # P-0103 v3-25c: protect legacy on-disk artefacts. If a file
+    # already exists at ``path`` and declares an older format_version,
+    # refuse to overwrite unless the operator opts in via the
+    # LIZYSTUDIO_ALLOW_LEGACY_WRITE env var. The check runs BEFORE
+    # mkdir / tmp-file creation so a refusal is observably side-effect
+    # free.
+    existing = _peek_existing_format_version(path)
+    if (
+        existing is not None
+        and existing < STUDIO_FORMAT_VERSION
+        and not _legacy_write_allowed()
+    ):
+        raise LegacyFormatProtectionError(path, existing)
+
     path.parent.mkdir(parents=True, exist_ok=True)
     versioned: dict[str, Any] = {_FORMAT_VERSION_KEY: STUDIO_FORMAT_VERSION}
     versioned.update(payload)

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Storage protection (P-0103, v3-25c)** — `write_versioned_json`
+  now refuses to overwrite a workspace artefact whose existing
+  on-disk `format_version` is older than the runtime's
+  `STUDIO_FORMAT_VERSION`. To opt in to upgrading a legacy workspace
+  in place, set `LIZYSTUDIO_ALLOW_LEGACY_WRITE=1` before launching
+  `lizystudio`. New artefacts and same-version overwrites are
+  unaffected. Recovery for users on v0 / v1 workspaces is documented
+  in HISTORY P-0103.
+
 ## [0.4.2] - 2026-05-06
 
 The **v0.5 prep** maintenance release. **No user-facing behaviour
