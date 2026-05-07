@@ -10,6 +10,8 @@ const INITIAL_DELAY = 1000;
 const MAX_DELAY = 5 * 60 * 1000; // 5 minutes
 // Random jitter (±JITTER_RATIO * delay) prevents thundering herd when
 // a network outage forces every tab to reconnect at the same instant.
+// Empirical default — large enough to spread peak load but small
+// enough to keep the user-visible reconnect delay close to the base.
 const JITTER_RATIO = 0.15;
 
 /**
