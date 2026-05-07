@@ -1392,7 +1392,7 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 | サブフェーズ | 内容 | 状態 | PR |
 |---|---|---|---|
 | v3-22a | server lifespan startup で paused jobs を `meta.json` から再 attach + orphaned running/pending を failed に reconcile + 多重 paused は newest 残し他 failed | 🟢 | feat/v3-22a-startup-reconcile |
-| v3-22b | `tests/regression/test_inv_ws_disconnect_does_not_release.py` で INV-7 検証 | 🟡 | — |
+| v3-22b | `tests/regression/test_inv_ws_disconnect_does_not_release.py` で INV-7 検証 (same-process baseline + cross-restart Scenario A 走行 orphan reconcile + Scenario B paused slot 復元 + 16 cycle robustness) | 🟢 | feat/v3-22b-inv7-ws-disconnect-test |
 | v3-22c | Playwright `tests/e2e/server-restart-recovery.spec.ts` で実 restart シナリオ | 🟡 | — |
 
 **DoD:**

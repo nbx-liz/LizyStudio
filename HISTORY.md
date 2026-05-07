@@ -3285,6 +3285,14 @@ R-1.1〜R-1.5b の各 phase に invariant test を割り当てる。本 Proposal
     - `API: unpause on a non-paused job is rejected with JOB_NOT_PAUSED`
   - **R-1.4 完了** — v3-20a〜g 全 7 sub-phase shipped、v0.5 の Tune long-run resumability invariants が確定
   - 後続 (v3-22): server restart で paused 状態を復元 (R-1.5b、別 Proposal で Issue #384 child として進める)
+- 2026-05-07 **v3-22b (R-1.5b INV-7 unified test) 実装** — `feat/v3-22b-inv7-ws-disconnect-test` ブランチ:
+  - `tests/regression/test_inv_ws_disconnect_does_not_release.py` 新規 4 件で INV-7 (WebSocket disconnect は active slot を release しない) を multi-scenario で gate:
+    - Scenario A baseline: same-process subscribe→unsubscribe round-trip で paused job の slot が touched しない
+    - Scenario A continued: running + WS disconnect + crash → reconcile が orphan を failed 化、slot は crash recovery で free (WS disconnect 起因ではない)
+    - Scenario B: paused + WS disconnect + restart → reconcile が slot 再 attach、cross-restart JOB_CONFLICT で INV-7 維持
+    - Robustness: 16 回 subscribe/unsubscribe cycle で slot ownership に漏れがない
+  - 既存 `test_inv_slot_release.py::test_inv1_path5_*` (path 5 同 process) と組み合わせて INV-7 end-to-end coverage 完了
+  - Issue #384 close 条件 (INV-7 invariant test green) 達成
 - 2026-05-07 **v3-22a (R-1.5b server restart reconciliation) 実装** — `feat/v3-22a-startup-reconcile` ブランチ:
   - `JobStore.reconcile_at_startup()` 新メソッド: server lifespan 起動時に on-disk meta.json をスキャンし以下の reconciliation を実施
     - `running` / `pending` 状態の orphan job → `failed` 化（worker thread/subprocess は前プロセスと共に消えているため）。`error` に "Server restarted before this job could complete" を記録
