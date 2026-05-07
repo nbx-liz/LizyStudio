@@ -494,3 +494,88 @@ class TestLegacyFormatProtection:
         _write_raw_json(path, {"job_id": "j1"})  # v0 fixture
         with pytest.raises(LegacyFormatProtectionError):
             write_versioned_json(path, {"job_id": "j1"})
+
+    @pytest.mark.parametrize(
+        "tampered",
+        ["not-a-number", "v2", None, [], {}, 1.5],
+    )
+    def test_non_integer_format_version_does_not_crash_writer(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        tampered: object,
+    ) -> None:
+        """Writer tolerates a non-integer ``format_version`` on disk.
+
+        A tampered or hand-edited workspace can carry a string,
+        float, list, or null in the version slot. The peek helper
+        must NOT raise out of write_versioned_json — the docstring
+        promises the read errors are swallowed. Regression for the
+        post-v3-25c review finding (bare ``int()`` was raising
+        ValueError on non-numeric stamps and propagating out of the
+        protection gate).
+        """
+        from lizystudio.storage.versions import (
+            STUDIO_FORMAT_VERSION,
+            read_versioned_json,
+            write_versioned_json,
+        )
+
+        monkeypatch.delenv("LIZYSTUDIO_ALLOW_LEGACY_WRITE", raising=False)
+        path = tmp_path / "meta.json"
+        _write_raw_json(path, {"format_version": tampered, "job_id": "j1"})
+
+        # Should NOT raise — the non-integer stamp is treated as
+        # "unknown / no legacy file" and the writer proceeds.
+        write_versioned_json(path, {"job_id": "j1", "status": "running"})
+        # Post-condition: file now carries the current version.
+        detected, _ = read_versioned_json(path)
+        assert detected == STUDIO_FORMAT_VERSION
+
+    def test_unreadable_or_corrupt_json_does_not_crash_writer(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A corrupt JSON file at the target path is treated as no-legacy.
+
+        ``_peek_existing_format_version`` must return ``None`` (not raise)
+        when ``json.loads`` fails. Otherwise the writer's docstring
+        promise (read errors swallowed) would be violated. Branch
+        coverage for the OSError / JSONDecodeError except clause.
+        """
+        from lizystudio.storage.versions import write_versioned_json
+
+        monkeypatch.delenv("LIZYSTUDIO_ALLOW_LEGACY_WRITE", raising=False)
+        path = tmp_path / "meta.json"
+        # Truncated JSON — json.loads raises JSONDecodeError.
+        path.write_text("{not valid json", encoding="utf-8")
+
+        # Should NOT raise — peek returns None, gate sees no legacy
+        # artefact, write proceeds.
+        write_versioned_json(path, {"job_id": "j1"})
+        assert path.read_text(encoding="utf-8").startswith('{"format_version"')
+
+    def test_non_dict_json_root_does_not_crash_writer(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A JSON file whose root is not an object is treated as no-legacy.
+
+        ``_peek_existing_format_version`` checks ``isinstance(raw, dict)``
+        before extracting the version. Branch coverage for the non-dict
+        guard (e.g. a tampered file with ``[1, 2, 3]`` at the root).
+        """
+        import json as _json
+
+        from lizystudio.storage.versions import write_versioned_json
+
+        monkeypatch.delenv("LIZYSTUDIO_ALLOW_LEGACY_WRITE", raising=False)
+        path = tmp_path / "meta.json"
+        path.write_text(_json.dumps([1, 2, 3]), encoding="utf-8")
+
+        # Should NOT raise — the array root is treated as "unknown
+        # legacy" → None → gate skipped → write proceeds.
+        write_versioned_json(path, {"job_id": "j1"})
+        assert path.read_text(encoding="utf-8").startswith('{"format_version"')
