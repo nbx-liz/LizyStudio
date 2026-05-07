@@ -126,6 +126,10 @@ def create_app() -> FastAPI:
         application.state.metrics = metrics
         application.state.workspace = WorkspaceState(backend=adapter)
         application.state.job_store = JobStore(jobs_dir, metrics=metrics)
+        # P-0099 v3-22a (R-1.5b): reconcile orphaned running/pending
+        # rows to failed and re-attach the paused job's active slot
+        # so the in-place /unpause contract survives restart.
+        application.state.job_store.reconcile_at_startup()
         broadcaster = ProgressBroadcaster(metrics=metrics)
         broadcaster.set_loop(asyncio.get_running_loop())
         application.state.broadcaster = broadcaster

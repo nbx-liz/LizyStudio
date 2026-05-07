@@ -3285,6 +3285,16 @@ R-1.1〜R-1.5b の各 phase に invariant test を割り当てる。本 Proposal
     - `API: unpause on a non-paused job is rejected with JOB_NOT_PAUSED`
   - **R-1.4 完了** — v3-20a〜g 全 7 sub-phase shipped、v0.5 の Tune long-run resumability invariants が確定
   - 後続 (v3-22): server restart で paused 状態を復元 (R-1.5b、別 Proposal で Issue #384 child として進める)
+- 2026-05-07 **v3-22a (R-1.5b server restart reconciliation) 実装** — `feat/v3-22a-startup-reconcile` ブランチ:
+  - `JobStore.reconcile_at_startup()` 新メソッド: server lifespan 起動時に on-disk meta.json をスキャンし以下の reconciliation を実施
+    - `running` / `pending` 状態の orphan job → `failed` 化（worker thread/subprocess は前プロセスと共に消えているため）。`error` に "Server restarted before this job could complete" を記録
+    - `paused` 状態の job → in-memory `_active_job_id` に再 attach し、active-jobs gauge を 1 に設定（INV-1 の slot 占有を restart 越しに維持、INV-restart-2）
+    - 多重 paused（ありえない corruption ケース）→ `created_at` newest を survivor、他は failed 化（INV-1 deterministic restoration）
+    - terminal states (`completed` / `failed` / `cancelled`) は **rewrite しない**（INV-restart-3）
+    - idempotent: 2 回呼んでも同じ結果（既に reconcile 済の状態に対して候補なし）
+  - `server.py:lifespan` で `JobStore` 構築直後に `reconcile_at_startup()` を呼び出し
+  - tests: `test_inv_startup_reconcile.py` 9 件で 3 不変条件（INV-restart-1/2/3）+ JOB_CONFLICT cross-restart + idempotence を gate
+  - 後続 (v3-22b/c): INV-7 unified test、Playwright 実 server-restart e2e は本 PR の scope 外
 - 2026-05-07 **v3-20f (R-1.4 frontend Pause/Resume buttons) 実装** — `feat/v3-20f-frontend-pause-resume-buttons` ブランチ:
   - `frontend/src/api/jobs.ts`: `pauseJob(jobId)` / `unpauseJob(jobId)` API helpers 追加
   - `frontend/src/api/queries/usePauseJob.ts` + `useUnpauseJob.ts`: TanStack Query mutation hooks (jobs / job(id) invalidation)

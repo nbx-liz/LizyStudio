@@ -721,6 +721,83 @@ class JobStore:
         job.status = new_status  # type: ignore[assignment]
         self.update(job)
 
+    # --- Startup reconciliation (P-0099 v3-22a, R-1.5b) ---
+
+    def reconcile_at_startup(self) -> None:
+        """Reconcile in-memory state with disk after server (re)start.
+
+        At fresh process start the in-memory ``_active_job_id`` is
+        ``None`` while ``meta.json`` files survive the restart. Three
+        invariants must be restored:
+
+          INV-restart-1: ``running`` / ``pending`` rows on disk are
+            orphaned — no thread / subprocess survived. Reconcile to
+            ``failed`` with a clear error so the UI does not dangle.
+
+          INV-restart-2: at most ONE ``paused`` job survives (newest
+            by ``created_at`` wins). The survivor claims the active
+            slot so a concurrent /tune is rejected with
+            ``JOB_CONFLICT`` until the user clicks Resume or Cancel
+            (in-place /unpause contract from v3-20d).
+
+          INV-restart-3: terminal rows (completed / failed / cancelled)
+            are NEVER rewritten — reconciliation is a one-way forward
+            arrow.
+
+        Idempotent: running a second time on already-reconciled state
+        is a no-op (paused survivor stays paused, terminals stay
+        terminal, no further candidates exist).
+        """
+        paused_candidates: list[Job] = []
+        running_orphans: list[Job] = []
+        for job in self.list():
+            if job.status in ("running", "pending"):
+                running_orphans.append(job)
+            elif job.status == "paused":
+                paused_candidates.append(job)
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        for job in running_orphans:
+            _logger.warning(
+                "Reconciling orphaned %s job %s to failed at startup",
+                job.status,
+                job.job_id,
+            )
+            job.status = "failed"
+            job.error = "Server restarted before this job could complete"
+            job.completed_at = now
+            self.update(job)
+
+        if len(paused_candidates) > 1:
+            paused_candidates.sort(key=lambda j: j.created_at, reverse=True)
+            winner = paused_candidates[0]
+            _logger.warning(
+                "Multiple paused jobs at startup (%d); keeping newest %s, "
+                "reconciling the rest to failed",
+                len(paused_candidates),
+                winner.job_id,
+            )
+            for job in paused_candidates[1:]:
+                job.status = "failed"
+                job.error = (
+                    "Multiple paused jobs found at startup; only the newest "
+                    "is preserved (INV-1: at most one paused job)"
+                )
+                job.completed_at = now
+                self.update(job)
+            paused_candidates = [winner]
+
+        if paused_candidates:
+            survivor = paused_candidates[0]
+            with self._active_lock:
+                self._active_job_id = survivor.job_id
+                self._set_active_gauge(1)
+            _logger.info(
+                "Re-attached paused job %s to active slot at startup",
+                survivor.job_id,
+            )
+
     # --- Active job tracking (concurrency control) ---
 
     def create_and_claim_active(
