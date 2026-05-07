@@ -81,6 +81,40 @@ class IncompatibleFormatVersionError(Exception):
     """
 
 
+class LegacyFormatProtectionError(Exception):
+    """Raised when a write would overwrite a legacy on-disk artefact
+    without explicit opt-in (P-0103 v3-25c / R-4.1).
+
+    The storage layer auto-migrates v0 / v1 / ... artefacts to the
+    current ``STUDIO_FORMAT_VERSION`` in memory, but historically the
+    next ``write_versioned_json`` call would silently bump the on-disk
+    version and any future migration that loses fields would silently
+    truncate customer data.
+
+    To prevent that class of silent destruction:
+
+    - Reading a legacy file is always permitted (callers can still
+      browse historical workspaces).
+    - Writing back to a path whose existing file declares
+      ``format_version < STUDIO_FORMAT_VERSION`` requires the env var
+      ``LIZYSTUDIO_ALLOW_LEGACY_WRITE=1`` to opt in. Otherwise the
+      writer raises this exception.
+
+    Recovery: the user can re-run their ``lizystudio`` server with the
+    env var set after explicitly backing up the legacy workspace.
+    """
+
+    def __init__(self, path: object, detected_version: int) -> None:
+        super().__init__(
+            f"Refusing to overwrite legacy artefact at {path} "
+            f"(format_version={detected_version}). Set "
+            "LIZYSTUDIO_ALLOW_LEGACY_WRITE=1 to opt in to upgrading "
+            "this file to the current schema."
+        )
+        self.path = path
+        self.detected_version = detected_version
+
+
 class PlotNotAvailableError(Exception):
     """Raised when a plot type is not in the backend's dispatch table
     (Issue #355).
@@ -111,6 +145,7 @@ __all__ = [
     "CheckpointIncompatibleError",
     "CheckpointPreflightError",
     "IncompatibleFormatVersionError",
+    "LegacyFormatProtectionError",
     "PausedError",
     "PlotNotAvailableError",
 ]
