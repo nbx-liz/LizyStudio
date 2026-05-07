@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Browser reload state restoration (P-0102, v3-24)** — reloading
+  the Workspace tab now re-attaches the UI to the previously
+  running / completed job via `workspaceStatus.current_job_id`,
+  even when the URL has no `?job_id=` query param. A `beforeunload`
+  warning fires when the config write funnel still has an in-flight
+  PUT, so a misclick on the reload button no longer silently loses
+  unsaved edits. Closes the v0.5 Exit Criterion for browser reload
+  state recovery.
+- **format_version migration matrix CI gate (P-0103, v3-25)** — new
+  `format-version-matrix` CI job runs the full matrix
+  (`tests/regression/test_format_version_migration_matrix.py`,
+  `test_legacy_workspace_fixtures.py`, `test_storage_versions.py`)
+  on every PR. Captured-to-disk fixtures for v0 / v1 / v2 workspaces
+  live under `tests/fixtures/legacy_workspaces/`, so a future
+  `STUDIO_FORMAT_VERSION` bump cannot ship without proving the
+  migration chain end-to-end. Closes the v0.5 Exit Criterion for
+  format_version CI gating.
+
 ### Changed
 
 - **Storage protection (P-0103, v3-25c)** — `write_versioned_json`
