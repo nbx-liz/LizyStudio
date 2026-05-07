@@ -684,6 +684,24 @@ class TestForwardProgress:
         )
         b.send_error.assert_called_once_with("job-1", "bad", code="FIT_ERROR")
 
+    def test_paused_dispatch_forwards_to_send_paused(self) -> None:
+        """P-0099 v3-20e regression — the JSONL line ``{"type":
+        "paused", ...}`` written by the subprocess child via
+        ``_FileBroadcaster.send_paused`` must be forwarded to the live
+        parent broadcaster's ``send_paused`` so WS subscribers see the
+        transition. The CI failure for PR #427 traced to this missing
+        case in ``_forward_progress``.
+        """
+        b = MagicMock()
+        _forward_progress(
+            '{"type": "paused", "trial_number": 5, "message": "Paused."}',
+            "job-1",
+            b,
+        )
+        b.send_paused.assert_called_once_with(
+            "job-1", trial_number=5, message="Paused."
+        )
+
 
 # ---------------------------------------------------------------------------
 # _FileBroadcaster (lines 341, 353-363, 366, 377, 385-388)
@@ -737,6 +755,30 @@ class TestFileBroadcaster:
         assert msg["type"] == "error"
         assert msg["message"] == "something bad"
         assert msg["code"] == "FIT_ERROR"
+
+    def test_send_paused_writes_jsonl(self, tmp_path: Path) -> None:
+        """P-0099 v3-20e regression — _FileBroadcaster must implement
+        ``send_paused`` so subprocess workers can notify the parent
+        without crashing on AttributeError. The bug surfaced in CI for
+        PR #427 (v3-23) when the e2e tune-resume spec hit the paused
+        branch of ``_run_job_core`` inside a subprocess child.
+        """
+        path = tmp_path / "progress.jsonl"
+        fb = _FileBroadcaster(str(path))
+        fb.send_paused("job-1", trial_number=7, message="Paused.")
+        msg = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+        assert msg["type"] == "paused"
+        assert msg["trial_number"] == 7
+        assert msg["message"] == "Paused."
+
+    def test_send_paused_omits_trial_number_when_unset(self, tmp_path: Path) -> None:
+        path = tmp_path / "progress.jsonl"
+        fb = _FileBroadcaster(str(path))
+        fb.send_paused("job-1")
+        msg = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+        assert msg["type"] == "paused"
+        assert "trial_number" not in msg
+        assert msg["message"] == "Paused."
 
 
 # ---------------------------------------------------------------------------
