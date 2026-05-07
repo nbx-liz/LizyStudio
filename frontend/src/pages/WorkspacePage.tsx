@@ -19,6 +19,7 @@ import {
 import { ModelPanel } from "@/components/workspace/ModelPanel";
 import { ResultsPanel } from "@/components/workspace/ResultsPanel";
 import { useBackgroundNotification } from "@/hooks/useBackgroundNotification";
+import { useBeforeUnloadDirty } from "@/hooks/useBeforeUnloadDirty";
 import { useConfigWriteFunnel } from "@/hooks/useConfigWriteFunnel";
 import { ConfigWriteFunnelProvider } from "@/hooks/useConfigWriteFunnelContext";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
@@ -114,6 +115,16 @@ export function WorkspacePage() {
       }
     },
   });
+
+  // P-0102 v3-24b: warn the user before reload / tab-close while a
+  // config write is still in flight. The funnel batches per-microtask
+  // bursts then drains; during the queue + PUT window an unintended
+  // reload would lose the queued edit. ``isFlushing`` covers both
+  // ``pending.length > 0`` and the in-flight PUT, so it is the
+  // canonical "dirty" signal for INV-reload-4. Clean form (queue
+  // drained, no in-flight PUT) → no dialog, matching browser
+  // best-practice of not warning on read-only navigation.
+  useBeforeUnloadDirty(writeFunnel.isFlushing);
 
   const handleDataChanged = useCallback(() => {
     setHasData(true);
