@@ -1415,9 +1415,9 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 
 | サブフェーズ | 内容 | 状態 | PR |
 |---|---|---|---|
-| v3-23a | Frontend `useJobProgress` hook の reconnect ロジックを exponential backoff 化 | 🟡 | — |
-| v3-23b | Backend WebSocket handler で resume token を発行 → reconnect で missed messages を replay | 🟡 | — |
-| v3-23c | Playwright で 10s 切断 → 復帰の progress 続行 verification | 🟡 | — |
+| v3-23a | Frontend `connectJobProgress` の reconnect ロジック: MAX_DELAY 5min + MAX_RETRIES 無制限 + ±15% jitter | 🟢 | feat/v3-23-ws-reconnect-strategy |
+| v3-23b | Missed messages 受信は既存 backend `_last_terminal` cache (5min TTL) + frontend `useJobProgress` polling fallback で実装済 → 新 resume token 機構は不要 (doc-only) | 🟢 | feat/v3-23-ws-reconnect-strategy |
+| v3-23c | Playwright `tests/e2e/ws-reconnect.spec.ts` で `context.setOffline()` 10s simulation → tune completion 維持 + INV-7 + INV-4 trial count 維持 | 🟢 | feat/v3-23-ws-reconnect-strategy |
 
 **DoD:**
 - [ ] 10s 切断後 progress 続行、最終 status 一致
