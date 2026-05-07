@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-07
+
+The **v0.5 reliability** release. Closes 4 of 5 v0.5 Exit Criteria
+(P-0099 R-1 invariants, browser reload state restoration,
+format_version CI gating, slot release coverage). Brings 24h Tune
+long-run resumability across server restarts and WebSocket
+reconnects to the production runtime, plus tightens dependency
+hygiene with a CVE patch round.
+
+Bundles:
+
+1. **R-1 state-machine invariants (P-0099)** — INV-1 through INV-7
+   declared up-front and encoded as regression tests across v3-17
+   through v3-23 (slot release on 6 paths, cancel observability,
+   `meta.json` atomic write, `paused` job state, subprocess crash
+   recovery, WS-disconnect-doesn't-release).
+2. **R-1.4 Tune long-run resumability** — Optuna study reattach via
+   `(storage, study_name)`, in-place pause/resume buttons, server
+   startup reconciliation for orphan + paused jobs.
+3. **R-2.1 WebSocket reconnect strategy** — 5min ceiling +
+   indefinite retry + jitter; missed messages recovered via the
+   terminal-replay cache (P-0093).
+4. **R-2.2 Browser reload state restoration (P-0102)** — Workspace
+   re-attaches to the previously running / completed job after a
+   reload without `?job_id=`; dirty-config warning gates an
+   accidental tab close mid-PUT.
+5. **R-4.1 format_version migration matrix CI gate (P-0103)** —
+   captured v0 / v1 / v2 fixtures + dedicated `format-version-matrix`
+   CI job ensure a future schema bump cannot ship without proving
+   the migration chain end-to-end.
+
 ### Added
 
 - **Browser reload state restoration (P-0102, v3-24)** — reloading
@@ -26,6 +57,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `STUDIO_FORMAT_VERSION` bump cannot ship without proving the
   migration chain end-to-end. Closes the v0.5 Exit Criterion for
   format_version CI gating.
+- **Pause / Resume Tune long-runs (P-0099 R-1.4, v3-20)** — new
+  `POST /api/jobs/{id}/pause` and `POST /api/jobs/{id}/unpause`
+  endpoints + Jobs UI buttons let a 24h tuning job pause at the
+  next trial boundary, persist state, and resume in place via the
+  same `(storage, study_name)` Optuna handle.
+- **Server startup reconciliation (P-0099 R-1.5b, v3-22)** — orphan
+  jobs (running on disk but no live process) are auto-failed;
+  paused jobs reclaim their active slot at boot so the next request
+  observes a coherent JobStore state.
+- **WebSocket reconnect strategy (R-2.1, v3-23)** — frontend retries
+  WS connects with exponential backoff up to 5 min ceiling + jitter,
+  and never gives up; missed messages flow through the terminal-
+  replay cache.
 
 ### Changed
 
@@ -37,6 +81,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `lizystudio`. New artefacts and same-version overwrites are
   unaffected. Recovery for users on v0 / v1 workspaces is documented
   in HISTORY P-0103.
+- **`format_version` bumped 1 -> 2** — `Job.status` literal extended
+  with `"paused"`. Migration is byte-identity (no v1 artefact ever
+  contained `"paused"`); the bump exists so a future runtime that
+  re-shapes the field can detect a v2 workspace via `format_version`
+  and refuse with `IncompatibleFormatVersionError`.
+
+### Fixed
+
+- **SHAP 0.51.0 LightGBM-binary UserWarning noise** — the upstream
+  warning about TreeExplainer output shape change is now suppressed
+  at server startup. The lizyml SHAP adapter already handles both
+  the legacy ndarray and the new list-of-ndarray shapes, so the
+  warning was purely informational; the noise (5 folds x 2
+  importance kinds per fit) was drowning out actionable log entries.
+
+### Security
+
+- **CVE fixes** — `mako` 1.3.10 -> 1.3.12 (CVE-2026-44307) and
+  `python-multipart` 0.0.22 -> 0.0.27 (CVE-2026-40347,
+  CVE-2026-42561) on the locked production dependency set. Post-
+  upgrade `pip-audit` reports zero vulnerabilities.
 
 ## [0.4.2] - 2026-05-06
 
