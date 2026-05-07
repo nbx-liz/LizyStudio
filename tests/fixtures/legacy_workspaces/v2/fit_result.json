@@ -1,0 +1,1 @@
+{"format_version": 2, "task": "regression", "target": "value", "metrics": {"r2": 0.78, "rmse": 1.42}, "feature_importance": {"feature_x": 0.55, "feature_y": 0.45}, "n_rows": 500, "n_features": 2}
