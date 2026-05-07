@@ -3457,4 +3457,148 @@ PR-B4 で `ValidationError` payload に `severity: Literal["error", "warning", "
 
 - 2026-05-05 **Decided (post-hoc)** — PR-C2 / PR-D1 で実装済、本 Decision 記録は v0.4.1 リリース後の reconciliation。Issue #403 で BackendAdapter 抽象化、#404 で異常系 7 cases 追加が follow-up
 
+### P-0102: ブラウザリロード後の workspace state 自動復元（v3-24, R-2.2）
+
+- **Date:** 2026-05-07 起票
+- **Related:** PLAN.md Phase v3-24, `docs/v0.4-business-readiness-plan.md` §3.2, P-0099 (R-1 invariants), Issue #91 / #101 (deep-link recovery, prior art), `frontend/tests/e2e/session-restore.spec.ts`
+
+#### Motivation
+
+P-0099 で Tune long-run resumability が backend 側で完成 (v3-20) し、server restart recovery (v3-22) と WS reconnect (v3-23) も shipped した。残るは frontend のリロード対応で、現状 `?job_id=` query param が無い場合 Workspace は空状態に戻る。`workspaceStatus.current_job_id` は既に backend 側で露出されているのに、frontend は無視している。長時間学習中の user がリロードしただけで「Results will appear here after running a job.」が表示され、進捗を見失う UX がそのまま残っている。
+
+`UI: reload without ?job_id= leaves Workspace empty` (`frontend/tests/e2e/session-restore.spec.ts:91`) は現状動作を pin している。「将来的な auto-restore は明示的な議論を経てから」という意図で書かれているため、その議論を本 Proposal で行い、test を更新する。
+
+#### Purpose
+
+- リロード後 30 秒以内に form / data / progress / results が前と同じ状態を表示する
+- `?job_id=` 不在時に `workspaceStatus.current_job_id` をフォールバックとして自動 hydrate する
+- 入力途中の dirty config が beforeunload で確認ダイアログを出す（誤リロード防止）
+- 上記を Playwright で reload 後 visual diff 検証する
+
+#### Invariants
+
+- **INV-reload-1**: `?job_id=<id>` 明示時はその id を最優先（既存挙動を保つ）
+- **INV-reload-2**: `?job_id=` 不在 + `workspaceStatus.current_job_id` が non-null + page-local `running` flag が false の場合、initial mount で 1 回だけ `current_job_id` を hydrate する
+- **INV-reload-3**: hydrate latch (`restoredFromStatusRef`) は user の手動リセット（`workspace_reset` 経由）で解除されない限り再発火しない
+- **INV-reload-4**: dirty form (react-hook-form `formState.isDirty`) を持つ状態で `beforeunload` event が発火したら browser default confirm dialog を出す。clean form では出さない
+
+#### Impact
+
+**Public API:** 変更なし。既存 `GET /api/workspace/status` の `current_job_id` をそのまま使う。
+
+**Frontend (B-8 / WorkspacePage):**
+- `useJobIdParam` に `fallbackJobId?: string | null` option 追加。URL param 不在時のみ参照する
+- `WorkspacePage` で `workspaceStatus.current_job_id` を fallback として渡す
+- `ConfigForm` (or top-level form context) に `useBeforeUnloadDirty(formIsDirty)` カスタム hook を組み込む
+- 既存 `session-restore.spec.ts` の「reload without ?job_id= leaves Workspace empty」テストを「reload without ?job_id= restores last job from workspace status」に書き換え
+
+**Internal (no behavior change for backend):**
+- なし
+
+#### Compatibility
+
+- 既存 `?job_id=` 明示の deep-link 動作は不変（INV-reload-1）
+- `workspaceStatus.current_job_id` が null なら従来どおり空状態を表示（後方互換）
+- multi-tab で同じ workspace を開いている場合、両 tab が同じ `current_job_id` を hydrate する。1 名利用前提のため衝突制御は scope 外
+- `beforeunload` ダイアログは modern browser がカスタムメッセージを許可しないので default 文言固定。E2E では `dialog` event handler で accept/dismiss を制御
+
+#### Acceptance criteria
+
+- [ ] `frontend/src/hooks/useJobIdParam.ts` に `fallbackJobId` option 追加 + 単体テスト 4 ケース
+- [ ] `frontend/src/pages/WorkspacePage.tsx` で `workspaceStatus.current_job_id` を fallback として渡す
+- [ ] `useBeforeUnloadDirty` hook 新規 + 単体テスト
+- [ ] `session-restore.spec.ts` の "leaves Workspace empty" テストを反転させ "restores from workspace status" に
+- [ ] dirty form + reload で confirm dialog が出ることを Playwright で pin
+- [ ] reload 後 30s 以内に Results panel が同じ完了 job を表示する E2E spec
+
+#### Alternatives considered
+
+- **(a) localStorage / IndexedDB に独自永続化**: 拒否。backend に GET /workspace/status が既に存在するため重複、quota / cross-tab sync の追加実装が必要、SSR や private browsing の corner case 増加
+- **(b) URL を `?job_id=` で上書き**: 拒否。現状コメントの "URL は read-only" 設計を破る、deep-link 共有の意味論が変わる
+- **(c) auto-restore を opt-in 設定にする**: 拒否。1 名利用前提なのでデフォルト ON が UX 上自然。opt-out は localStorage で後付け可能だが現時点で需要なし
+
+→ 採用は **(d) backend GET /workspace/status を fallback として消費 + URL 上書きしない**。
+
+#### Decision
+
+- 2026-05-07 **Approved** — v3-24 phase で a (frontend hydrate) → b (beforeunload) → c (Playwright spec) の 3 PR 構成で着手
+
+### P-0103: 古い format_version の workspace を read-only で保護（v3-25, R-4.1）
+
+- **Date:** 2026-05-07 起票
+- **Related:** PLAN.md Phase v3-25, P-0095 (fit→load round-trip CI gate), `docs/v0.4-business-readiness-plan.md` §5.1, `src/lizystudio/storage/versions.py`
+
+#### Motivation
+
+`STUDIO_FORMAT_VERSION` は v3-20a で 1→2 に bump された (P-0099)。現状の v0/v1→v2 migration は識別 (identity) なので動作上の差は無いが、将来の structural change で v0 / v1 workspace を新 release で開いた際に **silent な data destruction** が起きるリスクがある。具体的には:
+
+1. v1 workspace を新 release で load → in-memory で v2 にマイグレ
+2. 同じ workspace に対して fit / tune を実行
+3. JobStore が new meta.json を v2 で write
+4. 残りの旧 v1 ファイルとの整合性が崩れる、あるいは新たな fields が抜け落ちる
+
+P-0095 の round-trip CI gate は単一 release 内のシリアライズ整合性しか保証しない。release 間の互換 (v1 で書いて v2 で読む / 書く) は別途 gating が必要。
+
+#### Purpose
+
+- `tests/regression/test_format_version_migration_matrix.py` で v0 → v1 → v2 round-trip を網羅
+- CI で過去 fixture (v0 / v1 workspace の小さな再現) を fetch + load + 新 release で save → load → 同値 assertion が pass しないと merge できない gate を新設
+- 古い workspace を新 CLI で開いた際に、`LIZYSTUDIO_ALLOW_LEGACY_WRITE` 環境変数なしでは write 操作 (jobs / config) を refuse する read-only mode を導入
+- 既存の auto-migration は in-memory 限定とし、disk 上の旧フォーマットを silently 上書きしない
+
+#### Invariants
+
+- **INV-fmt-1**: `read_versioned_json` は detected_version < STUDIO_FORMAT_VERSION でも raise しない（既存挙動を保つ）
+- **INV-fmt-2**: `write_versioned_json` は detected_version < STUDIO_FORMAT_VERSION の同名ファイルが既に disk に存在し、かつ `LIZYSTUDIO_ALLOW_LEGACY_WRITE` が未設定の場合、`LegacyFormatProtectionError` を raise する
+- **INV-fmt-3**: 新規ファイル (disk 上に存在しない) や同 version への上書きは常に許可される
+- **INV-fmt-4**: migration matrix CI job は v0 / v1 / v2 のフィクスチャを round-trip し、payload 内容が migration 後 idempotent であることを assert
+
+#### Impact
+
+**Public API:** 変更なし（HTTP endpoints は影響を受けない）。
+
+**Storage layer:**
+- `lizystudio.backends.exceptions.LegacyFormatProtectionError` 新規例外
+- `write_versioned_json` に detected-version check + env var gate 追加
+- `read_versioned_json` の戻り値 `(detected_version, payload)` を消費者が version を伝搬できるよう一部 caller (services/jobs.py 等) に detected log を追加。挙動は変えない
+
+**CI / fixtures:**
+- `tests/fixtures/legacy_workspaces/v0/meta.json` (pre-C-9 layout, no format_version key)
+- `tests/fixtures/legacy_workspaces/v1/meta.json` (C-9, format_version=1)
+- `tests/regression/test_format_version_migration_matrix.py` の round-trip テスト
+
+**Behavior change for users:**
+- v0 / v1 workspace を新 LizyStudio で開いて run job 試行 → `LegacyFormatProtectionError` (HTTP 500 経由で 4xx に変換) で停止
+- recovery: `LIZYSTUDIO_ALLOW_LEGACY_WRITE=1 lizystudio` で起動して explicit に upgrade を許可
+
+#### Compatibility
+
+- 既存ユーザは大半が v2 で書かれた workspace のみを持つ → 影響なし
+- v0 (pre-C-9) ユーザは存在自体が稀。FAQ に env var 経由の upgrade 手順を記載
+- v1 (C-9 〜 v3-20a 間) ユーザは数日分。同様に env var で upgrade
+- read-only での閲覧は影響を受けない（fit / tune を試行するまで Error は発火しない）
+
+#### Acceptance criteria
+
+- [ ] `LegacyFormatProtectionError` を `backends/exceptions.py` に追加 + docstring
+- [ ] `write_versioned_json` の env var gate + 既存ファイルの format_version peek + 新規例外 raise
+- [ ] `tests/regression/test_format_version_migration_matrix.py` で v0/v1/v2 fixture round-trip
+- [ ] `tests/fixtures/legacy_workspaces/{v0,v1}/meta.json` をコミット
+- [ ] `tests/test_storage_versions.py` に LegacyFormatProtectionError invariant test 追加
+- [ ] CI で migration matrix が gating（既存 ci.yml backend job に組み込み）
+- [ ] CHANGELOG v0.5 で env var 名と recovery 手順を明記
+
+#### Alternatives considered
+
+- **(a) Hard error on read for legacy versions**: 拒否。閲覧すら不可になり、復旧手段がさらに狭まる
+- **(b) Silently auto-upgrade on write (status quo)**: 拒否。silent destruction の risk が消えない
+- **(c) Per-file format_version (vs Studio-wide single constant)**: 拒否。H-0081 alternatives §b で却下済、本 Proposal の scope 外
+- **(d) New endpoint `POST /api/workspace/upgrade-format`**: defer。env var gate でまず最小実装、UI は user feedback を見てから
+
+→ 採用は **(e) env var (`LIZYSTUDIO_ALLOW_LEGACY_WRITE=1`) gate + matrix CI**。
+
+#### Decision
+
+- 2026-05-07 **Approved** — v3-25 phase で a (matrix regression test) → b (CI workflow + fixtures) → c (LegacyFormatProtectionError + env var gate) の 3 PR 構成で着手
+
 

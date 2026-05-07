@@ -88,21 +88,19 @@ test.describe("Session Restore", () => {
     });
   });
 
-  test("UI: reload without ?job_id= leaves Workspace empty", async ({
+  test("UI: reload without ?job_id= restores last job from workspace status", async ({
     page,
     request,
   }, testInfo) => {
-    // Boundary: even when a current_job_id exists server-side, the
-    // Workspace page intentionally does NOT auto-hydrate it without a
-    // URL param (see WorkspacePage.tsx Issue #101 comment block).
-    // Lock this behavior in so a future "always restore" change cannot
-    // ship silently.
-    const csvPath = createTestCsv(100, tmp("empty"));
+    // P-0102 v3-24a (R-2.2): a browser reload without ``?job_id=``
+    // now auto-hydrates ``currentJobId`` from
+    // ``workspaceStatus.current_job_id`` so the Workspace re-attaches
+    // to the previously-running / -completed job. Inversion of the
+    // pre-v3-24 behavior pinned by Issue #101 ("leaves Workspace
+    // empty") — the change is gated by HISTORY P-0102 Decision.
+    const csvPath = createTestCsv(100, tmp("restore"));
     const jobId = await setupAndFit(request, csvPath);
     const finished = await waitForJobDone(request, jobId);
-    // Guard the boundary: if the fit itself failed we would not be
-    // testing the "current_job_id exists but is not auto-restored"
-    // case at all, so the assertion below would be vacuously true.
     expect(finished.status).toBe("completed");
 
     await dismissOnboarding(page);
@@ -110,8 +108,11 @@ test.describe("Session Restore", () => {
     await page.waitForLoadState("networkidle");
     await openWorkspaceSectionIfMobile(page, testInfo, "results");
 
-    await expect(
-      page.getByText("Results will appear here after running a job."),
-    ).toBeVisible({ timeout: 10_000 });
+    // The Completed badge appears only after currentJobId is hydrated
+    // and JobDetail has been fetched, so it pins INV-reload-2: URL
+    // empty + workspaceStatus.current_job_id non-null → state attaches.
+    await expect(page.getByText("Completed").first()).toBeVisible({
+      timeout: 30_000,
+    });
   });
 });
