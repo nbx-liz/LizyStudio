@@ -70,6 +70,35 @@ jobs:
       - run: uv sync
       - run: uv run pytest tests/integration -v --reruns 2 --reruns-delay 1
 
+  # P-0103 v3-25b / R-4.1: format_version migration matrix gate. Runs
+  # the runtime-fixture matrix (`test_format_version_migration_matrix`)
+  # AND the captured-fixture round-trip
+  # (`test_legacy_workspace_fixtures`) on every PR so a structural
+  # bump cannot ship without:
+  #
+  # 1. updating the migration chain in `lizystudio.storage.migrations`
+  # 2. adding a fixture under `tests/fixtures/legacy_workspaces/v<N>/`
+  #
+  # The same tests already run inside the `backend` job; this dedicated
+  # job exists for observability — a red `format-version-matrix` check
+  # tells the reviewer the failure is in the storage compat surface,
+  # not the broader regression suite. Required check (configure in
+  # branch protection alongside backend / frontend / e2e).
+  format-version-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync
+      - run: |
+          uv run pytest \
+            tests/regression/test_format_version_migration_matrix.py \
+            tests/regression/test_legacy_workspace_fixtures.py \
+            tests/test_storage_versions.py \
+            -v --reruns 2 --reruns-delay 1
+
   frontend:
     runs-on: ubuntu-latest
     defaults:

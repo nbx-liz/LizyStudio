@@ -19,6 +19,7 @@ import {
 import { ModelPanel } from "@/components/workspace/ModelPanel";
 import { ResultsPanel } from "@/components/workspace/ResultsPanel";
 import { useBackgroundNotification } from "@/hooks/useBackgroundNotification";
+import { useBeforeUnloadDirty } from "@/hooks/useBeforeUnloadDirty";
 import { useConfigWriteFunnel } from "@/hooks/useConfigWriteFunnel";
 import { ConfigWriteFunnelProvider } from "@/hooks/useConfigWriteFunnelContext";
 import { useDocumentTitle } from "@/hooks/useDocumentTitle";
@@ -45,14 +46,26 @@ export function WorkspacePage() {
 
   const isMobile = useMediaQuery(MOBILE_QUERY);
 
-  // Issue #101: hydrate currentJobId from the `?job_id=<id>` query
-  // param so the Jobs page (or any external link) can navigate the
-  // user directly into the Workspace with a specific completed job
-  // selected. The query-param name matches the convention already
-  // established by InferencePage so links stay consistent across
-  // the two destinations. `useJobIdParam` (B-8) owns URL→state sync;
-  // we pass `suppress: running` so a URL change does not clobber a
-  // freshly-started job id set from handleFit / handleTune.
+  // Issue #363: probe the server on mount so the UI knows whether a
+  // previous session left data + config persisted. When ``has_data``
+  // is true, we flip the local ``hasData`` flag (via the same
+  // ``handleDataChanged`` callback the manual load path uses) and
+  // hand the snapshot to ``DataPanel.hydrateFromServer`` so the Path
+  // textbox / Target combobox / Column Settings / etc. all repopulate.
+  //
+  // P-0102 v3-24a: also expose ``current_job_id`` to ``useJobIdParam``
+  // as a fallback so a browser reload without ``?job_id=`` re-attaches
+  // the Workspace to the previously-running / -completed job.
+  const { data: workspaceStatus } = useWorkspaceStatus();
+
+  // Issue #101 + P-0102 v3-24a: hydrate currentJobId from the
+  // `?job_id=<id>` query param (deep-link / Jobs-page navigation)
+  // and fall back to ``workspaceStatus.current_job_id`` when the URL
+  // is empty (browser reload mid-run). The query-param name matches
+  // the convention established by InferencePage. `useJobIdParam`
+  // (B-8) owns URL→state sync; we pass `suppress: running` so a URL
+  // / fallback change does not clobber a freshly-started job id set
+  // from handleFit / handleTune.
   //
   // Note on stale URL: after the user starts a fresh fit / tune via
   // the Workspace UI, we intentionally do NOT rewrite `?job_id=` in
@@ -61,19 +74,13 @@ export function WorkspacePage() {
   // matches the pre-Issue #101 behavior and we accept it consciously.
   const { jobId: currentJobId, setJobId: setCurrentJobId } = useJobIdParam({
     suppress: running,
+    fallbackJobId: workspaceStatus?.current_job_id ?? null,
   });
 
   useDocumentTitle(running ? "Running..." : null);
   const notify = useBackgroundNotification();
 
   const { data: uiSchema } = useUiSchema();
-  // Issue #363: probe the server on mount so the UI knows whether a
-  // previous session left data + config persisted. When ``has_data``
-  // is true, we flip the local ``hasData`` flag (via the same
-  // ``handleDataChanged`` callback the manual load path uses) and
-  // hand the snapshot to ``DataPanel.hydrateFromServer`` so the Path
-  // textbox / Target combobox / Column Settings / etc. all repopulate.
-  const { data: workspaceStatus } = useWorkspaceStatus();
   const { data: config } = useConfig({
     enabled: hasData || workspaceStatus?.has_data === true,
     retry: false,
@@ -114,6 +121,16 @@ export function WorkspacePage() {
       }
     },
   });
+
+  // P-0102 v3-24b: warn the user before reload / tab-close while a
+  // config write is still in flight. The funnel batches per-microtask
+  // bursts then drains; during the queue + PUT window an unintended
+  // reload would lose the queued edit. ``isFlushing`` covers both
+  // ``pending.length > 0`` and the in-flight PUT, so it is the
+  // canonical "dirty" signal for INV-reload-4. Clean form (queue
+  // drained, no in-flight PUT) → no dialog, matching browser
+  // best-practice of not warning on read-only navigation.
+  useBeforeUnloadDirty(writeFunnel.isFlushing);
 
   const handleDataChanged = useCallback(() => {
     setHasData(true);

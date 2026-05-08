@@ -193,6 +193,9 @@ describe("connectJobProgress", () => {
 
   it("schedules reconnect on close", () => {
     vi.useFakeTimers();
+    // P-0099 v3-23a: pin jitter to 0 (Math.random()==0.5) so the
+    // boundary advance below is deterministic.
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     const onReconnect = vi.fn();
     connectJobProgress("j1", { onReconnect });
 
@@ -210,6 +213,10 @@ describe("connectJobProgress", () => {
 
   it("uses exponential backoff delays", () => {
     vi.useFakeTimers();
+    // Pin Math.random so jitter == 0 (random() * 2 - 1 == 0 when
+    // random() returns 0.5). Without this stub the ±15% jitter would
+    // make the boundary checks below flaky.
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     const onReconnect = vi.fn();
     connectJobProgress("j1", { onReconnect });
 
@@ -237,25 +244,65 @@ describe("connectJobProgress", () => {
     vi.useRealTimers();
   });
 
-  it("fires onError after max retries exceeded", () => {
+  it("caps backoff at 5 minutes and retries indefinitely (R-2.1)", () => {
     vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5); // jitter == 0
+    const onReconnect = vi.fn();
+    connectJobProgress("j1", { onReconnect });
+
+    const FIVE_MIN = 5 * 60 * 1000;
+    // Drive enough closes for the exponential schedule to saturate
+    // the cap. 2^9 * 1000 = 512000 ms > 300_000 ms; on the 9th close
+    // the delay is already 300_000 (5 min). Continuing past that
+    // must NOT terminate the retry loop (P-0099 v3-23a removed the
+    // hard MAX_RETRIES cap).
+    for (let i = 0; i < 50; i++) {
+      getLastWebSocket().simulateClose();
+      vi.advanceTimersByTime(FIVE_MIN);
+    }
+
+    // Crucial assertion: 50 reconnects fired (no give-up). Pre-fix
+    // the loop terminated at 10 retries with a WS_RECONNECT_FAILED
+    // error.
+    expect(onReconnect).toHaveBeenCalledTimes(50);
+
+    vi.useRealTimers();
+  });
+
+  it("does NOT fire onError after many disconnects (no max-retries cap)", () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     const onError = vi.fn();
     connectJobProgress("j1", { onError });
 
-    // Trigger 10 closes (MAX_RETRIES = 10)
-    for (let i = 0; i < 10; i++) {
+    const FIVE_MIN = 5 * 60 * 1000;
+    for (let i = 0; i < 100; i++) {
       getLastWebSocket().simulateClose();
-      vi.advanceTimersByTime(30000); // max delay
+      vi.advanceTimersByTime(FIVE_MIN);
     }
 
-    // 11th close — should trigger error, no more reconnects
+    // Pre-fix this would fire WS_RECONNECT_FAILED at retry 10. The
+    // R-2.1 spec ("5min 切断後でも reconnect 試行は継続") means the
+    // user-visible error path now only fires for backend-emitted
+    // ``error`` messages, never for client-side give-up.
+    expect(onError).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
+
+  it("applies jitter within ±15% of the base delay", () => {
+    vi.useFakeTimers();
+    const onReconnect = vi.fn();
+
+    // Math.random() = 0.0 → jitter == -15%
+    vi.spyOn(Math, "random").mockReturnValueOnce(0.0);
+    connectJobProgress("j1", { onReconnect });
     getLastWebSocket().simulateClose();
-    expect(onError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "error",
-        message: expect.stringContaining("maximum retries"),
-      }),
-    );
+    // Base = 1000ms; with -15% jitter = 850ms.
+    vi.advanceTimersByTime(849);
+    expect(onReconnect).toHaveBeenCalledTimes(0);
+    vi.advanceTimersByTime(1);
+    expect(onReconnect).toHaveBeenCalledTimes(1);
 
     vi.useRealTimers();
   });
@@ -295,6 +342,7 @@ describe("connectJobProgress", () => {
 
   it("resets retry count on successful open", () => {
     vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5); // jitter == 0
     const onReconnect = vi.fn();
     connectJobProgress("j1", { onReconnect });
 

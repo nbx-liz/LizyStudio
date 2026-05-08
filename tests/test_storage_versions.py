@@ -46,8 +46,14 @@ class TestReadVersionedJson:
         assert data["job_id"] == "j1"
         assert data["status"] == "completed"
 
-    def test_v1_round_trip(self, tmp_path: Path) -> None:
-        """A workspace written at v1 is read back at v1 with identical content."""
+    def test_current_version_round_trip(self, tmp_path: Path) -> None:
+        """A workspace written at the current version is read back at the same version.
+
+        Drift-proof: this test does NOT pin a specific format version,
+        so a future bump (vN -> vN+1) only requires updating
+        :data:`STUDIO_FORMAT_VERSION` and adding the migration. The
+        invariant is "writer + reader agree on the current version".
+        """
         from lizystudio.storage.versions import (
             STUDIO_FORMAT_VERSION,
             read_versioned_json,
@@ -60,8 +66,7 @@ class TestReadVersionedJson:
 
         detected, data = read_versioned_json(path)
 
-        assert detected == 1
-        assert STUDIO_FORMAT_VERSION == 1
+        assert detected == STUDIO_FORMAT_VERSION
         assert data["job_id"] == "j1"
         # The version sentinel should NOT leak back to the caller — the
         # returned dict is the domain payload only.
@@ -135,8 +140,81 @@ class TestMigrationPipeline:
         migrated = MIGRATIONS[0](dict(original))
         assert migrated == original
 
+    def test_v1_to_v2_is_identity(self) -> None:
+        """v1 -> v2 (P-0099 v3-20a) is a byte-identity migration.
+
+        v1 artefacts on disk cannot contain ``status="paused"`` because
+        no v1 LizyStudio runtime ever wrote it; the bump exists solely
+        so a future runtime that drops or reshapes ``paused`` can
+        detect the v2 artefact via ``format_version`` and refuse to
+        load it.
+        """
+        from lizystudio.storage.migrations import MIGRATIONS
+
+        assert 1 in MIGRATIONS
+        original = {
+            "job_id": "j1",
+            "status": "completed",
+            "config": {"foo": "bar"},
+        }
+        migrated = MIGRATIONS[1](dict(original))
+        assert migrated == original
+
+    def test_v0_to_current_chain_traverses_every_known_version(self) -> None:
+        """The chain must reach the current version by stepping through every bump."""
+        from lizystudio.storage.migrations import MIGRATIONS, migrate_to_current
+        from lizystudio.storage.versions import STUDIO_FORMAT_VERSION
+
+        # Every version from 0 up to (current - 1) must have a
+        # registered migration.
+        for v in range(STUDIO_FORMAT_VERSION):
+            assert v in MIGRATIONS, (
+                f"v{v} -> v{v + 1} migration missing from MIGRATIONS table; "
+                f"STUDIO_FORMAT_VERSION is {STUDIO_FORMAT_VERSION}"
+            )
+
+        # The chain reaches the current version without raising.
+        data = {"job_id": "j1", "status": "completed"}
+        migrated = migrate_to_current(dict(data), from_version=0)
+        assert migrated["job_id"] == "j1"
+        # Identity through both v0 -> v1 and v1 -> v2.
+        assert migrated["status"] == "completed"
+
+    def test_paused_status_round_trips_at_v2(self, tmp_path: Path) -> None:
+        """A v2 meta.json with ``status="paused"`` round-trips losslessly.
+
+        Pin for P-0099 v3-20a: the ``paused`` literal travels through
+        the storage layer without being normalised, replaced, or
+        rejected. The actual write side is exercised in v3-20c when
+        ``_run_job_core`` learns to emit ``status="paused"``; this
+        test only proves the storage round-trip is friendly to it.
+        """
+        from lizystudio.storage.versions import (
+            read_versioned_json,
+            write_versioned_json,
+        )
+
+        path = tmp_path / "meta.json"
+        payload = {
+            "job_id": "j-paused",
+            "status": "paused",
+            "job_type": "tune",
+        }
+        write_versioned_json(path, payload)
+
+        detected, data = read_versioned_json(path)
+        assert detected >= 2
+        assert data["status"] == "paused"
+        assert data["job_id"] == "j-paused"
+
     def test_migrate_covers_v0_to_current(self) -> None:
-        """``migrate_to_current`` walks the chain from any known older version."""
+        """``migrate_to_current`` walks the chain from any known older version.
+
+        Drift-proof: this test does NOT pin a specific
+        :data:`STUDIO_FORMAT_VERSION`. The invariant is "the chain
+        reaches the current version without raising", which the
+        registered MIGRATIONS table must satisfy at every bump.
+        """
         from lizystudio.storage.migrations import migrate_to_current
         from lizystudio.storage.versions import STUDIO_FORMAT_VERSION
 
@@ -147,8 +225,11 @@ class TestMigrationPipeline:
         # should rely on the file's format_version key, not on a
         # version field being injected into the returned dict.
         assert migrated["job_id"] == "j1"
-        # STUDIO_FORMAT_VERSION is currently 1; the chain reaches it.
-        assert STUDIO_FORMAT_VERSION == 1
+        # The chain must reach STUDIO_FORMAT_VERSION at any version
+        # bump. The previous form pinned this to 1 and broke each time
+        # the constant moved; the assertion below is an invariant
+        # statement instead of a value pin.
+        assert STUDIO_FORMAT_VERSION >= 1
 
     def test_migrations_are_pure_functions(self) -> None:
         """Each migration takes a dict and returns a new/mutated dict only.
@@ -275,3 +356,226 @@ class TestMigrationChainGap:
 
         with pytest.raises(RuntimeError, match="No migration registered for version 1"):
             migrations.migrate_to_current({"job_id": "j1"}, from_version=0)
+
+
+class TestLegacyFormatProtection:
+    """P-0103 v3-25c / R-4.1: ``write_versioned_json`` refuses to
+    overwrite a legacy on-disk artefact unless the operator opts in
+    via ``LIZYSTUDIO_ALLOW_LEGACY_WRITE=1``.
+
+    Coverage:
+
+    - Refusal: legacy file exists + env unset → LegacyFormatProtectionError
+    - Override: legacy file exists + env=1 → write succeeds + bumps version
+    - Pass-through: no existing file → write always succeeds (greenfield)
+    - Pass-through: existing file at current version → write succeeds
+    - Edge: empty / 0 / unrelated env values do NOT enable the override
+
+    These invariants are what stops a v0 / v1 customer workspace from
+    being silently up-converted by an in-place LizyStudio upgrade.
+    """
+
+    def test_write_refuses_when_existing_file_is_legacy(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """v0 file on disk + env unset → LegacyFormatProtectionError."""
+        from lizystudio.backends.exceptions import LegacyFormatProtectionError
+        from lizystudio.storage.versions import write_versioned_json
+
+        monkeypatch.delenv("LIZYSTUDIO_ALLOW_LEGACY_WRITE", raising=False)
+        path = tmp_path / "meta.json"
+        # Pin a v0 fixture (no format_version key).
+        _write_raw_json(path, {"job_id": "j1", "status": "completed"})
+
+        with pytest.raises(LegacyFormatProtectionError) as exc_info:
+            write_versioned_json(path, {"job_id": "j1", "status": "running"})
+
+        # Error message must guide the user to the override env var so
+        # the recovery path is self-evident from the traceback.
+        assert "LIZYSTUDIO_ALLOW_LEGACY_WRITE" in str(exc_info.value)
+        assert exc_info.value.detected_version == 0
+
+    def test_write_refuses_v1_file_under_v2_runtime(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """v1 file on disk + env unset → LegacyFormatProtectionError."""
+        from lizystudio.backends.exceptions import LegacyFormatProtectionError
+        from lizystudio.storage.versions import write_versioned_json
+
+        monkeypatch.delenv("LIZYSTUDIO_ALLOW_LEGACY_WRITE", raising=False)
+        path = tmp_path / "meta.json"
+        _write_raw_json(path, {"format_version": 1, "job_id": "j1"})
+
+        with pytest.raises(LegacyFormatProtectionError) as exc_info:
+            write_versioned_json(path, {"job_id": "j1", "status": "running"})
+        assert exc_info.value.detected_version == 1
+
+    def test_write_succeeds_when_env_var_opts_in(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """v0 file on disk + ``LIZYSTUDIO_ALLOW_LEGACY_WRITE=1`` → write succeeds.
+
+        After the override write, the on-disk version must be bumped
+        to current and the new payload must be readable through the
+        normal migration path.
+        """
+        import json
+
+        from lizystudio.storage.versions import (
+            STUDIO_FORMAT_VERSION,
+            read_versioned_json,
+            write_versioned_json,
+        )
+
+        monkeypatch.setenv("LIZYSTUDIO_ALLOW_LEGACY_WRITE", "1")
+        path = tmp_path / "meta.json"
+        _write_raw_json(path, {"job_id": "j1", "status": "completed"})
+
+        write_versioned_json(path, {"job_id": "j1", "status": "running"})
+
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        assert raw["format_version"] == STUDIO_FORMAT_VERSION
+        detected, payload = read_versioned_json(path)
+        assert detected == STUDIO_FORMAT_VERSION
+        assert payload["status"] == "running"
+
+    def test_write_succeeds_when_no_existing_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Greenfield write (no prior file) is unaffected by the gate."""
+        from lizystudio.storage.versions import write_versioned_json
+
+        monkeypatch.delenv("LIZYSTUDIO_ALLOW_LEGACY_WRITE", raising=False)
+        path = tmp_path / "meta.json"
+        # Path does not exist — the gate must NOT fire.
+        write_versioned_json(path, {"job_id": "j1"})
+        assert path.exists()
+
+    def test_write_succeeds_when_existing_file_is_current_version(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same-version overwrite is permitted without the env var.
+
+        The gate only triggers on legacy artefacts; routine writes to
+        an already-current file (every operational write the runtime
+        does after the workspace has been touched once) must remain
+        unblocked, otherwise the env var would be required for normal
+        operation.
+        """
+        from lizystudio.storage.versions import write_versioned_json
+
+        monkeypatch.delenv("LIZYSTUDIO_ALLOW_LEGACY_WRITE", raising=False)
+        path = tmp_path / "meta.json"
+        # First write creates a current-version artefact.
+        write_versioned_json(path, {"job_id": "j1", "status": "running"})
+        # Second write overwrites the same-version file — no error.
+        write_versioned_json(path, {"job_id": "j1", "status": "completed"})
+
+    @pytest.mark.parametrize("env_value", ["", "0", "false", "no", "True", "yes"])
+    def test_only_canonical_one_value_enables_override(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        env_value: str,
+    ) -> None:
+        """Only ``"1"`` opts in.
+
+        Naive ``bool(os.environ[...])`` would flip semantics: an
+        explicit ``LIZYSTUDIO_ALLOW_LEGACY_WRITE=0`` would still be
+        truthy and enable the override the user is trying to disable.
+        Pin the canonical truthy interpretation so the operator has a
+        predictable knob.
+        """
+        from lizystudio.backends.exceptions import LegacyFormatProtectionError
+        from lizystudio.storage.versions import write_versioned_json
+
+        monkeypatch.setenv("LIZYSTUDIO_ALLOW_LEGACY_WRITE", env_value)
+        path = tmp_path / "meta.json"
+        _write_raw_json(path, {"job_id": "j1"})  # v0 fixture
+        with pytest.raises(LegacyFormatProtectionError):
+            write_versioned_json(path, {"job_id": "j1"})
+
+    @pytest.mark.parametrize(
+        "tampered",
+        ["not-a-number", "v2", None, [], {}, 1.5],
+    )
+    def test_non_integer_format_version_does_not_crash_writer(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        tampered: object,
+    ) -> None:
+        """Writer tolerates a non-integer ``format_version`` on disk.
+
+        A tampered or hand-edited workspace can carry a string,
+        float, list, or null in the version slot. The peek helper
+        must NOT raise out of write_versioned_json — the docstring
+        promises the read errors are swallowed. Regression for the
+        post-v3-25c review finding (bare ``int()`` was raising
+        ValueError on non-numeric stamps and propagating out of the
+        protection gate).
+        """
+        from lizystudio.storage.versions import (
+            STUDIO_FORMAT_VERSION,
+            read_versioned_json,
+            write_versioned_json,
+        )
+
+        monkeypatch.delenv("LIZYSTUDIO_ALLOW_LEGACY_WRITE", raising=False)
+        path = tmp_path / "meta.json"
+        _write_raw_json(path, {"format_version": tampered, "job_id": "j1"})
+
+        # Should NOT raise — the non-integer stamp is treated as
+        # "unknown / no legacy file" and the writer proceeds.
+        write_versioned_json(path, {"job_id": "j1", "status": "running"})
+        # Post-condition: file now carries the current version.
+        detected, _ = read_versioned_json(path)
+        assert detected == STUDIO_FORMAT_VERSION
+
+    def test_unreadable_or_corrupt_json_does_not_crash_writer(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A corrupt JSON file at the target path is treated as no-legacy.
+
+        ``_peek_existing_format_version`` must return ``None`` (not raise)
+        when ``json.loads`` fails. Otherwise the writer's docstring
+        promise (read errors swallowed) would be violated. Branch
+        coverage for the OSError / JSONDecodeError except clause.
+        """
+        from lizystudio.storage.versions import write_versioned_json
+
+        monkeypatch.delenv("LIZYSTUDIO_ALLOW_LEGACY_WRITE", raising=False)
+        path = tmp_path / "meta.json"
+        # Truncated JSON — json.loads raises JSONDecodeError.
+        path.write_text("{not valid json", encoding="utf-8")
+
+        # Should NOT raise — peek returns None, gate sees no legacy
+        # artefact, write proceeds.
+        write_versioned_json(path, {"job_id": "j1"})
+        assert path.read_text(encoding="utf-8").startswith('{"format_version"')
+
+    def test_non_dict_json_root_does_not_crash_writer(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A JSON file whose root is not an object is treated as no-legacy.
+
+        ``_peek_existing_format_version`` checks ``isinstance(raw, dict)``
+        before extracting the version. Branch coverage for the non-dict
+        guard (e.g. a tampered file with ``[1, 2, 3]`` at the root).
+        """
+        import json as _json
+
+        from lizystudio.storage.versions import write_versioned_json
+
+        monkeypatch.delenv("LIZYSTUDIO_ALLOW_LEGACY_WRITE", raising=False)
+        path = tmp_path / "meta.json"
+        path.write_text(_json.dumps([1, 2, 3]), encoding="utf-8")
+
+        # Should NOT raise — the array root is treated as "unknown
+        # legacy" → None → gate skipped → write proceeds.
+        write_versioned_json(path, {"job_id": "j1"})
+        assert path.read_text(encoding="utf-8").startswith('{"format_version"')

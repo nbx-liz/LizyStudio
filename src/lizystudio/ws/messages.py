@@ -98,8 +98,36 @@ class WsPing(BaseModel):
     job_id: str
 
 
+class WsPaused(BaseModel):
+    """Non-terminal pause notification (P-0099 v3-20e, R-1.4).
+
+    Emitted when ``_run_job_core`` catches :class:`PausedError`.  Unlike
+    :class:`WsCompleted` / :class:`WsError`, this message is **NOT**
+    cached for late-subscriber replay — pause is a resumable state, so
+    a subscriber that connects after the user clicked Resume must
+    observe the live progress stream rather than a stale "you were
+    paused at trial 7" frame from a previous session.
+
+    Frontends switch on ``msg.type === "paused"`` and update the Jobs
+    list / detail view to show the Resume / Cancel actions.  The WS
+    connection itself stays open: pause is non-terminal, so the
+    reconnect / suppress logic must NOT close the channel here.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["paused"]
+    job_id: str
+    # Optuna trial index at the time of pause observation. ``None`` is
+    # legal for fit jobs that gain a /pause endpoint in the future and
+    # for safety on the first paused emit before the worker has reached
+    # any trial-emitting callback.
+    trial_number: int | None = None
+    message: str = "Paused."
+
+
 WsMessage = Annotated[
-    WsProgress | WsCompleted | WsError | WsPing,
+    WsProgress | WsCompleted | WsError | WsPing | WsPaused,
     Field(discriminator="type"),
 ]
 
@@ -108,6 +136,7 @@ __all__ = [
     "WsCompleted",
     "WsError",
     "WsMessage",
+    "WsPaused",
     "WsPing",
     "WsProgress",
 ]

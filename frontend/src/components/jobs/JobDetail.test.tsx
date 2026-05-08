@@ -16,6 +16,12 @@ vi.mock("@/api/jobs", () => ({
   fetchJob: (...args: unknown[]) => mockFetchJob(...args),
   fetchJobLog: vi.fn().mockResolvedValue({ log: "test log" }),
   cancelJob: vi.fn(),
+  // P-0099 v3-20f: pause / unpause used by Pause-/UnpauseActionButton.
+  pauseJob: vi.fn().mockResolvedValue({ status: "pause_requested" }),
+  unpauseJob: vi.fn().mockResolvedValue({
+    status: "unpause_started",
+    job_id: "test-job-1",
+  }),
   // H-0067: retune / resume / lineage surface used by the embedded
   // RetuneActionButton / ResumeActionButton / JobLineageTree.
   retuneJob: vi.fn().mockResolvedValue({
@@ -180,6 +186,95 @@ describe("JobDetailPanel", () => {
     expect(screen.queryByText("Delete")).not.toBeInTheDocument();
     expect(screen.queryByText("Inference")).not.toBeInTheDocument();
     expect(screen.queryByText("Export")).not.toBeInTheDocument();
+  });
+
+  it("renders running tune job with Pause and Cancel actions", async () => {
+    // P-0099 v3-20f: a running tune exposes Pause + Cancel.
+    const runningTune = makeJob({
+      status: "running",
+      job_type: "tune",
+      completed_at: null,
+    });
+    mockFetchJob.mockResolvedValue(runningTune);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Running");
+    expect(
+      screen.getByRole("button", { name: /Pause tuning at next trial/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Cancel")).toBeInTheDocument();
+  });
+
+  it("renders paused tune job with Resume + Cancel and a notice paragraph", async () => {
+    // P-0099 v3-20f: paused is non-terminal — the user must explicitly
+    // Resume (in-place /unpause) or Cancel to free the slot.
+    const pausedTune = makeJob({
+      status: "paused",
+      job_type: "tune",
+      completed_at: null,
+    });
+    mockFetchJob.mockResolvedValue(pausedTune);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    await screen.findByTestId("paused-notice");
+    expect(
+      screen.getByRole("button", { name: /Resume paused tuning/i }),
+    ).toBeInTheDocument();
+    // Cancel action bar button — the bare "Cancel" label rendered by
+    // the action-bar Button (matching it by accessible role + name
+    // avoids collision with "Cancel job?" dialog text or "Yes, Cancel"
+    // confirm button if the dialog were open).
+    const cancelButtons = screen.getAllByRole("button", { name: /^Cancel$/ });
+    expect(cancelButtons.length).toBeGreaterThan(0);
+
+    // Paused jobs are non-terminal: Delete / Inference / Export must
+    // remain hidden so the user is funnelled to Resume / Cancel.
+    expect(screen.queryByText("Delete")).not.toBeInTheDocument();
+    expect(screen.queryByText("Inference")).not.toBeInTheDocument();
+    expect(screen.queryByText("Export")).not.toBeInTheDocument();
+  });
+
+  it("does NOT show Pause on a running fit job", async () => {
+    // P-0099 v3-20f: pause is tune-only. Fit jobs train a single model
+    // with the user's chosen params and have no usable resume target.
+    const runningFit = makeJob({
+      status: "running",
+      job_type: "fit",
+      completed_at: null,
+    });
+    mockFetchJob.mockResolvedValue(runningFit);
+
+    renderWithProviders(
+      <JobDetailPanel
+        jobId="test-job-1"
+        jobNumber={1}
+        onJobDeleted={vi.fn()}
+        onJobChanged={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("Running");
+    expect(
+      screen.queryByRole("button", { name: /Pause tuning at next trial/i }),
+    ).not.toBeInTheDocument();
+    // Cancel still appears for a running fit.
+    expect(screen.getByText("Cancel")).toBeInTheDocument();
   });
 
   it("renders header with model name and job number", async () => {

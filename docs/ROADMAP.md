@@ -6,7 +6,7 @@
 - このファイルは **横串インデックス** であり、詳細はリンク先で確認すること。
 - 着手する際は HISTORY に Proposal を起票（変更ゲート対象の場合）→ PLAN にフェーズ追加 → 実装、の順で進める。
 
-最終更新: 2026-05-05（v0.4.1 リリース反映：CHANGELOG / HISTORY P-0095..P-0098 / Open Issues #403..#405 / v0.5 R-1 Next Action）
+最終更新: 2026-05-06（v0.5 R-1 進行中：v3-17 / v3-18 / v3-19 すべて完了 (PR #412 / #413 / #414 / #415)、v3-21 subsumed by #366、v3-20 設計レビュー Approved (`docs/v3-20-tune-resume-design.md`) → 7 sub-phase で実装開始）
 
 ---
 
@@ -134,12 +134,12 @@
 
 ## 3. アクティブ：仕様変更を伴う Proposal
 
-### 3.-1 v0.5 R-1 invariants Proposal（採番予約：P-0099, P-0100, P-0101）
+### 3.-1 v0.5 R-1 invariants Proposal（P-0099, P-0100, P-0101 — すべて Decision 確定済）
 
-- **状態**: 🟡 未起票（v0.5 R-1 着手直前に書く。`docs/pre-v05-handoff-2026-05-05.md` §3.1 M-2 / M-3 参照）
-- **P-0099**: Job state machine invariants + `paused` state（R-1 全体の Change Gate）
-- **P-0100**: severity envelope formalization (PR-B4) — Pydantic Literal 化、`_blocking_errors` セマンティクス（PR-D1 #400 で確立、未記録）
-- **P-0101**: metric-compat watchlist — `_workspace_metric_compatibility_errors` の検出ルール（PR-C2 #399 / PR-D1 #400 で確立、未記録）
+- **状態**: ✅ Approved／確定済（P-0099 = 2026-05-06 Approved、P-0100 / P-0101 = 2026-05-05 確定 with #406）
+- **P-0099**: Job state machine invariants + `paused` state（R-1 全体の Change Gate）— **Approved 2026-05-06**, v3-17 着手可
+- **P-0100**: severity envelope formalization (PR-B4) — Pydantic Literal 化、`_blocking_errors` セマンティクス（PR-D1 #400 で確立、#406 で記録）
+- **P-0101**: metric-compat watchlist — `_workspace_metric_compatibility_errors` の検出ルール（PR-C2 #399 / PR-D1 #400 で確立、#406 で記録）
 - **次回採番**: P-0102 以降
 
 ### 3.0 P-0094 (済)：pytest-benchmark performance baseline（Issue #27 (a)）
@@ -250,7 +250,7 @@ v0.4.1 リリース後の Open Issue は 5 件。
 
 | Issue | タイトル | priority | 推奨アクション |
 |---|---|---|---|
-| **#360** | feat(tune): long-run resumability (24h+, all termination paths) | tier-4 / high | **v0.5 core (R-1.4, 3 週間)**。LizyML 上流対応待ち（M-1 で起票予定） |
+| **#360** | feat(tune): long-run resumability (24h+, all termination paths) | tier-4 / high | **v0.5 core (R-1.4, 3 週間)**。✅ 上流解消（lizyml 0.12.0 / 2026-05-06 で `storage` 引数 shipped）— v3-17→v3-19 完了後に着手 |
 | **#384** | [Testing] #28 follow-up — Server Restart Recovery (blocked on #360) | tier-3 / medium | **R-1.5b (v0.5)** — #360 解消後 |
 | **#403** | refactor(backend): move metric-compat watchlist behind BackendAdapter abstraction (HIGH-2) | tier-3 / medium | **v0.6 defer 推奨** — 第 2 backend が見えてから |
 | **#404** | test: add edge-case coverage for `_workspace_metric_compatibility_errors` | tier-2 / medium | **S-1 (Day 3 着手)** — 7 cases (NaN/inf/dtype/dedup/malformed) |
@@ -280,14 +280,14 @@ v0.4.1 リリース後の Open Issue は 5 件。
 
 > v0.4.1 リリース完了 (2026-05-05)。詳細な v0.5 着手前の作業内訳は `docs/pre-v05-handoff-2026-05-05.md` 参照（MUST 6 + SHOULD 4 + OPTIONAL 3 = 13 件、計 4-7 日）。
 
-### Tier 1：v0.5 着手前必須（MUST、4-6 日）
+### Tier 1：v0.5 着手前必須（MUST、すべて完了）
 
-1. **M-1**: LizyML 側に Optuna persistent storage Issue を起票（`/home/rem/repos/LizyML`、cross-repo）— v0.5 R-1.4 (#360) のクリティカルパス
-2. **M-2**: HISTORY.md P-0099 起票（R-1 invariants + `paused` state Change Gate）
-3. **M-3**: HISTORY.md P-0100 / P-0101 起票（severity envelope / metric-compat watchlist Decision）
-4. **M-4**: BLUEPRINT.md §5 (API) に severity / suggested_fix を反映
-5. **M-5**: PLAN.md v3-N (R-1 〜 R-2) phase 追加 + v0.4.0 / v0.4.1 phase 確定
-6. **M-6**: handoff docs cleanup（5 ファイル削除） — 一部完了（3 ファイル削除済、本 ROADMAP 更新後 `pre-v05-handoff-2026-05-05.md` 削除予定）
+1. ✅ **M-1**: LizyML 側 Optuna persistent storage — lizyml 0.12.0 (2026-05-06) で shipped (H-0072)。LizyStudio 側 `pyproject.toml` を `>=0.12.0,<0.13.0` に bump 済（本 ROADMAP 更新と同 PR）
+2. ✅ **M-2**: HISTORY.md P-0099 起票 — 2026-05-06 起票 + Approved（PR #408 + 本 PR）
+3. ✅ **M-3**: HISTORY.md P-0100 / P-0101 確定 — PR #406 で記録済
+4. ✅ **M-4**: BLUEPRINT.md §5 (API) に severity / suggested_fix を反映 — PR #406
+5. ✅ **M-5**: PLAN.md v3-17〜v3-26 (R-1 〜 R-4) phase 追加 — PR #408 + 本 PR で v3-20 entry criteria 確定
+6. ✅ **M-6**: handoff docs cleanup — `pre-v05-handoff-2026-05-05.md` は ROADMAP §0 に内容統合済、参照不要
 
 ### Tier 2：高 ROI 準備（SHOULD、1-2 日）
 
@@ -302,13 +302,24 @@ v0.4.1 リリース後の Open Issue は 5 件。
 12. **O-2**: #403 BackendAdapter metric-compat refactor — 第 2 backend が見えるまで defer 推奨
 13. **O-3**: P-0087 Phase 3 (`cv_strategy_fields` 自動派生) — LizyML 構造化 export 待ち、defer 推奨
 
-### Tier 4：v0.5 core（着手後 8-12 週間）
+### Tier 4：v0.5 core（着手可、8-12 週間）
 
-- **#360** Tune long-run resumability (R-1.4, 3 週間) — M-1 上流対応待ち
-- **#384** Server Restart Recovery (R-1.5b, 1 週間) — #360 解消後
-- **#358** BlockedGroup race (R-1.2)
-- **#359** job-num drift (R-1.5)
-- WS 再接続 / ブラウザリロード復元 (R-2)
+直列 R-1 → 並行 R-2 / R-4 の順で進める。各 phase の DoD は `PLAN.md` v3-17〜v3-26 を参照。
+
+| Phase | 内容 | 期間 | 並行可否 |
+|---|---|---|---|
+| ~~v3-17~~ | R-1.1 Slot release 6 経路 invariant test (INV-1/INV-5) | 1 週 | ✅ 完了 (PR #412 + #413) |
+| ~~v3-18~~ | R-1.2 Cancel + completion interleaving defense-in-depth (INV-5 write-side) | 0.5 週 (rescoped) | ✅ 完了 (PR #414) |
+| ~~v3-19~~ | R-1.3 INV-2 fsync durability + INV-6 crash recovery test coverage | 0.5 週 (rescoped — watchdog 不要と audit) | ✅ 完了 (PR #415) |
+| v3-20 | R-1.4 Tune resume (INV-3/INV-4 / #360) — `docs/v3-20-tune-resume-design.md` Approved | 3 週 (7 sub-phase: prep + a〜g) — 進行中 | — |
+| ~~v3-21~~ | ~~R-1.5 #359 job-num drift~~ | — | ❌ subsumed by PR #366 (closed 2026-05-03), 欠番 |
+| v3-22 | R-1.5b Server Restart Recovery (INV-7 / #384) | 1 週 | v3-20 後 |
+| v3-23 | R-2.1 WS 再接続 | 1 週 | v3-22 後 |
+| v3-24 | R-2.2 ブラウザリロード復元 | 1 週 | v3-23 後 |
+| v3-25 | R-4.1 format_version migration matrix | 1 週 | v3-20 完了後並行可 |
+| v3-26 | R-4.2 Pickle compatibility | 1 週 | v3-25 と並行可 |
+
+直近の next: **v3-20 (R-1.4)** — `docs/v3-20-tune-resume-design.md` (Approved 2026-05-06) に従い 7 sub-phase で実装開始。**v3-20-prep** (本 PR) で設計資料を develop に landing → **v3-20a** で format_version 1→2 migration + `Job.status` に `"paused"` 追加。
 
 ### Tier 5：要長期計画（v0.6 以降）
 

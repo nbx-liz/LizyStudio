@@ -1249,27 +1249,29 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 
 | サブフェーズ | 内容 | 状態 | PR |
 |---|---|---|---|
-| v3-17a | INV-1 / INV-5 の invariant test を `tests/regression/test_inv_slot_release.py` に書く（RED phase） | 🟡 | — |
-| v3-17b | 既存 release 経路の audit + 抜け落ちを修正（GREEN phase） | 🟡 | — |
-| v3-17c | Playwright で WS切断 / browser閉じる経路を E2E 化 | 🟡 | — |
+| v3-17a | INV-1 / INV-5 の invariant test を `tests/regression/test_inv_slot_release.py` に書く（RED phase） | 🟢 path 1/2/3/5 + INV-5 monotonic + concurrent slot ownership = 7 tests pass、path 4 (SIGKILL) は xfail strict (v3-19 待ち) | feat/v3-17-r11-slot-release-invariant |
+| v3-17b | 既存 release 経路の audit + 抜け落ちを修正（GREEN phase） | 🟢 audit 完了 — paths 1/2/3 は `_run_job_core.finally`、path 5 は `ProgressBroadcaster.subscribe/unsubscribe` が active slot に touch しない設計を test で固定。抜け落ちは path 4 のみで v3-19 へ送る | 同上 |
+| v3-17c | Playwright で WS切断 / browser閉じる経路を E2E 化 | 🟢 完了 — `frontend/tests/e2e/slot-release-paths.spec.ts` で path 5 (WS disconnect) + path 6 (page close) を実機 verification。INV-1 + INV-7 を `POST /workspace/fit` の 409/200 応答で count-based assertion 化 | feat/v3-17c-slot-release-playwright |
 
 **DoD:**
-- [ ] `tests/regression/test_inv_slot_release.py` で 6 経路すべてが green、各 path に `assert active_job_id is None` がある
-- [ ] `tests/regression/test_inv_cancel_monotonic.py` で `is_cancel_requested` の monotonic 性が確認される（INV-5）
-- [ ] Playwright `tests/e2e/slot-release-paths.spec.ts` で WS切断 + browser閉じるの 2 経路を実機 verification
-- [ ] `services/jobs.py:JobStore` に `assert _active_job_id is None or _active_job_id == job_id` 等の runtime guard が encode 済
+- [x] `tests/regression/test_inv_slot_release.py` で 6 経路の invariant test を 1 ファイル化、path 1/2/3/5 が green、path 4 は `xfail(strict=True)` で v3-19 entry を pin
+- [x] `tests/regression/test_inv_slot_release.py` 内の `test_inv5_cancel_observation_monotonic_*` 2 関数で `is_cancel_requested` の monotonic 性 (single-thread + 8-thread concurrent reader) を確認 (INV-5)
+- [x] Playwright `frontend/tests/e2e/slot-release-paths.spec.ts` で WS切断 + browser閉じるの 2 経路を実機 verification（v3-17c）— `POST /workspace/fit` の 409/200 応答で「terminal まで slot 保持」を count-based assertion 化
+- [ ] `services/jobs.py:JobStore` に `assert _active_job_id is None or _active_job_id == job_id` 等の runtime guard が encode 済 — 既存の release_active は意図的に permissive (sliently no-op on wrong-owner) なので、v3-19 (subprocess crash watchdog) と同じ PR で wrong-owner release を warning log に格上げする方針で defer
 
 **Exit criteria:** 上記 DoD すべて green。次は v3-18。
 
 ---
 
-## Phase v3-18: v0.5 R-1.2 — Cancel race の修復（P-0099 INV-5 / Issue #358）
+## Phase v3-18: v0.5 R-1.2 — Cancel + completion interleaving defense-in-depth（P-0099 INV-5）
 
-**期間:** v3-17 完了後 1 週間
+**期間:** v3-17 完了後 0.5 週間（rescope 済 — 当初 1 週間想定）
 
-**対象 Proposal:** P-0099, Issue #358 (BlockedGroup race)
+**対象 Proposal:** P-0099 INV-5（write-side defense-in-depth）
 
-**動機:** Cancel + 完了通知の競合で「キャンセル押下後の `cancelled` 状態が completion で上書きされる」regression を構造的に閉じる。memory `feedback_count_budget_assertions` の lesson を踏まえ、count-based assertion で証明する。
+**動機 (rescope, 2026-05-06):** 当初 v3-18 は Issue #358 を cancel race の reproducer として固定する想定だったが、audit 結果 #358 は frontend の cv.strategy revert (config-sync race、cancel race ではない) で 2026-05-03 に PR #368 で close 済。実装コードの cancel-write は cooperative cancel として構造的に正しい（`_run_job_core` の cb が `CancelledError` を raise → `except` で `status="cancelled"`、completion 経路と排他、`clear_cancel` は finally 内で `release_active` の後 → INV-5 monotonic は structural 保証）。v3-17 で read-side INV-5 は既にカバー済。
+
+このため v3-18 は **cancel + completion interleaving の write-side を defense-in-depth で test pin する 0.5 週フェーズ** に再 scope する。memory `feedback_count_budget_assertions` の lesson を踏まえ count-based assertion を採用、「storm/race の test は count しろ、eventually settle で済ませるな」。
 
 **Entry criteria:** v3-17 完了。
 
@@ -1277,14 +1279,15 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 
 | サブフェーズ | 内容 | 状態 | PR |
 |---|---|---|---|
-| v3-18a | Issue #358 の reproducer を `tests/regression/test_reg_358_blocked_group_cancel_race.py` に固定 | 🟡 | — |
-| v3-18b | cancel + terminal write の race を count-based assertion で test | 🟡 | — |
-| v3-18c | services/training.py で cancel observation を pre-terminal-write に固定 | 🟡 | — |
+| v3-18a | `tests/regression/test_inv_cancel_completion_interleaving.py` で 3 件の interleaving test を pin（cb 間 cancel→cancelled / 16 並行 count-balance / post-terminal cancel non-mutation） | 🟢 完了 | feat/v3-18-r12-cancel-race-rescope |
+| ~~v3-18b~~ | ~~Issue #358 reproducer~~ | ❌ 不要 — #358 は別バグ系で PR #368 で close 済 | — |
+| ~~v3-18c~~ | ~~services/training.py で cancel observation を pre-terminal-write に固定~~ | ❌ 不要 — 既存の cooperative cancel 設計で structural 保証済（audit 結果） | — |
 
 **DoD:**
-- [ ] Issue #358 が close 済（reproducer green）
-- [ ] count-based assertion: 100 並行 cancel-during-completion で `cancelled` 状態が常に observable 1 件以上
-- [ ] INV-5 の monotonic 性が cancel race のすべての interleaving で破れない
+- [x] cancel-between-cb-calls の cooperative-cancel が `status="cancelled"` を produce する deterministic test
+- [x] 16 並行 cancel-during-completion で `count(cancelled) + count(completed) == n_runs` の count-based assertion
+- [x] post-terminal `request_cancel` が persisted `completed` を mutate しない negative test
+- [x] PLAN.md / ROADMAP.md / HISTORY.md の Issue #358 / #359 drift 整理（#358 = frontend bug, fixed by #368; #359 = job-num drift, fixed by #366）
 
 ---
 
@@ -1296,79 +1299,81 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 
 **動機:** OpenMP detection で subprocess に行く経路は kill -9 で死ぬと親が状態を見失う既知のリスク。`meta.json` の atomic write も子プロセスが mid-write で死ぬと file が壊れる。R-1.4 (Tune resume) で trial-level checkpoint を書く前に、書き込み一貫性を保証する。
 
+**Audit (2026-05-06):**
+- 既存の `meta.json` 書き込みは `lizystudio/storage/versions.py:write_versioned_json` (`tmp + os.replace`) に集約済 (H-0082, Issue #232)。**fsync が欠けていた** ため kill -9 でカーネル buffer flush 前にプロセスが死ねば canonical path が空 / 部分のまま rename される。
+- subprocess crash recovery は既に `services/subprocess_runner.py:run_job_in_subprocess` の post-`proc.wait()` reconcile 経路 (lines 250-274) + `_run_subprocess_job.finally` の `release_active` (`services/_training_core.py:362-363`) で構造的に正しい。新たな active polling watchdog の追加は不要 — `proc.wait()` が OS の child reap を同期点として機能するため。
+
 **Entry criteria:** v3-18 完了。
 
 **サブフェーズ:**
 
 | サブフェーズ | 内容 | 状態 | PR |
 |---|---|---|---|
-| v3-19a | `services/jobs.py:_write_meta_atomic` で tmpfile + fsync + rename を実装 | 🟡 | — |
-| v3-19b | `tests/regression/test_inv_meta_json_atomic.py` で kill -9 mid-write の simulate test (INV-2) | 🟡 | — |
-| v3-19c | subprocess crash watchdog を `services/training.py` に追加（INV-6） | 🟡 | — |
-| v3-19d | `tests/regression/test_inv_subprocess_crash_recovery.py` で kill -9 → bounded time → failed terminal の test | 🟡 | — |
+| v3-19a | `lizystudio/storage/versions.py:write_versioned_json` に `fh.flush() + os.fsync(fd) + os.replace + parent-dir fsync` を追加 (INV-2 durable bytes 強化、当初の "services/jobs.py:_write_meta_atomic" は audit で誤参照と判明) | 🟢 完了 | feat/v3-19-r13-subprocess-crash-recovery |
+| v3-19b | `tests/regression/test_inv_meta_json_atomic.py` で fsync ordering + crash simulation (5 + parent-dir tolerance) の 6 件テストを landing | 🟢 完了 | 同上 |
+| ~~v3-19c~~ | ~~subprocess crash watchdog を services/training.py に追加~~ | ❌ 不要 — audit で既存 reconcile path が INV-6 を満たすと判明 | — |
+| v3-19d | `tests/regression/test_inv_subprocess_crash_recovery.py` で 3 件テスト (abnormal exit reconcile / real Popen + os.kill / cancel-before-kill = cancelled wins)、加えて `test_inv_slot_release.py::test_inv1_path4_*` の `xfail(strict=True)` を green に flip | 🟢 完了 | 同上 |
 
 **DoD:**
-- [ ] INV-2 / INV-6 の invariant test green
-- [ ] `meta.json` write 経路すべてが `_write_meta_atomic` 経由（grep で hand-rolled `open(...,"w")` がない）
-- [ ] watchdog が `polling interval <= 5s` で subprocess の生存確認、死亡検知から terminal write までが <= 10s
+- [x] INV-2 invariant test green — `test_inv_meta_json_atomic.py` 6 件すべて pass
+- [x] INV-6 invariant test green — `test_inv_subprocess_crash_recovery.py` 3 件 + `test_inv_slot_release.py` path 4 が xfail から green へ flip
+- [x] `meta.json` write 経路がすべて `write_versioned_json` 経由 (grep で confirm)、新 fsync は同関数 1 箇所に集中
+- [x] subprocess crash recovery の bounded time = 既存 `proc.wait(_WAIT_TIMEOUT)` + reconcile で 15s 以内 (path 4 + INV-6 real Popen test で確認)
+- [ ] ~~watchdog polling interval~~ — 不要に縮退 (audit 結論)
 
 ---
 
 ## Phase v3-20: v0.5 R-1.4 — Tune long-run resumability（P-0099 INV-3 / INV-4 / Issue #360）
 
-**期間:** v3-19 完了後 3 週間。**LizyML #105 (Optuna persistent storage) merged が前提。**
+**期間:** v3-19 完了後 3 週間。**上流ブロッカー (LizyML #105) は lizyml 0.12.0 (2026-05-06) で解消済。**
 
 **対象 Proposal:** P-0099 + Issue #360
 
 **動機:** v0.4 で識別された最大の業務リスク (`docs/v0.4-business-readiness-plan.md` §0)。24h+ Tune 中に SIGKILL / network 切断 / browser リロードで進捗が完全消失する問題を構造的に解消する。
 
+**設計レビュー資料:** `docs/v3-20-tune-resume-design.md` (Approved 2026-05-06、推奨案 5 件すべて採用)
+
+**採用された設計判断:**
+- API: 案 B — 既存 `/resume` (failed→child job, H-0062) は変更せず、新規 `POST /jobs/{id}/unpause` を追加
+- paused 中の Cancel UX: 案 a — UI 明示 + Cancel 経路は INV-1 release path として有効
+- format_version: v3-20 で v1→v2 を導入し v3-25 で migration matrix CI gate
+- Playwright: 1 trial=1s mock で resume シナリオを E2E、24h 実機は defer
+- Optuna storage: SQLite (`sqlite:///`) で着手、lock 競合は実装中に再評価
+
 **Entry criteria:**
 - v3-19 完了
-- LizyML #105 merged + LizyStudio 側 `pyproject.toml` で対応 minor version へ bump
-- `LIZYSTUDIO_TUNE_RESUME_ENABLED=1` を default に切り替え可能
+- ✅ lizyml 0.12.0 + LizyStudio `pyproject.toml` `>=0.12.0,<0.13.0` bump 済（本 phase 開始前に bundle 済）
+- ✅ `Tuner` / `Model.tune()` の `storage` / `study_name` 引数経由で永続化可能（LizyML H-0072）
+- ~~`LIZYSTUDIO_TUNE_RESUME_ENABLED` feature flag~~ → **不要に縮退**（lizyml 0.12.0 で常時利用可能）
 
-**サブフェーズ:**
+**サブフェーズ:** (各 PR で develop に積む)
 
 | サブフェーズ | 内容 | 状態 | PR |
 |---|---|---|---|
-| v3-20a | `meta.json` schema に `status="paused"` 追加 + format_version 1 → 2 migration（INV-3） | 🟡 | — |
-| v3-20b | `backends/lizyml/lifecycle_mixin.py` で `tune(storage=...)` passthrough | 🟡 | — |
-| v3-20c | `services/jobs.py` に `pause(job_id)` / `unpause(job_id)`、API `POST /api/jobs/{job_id}/pause` 追加 | 🟡 | — |
-| v3-20d | WebSocket message に `paused` type 追加 + frontend ハンドリング | 🟡 | — |
-| v3-20e | Frontend Jobs UI に Pause / Resume ボタン（paused 状態のみ表示） | 🟡 | — |
-| v3-20f | `tests/regression/test_inv_paused_roundtrip.py` で trial-level checkpoint round-trip (INV-4) | 🟡 | — |
-| v3-20g | Playwright `tests/e2e/tune-resume.spec.ts` で 24h 模擬 (時間圧縮 mock) の resume シナリオ | 🟡 | — |
+| v3-20-prep | 設計レビュー資料を `docs/v3-20-tune-resume-design.md` に landing | 🟢 | feat/v3-20-prep-design-doc |
+| v3-20a | format_version 1→2 migration + `Job.status` に `"paused"` 追加 + Pydantic `JobStatus` Literal 拡張 | 🟢 | #417 |
+| v3-20b | `backends/lizyml/lifecycle_mixin.py` で `tune(storage=, study_name=)` passthrough + `BackendAdapter` Protocol に新引数 | 🟢 | #418 |
+| v3-20c | `JobStore.request_pause/is_pause_requested/clear_pause` + `PausedError` + `_run_job_core` の paused 分岐 (finally で release_active を skip) + `JobStore.set_status` runtime guard + `cancel_job` paused 対応 + `has_active_children` paused 包含 | 🟢 | feat/v3-20c-pause-primitives |
+| v3-20d | `POST /api/jobs/{id}/pause` + `POST /api/jobs/{id}/unpause` API + service layer wiring + subprocess parent finally paused-skip | 🟢 | feat/v3-20d-pause-unpause-api |
+| v3-20e | `WsPaused` message + frontend WS `case "paused"` handler + openapi-typescript 再生成 | 🟢 | feat/v3-20e-wspaused-message |
+| v3-20f | Frontend Jobs UI Pause/Resume buttons + component test (PauseActionButton + UnpauseActionButton + JobDetail isPaused branch) | 🟢 | feat/v3-20f-frontend-pause-resume-buttons |
+| v3-20g | INV-4 backend round-trip integration test + Playwright `tests/e2e/tune-resume.spec.ts` (3 scenarios: pause→unpause→completed, pause-on-fit-rejected, unpause-on-completed-rejected) | 🟢 | feat/v3-20g-playwright-tune-resume-e2e |
 
 **DoD:**
-- [ ] INV-3 / INV-4 の invariant test green
+- [ ] INV-3 / INV-4 の invariant test green (`tests/regression/test_inv_paused_roundtrip.py` + `tests/regression/test_inv_state_machine.py`)
 - [ ] Issue #360 が close 済
-- [ ] format_version=2 への migration が P-0095 round-trip CI gate に組み込まれている
+- [ ] format_version=2 への migration が CI で round-trip 検証 (v3-25 phase で gate に昇格)
 - [ ] CHANGELOG (v0.5 draft) に `paused` 状態が Added で記載
-- [ ] `LIZYSTUDIO_TUNE_RESUME_ENABLED` を `1` で default 化、feature flag 経由で off にも切替可
+- [ ] `Model.tune(storage=, study_name=)` 経由で trial 永続化、process kill → restart で同 study_name へ resume が e2e 検証済 (v3-22 R-1.5b で server restart も併せて確認)
+- [ ] BLUEPRINT.md §3.4 (Job lifecycle) に `paused` 状態と新 API endpoint が反映
 
 ---
 
-## Phase v3-21: v0.5 R-1.5 — Issue #359 job-num drift 解消
+## ~~Phase v3-21: v0.5 R-1.5 — Issue #359 job-num drift 解消~~（subsumed）
 
-**期間:** v3-20 と並行可（state machine 変更を含まない）、0.5 週間
+**状態:** ❌ 不要 — Issue #359 は 2026-05-03 に PR #366 (`fix(inference): derive dropdown #N from allJobs not completedJobs`) で close 済。当初 v3-21 は `meta.json` に不変 `job_num` を保存する v0.5 path を想定していたが、PR #366 は **frontend 側の dropdown 番号導出を `completedJobs` から `allJobs` に切替える**ことで failed/cancelled job 含む全 job を一貫した番号で扱うアプローチを採用済。実装が既に問題を解決しているため、本フェーズは v0.5 の作業対象から除外する。
 
-**対象:** Issue #359
-
-**動機:** `job_num` を frontend 側で計算せず API レスポンスに含めることで、削除や cancel 後の番号 drift を解消。
-
-**Entry criteria:** v3-17 完了（slot release が安定したら着手可）。
-
-**サブフェーズ:**
-
-| サブフェーズ | 内容 | 状態 | PR |
-|---|---|---|---|
-| v3-21a | `meta.json` に不変 `job_num: int` を保存（format_version=2 と同 PR が望ましい） | 🟡 | — |
-| v3-21b | API `GET /api/jobs` / `GET /api/jobs/{id}` レスポンスに `job_num` 追加（openapi-typescript 再生成） | 🟡 | — |
-| v3-21c | Frontend で `job_num` を index 計算から API レスポンス参照に切替 | 🟡 | — |
-
-**DoD:**
-- [ ] Issue #359 が close 済
-- [ ] `tests/regression/test_reg_359_job_num_stable.py` で削除 + 新規作成サイクル後の番号 stability 確認
+**正式番号は欠番として保持** — 後続 phase の参照 (v3-22 / v3-23 / v3-24 / v3-25 / v3-26) はそのまま使用可。新規 phase は v3-27 以降を採番（採番ガイダンス参照）。
 
 ---
 
@@ -1386,8 +1391,8 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 
 | サブフェーズ | 内容 | 状態 | PR |
 |---|---|---|---|
-| v3-22a | server lifespan startup で paused jobs を `meta.json` から再 attach | 🟡 | — |
-| v3-22b | `tests/regression/test_inv_ws_disconnect_does_not_release.py` で INV-7 検証 | 🟡 | — |
+| v3-22a | server lifespan startup で paused jobs を `meta.json` から再 attach + orphaned running/pending を failed に reconcile + 多重 paused は newest 残し他 failed | 🟢 | feat/v3-22a-startup-reconcile |
+| v3-22b | `tests/regression/test_inv_ws_disconnect_does_not_release.py` で INV-7 検証 (same-process baseline + cross-restart Scenario A 走行 orphan reconcile + Scenario B paused slot 復元 + 16 cycle robustness) | 🟢 | feat/v3-22b-inv7-ws-disconnect-test |
 | v3-22c | Playwright `tests/e2e/server-restart-recovery.spec.ts` で実 restart シナリオ | 🟡 | — |
 
 **DoD:**
@@ -1410,9 +1415,9 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 
 | サブフェーズ | 内容 | 状態 | PR |
 |---|---|---|---|
-| v3-23a | Frontend `useJobProgress` hook の reconnect ロジックを exponential backoff 化 | 🟡 | — |
-| v3-23b | Backend WebSocket handler で resume token を発行 → reconnect で missed messages を replay | 🟡 | — |
-| v3-23c | Playwright で 10s 切断 → 復帰の progress 続行 verification | 🟡 | — |
+| v3-23a | Frontend `connectJobProgress` の reconnect ロジック: MAX_DELAY 5min + MAX_RETRIES 無制限 + ±15% jitter | 🟢 | feat/v3-23-ws-reconnect-strategy |
+| v3-23b | Missed messages 受信は既存 backend `_last_terminal` cache (5min TTL) + frontend `useJobProgress` polling fallback で実装済 → 新 resume token 機構は不要 (doc-only) | 🟢 | feat/v3-23-ws-reconnect-strategy |
+| v3-23c | Playwright `tests/e2e/ws-reconnect.spec.ts` で `context.setOffline()` 10s simulation → tune completion 維持 + INV-7 + INV-4 trial count 維持 | 🟢 | feat/v3-23-ws-reconnect-strategy |
 
 **DoD:**
 - [ ] 10s 切断後 progress 続行、最終 status 一致

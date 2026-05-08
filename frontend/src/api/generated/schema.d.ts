@@ -548,9 +548,81 @@ export interface paths {
         put?: never;
         /**
          * Cancel Job
-         * @description Cancel a running job (H-0011).
+         * @description Cancel a running or paused job (H-0011, P-0099 v3-20c).
+         *
+         *     For ``running`` jobs the cancel signal is delivered via the cancel
+         *     flag and the cooperative callback (cancel-aware-cb) unwinds through
+         *     :class:`CancelledError` — the worker's finally-block writes
+         *     ``status="cancelled"`` and releases the slot.
+         *
+         *     For ``paused`` jobs there is no worker to observe a flag, so the
+         *     transition is performed directly here: ``paused -> cancelled`` is a
+         *     legal edge per :data:`LEGAL_TRANSITIONS`, and we explicitly release
+         *     the slot + clear the pause flag so the workspace is unblocked
+         *     immediately (case 案 a in P-0099 §6 — paused-as-zombie is worse UX
+         *     than just letting Cancel be a fast exit).
          */
         post: operations["cancel_job_api_jobs__job_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pause Job
+         * @description Request a tune job to pause at the next cooperative-cb boundary.
+         *
+         *     Pause is a tune-only action — fit jobs are short-running by design
+         *     (training a single model with the user's chosen params), so a pause
+         *     primitive there has no usable resume target. The cooperative
+         *     callback inside the worker observes the on-disk PAUSE flag through
+         *     :meth:`JobStore.is_pause_requested` and unwinds via
+         *     :class:`PausedError`. ``_run_job_core`` writes ``status="paused"``
+         *     on disk and KEEPS slot ownership so the user's subsequent /unpause
+         *     click resumes the same job in place (P-0099 v3-20c invariant).
+         */
+        post: operations["pause_job_api_jobs__job_id__pause_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/unpause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unpause Job
+         * @description Re-launch a paused tune in place (P-0099 v3-20d, R-1.4).
+         *
+         *     Unlike ``POST /resume`` (H-0062 Phase B, failed→child job), unpause
+         *     re-uses the SAME ``job_id``: the worker re-attaches to the same
+         *     Optuna study via ``load_if_exists=True`` and continues from
+         *     ``trial N+1``.  Slot ownership stays with the original job_id from
+         *     paused into running (paused→running is a legal INV-3 transition),
+         *     so the active-slot lock is never released across the round-trip.
+         *
+         *     Workspace dataframe must still be loaded and matching the job's
+         *     original ``data_ref``; mismatched data would silently corrupt the
+         *     Optuna study (best_value compared across different data).
+         */
+        post: operations["unpause_job_api_jobs__job_id__unpause_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1530,7 +1602,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "pending" | "running" | "completed" | "failed" | "cancelled";
+            status: "pending" | "running" | "completed" | "failed" | "cancelled" | "paused";
             /** Backend Name */
             backend_name: string;
             /**
@@ -1589,7 +1661,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "pending" | "running" | "completed" | "failed" | "cancelled";
+            status: "pending" | "running" | "completed" | "failed" | "cancelled" | "paused";
             /** Backend Name */
             backend_name: string;
             /**
@@ -1661,6 +1733,14 @@ export interface components {
             description?: string | null;
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * PauseJobResponse
+         * @description POST /api/jobs/{job_id}/pause (P-0099 v3-20d, R-1.4).
+         */
+        PauseJobResponse: {
+            /** Status */
+            status: string;
         };
         /** PlotResponseModel */
         PlotResponseModel: {
@@ -1938,6 +2018,16 @@ export interface components {
             /** Title */
             title: string;
         };
+        /**
+         * UnpauseJobResponse
+         * @description POST /api/jobs/{job_id}/unpause (P-0099 v3-20d, R-1.4).
+         */
+        UnpauseJobResponse: {
+            /** Status */
+            status: string;
+            /** Job Id */
+            job_id: string;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -2063,6 +2153,41 @@ export interface components {
             [key: string]: unknown;
         };
         /**
+         * WsPaused
+         * @description Non-terminal pause notification (P-0099 v3-20e, R-1.4).
+         *
+         *     Emitted when ``_run_job_core`` catches :class:`PausedError`.  Unlike
+         *     :class:`WsCompleted` / :class:`WsError`, this message is **NOT**
+         *     cached for late-subscriber replay — pause is a resumable state, so
+         *     a subscriber that connects after the user clicked Resume must
+         *     observe the live progress stream rather than a stale "you were
+         *     paused at trial 7" frame from a previous session.
+         *
+         *     Frontends switch on ``msg.type === "paused"`` and update the Jobs
+         *     list / detail view to show the Resume / Cancel actions.  The WS
+         *     connection itself stays open: pause is non-terminal, so the
+         *     reconnect / suppress logic must NOT close the channel here.
+         */
+        WsPaused: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "paused";
+            /** Job Id */
+            job_id: string;
+            /**
+             * Trial Number
+             * @default null
+             */
+            trial_number: number | null;
+            /**
+             * Message
+             * @default Paused.
+             */
+            message: string;
+        };
+        /**
          * WsPing
          * @description 30-second keepalive ping (H-0058).
          *
@@ -2123,7 +2248,7 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        WsMessage: components["schemas"]["WsProgress"] | components["schemas"]["WsCompleted"] | components["schemas"]["WsError"] | components["schemas"]["WsPing"];
+        WsMessage: components["schemas"]["WsProgress"] | components["schemas"]["WsCompleted"] | components["schemas"]["WsError"] | components["schemas"]["WsPing"] | components["schemas"]["WsPaused"];
     };
     responses: never;
     parameters: never;
@@ -2861,6 +2986,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CancelJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pause_job_api_jobs__job_id__pause_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PauseJobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unpause_job_api_jobs__job_id__unpause_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnpauseJobResponse"];
                 };
             };
             /** @description Validation Error */

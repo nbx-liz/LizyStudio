@@ -3186,8 +3186,8 @@ frontend で virtualization / top-N を入れても、転送する payload 自�
 
 ### P-0099: v0.5 R-1 状態整合性 invariants + `paused` job state（Change Gate）
 
-- **Date:** 2026-05-06 起票
-- **Related:** Issue #360 (Tune long-run resumability), Issue #358 (BlockedGroup race), Issue #359 (job-num drift), Issue #384 (Server Restart Recovery), LizyML #105 (Optuna persistent storage), `docs/v0.4-business-readiness-plan.md` §2 (R-1), `~/.claude/rules/common/invariants-first.md`
+- **Date:** 2026-05-06 起票 / 同日 Approved
+- **Related:** Issue #360 (Tune long-run resumability), Issue #358 (BlockedGroup race), Issue #359 (job-num drift), Issue #384 (Server Restart Recovery), LizyML #105 (Optuna persistent storage, shipped in lizyml 0.12.0 / 2026-05-06), `docs/v0.4-business-readiness-plan.md` §2 (R-1), `~/.claude/rules/common/invariants-first.md`
 
 #### Motivation
 
@@ -3244,21 +3244,21 @@ CLAUDE.md §2 Change Gate 対象（state machine 変更 / 並行性・所有権�
 - v0.4 までで作成した `meta.json` (format_version=1) は `paused` フィールドを持たない → migration で `paused: false` を default に挿入。read-only で読める
 - POST /api/jobs/{job_id}/pause は新規追加なのでクライアント側で 404 をハンドルする legacy path は不要
 - WebSocket `paused` メッセージは未知タイプとして無視されるよう既存 client の switch に default branch を追加 (R-2.1 で別途扱う)
-- LizyML 0.11.x で `storage=` パラメタが無いため、LizyML #105 が merged するまでは `paused` 経路を feature flag (`LIZYSTUDIO_TUNE_RESUME_ENABLED=0`) で off にする
+- LizyML #105 (Optuna persistent storage) は lizyml 0.12.0 (2026-05-06) で shipped。LizyStudio 側は `pyproject.toml` を `>=0.12.0,<0.13.0` に bump 済 (本 PR)。当初検討していた feature flag (`LIZYSTUDIO_TUNE_RESUME_ENABLED`) は **不要に縮退** — `paused` 経路を default で有効化する
 
 #### Acceptance criteria
 
 R-1.1〜R-1.5b の各 phase に invariant test を割り当てる。本 Proposal の DoD は「invariant declaration が PLAN.md の各 phase に reflectee されている」こと。実装は phase 単位で行う。
 
-- [ ] PLAN.md v3-17 (R-1.1) に **INV-1 / INV-5** の invariant test を Acceptance criteria として明記
-- [ ] PLAN.md v3-18 (R-1.2) に **INV-5** + #358 の regression test を明記
-- [ ] PLAN.md v3-19 (R-1.3) に **INV-2 / INV-6** の invariant test を明記
-- [ ] PLAN.md v3-20 (R-1.4) に **INV-3 / INV-4** の invariant test + LizyML #105 dependency を明記
-- [ ] PLAN.md v3-21 (R-1.5) に Issue #359 (job-num drift) の regression test を明記
+- [x] PLAN.md v3-17 (R-1.1) に **INV-1 / INV-5** の invariant test を Acceptance criteria として明記 — PR #408 で起票、PR #412 (Python) / #413 (Playwright) で実装
+- [x] PLAN.md v3-18 (R-1.2) を **INV-5 write-side defense-in-depth** へ rescope — Issue #358 は cancel race ではなく frontend cv.strategy revert (PR #368 で 2026-05-03 close 済) と判明したため `tests/regression/test_inv_cancel_completion_interleaving.py` の 3 件 (cooperative cancel deterministic / 16 並行 count balance / post-terminal non-mutation) で write-side coverage を強化、0.5 週へ短縮
+- [x] PLAN.md v3-19 (R-1.3) に **INV-2 / INV-6** の invariant test を明記 — `write_versioned_json` に fsync 追加、`test_inv_meta_json_atomic.py` 6 件 + `test_inv_subprocess_crash_recovery.py` 3 件 + path 4 xfail flip。watchdog は audit で不要と判明（既存 reconcile path で十分）
+- [ ] PLAN.md v3-20 (R-1.4) に **INV-3 / INV-4** の invariant test + LizyML 0.12.0 (H-0072 storage) dependency を明記
+- [x] ~~PLAN.md v3-21 (R-1.5)~~ — Issue #359 は PR #366 (`fix(inference): derive dropdown #N from allJobs`, 2026-05-03 close) で実装済のため subsumed、v3-21 は欠番として保持
 - [ ] PLAN.md v3-22 (R-1.5b) に **INV-7** + Issue #384 の regression test を明記
 - [ ] BLUEPRINT.md §3.4 (Job lifecycle) に上記 INV-1〜INV-7 を明記
 - [ ] CHANGELOG.md (v0.5.0 release notes drafting 時) に `paused` 状態追加を Breaking 寸前 (Added) で記述
-- [ ] Issues #358 / #359 / #360 / #384 を本 Proposal の child Issue として label
+- [x] Issues #358 / #359 は本 Proposal の child から外す (drift 解消)、#360 / #384 のみ child として保持
 
 #### Alternatives considered
 
@@ -3272,6 +3272,76 @@ R-1.1〜R-1.5b の各 phase に invariant test を割り当てる。本 Proposal
 #### Decision
 
 - 2026-05-06 **Proposed** — v0.5 R-1.1 着手前に user 承認を取り、PLAN.md に v3-17〜v3-22 を追加した時点で **Approved**。実装は phase 単位、各 phase の PR が invariant test を含む
+- 2026-05-06 **Approved** — user 承認 (LizyML 0.12.0 リリース受領後)。PLAN.md v3-17〜v3-26 は #408 で既に追加済。本 Proposal の DoD (invariant declaration が PLAN.md の各 phase に reflectee されている) は満了。R-1.4 の上流ブロッカー (LizyML #105) も解消したため、v3-17 (R-1.1) から phase 単位の実装に着手可
+- 2026-05-06 **R-1.4 (v3-20) 設計確定** — `docs/v3-20-tune-resume-design.md` Approved。Impact section の修正点:
+  - **API 構成変更 (案 B 採用)**: 既存 `POST /api/jobs/{id}/resume` (H-0062 Phase B、failed→child job) は **変更しない**。`paused → running` 用に **新規 `POST /api/jobs/{id}/unpause`** を追加して semantically 別の操作を別 URL に分離。理由: 既存 frontend 実装 (`ResumeActionButton`) と child job creation 経路を破壊しない、新機能を opt-in で導入できる
+  - **paused 中の Cancel UX**: paused 状態でも `POST /api/jobs/{id}/cancel` を有効化し INV-1 release path として活用 (slot 占有による usability 低下の緩和)
+  - 残りの impact (format_version 1→2、`WsPaused` message、`paused → cancelled|failed` 遷移、Pause/Resume UI) は当初の Impact 通り
+- 2026-05-07 **v3-20g (R-1.4 INV-4 round-trip + Playwright tune-resume E2E) 実装** — `feat/v3-20g-playwright-tune-resume-e2e` ブランチ:
+  - `tests/integration/test_tune_resume_round_trip.py` (新規): INV-4 を直接実証 — 同 `(storage, study_name)` で 2-trial tune を 2回連続実行し SQLite に 4 trial が monotonic な番号 (0,1,2,3) で蓄積されることを assert。lizyml `load_if_exists=True` の round-trip 契約を CI で gate
+  - `frontend/tests/e2e/tune-resume.spec.ts` (新規 3 spec):
+    - `API: tune -> pause -> paused -> unpause -> completed (in-place resume)` — 実 lizyml + n_trials=4 で full HTTP cycle を回し、paused 中の `/tune` が JOB_CONFLICT (INV-1+INV-pause-1)、最終 trial 数が 4 (INV-4 in-place resume) を確認
+    - `API: pause on fit job is rejected with JOB_NOT_PAUSEABLE`
+    - `API: unpause on a non-paused job is rejected with JOB_NOT_PAUSED`
+  - **R-1.4 完了** — v3-20a〜g 全 7 sub-phase shipped、v0.5 の Tune long-run resumability invariants が確定
+  - 後続 (v3-22): server restart で paused 状態を復元 (R-1.5b、別 Proposal で Issue #384 child として進める)
+- 2026-05-07 **v3-23 (R-2.1 WebSocket 再接続戦略) 実装** — `feat/v3-23-ws-reconnect-strategy` ブランチ:
+  - **v3-23a frontend `connectJobProgress` 改良**: `MAX_DELAY` を 30s → **5min (300s)** に拡張、`MAX_RETRIES` の hard cap (10) を **削除**して indefinite retry に変更、**±15% jitter** を追加 (thundering herd 回避)。pre-fix: 5min disconnect で `WS_RECONNECT_FAILED` を発火していた → 再試行は continued
+  - **v3-23b**: "missed messages 受信" 要件は新 resume token なしで満たす — backend `_last_terminal` cache (5min TTL) は既に late subscriber に terminal を replay、frontend `useJobProgress` の polling fallback が terminal transition を jobs cache invalidate で picks up。**No code change**, doc-only
+  - **v3-23c**: `tests/e2e/ws-reconnect.spec.ts` 新規 spec で Playwright `context.setOffline()` を使った 10s disconnect simulation。INV-7 (worker thread が job lifetime を所有、WS 状態に非依存) + INV-4 (n_trials=4 が disconnect 越しに維持) を gate
+  - tests: `websocket.test.ts` の既存 backoff test を新スケジュールに合わせて更新、追加 4 件 (5min ceiling, no max-retries cap, no onError fire, jitter ±15% range) — 17 passed total
+  - DoD 満了: 10s 切断後 progress 続行 + 最終 status 一致、5min 切断後でも reconnect 試行 continued
+- 2026-05-07 **v3-22b (R-1.5b INV-7 unified test) 実装** — `feat/v3-22b-inv7-ws-disconnect-test` ブランチ:
+  - `tests/regression/test_inv_ws_disconnect_does_not_release.py` 新規 4 件で INV-7 (WebSocket disconnect は active slot を release しない) を multi-scenario で gate:
+    - Scenario A baseline: same-process subscribe→unsubscribe round-trip で paused job の slot が touched しない
+    - Scenario A continued: running + WS disconnect + crash → reconcile が orphan を failed 化、slot は crash recovery で free (WS disconnect 起因ではない)
+    - Scenario B: paused + WS disconnect + restart → reconcile が slot 再 attach、cross-restart JOB_CONFLICT で INV-7 維持
+    - Robustness: 16 回 subscribe/unsubscribe cycle で slot ownership に漏れがない
+  - 既存 `test_inv_slot_release.py::test_inv1_path5_*` (path 5 同 process) と組み合わせて INV-7 end-to-end coverage 完了
+  - Issue #384 close 条件 (INV-7 invariant test green) 達成
+- 2026-05-07 **v3-22a (R-1.5b server restart reconciliation) 実装** — `feat/v3-22a-startup-reconcile` ブランチ:
+  - `JobStore.reconcile_at_startup()` 新メソッド: server lifespan 起動時に on-disk meta.json をスキャンし以下の reconciliation を実施
+    - `running` / `pending` 状態の orphan job → `failed` 化（worker thread/subprocess は前プロセスと共に消えているため）。`error` に "Server restarted before this job could complete" を記録
+    - `paused` 状態の job → in-memory `_active_job_id` に再 attach し、active-jobs gauge を 1 に設定（INV-1 の slot 占有を restart 越しに維持、INV-restart-2）
+    - 多重 paused（ありえない corruption ケース）→ `created_at` newest を survivor、他は failed 化（INV-1 deterministic restoration）
+    - terminal states (`completed` / `failed` / `cancelled`) は **rewrite しない**（INV-restart-3）
+    - idempotent: 2 回呼んでも同じ結果（既に reconcile 済の状態に対して候補なし）
+  - `server.py:lifespan` で `JobStore` 構築直後に `reconcile_at_startup()` を呼び出し
+  - tests: `test_inv_startup_reconcile.py` 9 件で 3 不変条件（INV-restart-1/2/3）+ JOB_CONFLICT cross-restart + idempotence を gate
+  - 後続 (v3-22b/c): INV-7 unified test、Playwright 実 server-restart e2e は本 PR の scope 外
+- 2026-05-07 **v3-20f (R-1.4 frontend Pause/Resume buttons) 実装** — `feat/v3-20f-frontend-pause-resume-buttons` ブランチ:
+  - `frontend/src/api/jobs.ts`: `pauseJob(jobId)` / `unpauseJob(jobId)` API helpers 追加
+  - `frontend/src/api/queries/usePauseJob.ts` + `useUnpauseJob.ts`: TanStack Query mutation hooks (jobs / job(id) invalidation)
+  - `frontend/src/components/jobs/PauseActionButton.tsx`: running tune に対する小型ボタン (dialog なし、PauseCircle icon、`onPauseRequested` callback)
+  - `frontend/src/components/jobs/UnpauseActionButton.tsx`: paused tune に対する Resume ボタン (dialog なし、PlayCircle icon、`disabledReason` 対応、`onUnpauseStarted` callback)。**注**: 既存 `ResumeActionButton` (failed→child job) とは責務が分離 (in-place vs lineage)
+  - `JobDetail.tsx` に `isPaused` 分岐 + paused 状態の説明文 + Pause/Resume/Cancel アクションバー条件分岐。Cancel 確認 dialog の本文も paused 状態用に切り替え
+  - tests: `PauseActionButton.test.tsx` (4 件)、`UnpauseActionButton.test.tsx` (5 件)、`JobDetail.test.tsx` に paused branch + running tune Pause + running fit no-Pause の 3 件追加
+  - 後続 (v3-20g): Playwright tune-resume E2E + INV-4 round-trip
+- 2026-05-06 **v3-20e (R-1.4 WsPaused WS message + frontend handler) 実装** — `feat/v3-20e-wspaused-message` ブランチ:
+  - `lizystudio.ws.messages.WsPaused` 新 Pydantic モデル (`type="paused"`, `job_id`, `trial_number: int | None`, `message: str`, `extra="forbid"`)
+  - `WsMessage` discriminated union に `WsPaused` を追加
+  - `ProgressBroadcaster.send_paused(job_id, *, trial_number=None, message="Paused.")` 追加。`_TERMINAL_TYPES` には**含まない** — pause は resumable なので late-subscriber replay cache に載せない (INV-WS-5)
+  - `_run_job_core.except PausedError` 分岐に `broadcaster.send_paused(job.job_id)` を追加 (v3-20c で deferred していた WS notification を完成)
+  - Frontend: `connectJobProgress` に `onPaused` callback 追加、`case "paused"` で **jobDone を立てない** (WS 接続を維持して unpause 復帰時の live stream 継続を保証)
+  - Frontend: `useJobProgress` に `onPaused` ハンドラ追加 — `setProgress(null)` + jobs/job query invalidate のみ、`fireTerminal` は呼ばない
+  - openapi-typescript 再生成で `WsMessage` union が自動的に `paused` variant を含む (frontend の hand-written 重複なし)
+  - tests: `test_ws_messages.py` に 5 件 (round-trip / wire-format / send_paused / cache-exclusion / extra-field reject)、`test_inv_pause_keeps_slot.py` に 1 件 (`test_paused_branch_invokes_broadcaster_send_paused` for INV-pause-7)
+- 2026-05-06 **v3-20d (R-1.4 pause/unpause API) 実装** — `feat/v3-20d-pause-unpause-api` ブランチで HTTP エントリーポイント + subprocess parent finally の paused-skip を実装:
+  - `POST /api/jobs/{id}/pause` — tune-only、status=running を要求、`request_pause` を呼ぶ。エラーコード: `JOB_NOT_PAUSEABLE` (fit ジョブ拒否) / `JOB_NOT_RUNNING` (paused/completed 等)
+  - `POST /api/jobs/{id}/unpause` — tune-only、status=paused を要求、ws.dataframe 再ロード必須、`clear_pause` 後に `start_tune_async` を **同 job_id** で呼び（in-place 復帰）。lizyml の Optuna `load_if_exists=True` で trial 継続。エラーコード: `JOB_NOT_PAUSED` / `WORKSPACE_NO_DATA`
+  - `_run_subprocess_job.finally` を修正: child が `status="paused"` を書き込んだ場合は `release_active` を skip (v3-20c の in-process 修正と対称、subprocess mode で見落としていた INV-pause-1 violation を修復)
+  - `tests/test_jobs_api.py` に 10 件の HTTP コントラクトテスト + `tests/regression/test_inv_pause_keeps_slot.py::test_subprocess_finally_keeps_slot_when_child_wrote_paused` 追加
+  - 後続 (v3-20e 以降): `WsPaused` WS message、frontend Pause/Resume button、Playwright tune-resume E2E は本 PR の scope 外
+- 2026-05-06 **v3-20c (R-1.4 pause primitives) 実装** — `feat/v3-20c-pause-primitives` ブランチで以下を実装、`tests/regression/test_inv_pause_keeps_slot.py` (12 件) + `test_inv_state_machine.py` xfail flip で INV-pause 1〜5 + INV-3 runtime guard を green に固定:
+  - `lizystudio.backends.exceptions.PausedError` 新例外（`CancelledError` と同じ identity / re-export 戦略）
+  - `JobStore.request_pause` / `is_pause_requested` / `clear_pause` — cancel と同じ in-memory set + `<job_dir>/PAUSE` IPC flag pattern (subprocess child 用)
+  - `JobStore.set_status(job_id, new_status)` — INV-3 LEGAL_TRANSITIONS を runtime assert (illegal transitions が AssertionError を raise)
+  - `_make_cancel_aware_cb`: cancel check の後に pause check 追加、True なら `PausedError` raise（broadcaster の send_progress を short-circuit）
+  - `_run_job_core`: `except PausedError` 分岐で `status="paused"` + `completed_at=None` を書き込み、finally では **status=="paused" の場合に release_active / clear_cancel を skip** (INV-1 拡張: paused は slot を保持)
+  - `JobStore.has_active_children`: paused を active 扱いに拡張（cascade-delete guard で paused child の rmtree を防ぐ）
+  - `api/jobs.py:cancel_job`: paused job も accept、direct transition で `paused → cancelled` + slot release + clear_pause（worker がいないため signal pass-through ではなく明示遷移）
+  - `api/jobs.py:delete_job` cascade: paused child は worker がいないので request_cancel ではなく release_active + clear_pause を直接呼ぶ
+  - 後段 (v3-20d 以降): `POST /pause` / `POST /unpause` API、`WsPaused` message、frontend Pause/Resume button、Playwright tune-resume E2E は本 PR の scope 外
 
 
 
@@ -3386,5 +3456,149 @@ PR-B4 で `ValidationError` payload に `severity: Literal["error", "warning", "
 #### Decision
 
 - 2026-05-05 **Decided (post-hoc)** — PR-C2 / PR-D1 で実装済、本 Decision 記録は v0.4.1 リリース後の reconciliation。Issue #403 で BackendAdapter 抽象化、#404 で異常系 7 cases 追加が follow-up
+
+### P-0102: ブラウザリロード後の workspace state 自動復元（v3-24, R-2.2）
+
+- **Date:** 2026-05-07 起票
+- **Related:** PLAN.md Phase v3-24, `docs/v0.4-business-readiness-plan.md` §3.2, P-0099 (R-1 invariants), Issue #91 / #101 (deep-link recovery, prior art), `frontend/tests/e2e/session-restore.spec.ts`
+
+#### Motivation
+
+P-0099 で Tune long-run resumability が backend 側で完成 (v3-20) し、server restart recovery (v3-22) と WS reconnect (v3-23) も shipped した。残るは frontend のリロード対応で、現状 `?job_id=` query param が無い場合 Workspace は空状態に戻る。`workspaceStatus.current_job_id` は既に backend 側で露出されているのに、frontend は無視している。長時間学習中の user がリロードしただけで「Results will appear here after running a job.」が表示され、進捗を見失う UX がそのまま残っている。
+
+`UI: reload without ?job_id= leaves Workspace empty` (`frontend/tests/e2e/session-restore.spec.ts:91`) は現状動作を pin している。「将来的な auto-restore は明示的な議論を経てから」という意図で書かれているため、その議論を本 Proposal で行い、test を更新する。
+
+#### Purpose
+
+- リロード後 30 秒以内に form / data / progress / results が前と同じ状態を表示する
+- `?job_id=` 不在時に `workspaceStatus.current_job_id` をフォールバックとして自動 hydrate する
+- 入力途中の dirty config が beforeunload で確認ダイアログを出す（誤リロード防止）
+- 上記を Playwright で reload 後 visual diff 検証する
+
+#### Invariants
+
+- **INV-reload-1**: `?job_id=<id>` 明示時はその id を最優先（既存挙動を保つ）
+- **INV-reload-2**: `?job_id=` 不在 + `workspaceStatus.current_job_id` が non-null + page-local `running` flag が false の場合、initial mount で 1 回だけ `current_job_id` を hydrate する
+- **INV-reload-3**: hydrate latch (`restoredFromStatusRef`) は user の手動リセット（`workspace_reset` 経由）で解除されない限り再発火しない
+- **INV-reload-4**: dirty form (react-hook-form `formState.isDirty`) を持つ状態で `beforeunload` event が発火したら browser default confirm dialog を出す。clean form では出さない
+
+#### Impact
+
+**Public API:** 変更なし。既存 `GET /api/workspace/status` の `current_job_id` をそのまま使う。
+
+**Frontend (B-8 / WorkspacePage):**
+- `useJobIdParam` に `fallbackJobId?: string | null` option 追加。URL param 不在時のみ参照する
+- `WorkspacePage` で `workspaceStatus.current_job_id` を fallback として渡す
+- `ConfigForm` (or top-level form context) に `useBeforeUnloadDirty(formIsDirty)` カスタム hook を組み込む
+- 既存 `session-restore.spec.ts` の「reload without ?job_id= leaves Workspace empty」テストを「reload without ?job_id= restores last job from workspace status」に書き換え
+
+**Internal (no behavior change for backend):**
+- なし
+
+#### Compatibility
+
+- 既存 `?job_id=` 明示の deep-link 動作は不変（INV-reload-1）
+- `workspaceStatus.current_job_id` が null なら従来どおり空状態を表示（後方互換）
+- multi-tab で同じ workspace を開いている場合、両 tab が同じ `current_job_id` を hydrate する。1 名利用前提のため衝突制御は scope 外
+- `beforeunload` ダイアログは modern browser がカスタムメッセージを許可しないので default 文言固定。E2E では `dialog` event handler で accept/dismiss を制御
+
+#### Acceptance criteria
+
+- [ ] `frontend/src/hooks/useJobIdParam.ts` に `fallbackJobId` option 追加 + 単体テスト 4 ケース
+- [ ] `frontend/src/pages/WorkspacePage.tsx` で `workspaceStatus.current_job_id` を fallback として渡す
+- [ ] `useBeforeUnloadDirty` hook 新規 + 単体テスト
+- [ ] `session-restore.spec.ts` の "leaves Workspace empty" テストを反転させ "restores from workspace status" に
+- [ ] dirty form + reload で confirm dialog が出ることを Playwright で pin
+- [ ] reload 後 30s 以内に Results panel が同じ完了 job を表示する E2E spec
+
+#### Alternatives considered
+
+- **(a) localStorage / IndexedDB に独自永続化**: 拒否。backend に GET /workspace/status が既に存在するため重複、quota / cross-tab sync の追加実装が必要、SSR や private browsing の corner case 増加
+- **(b) URL を `?job_id=` で上書き**: 拒否。現状コメントの "URL は read-only" 設計を破る、deep-link 共有の意味論が変わる
+- **(c) auto-restore を opt-in 設定にする**: 拒否。1 名利用前提なのでデフォルト ON が UX 上自然。opt-out は localStorage で後付け可能だが現時点で需要なし
+
+→ 採用は **(d) backend GET /workspace/status を fallback として消費 + URL 上書きしない**。
+
+#### Decision
+
+- 2026-05-07 **Approved** — v3-24 phase で a (frontend hydrate) → b (beforeunload) → c (Playwright spec) の 3 PR 構成で着手
+
+### P-0103: 古い format_version の workspace を read-only で保護（v3-25, R-4.1）
+
+- **Date:** 2026-05-07 起票
+- **Related:** PLAN.md Phase v3-25, P-0095 (fit→load round-trip CI gate), `docs/v0.4-business-readiness-plan.md` §5.1, `src/lizystudio/storage/versions.py`
+
+#### Motivation
+
+`STUDIO_FORMAT_VERSION` は v3-20a で 1→2 に bump された (P-0099)。現状の v0/v1→v2 migration は識別 (identity) なので動作上の差は無いが、将来の structural change で v0 / v1 workspace を新 release で開いた際に **silent な data destruction** が起きるリスクがある。具体的には:
+
+1. v1 workspace を新 release で load → in-memory で v2 にマイグレ
+2. 同じ workspace に対して fit / tune を実行
+3. JobStore が new meta.json を v2 で write
+4. 残りの旧 v1 ファイルとの整合性が崩れる、あるいは新たな fields が抜け落ちる
+
+P-0095 の round-trip CI gate は単一 release 内のシリアライズ整合性しか保証しない。release 間の互換 (v1 で書いて v2 で読む / 書く) は別途 gating が必要。
+
+#### Purpose
+
+- `tests/regression/test_format_version_migration_matrix.py` で v0 → v1 → v2 round-trip を網羅
+- CI で過去 fixture (v0 / v1 workspace の小さな再現) を fetch + load + 新 release で save → load → 同値 assertion が pass しないと merge できない gate を新設
+- 古い workspace を新 CLI で開いた際に、`LIZYSTUDIO_ALLOW_LEGACY_WRITE` 環境変数なしでは write 操作 (jobs / config) を refuse する read-only mode を導入
+- 既存の auto-migration は in-memory 限定とし、disk 上の旧フォーマットを silently 上書きしない
+
+#### Invariants
+
+- **INV-fmt-1**: `read_versioned_json` は detected_version < STUDIO_FORMAT_VERSION でも raise しない（既存挙動を保つ）
+- **INV-fmt-2**: `write_versioned_json` は detected_version < STUDIO_FORMAT_VERSION の同名ファイルが既に disk に存在し、かつ `LIZYSTUDIO_ALLOW_LEGACY_WRITE` が未設定の場合、`LegacyFormatProtectionError` を raise する
+- **INV-fmt-3**: 新規ファイル (disk 上に存在しない) や同 version への上書きは常に許可される
+- **INV-fmt-4**: migration matrix CI job は v0 / v1 / v2 のフィクスチャを round-trip し、payload 内容が migration 後 idempotent であることを assert
+
+#### Impact
+
+**Public API:** 変更なし（HTTP endpoints は影響を受けない）。
+
+**Storage layer:**
+- `lizystudio.backends.exceptions.LegacyFormatProtectionError` 新規例外
+- `write_versioned_json` に detected-version check + env var gate 追加
+- `read_versioned_json` の戻り値 `(detected_version, payload)` を消費者が version を伝搬できるよう一部 caller (services/jobs.py 等) に detected log を追加。挙動は変えない
+
+**CI / fixtures:**
+- `tests/fixtures/legacy_workspaces/v0/meta.json` (pre-C-9 layout, no format_version key)
+- `tests/fixtures/legacy_workspaces/v1/meta.json` (C-9, format_version=1)
+- `tests/regression/test_format_version_migration_matrix.py` の round-trip テスト
+
+**Behavior change for users:**
+- v0 / v1 workspace を新 LizyStudio で開いて run job 試行 → `LegacyFormatProtectionError` (HTTP 500 経由で 4xx に変換) で停止
+- recovery: `LIZYSTUDIO_ALLOW_LEGACY_WRITE=1 lizystudio` で起動して explicit に upgrade を許可
+
+#### Compatibility
+
+- 既存ユーザは大半が v2 で書かれた workspace のみを持つ → 影響なし
+- v0 (pre-C-9) ユーザは存在自体が稀。FAQ に env var 経由の upgrade 手順を記載
+- v1 (C-9 〜 v3-20a 間) ユーザは数日分。同様に env var で upgrade
+- read-only での閲覧は影響を受けない（fit / tune を試行するまで Error は発火しない）
+
+#### Acceptance criteria
+
+- [ ] `LegacyFormatProtectionError` を `backends/exceptions.py` に追加 + docstring
+- [ ] `write_versioned_json` の env var gate + 既存ファイルの format_version peek + 新規例外 raise
+- [ ] `tests/regression/test_format_version_migration_matrix.py` で v0/v1/v2 fixture round-trip
+- [ ] `tests/fixtures/legacy_workspaces/{v0,v1}/meta.json` をコミット
+- [ ] `tests/test_storage_versions.py` に LegacyFormatProtectionError invariant test 追加
+- [ ] CI で migration matrix が gating（既存 ci.yml backend job に組み込み）
+- [ ] CHANGELOG v0.5 で env var 名と recovery 手順を明記
+
+#### Alternatives considered
+
+- **(a) Hard error on read for legacy versions**: 拒否。閲覧すら不可になり、復旧手段がさらに狭まる
+- **(b) Silently auto-upgrade on write (status quo)**: 拒否。silent destruction の risk が消えない
+- **(c) Per-file format_version (vs Studio-wide single constant)**: 拒否。H-0081 alternatives §b で却下済、本 Proposal の scope 外
+- **(d) New endpoint `POST /api/workspace/upgrade-format`**: defer。env var gate でまず最小実装、UI は user feedback を見てから
+
+→ 採用は **(e) env var (`LIZYSTUDIO_ALLOW_LEGACY_WRITE=1`) gate + matrix CI**。
+
+#### Decision
+
+- 2026-05-07 **Approved** — v3-25 phase で a (matrix regression test) → b (CI workflow + fixtures) → c (LegacyFormatProtectionError + env var gate) の 3 PR 構成で着手
 
 

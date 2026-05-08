@@ -1,0 +1,1 @@
+{"task": "binary", "target": "label", "metrics": {"accuracy": 0.85, "auc": 0.91}, "feature_importance": {"feature_a": 0.3, "feature_b": 0.7}, "n_rows": 100, "n_features": 2}

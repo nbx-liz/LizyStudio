@@ -15,6 +15,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from lizystudio.api.deps import get_broadcaster
 from lizystudio.api.errors import (
     BackendError,
     ExportError,
@@ -24,6 +25,7 @@ from lizystudio.api.errors import (
     ParentHasActiveChildrenError,
     PlotNotAvailableError,
     StudioError,
+    WorkspaceNoDataError,
 )
 from lizystudio.api.models import (
     CancelJobResponse,
@@ -33,7 +35,9 @@ from lizystudio.api.models import (
     JobDetailResponse,
     JobLogResponse,
     JobSummaryResponse,
+    PauseJobResponse,
     PlotResponseModel,
+    UnpauseJobResponse,
 )
 from lizystudio.backends.exceptions import (
     PlotNotAvailableError as _BackendPlotNotAvailable,
@@ -51,7 +55,9 @@ from lizystudio.services.jobs import (
     get_metrics_table,
     get_split_summary,
 )
+from lizystudio.services.training import start_tune_async
 from lizystudio.services.workspace import WorkspaceState, get_workspace
+from lizystudio.ws.progress import ProgressBroadcaster
 
 _MAX_METRICS = 20
 _VALID_PARAM_RE = re.compile(r"^[a-zA-Z0-9_]+$")
@@ -193,14 +199,17 @@ def delete_job(
     if job.status == "running":
         raise JobRunningError(job_id)
 
-    # H-0062: guard against orphaning in-flight children on a non-cascade
-    # delete. Collect the direct active descendants first so the error
-    # details list exactly what would be lost.
+    # H-0062 / P-0099 v3-20c: guard against orphaning in-flight or paused
+    # children on a non-cascade delete. Collect the direct active
+    # descendants first so the error details list exactly what would be
+    # lost. ``paused`` joins ``pending`` / ``running`` here because a
+    # paused tune still holds the workspace slot and owns the Optuna
+    # sqlite that feeds /unpause.
     if not cascade and job_store.has_active_children(job_id):
         active: list[str] = []
         for cid in job_store.get_child_job_ids(job_id):
             child = job_store.get(cid)
-            if child is not None and child.status in ("pending", "running"):
+            if child is not None and child.status in ("pending", "running", "paused"):
                 active.append(cid)
         raise ParentHasActiveChildrenError(job_id, active)
 
@@ -209,11 +218,19 @@ def delete_job(
         # rmtree their directories. Cancel flags are best-effort; the
         # actual subprocess may still be running when rmtree fires, but
         # the run_tune wrapper tolerates a missing job dir via its finally
-        # block.
+        # block.  Paused children have no worker to observe a cancel
+        # flag, so the slot is released directly here (P-0099 v3-20c) —
+        # status persistence is skipped because the job dir is rmtree'd
+        # immediately below.
         for cid in job_store.get_child_job_ids(job_id):
             child = job_store.get(cid)
-            if child is not None and child.status in ("pending", "running"):
+            if child is None:
+                continue
+            if child.status in ("pending", "running"):
                 job_store.request_cancel(cid)
+            elif child.status == "paused":
+                job_store.release_active(cid)
+                job_store.clear_pause(cid)
         removed = job_store.delete(job_id, cascade=True)
     else:
         removed = job_store.delete(job_id)
@@ -228,16 +245,124 @@ def cancel_job(
     job_id: str,
     job_store: JobStore = Depends(get_job_store),
 ) -> dict[str, str]:
-    """Cancel a running job (H-0011)."""
+    """Cancel a running or paused job (H-0011, P-0099 v3-20c).
+
+    For ``running`` jobs the cancel signal is delivered via the cancel
+    flag and the cooperative callback (cancel-aware-cb) unwinds through
+    :class:`CancelledError` — the worker's finally-block writes
+    ``status="cancelled"`` and releases the slot.
+
+    For ``paused`` jobs there is no worker to observe a flag, so the
+    transition is performed directly here: ``paused -> cancelled`` is a
+    legal edge per :data:`LEGAL_TRANSITIONS`, and we explicitly release
+    the slot + clear the pause flag so the workspace is unblocked
+    immediately (case 案 a in P-0099 §6 — paused-as-zombie is worse UX
+    than just letting Cancel be a fast exit).
+    """
     job = _get_job_or_404(job_id, job_store)
+    if job.status == "running":
+        job_store.request_cancel(job_id)
+        return {"status": "cancelled"}
+    if job.status == "paused":
+        # Direct transition: no worker observing the flag, so the
+        # worker-side terminal write that normally rides on the cancel
+        # flag will never fire.
+        job_store.set_status(job_id, "cancelled")
+        job_store.release_active(job_id)
+        job_store.clear_pause(job_id)
+        return {"status": "cancelled"}
+    raise StudioError(
+        "JOB_NOT_RUNNING",
+        f"Job {job_id} is not running or paused (status: {job.status})",
+        400,
+    )
+
+
+# --- Pause / Unpause (P-0099 v3-20d, R-1.4 / Issue #360) ---
+
+
+@router.post("/{job_id}/pause", response_model=PauseJobResponse)
+def pause_job(
+    job_id: str,
+    job_store: JobStore = Depends(get_job_store),
+) -> dict[str, str]:
+    """Request a tune job to pause at the next cooperative-cb boundary.
+
+    Pause is a tune-only action — fit jobs are short-running by design
+    (training a single model with the user's chosen params), so a pause
+    primitive there has no usable resume target. The cooperative
+    callback inside the worker observes the on-disk PAUSE flag through
+    :meth:`JobStore.is_pause_requested` and unwinds via
+    :class:`PausedError`. ``_run_job_core`` writes ``status="paused"``
+    on disk and KEEPS slot ownership so the user's subsequent /unpause
+    click resumes the same job in place (P-0099 v3-20c invariant).
+    """
+    job = _get_job_or_404(job_id, job_store)
+    if job.job_type != "tune":
+        raise StudioError(
+            "JOB_NOT_PAUSEABLE",
+            f"Pause is only available on tune jobs (job_type: {job.job_type})",
+            400,
+        )
     if job.status != "running":
         raise StudioError(
             "JOB_NOT_RUNNING",
-            f"Job {job_id} is not running (status: {job.status})",
+            f"Pause requires a running job (status: {job.status})",
             400,
         )
-    job_store.request_cancel(job_id)
-    return {"status": "cancelled"}
+    job_store.request_pause(job_id)
+    return {"status": "pause_requested"}
+
+
+@router.post("/{job_id}/unpause", response_model=UnpauseJobResponse)
+def unpause_job(
+    job_id: str,
+    job_store: JobStore = Depends(get_job_store),
+    ws: WorkspaceState = Depends(get_workspace),
+    broadcaster: ProgressBroadcaster = Depends(get_broadcaster),
+) -> dict[str, str]:
+    """Re-launch a paused tune in place (P-0099 v3-20d, R-1.4).
+
+    Unlike ``POST /resume`` (H-0062 Phase B, failed→child job), unpause
+    re-uses the SAME ``job_id``: the worker re-attaches to the same
+    Optuna study via ``load_if_exists=True`` and continues from
+    ``trial N+1``.  Slot ownership stays with the original job_id from
+    paused into running (paused→running is a legal INV-3 transition),
+    so the active-slot lock is never released across the round-trip.
+
+    Workspace dataframe must still be loaded and matching the job's
+    original ``data_ref``; mismatched data would silently corrupt the
+    Optuna study (best_value compared across different data).
+    """
+    job = _get_job_or_404(job_id, job_store)
+    if job.job_type != "tune":
+        raise StudioError(
+            "JOB_NOT_PAUSEABLE",
+            f"Unpause is only available on tune jobs (job_type: {job.job_type})",
+            400,
+        )
+    if job.status != "paused":
+        raise StudioError(
+            "JOB_NOT_PAUSED",
+            f"Unpause requires a paused job (status: {job.status})",
+            400,
+        )
+    if ws.dataframe is None or ws.data_ref is None:
+        raise WorkspaceNoDataError()
+
+    # Clear the pause flag BEFORE re-launching so the cb does not
+    # immediately raise PausedError again on its first observation.
+    job_store.clear_pause(job_id)
+
+    start_tune_async(
+        ws=ws,
+        job_store=job_store,
+        broadcaster=broadcaster,
+        config=job.config,
+        dataframe=ws.dataframe,
+        job=job,
+    )
+    return {"status": "unpause_started", "job_id": job_id}
 
 
 # --- Result viewing ---

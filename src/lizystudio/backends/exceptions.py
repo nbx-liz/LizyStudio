@@ -14,6 +14,8 @@ match the same class.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 
 class CancelledError(Exception):
     """Raised when a long-running backend operation is cancelled.
@@ -21,6 +23,23 @@ class CancelledError(Exception):
     Adapters may raise this directly from a progress-callback bridge to
     short-circuit ``fit`` / ``tune`` when :func:`JobStore.is_cancel_requested`
     returns ``True``.
+    """
+
+
+class PausedError(Exception):
+    """Raised when a long-running backend operation observes a pause request.
+
+    Pause is the first non-terminal mid-flight unwind in the Job state
+    machine (P-0099 R-1.4 / v3-20).  ``_run_job_core`` catches this in a
+    dedicated except-branch that writes ``status="paused"`` and KEEPS
+    ownership of ``active_job_id`` so the same job id can be resumed in
+    place via the /unpause endpoint — pre-fix the cancel/failure finally
+    block would have released the slot, defeating in-place resume.
+
+    Adapters raise this from a progress-callback bridge when
+    :meth:`JobStore.is_pause_requested` returns ``True``, mirroring the
+    cancel observation point so the subprocess child's fresh JobStore can
+    react via the on-disk PAUSE flag.
     """
 
 
@@ -64,6 +83,40 @@ class IncompatibleFormatVersionError(Exception):
     """
 
 
+class LegacyFormatProtectionError(Exception):
+    """Raised when a write would overwrite a legacy on-disk artefact
+    without explicit opt-in (P-0103 v3-25c / R-4.1).
+
+    The storage layer auto-migrates v0 / v1 / ... artefacts to the
+    current ``STUDIO_FORMAT_VERSION`` in memory, but historically the
+    next ``write_versioned_json`` call would silently bump the on-disk
+    version and any future migration that loses fields would silently
+    truncate customer data.
+
+    To prevent that class of silent destruction:
+
+    - Reading a legacy file is always permitted (callers can still
+      browse historical workspaces).
+    - Writing back to a path whose existing file declares
+      ``format_version < STUDIO_FORMAT_VERSION`` requires the env var
+      ``LIZYSTUDIO_ALLOW_LEGACY_WRITE=1`` to opt in. Otherwise the
+      writer raises this exception.
+
+    Recovery: the user can re-run their ``lizystudio`` server with the
+    env var set after explicitly backing up the legacy workspace.
+    """
+
+    def __init__(self, path: Path | str, detected_version: int) -> None:
+        super().__init__(
+            f"Refusing to overwrite legacy artefact at {path} "
+            f"(format_version={detected_version}). Set "
+            "LIZYSTUDIO_ALLOW_LEGACY_WRITE=1 to opt in to upgrading "
+            "this file to the current schema."
+        )
+        self.path = path
+        self.detected_version = detected_version
+
+
 class PlotNotAvailableError(Exception):
     """Raised when a plot type is not in the backend's dispatch table
     (Issue #355).
@@ -94,5 +147,7 @@ __all__ = [
     "CheckpointIncompatibleError",
     "CheckpointPreflightError",
     "IncompatibleFormatVersionError",
+    "LegacyFormatProtectionError",
+    "PausedError",
     "PlotNotAvailableError",
 ]

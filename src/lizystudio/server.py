@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import time
+import warnings
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -41,6 +42,42 @@ from lizystudio.ws.progress import ProgressBroadcaster, websocket_progress
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _install_upstream_warning_filters() -> None:
+    """Install ``warnings.filterwarnings`` entries for upstream noise.
+
+    Currently filters:
+
+    - SHAP 0.51.0's ``UserWarning`` for LightGBM binary classifiers.
+      The notice ("shap values output has changed to a list of
+      ndarray") fires on every ``TreeExplainer.shap_values`` call.
+      The lizyml SHAP adapter (``lizyml/explain/shap_explainer.py``)
+      already handles BOTH the legacy ndarray and the new list-of-
+      ndarray shapes, so the warning is purely informational. With
+      5 folds x 2 importance kinds per fit, the noise drowns out
+      actionable log entries during normal use.
+
+    Exposed as a function (vs. a module-level statement) so test
+    contexts that snapshot ``warnings.filters`` per-test (pytest
+    does this via ``_pytest.warnings``) can re-install the filter
+    deterministically and assert it is present.
+    """
+    warnings.filterwarnings(
+        "ignore",
+        message=(
+            r"LightGBM binary classifier with TreeExplainer shap values "
+            r"output has changed to a list of ndarray"
+        ),
+        category=UserWarning,
+    )
+
+
+# Install at module import so production runs (uvicorn, ``lizystudio``
+# CLI) get the filter without any explicit call. Tests re-invoke the
+# function directly because pytest's per-test ``catch_warnings``
+# snapshot resets ``warnings.filters`` between tests.
+_install_upstream_warning_filters()
 
 # --- Security headers (H-0039) ---
 
@@ -126,6 +163,10 @@ def create_app() -> FastAPI:
         application.state.metrics = metrics
         application.state.workspace = WorkspaceState(backend=adapter)
         application.state.job_store = JobStore(jobs_dir, metrics=metrics)
+        # P-0099 v3-22a (R-1.5b): reconcile orphaned running/pending
+        # rows to failed and re-attach the paused job's active slot
+        # so the in-place /unpause contract survives restart.
+        application.state.job_store.reconcile_at_startup()
         broadcaster = ProgressBroadcaster(metrics=metrics)
         broadcaster.set_loop(asyncio.get_running_loop())
         application.state.broadcaster = broadcaster

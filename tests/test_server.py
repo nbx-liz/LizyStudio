@@ -275,3 +275,113 @@ def test_h0083_cors_parse_allowed_origins_helper() -> None:
         "https://x.example",
         "https://y.example",
     ]
+
+
+class TestShapWarningSuppression:
+    """Importing ``lizystudio.server`` registers a filter for the SHAP
+    0.51.0 LightGBM-binary ``UserWarning`` so the lizyml SHAP adapter
+    (which already handles both old and new output shapes) does not
+    spam the log with N x folds copies of an upstream API-change
+    notice on every fit.
+    """
+
+    def test_shap_userwarning_filter_is_registered(self) -> None:
+        """Calling ``_install_upstream_warning_filters`` registers an
+        ``ignore`` entry for the SHAP LightGBM-binary message.
+
+        We invoke the installer explicitly because pytest snapshots
+        ``warnings.filters`` per-test (via ``_pytest.warnings``), so
+        the module-import-time filter set up at production startup
+        is restored to the pre-test state before each test runs. The
+        installer is idempotent: production calls it once at module
+        load, this test re-invokes it inside the per-test snapshot.
+        """
+        import warnings as _warnings
+
+        from lizystudio.server import _install_upstream_warning_filters
+
+        _install_upstream_warning_filters()
+
+        matching = [
+            f
+            for f in _warnings.filters
+            if f[0] == "ignore"
+            and f[1] is not None
+            and "TreeExplainer shap values" in f[1].pattern
+        ]
+        assert matching, (
+            "Expected an ``ignore`` filter for the SHAP TreeExplainer "
+            "UserWarning to be registered after calling "
+            "_install_upstream_warning_filters. Current filters: "
+            f"{[(a, p.pattern if p else None) for a, p, *_ in _warnings.filters]}"
+        )
+        # Filter must target UserWarning specifically — broader
+        # categories would silently swallow unrelated signal.
+        assert matching[0][2] is UserWarning, (
+            f"SHAP filter should target UserWarning, got {matching[0][2].__name__}"
+        )
+
+    def test_filter_does_not_swallow_unrelated_userwarnings(self) -> None:
+        """The filter regex must scope tightly to the SHAP message.
+
+        Pin so a future broadening (e.g. a typo turning the regex into
+        ``.*``) does not silently swallow legitimate signal from
+        elsewhere in the stack.
+        """
+        import re
+        import warnings as _warnings
+
+        from lizystudio.server import _install_upstream_warning_filters
+
+        _install_upstream_warning_filters()
+
+        shap_filter = next(
+            (
+                f
+                for f in _warnings.filters
+                if f[0] == "ignore"
+                and f[1] is not None
+                and "TreeExplainer shap values" in f[1].pattern
+            ),
+            None,
+        )
+        assert shap_filter is not None
+        regex = shap_filter[1]
+        assert isinstance(regex, re.Pattern)
+        assert not regex.match("this is an unrelated warning about something else")
+        assert not regex.match("LightGBM regression model warning")
+        # And the actual SHAP message MUST match.
+        assert regex.match(
+            "LightGBM binary classifier with TreeExplainer shap "
+            "values output has changed to a list of ndarray"
+        )
+
+    def test_module_import_invokes_the_installer_in_production(self) -> None:
+        """The module-level installer call survives ``import``.
+
+        Pytest's per-test snapshot does NOT roll back the module-level
+        side effect of the FIRST production import. We assert the
+        installer name is exposed at module top-level so a future
+        refactor cannot accidentally remove the line that wires it
+        into normal startup.
+        """
+        from lizystudio import server
+
+        assert hasattr(server, "_install_upstream_warning_filters"), (
+            "Module must expose _install_upstream_warning_filters so "
+            "tests + production share a single installation surface."
+        )
+        # The installer must be a callable taking no required args.
+        import inspect
+
+        sig = inspect.signature(server._install_upstream_warning_filters)
+        required = [
+            p
+            for p in sig.parameters.values()
+            if p.default is inspect.Parameter.empty
+            and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)
+        ]
+        assert required == [], (
+            "_install_upstream_warning_filters must be callable with no "
+            "required arguments so it works at module import."
+        )

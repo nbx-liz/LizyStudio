@@ -39,6 +39,12 @@ _logger = logging.getLogger(__name__)
 # actually fires before the SIGTERM escalation.
 CANCEL_FLAG_FILENAME = "CANCEL"
 
+# P-0099 v3-20c: on-disk pause flag mirrors the cancel-flag IPC pattern
+# so the subprocess child's fresh JobStore observes pause requests at
+# the cancel-aware callback boundary even though its in-memory
+# ``_pause_requested`` set is disjoint from the parent's.
+PAUSE_FLAG_FILENAME = "PAUSE"
+
 
 # A-10: BLUEPRINT §3.4.4 on-disk layout for a single job. Centralising
 # this map is the core of the path-layout SSOT — every artifact filename
@@ -53,6 +59,7 @@ ArtifactKind = Literal[
     "log",
     "tuning_plot",
     "cancel_flag",
+    "pause_flag",
 ]
 
 ARTIFACT_FILENAMES: dict[ArtifactKind, str] = {
@@ -63,6 +70,7 @@ ARTIFACT_FILENAMES: dict[ArtifactKind, str] = {
     "log": "execution.log",
     "tuning_plot": "tuning_plot.json",
     "cancel_flag": CANCEL_FLAG_FILENAME,
+    "pause_flag": PAUSE_FLAG_FILENAME,
 }
 
 
@@ -84,7 +92,21 @@ class Job:
     """Persistent job metadata."""
 
     job_id: str
-    status: Literal["pending", "running", "completed", "failed", "cancelled"]
+    # P-0099 v3-20a: ``paused`` is a non-terminal state introduced for
+    # R-1.4 (Tune long-run resumability, Issue #360). The state machine
+    # contract (legal transitions, slot ownership, terminal vs non-
+    # terminal classification) is declared in
+    # ``tests/regression/test_inv_state_machine.py``; runtime assertion
+    # of illegal transitions lands in v3-20c alongside the
+    # ``request_pause`` / ``PausedError`` plumbing.
+    status: Literal[
+        "pending",
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+        "paused",
+    ]
     backend_name: str
     config: dict[str, Any]
     data_ref: DataRef
@@ -120,6 +142,15 @@ class JobStore:
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         self._cancel_requested: set[str] = set()
         self._cancel_lock = threading.Lock()
+        # P-0099 v3-20c: pause primitives mirror cancel exactly — same
+        # in-memory set + lock + on-disk flag IPC pattern. Kept as a
+        # separate set so cancel and pause observations stay independent
+        # in the cancel-aware callback (a job can be both cancel- and
+        # pause-requested in flight; the callback raises whichever check
+        # fires first, but the un-observed flag must persist for the
+        # next call).
+        self._pause_requested: set[str] = set()
+        self._pause_lock = threading.Lock()
         self._active_job_id: str | None = None
         self._active_lock = threading.Lock()
         # A-9: the active-slot gauge lives on the per-app MetricsRegistry.
@@ -401,7 +432,8 @@ class JobStore:
         return _build(root, 0)
 
     def has_active_children(self, parent_job_id: str) -> bool:
-        """Return True when any direct child is pending or running (H-0062).
+        """Return True when any direct child is pending, running, or
+        paused (H-0062, P-0099 v3-20c).
 
         Only walks direct children, not the whole descendant tree. This
         matches the Phase B MVP invariant that nested Re-tune is
@@ -411,12 +443,17 @@ class JobStore:
         restriction is ever relaxed, this helper must be rewritten as a
         full subtree walk, otherwise cascade-delete guards will miss
         running grandchildren and silently destroy their work.
+
+        v3-20c: ``paused`` also counts as active — a paused tune holds
+        the workspace's training slot AND owns the Optuna sqlite that
+        feeds the resume worker, so a non-cascade delete of the parent
+        would silently destroy resume state otherwise.
         """
         for cid in self.get_child_job_ids(parent_job_id):
             child = self.get(cid)
             if child is None:
                 continue
-            if child.status in ("pending", "running"):
+            if child.status in ("pending", "running", "paused"):
                 return True
         return False
 
@@ -564,6 +601,202 @@ class JobStore:
         escape the jobs_dir root.
         """
         return self.path_for(job_id, "cancel_flag")
+
+    # --- Pause / unpause (P-0099 v3-20c, R-1.4) ---
+
+    def request_pause(self, job_id: str) -> None:
+        """Mark a job for pause (R-1.4 / Issue #360).
+
+        Mirrors :meth:`request_cancel`: the in-memory set is the source
+        of truth for same-process callers, and ``<job_dir>/PAUSE`` is the
+        IPC channel a subprocess child reads through its own fresh
+        :class:`JobStore`. The cancel-aware callback raises
+        :class:`PausedError` instead of :class:`CancelledError` when this
+        observation fires, and ``_run_job_core`` catches it on a branch
+        that KEEPS ``active_job_id`` so the same job id can be resumed
+        in place (slot ownership extension to INV-1).
+        """
+        with self._pause_lock:
+            self._pause_requested.add(job_id)
+        # Best-effort file write. Same job_dir-must-exist guard and
+        # tmp-in-jobs_dir staging as request_cancel — see that method's
+        # comment for the concurrent-delete-race rationale.
+        tmp_path: Path | None = None
+        try:
+            flag_path = self._pause_flag_path(job_id)
+            if not flag_path.parent.exists():
+                return
+            tmp_path = self.jobs_dir / f".pause-{job_id}-{os.getpid()}.tmp"
+            tmp_path.write_bytes(b"")
+            os.replace(tmp_path, flag_path)
+        except (OSError, ValueError):
+            if tmp_path is not None:
+                with contextlib.suppress(OSError):
+                    tmp_path.unlink(missing_ok=True)
+            _logger.warning(
+                "Failed to write pause flag for job %s", job_id, exc_info=True
+            )
+
+    def is_pause_requested(self, job_id: str) -> bool:
+        """Check whether a pause request has been observed.
+
+        In-memory check first (hot cancel-aware-callback path), then
+        on-disk flag fallback for subprocess children.  Any OSError /
+        ValueError fallback returns ``False`` so a malformed job_id or
+        permissions glitch cannot stall the worker.
+        """
+        with self._pause_lock:
+            if job_id in self._pause_requested:
+                return True
+        try:
+            return self._pause_flag_path(job_id).exists()
+        except (OSError, ValueError):
+            return False
+
+    def clear_pause(self, job_id: str) -> None:
+        """Clear the pause observation after the worker has unwound.
+
+        The /unpause endpoint calls this immediately before re-launching
+        the resume worker so the next callback iteration does not raise
+        :class:`PausedError` again on the same flag.
+        """
+        with self._pause_lock:
+            self._pause_requested.discard(job_id)
+        try:
+            self._pause_flag_path(job_id).unlink(missing_ok=True)
+        except (OSError, ValueError):
+            _logger.warning(
+                "Failed to clear pause flag for job %s", job_id, exc_info=True
+            )
+
+    def _pause_flag_path(self, job_id: str) -> Path:
+        """Resolve the pause flag path with the traversal guard."""
+        return self.path_for(job_id, "pause_flag")
+
+    # --- INV-3 runtime guard (P-0099 v3-20c) ---
+
+    def set_status(self, job_id: str, new_status: str) -> None:
+        """Persist ``new_status`` for *job_id* under the INV-3 guard.
+
+        Asserts ``(current_status, new_status)`` is a member of
+        :data:`tests/regression/test_inv_state_machine.py:LEGAL_TRANSITIONS`
+        (re-declared inline below to avoid a runtime dependency on the
+        test module).  Illegal transitions raise ``AssertionError`` so a
+        regression in the API layer cannot silently rewind audit trails
+        or skip non-terminal states.
+
+        Direct ``update(job)`` writes still bypass this guard — the
+        runtime assertion is opt-in for callers that mutate status at
+        the API boundary (e.g. /pause, /unpause).  ``_run_job_core``
+        keeps using ``update`` because its except-branches each have a
+        single legal pre-state, so an extra assertion would only be
+        defensive without changing the executable contract.
+        """
+        # P-0099 INV-3: pinned in tests/regression/test_inv_state_machine.py
+        # under ``LEGAL_TRANSITIONS``. Mirrored here as a frozenset literal
+        # so the runtime guard does not import from a test module.
+        legal_transitions: frozenset[tuple[str, str]] = frozenset(
+            {
+                ("pending", "running"),
+                ("pending", "cancelled"),
+                ("running", "completed"),
+                ("running", "failed"),
+                ("running", "cancelled"),
+                ("running", "paused"),
+                ("paused", "running"),
+                ("paused", "cancelled"),
+                ("paused", "failed"),
+            }
+        )
+        job = self.get(job_id)
+        assert job is not None, f"set_status: job {job_id!r} does not exist"
+        current = job.status
+        assert (current, new_status) in legal_transitions, (
+            f"INV-3 violation: illegal transition {current!r} -> {new_status!r} "
+            f"for job {job_id!r}"
+        )
+        # mypy: new_status is a free str on the API surface; the literal
+        # widening here is verified by the legal_transitions membership
+        # check above, which only contains valid Job.status literals.
+        job.status = new_status  # type: ignore[assignment]
+        self.update(job)
+
+    # --- Startup reconciliation (P-0099 v3-22a, R-1.5b) ---
+
+    def reconcile_at_startup(self) -> None:
+        """Reconcile in-memory state with disk after server (re)start.
+
+        At fresh process start the in-memory ``_active_job_id`` is
+        ``None`` while ``meta.json`` files survive the restart. Three
+        invariants must be restored:
+
+          INV-restart-1: ``running`` / ``pending`` rows on disk are
+            orphaned — no thread / subprocess survived. Reconcile to
+            ``failed`` with a clear error so the UI does not dangle.
+
+          INV-restart-2: at most ONE ``paused`` job survives (newest
+            by ``created_at`` wins). The survivor claims the active
+            slot so a concurrent /tune is rejected with
+            ``JOB_CONFLICT`` until the user clicks Resume or Cancel
+            (in-place /unpause contract from v3-20d).
+
+          INV-restart-3: terminal rows (completed / failed / cancelled)
+            are NEVER rewritten — reconciliation is a one-way forward
+            arrow.
+
+        Idempotent: running a second time on already-reconciled state
+        is a no-op (paused survivor stays paused, terminals stay
+        terminal, no further candidates exist).
+        """
+        paused_candidates: list[Job] = []
+        running_orphans: list[Job] = []
+        for job in self.list():
+            if job.status in ("running", "pending"):
+                running_orphans.append(job)
+            elif job.status == "paused":
+                paused_candidates.append(job)
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        for job in running_orphans:
+            _logger.warning(
+                "Reconciling orphaned %s job %s to failed at startup",
+                job.status,
+                job.job_id,
+            )
+            job.status = "failed"
+            job.error = "Server restarted before this job could complete"
+            job.completed_at = now
+            self.update(job)
+
+        if len(paused_candidates) > 1:
+            paused_candidates.sort(key=lambda j: j.created_at, reverse=True)
+            winner = paused_candidates[0]
+            _logger.warning(
+                "Multiple paused jobs at startup (%d); keeping newest %s, "
+                "reconciling the rest to failed",
+                len(paused_candidates),
+                winner.job_id,
+            )
+            for job in paused_candidates[1:]:
+                job.status = "failed"
+                job.error = (
+                    "Multiple paused jobs found at startup; only the newest "
+                    "is preserved (INV-1: at most one paused job)"
+                )
+                job.completed_at = now
+                self.update(job)
+            paused_candidates = [winner]
+
+        if paused_candidates:
+            survivor = paused_candidates[0]
+            with self._active_lock:
+                self._active_job_id = survivor.job_id
+                self._set_active_gauge(1)
+            _logger.info(
+                "Re-attached paused job %s to active slot at startup",
+                survivor.job_id,
+            )
 
     # --- Active job tracking (concurrency control) ---
 

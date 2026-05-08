@@ -151,6 +151,32 @@ export async function cancelJob(jobId: string): Promise<{ status: string }> {
   return unwrap(data, "/api/jobs/{job_id}/cancel");
 }
 
+/**
+ * P-0099 v3-20d: request a tune job to pause at the next cooperative
+ * callback boundary. Tune-only — fit jobs reject with
+ * ``JOB_NOT_PAUSEABLE``.
+ */
+export async function pauseJob(jobId: string): Promise<{ status: string }> {
+  const { data } = await apiClient.POST("/api/jobs/{job_id}/pause", {
+    params: { path: { job_id: jobId } },
+  });
+  return unwrap(data, "/api/jobs/{job_id}/pause");
+}
+
+/**
+ * P-0099 v3-20d: re-launch a paused tune in place (same job_id). The
+ * Optuna study re-attaches via ``load_if_exists=True`` and continues
+ * from the next trial.
+ */
+export async function unpauseJob(
+  jobId: string,
+): Promise<{ status: string; job_id: string }> {
+  const { data } = await apiClient.POST("/api/jobs/{job_id}/unpause", {
+    params: { path: { job_id: jobId } },
+  });
+  return unwrap(data, "/api/jobs/{job_id}/unpause");
+}
+
 export async function deleteJob(
   jobId: string,
   options: { cascade?: boolean } = {},

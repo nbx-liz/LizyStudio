@@ -207,7 +207,17 @@ class JobSummaryResponse(BaseModel):
     """
 
     job_id: str
-    status: Literal["pending", "running", "completed", "failed", "cancelled"]
+    # P-0099 v3-20a: ``paused`` joins the existing five statuses for
+    # R-1.4 (Tune long-run resumability, Issue #360). Legal transitions
+    # are pinned in ``tests/regression/test_inv_state_machine.py``.
+    status: Literal[
+        "pending",
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+        "paused",
+    ]
     backend_name: str
     job_type: Literal["fit", "tune"]
     created_at: str
@@ -249,6 +259,19 @@ class CancelJobResponse(BaseModel):
     """POST /api/jobs/{job_id}/cancel."""
 
     status: str
+
+
+class PauseJobResponse(BaseModel):
+    """POST /api/jobs/{job_id}/pause (P-0099 v3-20d, R-1.4)."""
+
+    status: str
+
+
+class UnpauseJobResponse(BaseModel):
+    """POST /api/jobs/{job_id}/unpause (P-0099 v3-20d, R-1.4)."""
+
+    status: str
+    job_id: str
 
 
 class DeleteJobResponse(BaseModel):
