@@ -3602,3 +3602,118 @@ P-0095 の round-trip CI gate は単一 release 内のシリアライズ整合�
 - 2026-05-07 **Approved** — v3-25 phase で a (matrix regression test) → b (CI workflow + fixtures) → c (LegacyFormatProtectionError + env var gate) の 3 PR 構成で着手
 
 
+### P-0104: Tune workflow 全面整備（Re-tune UX + canonical defaults + validation guardrails + LizyML v0.15 SSOT 連動）
+
+- **Date:** 2026-05-11 起票・即承認
+- **Related:** Issue #458 / #459 / #460 / #461、LizyML #159（H-0079 v0.15.0）、`docs/issue-cleanup-plan-2026-05-10.md` Wave 1.1、BLUEPRINT.md §4.2.2、`src/lizystudio/backends/lizyml_ui_schema.py`、`src/lizystudio/backends/lizyml/config_compat.py`、`src/lizystudio/backends/lizyml/config_mixin.py`、`frontend/src/components/workspace/SearchSpaceRow.tsx`、`frontend/src/components/retune/RetuneSettingsSection.tsx`
+
+#### Motivation
+
+LizyML v0.15.0 の出荷（2026-05-10）により、Studio の Tune workflow を取り巻く上流ブロッカー（`parameter_bounds()` / `objective_choices()` / `metric_choices()` API、silent objective override fix）がすべて解消された。同時に Studio 側の Tune 周辺で 4 つの open Issue（#458 / #459 / #460 / #461）が並行して残っており、いずれも `lizyml_ui_schema.py` / `SearchSpaceRow.tsx` / BLUEPRINT.md §4.2.2 を編集する。これらを別々の Proposal として進めると以下の問題がある:
+
+1. **Spec 重複編集**: BLUEPRINT.md の Tune 関連節を 3 PR が連続して書き換え、conflict / churn が増える
+2. **objective / metric master の整合**: #459 で objective master を整理する一方、#461 で UiSchema 経由 LizyML SSOT に切替えるため、暫定状態が中間 PR で発生する
+3. **D6 確定の反映**: #460 を当初の bounds map ベース（Option A）から D6=Option C（usability-only）に縮退済だが、Issue body と実装計画が未だ齟齬を含む
+4. **multiclass `auc` 不整合**: LizyML Phase 3 で発覚した LightGBM 4.x 不整合（multiclass で `auc` を指定すると拒否）が Studio `option_sets.model_metric.multiclass` にも残存している
+
+これらは「Tune workflow 全体を v0.15 SSOT に揃え直す」という単一テーマの subset であり、1 Proposal にまとめることで Decision 整合・実装順序・後方互換戦略が一貫する。
+
+#### Purpose
+
+- **Scope-1 (#459)**: Tune 初期パラメータ仕様を 3 task（regression / binary / multiclass）で再確立。`get_default_config()` の Fit seed default を `1120` に統一。`SearchSpaceRow` で inner_valid を選択できる UI を追加。`option_sets.objective.regression` から `cross_entropy`（regression task で意味を持たない）を除去
+- **Scope-2 (#458)**: Re-tune Settings の `enabled` Switch を復活（null payload で送信時は backward-compat として `n_rounds=1` 同等扱い）。BLUEPRINT.md §4.2.2 の default-range 表を現行実装に整合
+- **Scope-3 (#460, D6=Option C)**: NumberInput を integer parameter で強制 integer 入力。範囲外入力に inline 警告（実装は frontend のみ、bounds map は導入しない — Wave 3 で UiSchema 直行）
+- **Scope-4 (#461 expanded)**: UiSchema を LizyML v0.15 SSOT 直結化。`LGBMProvider().parameter_bounds(task)` / `.objective_choices(task)` / `.metric_choices(task)` を `lizyml_ui_schema.build_ui_schema()` から読み、Studio の hardcoded master を撤去。Range Min/Max を `min_allowed` / `max_allowed` でクランプ。`BoundaryDimStatus.clamped_to_bound` バッジを Tune 実行結果 UI に表示。`validate_config` を `parse_space()` 経由に rewire し v0.13 の typed errors を活用
+- **Scope-5 (auc removal)**: `option_sets.model_metric.multiclass` から `auc` を除去（LizyML Phase 3 と sync）。Studio 側の対応 fixture / e2e snapshot を update
+- **Q1-Q3 確定**:
+  - Q1: `option_sets.objective` master = LizyML `objective_choices(task)` の **full canonical（regression 9 / binary 3 / multiclass 2）**を採用。target 分布制約のある objective（gamma / poisson / tweedie / mape）には UI 上で warning ヘルプテキストを併記
+  - Q2: `option_sets.metric` の表示で `metric_choices(task)["feval"]` 由来の項目に **"Custom (slow)" バッジ**を表示（学習速度の trade-off をユーザに可視化）
+  - Q3: `option_sets.model_metric` を **撤廃**し `option_sets.metric` に一本化（LightGBM 生名は metric の native section で吸収）。`config_compat.py` `allowed_metric` も `option_sets.metric` 参照に切替
+
+#### Invariants
+
+- **INV-tune-1**: `option_sets.objective[task]` の値は `LGBMProvider().objective_choices(task)` と完全一致する（drift CI で固定）
+- **INV-tune-2**: `option_sets.metric[task]` の値は `LGBMProvider().metric_choices(task)["native"] + ["feval"]` と完全一致する
+- **INV-tune-3**: `LGBMConfig.params["objective"]` / `["metric"]` のバリデーションは backend `parse_space()` / Pydantic で一意に行い、frontend は表示のみ。drift CI で同期を保証
+- **INV-tune-4**: Re-tune の保存形式 `tuning.re_tune` は `null`（無効）/ `{ n_rounds: int >= 1, ... }`（有効）の 2 形態のみ許容。既存の `{ n_rounds: 1, ... }` 保存は引き続き読み込める（D2 確定）
+- **INV-tune-5**: SearchSpace の Range Min/Max は `parameter_bounds(task)[name]` の `min_allowed` / `max_allowed` でクランプされ、超過入力は LizyML `parse_space()` で `LizyMLError(BOUNDS_VIOLATION)` を raise する
+- **INV-tune-6**: `option_sets.model_metric` は撤廃され、参照する code path（`config_compat.py` 含む）はすべて `option_sets.metric` を参照する
+
+#### Impact
+
+**Public API:**
+- HTTP endpoints の入出力 schema 変更なし（既存 `tuning.re_tune` payload は受信時 normalize なしで accept）
+- `GET /api/workspace/{id}/ui-schema` の戻り値で `option_sets.model_metric` フィールドが消滅（既存 frontend は `option_sets.metric` のみ参照するよう移行）
+
+**Backend (`src/lizystudio/backends/`):**
+- `lizyml_ui_schema.py`: `build_ui_schema()` が `LGBMProvider()` を引数に受け、`option_sets.objective` / `option_sets.metric` を SSOT から組み立て。`option_sets.model_metric` は削除
+- `lizyml/config_mixin.py`: `get_default_config()` の Fit seed default を `1120` に
+- `lizyml/config_compat.py`: `allowed_metric` の参照先を `option_sets.metric` に変更
+- `lizyml_constants.py`: ハードコード `_OBJECTIVE_BY_TASK` / `_METRIC_BY_TASK` を撤去（SSOT 一本化）
+
+**Frontend (`frontend/src/`):**
+- `components/workspace/SearchSpaceRow.tsx`: inner_valid picker UI 追加、Range Min/Max クランプ、BoundaryDimStatus バッジ表示
+- `components/retune/RetuneSettingsSection.tsx`: enabled Switch 復活、null payload 送信
+- `components/workspace/TuneTab.tsx`: `option_sets.metric` から feval 由来項目に "Custom (slow)" バッジ
+- `components/workspace/TuneEvaluationSection.tsx`: defaults auto-populate（task 切替時）
+- `components/workspace/NumberInput.tsx`: integer parameter で `inputMode="numeric"` + step=1 強制 + inline 警告
+
+**BLUEPRINT.md §4.2.2:**
+- default-range 表を SSOT 連動後の値に更新
+- Re-tune Settings の Switch 仕様を明文化
+- objective / metric の出典を「LizyML EstimatorProvider API」と明記
+
+**Behavior change for users:**
+- Re-tune Settings に Switch が復活し、disabled 時は `tuning.re_tune = null` で保存される
+- `option_sets.objective.regression` から `cross_entropy` が消える（誤って表示されていた選択肢を削除）
+- objective / metric の選択肢が LizyML SSOT から読まれるため、LizyML release ごとに UI の選択肢が自動更新される
+- multiclass で `auc` を選択していた既存 Job は Re-fit 時に `parse_space()` で fail（LightGBM 4.x が拒否するため、現状でも実質的に学習できていない）
+- `cross_entropy` を regression objective に指定していた hand-edited config は `LizyMLError(CONFIG_INVALID)` で拒否される
+
+**LizyML pin:**
+- `pyproject.toml` の `lizyml[plots,tuning,calibration,explain]>=0.12.0,<0.13.0` → `>=0.15.0,<0.16.0`（Wave 1.2 で別 PR）
+
+**Testing:**
+- `tests/contract/test_lizyml_objective_metric_drift.py`（新規）: Studio `option_sets` と LizyML SSOT の同期を CI で固定
+- `tests/contract/test_ui_schema_matches_pydantic.py`（既存）: `cross_entropy` 除去・`auc` 除去を反映
+- `frontend/src/__tests__`: NumberInput integer 強制・SearchSpaceRow inner_valid・RetuneSettingsSection Switch の unit test
+- e2e: workspace-fit / workspace-tune / workspace-retune 系の snapshot 更新
+
+#### Compatibility
+
+- **保存形式**: `tuning.re_tune = { n_rounds: 1, ... }` 形式の既存 Job は読み込み互換（D2 確定 — シム不要、後方互換テストで固定）
+- **dep bump**: LizyML v0.15.0 は behaviour change あり（`LGBMConfig.params["objective"]` が同 task 互換値で実効化）。Studio の e2e snapshot で objective を非デフォルトに固定しているテストは挙動変化の可能性 — Wave 1.2 dep bump PR で smoke test を必須化
+- **既存ユーザの選択肢消失**: `cross_entropy` を regression objective に hand-edit していたユーザは少数。Wave 2.2 で migration note を README / CHANGELOG に追加
+- **multiclass `auc` 利用者**: 現状で実際には学習できていない（LightGBM 4.x が拒否）。明示的エラーに変わるだけで実害なし
+
+#### Acceptance criteria
+
+- [ ] `pyproject.toml` の lizyml pin が `>=0.15.0,<0.16.0`（Wave 1.2）
+- [ ] `lizyml_ui_schema.py` が `LGBMProvider()` の `objective_choices` / `metric_choices` / `parameter_bounds` を SSOT として読む（Wave 2.2 / 3.1）
+- [ ] `option_sets.model_metric` フィールド削除 + 参照 code path の `option_sets.metric` 移行（Wave 2.2 / 3.1）
+- [ ] `option_sets.objective.regression` の `cross_entropy` 除去（Wave 2.2）
+- [ ] `option_sets.metric.multiclass` の `auc` 除去 + 対応 fixture / e2e snapshot 更新（Wave 3.1）
+- [ ] `RetuneSettingsSection` の Switch 復活 + null payload 後方互換テスト（Wave 2.1）
+- [ ] `SearchSpaceRow` inner_valid picker + Range Min/Max クランプ + BoundaryDimStatus バッジ（Wave 2.3 / 3.1）
+- [ ] NumberInput integer 強制 + inline 警告（Wave 2.4）
+- [ ] feval 由来 metric 項目に "Custom (slow)" バッジ（Wave 3.1）
+- [ ] BLUEPRINT.md §4.2.2 の default-range 表を SSOT 連動後の値に更新（Wave 2.2 / 3.1 でまとめて）
+- [ ] `tests/contract/test_lizyml_objective_metric_drift.py` 新設（Wave 3.1）
+- [ ] `tests/contract/test_ui_schema_matches_pydantic.py` を新規 schema に整合（Wave 2.2 以降の各 PR で）
+- [ ] `pnpm test:e2e --grep workspace-fit|workspace-tune|workspace-retune` 全 green（Wave 2 / 3 完了時）
+
+#### Alternatives considered
+
+- **(a) #458 / #459 / #460 / #461 を別 Proposal で 4 件起票**: 拒否。BLUEPRINT.md と `lizyml_ui_schema.py` を 4 PR が連続編集して conflict / churn が増える。同一テーマ（Tune workflow + LizyML SSOT）の subset を artificially 分割する弊害が大きい
+- **(b) #460 を D6=Option A（hardcoded bounds map）で実装**: 拒否（既に却下済）。bounds map は #461 の UiSchema 直行で代替され、throwaway code になる
+- **(c) Q1=conservative subset**: 拒否（user 確定）。LightGBM が許す全 objective を見せたいユーザに不足。target 分布制約は warning ヘルプテキストで対処すれば足りる
+- **(d) Q3=model_metric を保持**: 拒否（user 確定）。SSOT の二重化で同期コストが増える。aliases 整理（softmax→multiclass / l1→regression_l1）は撤廃で不要に
+- **(e) Wave 1.1 を draft Decision で commit**: 拒否（プラン §5 案）。Q1-Q3 が同セッションで解決済のため、即承認で進める方が後段の implementation PR が動きやすい
+
+→ 採用は **(f) 1 Proposal に 5 scope 統合・5 Wave に分割実装**（Wave 2.1 / 2.2 / 2.3 / 2.4 / 3.1 = 5 PR、+ Wave 1.2 dep bump = 計 6 PR）。
+
+#### Decision
+
+- 2026-05-11 **Approved** — Wave 2.1（#458 Re-tune Switch）→ 2.2（#459 backend canonical defaults）→ 2.3（#459 frontend inner_valid + auto-populate）→ 2.4（#460 NumberInput usability）→ 3.1（#461 UiSchema SSOT 統合 + auc 除去 + drift CI）の 5 PR 直列実装。Wave 1.2 dep bump（lizyml v0.15）は本 Proposal 採用と並行で先行 PR 化。Q1-Q3 は本セッションで確定（Q1=full canonical / Q2=feval badge / Q3=model_metric 撤廃）
+
+
