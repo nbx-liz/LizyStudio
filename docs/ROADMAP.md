@@ -47,6 +47,7 @@
 | ドキュメント | 役割 | ステータス | 進捗追跡 |
 |---|---|---|---|
 | `docs/gui-e2e-plan.md` | GUI E2E Phase A/B/C/D 計画 | 🟡 進行中（Phase D 残り B-1/B-2/B-4/B-5/B-6/B-8 + Phase C generator） | 本 ROADMAP §4 |
+| `docs/issue-cleanup-plan-2026-05-10.md` | Open Issue 23 件を 18 PR で消化する 6 Wave 計画（Tune workflow 中心） | 🟡 計画策定済み・未着手 | 本ドキュメント自体 |
 
 ### Tier 5: アーカイブ（完了済み・参照のみ）
 
