@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import {
   API,
   createTestCsv,
+  deleteAllJobs,
   setupAndFit,
   waitForJobDone,
 } from "./helpers/api";
@@ -106,6 +107,9 @@ test.describe("Job re-fit flow", () => {
     page,
     request,
   }) => {
+    // Earlier tests in this file leave jobs around (no deleteAllJobs in
+    // beforeEach); start clean so the seeded fit is "#1".
+    await deleteAllJobs(request);
     const csvPath = createTestCsv(100, "/tmp/e2e_refit_ui.csv");
     const jobId = await setupAndFit(request, csvPath);
     const detail = await waitForJobDone(request, jobId);

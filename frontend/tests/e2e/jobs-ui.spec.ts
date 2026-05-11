@@ -321,13 +321,24 @@ test.describe("Jobs page UI (B-1)", () => {
       const dialog = page.getByRole("dialog");
       await expect(dialog).toBeVisible({ timeout: 5_000 });
 
-      // Pick the format chip (re-selecting "Model" is harmless).
+      // Pick the format chip (re-selecting "Model" is harmless). This
+      // also resets the output-path input to ``./exports/job_N_<fmt>``,
+      // which the backend rejects (outside the allowed ``/tmp`` root) —
+      // so overwrite it with a /tmp path AFTER the chip click.
+      // ``model`` → lizyml ``Model.export(dir)`` writes pkl/metadata into
+      // the dir (created if absent); ``report`` → a single .html file
+      // (the .html suffix avoids ``export_report``'s "treat as dir" branch).
       await dialog
         .getByRole("button", {
           name: format === "model" ? "Model" : "Report",
           exact: true,
         })
         .click();
+      const outPath =
+        format === "model"
+          ? `/tmp/e2e_export_model_${jobId}`
+          : `/tmp/e2e_export_report_${jobId}.html`;
+      await dialog.getByRole("textbox").first().fill(outPath);
 
       // The confirm button inside the dialog is also labelled "Export"
       // (ExportDialog.tsx) — scope to the dialog to disambiguate from
