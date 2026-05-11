@@ -93,8 +93,10 @@ test.describe("Inference coverage (#443/#444/#448)", () => {
     await expect(combo).toBeEnabled({ timeout: 15_000 });
     await combo.click();
     await page.getByRole("listbox").getByRole("option").first().click();
+    // The page auto-selects the latest inference record (#1 for a single
+    // run, #N after N runs) — wait for whichever "Inf #<n>" heading lands.
     await expect(
-      page.getByRole("heading").filter({ hasText: /Inf\s*#1/ }),
+      page.getByRole("heading").filter({ hasText: /Inf\s*#\d/ }).first(),
     ).toBeVisible({ timeout: 15_000 });
   }
 
