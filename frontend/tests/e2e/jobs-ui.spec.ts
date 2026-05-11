@@ -292,4 +292,163 @@ test.describe("Jobs page UI (B-1)", () => {
       )
       .toMatch(/^(cancelled|completed|failed)$/);
   });
+
+  /**
+   * Issue #445 — Export dialog Format toggle drives the export_type
+   * request payload (BLUEPRINT 4.3.4). The existing "Export and Delete
+   * buttons open their respective dialogs" test stops at "dialog opens";
+   * this one parametrises over the two formats and asserts (a) the
+   * POST /export body carries the selected export_type and (b) the
+   * dialog auto-dismisses on success.
+   */
+  for (const format of ["model", "report"] as const) {
+    test(`Export dialog: Format=${format} drives export_type and dismisses on success`, async ({
+      page,
+      request,
+    }) => {
+      const jobId = await setupAndFit(request, CSV_PATH);
+      await waitForJobDone(request, jobId);
+
+      await dismissOnboarding(page);
+      await page.goto("/jobs");
+      await page.waitForLoadState("networkidle");
+      await expect(
+        page.getByRole("heading", { name: /^Fit\s*#1\b/ }),
+      ).toBeVisible({ timeout: 15_000 });
+
+      // Open the Export dialog from the JobDetail action row.
+      await page.getByRole("button", { name: "Export", exact: true }).click();
+      const dialog = page.getByRole("dialog");
+      await expect(dialog).toBeVisible({ timeout: 5_000 });
+
+      // Pick the format chip (re-selecting "Model" is harmless).
+      await dialog
+        .getByRole("button", {
+          name: format === "model" ? "Model" : "Report",
+          exact: true,
+        })
+        .click();
+
+      // The confirm button inside the dialog is also labelled "Export"
+      // (ExportDialog.tsx) — scope to the dialog to disambiguate from
+      // the JobDetail "Export" button that opened it.
+      const exportReqPromise = page.waitForRequest(
+        (req) =>
+          req.url().includes(`/api/jobs/${jobId}/export`) &&
+          req.method() === "POST",
+        { timeout: 15_000 },
+      );
+      await dialog.getByRole("button", { name: "Export", exact: true }).click();
+      const exportReq = await exportReqPromise;
+      expect(
+        (exportReq.postDataJSON() as { export_type: string }).export_type,
+      ).toBe(format);
+
+      // export_model / export_report create the parent dir, so the
+      // export succeeds and ExportDialog calls onOpenChange(false).
+      await expect(dialog).not.toBeVisible({ timeout: 20_000 });
+    });
+  }
+
+  /**
+   * Issue #442 — UI Pause / Resume buttons on the Jobs detail panel
+   * (v3-20f). tune-resume.spec.ts covers the HTTP contract; this walks
+   * the actual PauseActionButton / UnpauseActionButton (labels "Pause" /
+   * "Resume") through a real browser -> backend round-trip.
+   *
+   * @ci-flaky — depends on a long-running tune subprocess being in
+   * "running" when the pause request lands; CI runners occasionally
+   * SIGTERM the subprocess mid-tune (see session-restore.spec.ts).
+   */
+  test("Pause / Resume buttons drive backend state transitions through the UI @ci-flaky", async ({
+    page,
+    request,
+  }) => {
+    test.setTimeout(180_000);
+
+    // Start a small tune via API (n_trials=4 keeps it under budget while
+    // still being "running" when /pause lands).
+    expect(
+      (
+        await request.post(`${API}/workspace/data/path`, {
+          data: { path: CSV_PATH },
+        })
+      ).status(),
+    ).toBe(200);
+    const defaultsRes = await request.get(
+      `${API}/workspace/config/defaults?task=binary&target=target`,
+    );
+    expect(defaultsRes.status()).toBe(200);
+    const config = {
+      ...(await defaultsRes.json()),
+      tuning: {
+        optuna: {
+          params: { n_trials: 4, timeout: null },
+          space: {
+            learning_rate: { type: "float", low: 0.001, high: 0.3, log: true },
+          },
+        },
+      },
+    };
+    expect(
+      (await request.put(`${API}/workspace/config`, { data: config })).status(),
+    ).toBe(200);
+    const tuneRes = await request.post(`${API}/workspace/tune`);
+    expect(tuneRes.status()).toBe(200);
+    const jobId = (await tuneRes.json()).job_id as string;
+
+    const pollStatus = async (): Promise<string | null> => {
+      const res = await request.get(`${API}/jobs/${jobId}`);
+      return res.status() === 200
+        ? ((await res.json()) as { status: string }).status
+        : null;
+    };
+
+    // Wait until the worker has claimed the slot (a /pause before
+    // status="running" would 400).
+    await expect
+      .poll(pollStatus, { timeout: 30_000, intervals: [200, 250] })
+      .toBe("running");
+
+    await dismissOnboarding(page);
+    await page.goto("/jobs");
+    await page.waitForLoadState("networkidle");
+    await page
+      .getByRole("button", { name: /#1\b/ })
+      .first()
+      .click();
+    await expect(
+      page.getByRole("heading", { name: /^Tune\s*#1\b/ }),
+    ).toBeVisible({ timeout: 15_000 });
+
+    // Pause via the UI button -> backend status becomes paused.
+    const pauseRespPromise = page.waitForResponse(
+      (res) =>
+        res.url().endsWith(`/api/jobs/${jobId}/pause`) &&
+        res.request().method() === "POST",
+      { timeout: 15_000 },
+    );
+    await page.getByRole("button", { name: /^Pause/ }).click();
+    expect((await pauseRespPromise).status()).toBe(200);
+    await expect
+      .poll(pollStatus, { timeout: 30_000, intervals: [250, 500] })
+      .toBe("paused");
+
+    // Resume via the UI button -> backend status returns to running.
+    const unpauseRespPromise = page.waitForResponse(
+      (res) =>
+        res.url().endsWith(`/api/jobs/${jobId}/unpause`) &&
+        res.request().method() === "POST",
+      { timeout: 15_000 },
+    );
+    await page.getByRole("button", { name: /^Resume/ }).click();
+    expect((await unpauseRespPromise).status()).toBe(200);
+    await expect
+      .poll(pollStatus, { timeout: 30_000, intervals: [250, 500] })
+      // "running" again, or it may have already finished the 4 trials.
+      .toMatch(/^(running|completed)$/);
+
+    // Best-effort cleanup.
+    await request.post(`${API}/jobs/${jobId}/cancel`);
+  });
 });
