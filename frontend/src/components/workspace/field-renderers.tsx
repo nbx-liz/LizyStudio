@@ -134,6 +134,7 @@ export function renderNumberField(
   onChange: OnChange,
 ): ReactNode {
   const hasRange = prop.minimum != null && prop.maximum != null;
+  const numericParamType = prop.type === "integer" ? "integer" : "number";
 
   if (hasRange) {
     const min = prop.minimum as number;
@@ -149,6 +150,7 @@ export function renderNumberField(
             step={step}
             min={min}
             max={max}
+            paramType={numericParamType}
             placeholder={
               prop.default != null ? String(prop.default) : undefined
             }
@@ -168,6 +170,7 @@ export function renderNumberField(
         value={value != null ? Number(value) : undefined}
         onChange={(v) => onChange(path, v)}
         step={step}
+        paramType={numericParamType}
         placeholder={prop.default != null ? String(prop.default) : undefined}
       />
     </FormField>

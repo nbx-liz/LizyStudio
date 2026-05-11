@@ -177,4 +177,121 @@ describe("NumberInput", () => {
     fireEvent.click(screen.getByRole("button", { name: /decrement/i }));
     expect(onChange).toHaveBeenCalledWith(-5);
   });
+
+  // P-0104 Wave 2.4 / Issue #460 — integer paramType usability guard.
+  describe("paramType=integer", () => {
+    it('advertises inputMode="numeric" to mobile keyboards', () => {
+      render(<NumberInput value={10} onChange={vi.fn()} paramType="integer" />);
+      const input = screen.getByRole("textbox");
+      expect(input).toHaveAttribute("inputmode", "numeric");
+    });
+
+    it("typing an integer string still drives onChange", () => {
+      const onChange = vi.fn();
+      render(
+        <NumberInput
+          value={undefined}
+          onChange={onChange}
+          paramType="integer"
+        />,
+      );
+      const input = screen.getByRole("textbox");
+      fireEvent.change(input, { target: { value: "42" } });
+      expect(onChange).toHaveBeenCalledWith(42);
+    });
+
+    it("rejects decimal characters during typing and surfaces inline warning", () => {
+      const onChange = vi.fn();
+      render(<NumberInput value={1} onChange={onChange} paramType="integer" />);
+      const input = screen.getByRole("textbox");
+      onChange.mockClear();
+      fireEvent.change(input, { target: { value: "1.5" } });
+      // Raw text is preserved so the user can correct it
+      expect(input).toHaveValue("1.5");
+      // But onChange does NOT fire with the decimal value
+      expect(onChange).not.toHaveBeenCalled();
+      // Inline warning + aria-invalid are surfaced
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Integer values only",
+      );
+      expect(input).toHaveAttribute("aria-invalid", "true");
+    });
+
+    it("clears the violation when the user deletes the decimal point", () => {
+      const onChange = vi.fn();
+      render(<NumberInput value={1} onChange={onChange} paramType="integer" />);
+      const input = screen.getByRole("textbox");
+      fireEvent.change(input, { target: { value: "1.5" } });
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+      onChange.mockClear();
+      fireEvent.change(input, { target: { value: "15" } });
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(input).not.toHaveAttribute("aria-invalid", "true");
+      expect(onChange).toHaveBeenCalledWith(15);
+    });
+
+    it("blur on a decimal value rounds to nearest integer via Math.round", () => {
+      const onChange = vi.fn();
+      render(<NumberInput value={1} onChange={onChange} paramType="integer" />);
+      const input = screen.getByRole("textbox");
+      fireEvent.change(input, { target: { value: "1.5" } });
+      onChange.mockClear();
+      fireEvent.blur(input);
+      expect(onChange).toHaveBeenCalledWith(2);
+      expect(input).toHaveValue("2");
+      // Violation cleared on blur
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("blur rounds 1.4 down to 1 (Math.round half-away-from-zero)", () => {
+      const onChange = vi.fn();
+      render(<NumberInput value={1} onChange={onChange} paramType="integer" />);
+      const input = screen.getByRole("textbox");
+      fireEvent.change(input, { target: { value: "1.4" } });
+      onChange.mockClear();
+      fireEvent.blur(input);
+      expect(onChange).toHaveBeenCalledWith(1);
+    });
+
+    it("stepper buttons still work in integer mode", () => {
+      const onChange = vi.fn();
+      render(
+        <NumberInput
+          value={10}
+          onChange={onChange}
+          paramType="integer"
+          step={1}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: /increment/i }));
+      expect(onChange).toHaveBeenCalledWith(11);
+    });
+
+    it("paramType=number preserves existing decimal-typing behaviour", () => {
+      const onChange = vi.fn();
+      render(<NumberInput value={0} onChange={onChange} paramType="number" />);
+      const input = screen.getByRole("textbox");
+      fireEvent.change(input, { target: { value: "0.5" } });
+      expect(onChange).toHaveBeenCalledWith(0.5);
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("clamps integer value to min/max on blur", () => {
+      const onChange = vi.fn();
+      render(
+        <NumberInput
+          value={5}
+          onChange={onChange}
+          paramType="integer"
+          min={0}
+          max={10}
+        />,
+      );
+      const input = screen.getByRole("textbox");
+      fireEvent.change(input, { target: { value: "20" } });
+      onChange.mockClear();
+      fireEvent.blur(input);
+      expect(onChange).toHaveBeenCalledWith(10);
+    });
+  });
 });
