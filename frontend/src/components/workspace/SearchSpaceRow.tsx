@@ -231,6 +231,8 @@ export function SearchSpaceRow({
               value={entry.low}
               onChange={(v) => onUpdateEntry(param.key, { low: v ?? 0 })}
               step={isInteger ? 1 : (stepMap?.[param.key] ?? 0.001)}
+              paramType={isInteger ? "integer" : "number"}
+              ariaLabel={`${param.key} min`}
             />
           </div>
           <div className="flex items-center gap-2">
@@ -239,6 +241,8 @@ export function SearchSpaceRow({
               value={entry.high}
               onChange={(v) => onUpdateEntry(param.key, { high: v ?? 0 })}
               step={isInteger ? 1 : (stepMap?.[param.key] ?? 0.001)}
+              paramType={isInteger ? "integer" : "number"}
+              ariaLabel={`${param.key} max`}
             />
           </div>
           <div className="flex items-center gap-2">
@@ -269,6 +273,8 @@ export function SearchSpaceRow({
                 onChange={(v) => onUpdateEntry(param.key, { step: v })}
                 min={1}
                 step={1}
+                paramType="integer"
+                ariaLabel={`${param.key} step`}
               />
             </div>
           )}

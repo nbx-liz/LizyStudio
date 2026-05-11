@@ -319,6 +319,71 @@ describe("SearchSpaceRow – range mode expanded", () => {
     expect(screen.getByText("Step")).toBeInTheDocument();
   });
 
+  // P-0104 Wave 2.4 / Issue #460 — integer paramType on Range Min/Max
+  // surfaces an inline warning when the user attempts a decimal value
+  // and does NOT propagate the decimal upward via onUpdateEntry.
+  it("Range Min for integer paramType rejects decimals and shows inline warning", () => {
+    const intSpace = {
+      n_estimators: { type: "int", low: 10, high: 500, log: false },
+    };
+    const onUpdateEntry = vi.fn();
+    renderWithQuery(
+      <SearchSpaceRow
+        {...makeProps({
+          param: { ...baseParam, key: "n_estimators", type: "integer" },
+          space: intSpace,
+          isExpanded: true,
+          onUpdateEntry,
+        })}
+      />,
+    );
+    const minInput = screen.getByRole("textbox", { name: /n_estimators min/i });
+    fireEvent.change(minInput, { target: { value: "10.5" } });
+    expect(screen.getByRole("alert")).toHaveTextContent("Integer values only");
+    expect(onUpdateEntry).not.toHaveBeenCalled();
+  });
+
+  it("Range Max for integer paramType rounds to int on blur", () => {
+    const intSpace = {
+      n_estimators: { type: "int", low: 10, high: 500, log: false },
+    };
+    const onUpdateEntry = vi.fn();
+    renderWithQuery(
+      <SearchSpaceRow
+        {...makeProps({
+          param: { ...baseParam, key: "n_estimators", type: "integer" },
+          space: intSpace,
+          isExpanded: true,
+          onUpdateEntry,
+        })}
+      />,
+    );
+    const maxInput = screen.getByRole("textbox", { name: /n_estimators max/i });
+    fireEvent.change(maxInput, { target: { value: "500.6" } });
+    onUpdateEntry.mockClear();
+    fireEvent.blur(maxInput);
+    expect(onUpdateEntry).toHaveBeenCalledWith(
+      "n_estimators",
+      expect.objectContaining({ high: 501 }),
+    );
+  });
+
+  it("Range Min for float paramType keeps decimal-typing behaviour", () => {
+    const onUpdateEntry = vi.fn();
+    renderWithQuery(
+      <SearchSpaceRow
+        {...makeProps({ space: rangeSpace, isExpanded: true, onUpdateEntry })}
+      />,
+    );
+    const inputs = screen.getAllByRole("textbox");
+    fireEvent.change(inputs[0], { target: { value: "0.0001" } });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(onUpdateEntry).toHaveBeenCalledWith(
+      "learning_rate",
+      expect.objectContaining({ low: 0.0001 }),
+    );
+  });
+
   it("calls onToggleExpand when summary button clicked in range mode", () => {
     const onToggleExpand = vi.fn();
     renderWithQuery(
