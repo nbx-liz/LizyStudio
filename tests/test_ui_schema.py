@@ -673,12 +673,16 @@ class TestLizyMLAdapterUiSchema:
         assert ssf["metric"] == "model_metric"
 
     def test_search_space_catalog_learning_rate_default_mode_range(self) -> None:
-        """learning_rate must have default_mode='range' and default_range (H-0053)."""
+        """learning_rate must have default_mode='range' and default_range.
+
+        P-0104 Wave 2.2 / Issue #459 binary canonical spec narrows the
+        previous high=0.1 to high=0.01 (log-uniform).
+        """
         schema = LizyMLAdapter().get_ui_schema()
         catalog = {e["key"]: e for e in schema["search_space_catalog"]}
         lr = catalog["learning_rate"]
         assert lr["default_mode"] == "range"
-        assert lr["default_range"] == {"low": 0.0001, "high": 0.1, "log": True}
+        assert lr["default_range"] == {"low": 0.0001, "high": 0.01, "log": True}
 
     def test_search_space_catalog_num_leaves_no_default_range(self) -> None:
         """num_leaves must NOT have default_mode/default_range (Widget conformance).
@@ -692,23 +696,36 @@ class TestLizyMLAdapterUiSchema:
         assert "default_range" not in nl
 
     def test_search_space_catalog_n_estimators_default_mode_range(self) -> None:
-        """n_estimators must have default_mode='range' and default_range (H-0053)."""
+        """n_estimators must have default_mode='range' and default_range.
+
+        P-0104 Wave 2.2 / Issue #459 binary canonical spec narrows the
+        previous {600, 2500} range to {500, 2000}.
+        """
         schema = LizyMLAdapter().get_ui_schema()
         catalog = {e["key"]: e for e in schema["search_space_catalog"]}
         ne = catalog["n_estimators"]
         assert ne["default_mode"] == "range"
-        assert ne["default_range"] == {"low": 600, "high": 2500, "log": False}
+        assert ne["default_range"] == {"low": 500, "high": 2000, "log": False}
 
     def test_search_space_catalog_max_depth_default_mode_range(self) -> None:
-        """max_depth must have default_mode='range' and default_range (H-0053)."""
+        """max_depth must have default_mode='range' and default_range.
+
+        P-0104 Wave 2.2 / Issue #459 binary canonical spec narrows the
+        previous high=12 to high=9.
+        """
         schema = LizyMLAdapter().get_ui_schema()
         catalog = {e["key"]: e for e in schema["search_space_catalog"]}
         md = catalog["max_depth"]
         assert md["default_mode"] == "range"
-        assert md["default_range"] == {"low": 3, "high": 12, "log": False}
+        assert md["default_range"] == {"low": 3, "high": 9, "log": False}
 
     def test_search_space_catalog_max_bin_uses_choice_mode(self) -> None:
-        """max_bin uses default_mode=choice with default_choices."""
+        """max_bin uses default_mode=choice with default_choices.
+
+        P-0104 Wave 2.2 / Issue #459 drops 1023 from the binary spec
+        because high-bin training rarely converges under the new
+        narrower learning-rate range.
+        """
         schema = LizyMLAdapter().get_ui_schema()
         catalog = {e["key"]: e for e in schema["search_space_catalog"]}
         assert catalog["max_bin"]["default_mode"] == "choice"
@@ -718,7 +735,6 @@ class TestLizyMLAdapterUiSchema:
             127,
             255,
             511,
-            1023,
         ]
         assert "default_range" not in catalog["max_bin"]
 
@@ -731,6 +747,74 @@ class TestLizyMLAdapterUiSchema:
                 assert dr["low"] < dr["high"], (
                     f"default_range low >= high for '{entry['key']}': {dr}"
                 )
+
+    # P-0104 Wave 2.2 / Issue #459 binary canonical spec ----------------
+
+    def test_search_space_catalog_num_leaves_ratio_canonical(self) -> None:
+        """num_leaves_ratio default_range low must be 0.4 per #459 spec."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        row = catalog["num_leaves_ratio"]
+        assert row["default_mode"] == "range"
+        assert row["default_range"] == {"low": 0.4, "high": 1.0, "log": False}
+
+    def test_search_space_catalog_bagging_freq_canonical(self) -> None:
+        """bagging_freq default_range must be {1, 10} per #459 spec.
+
+        Previous {0, 20} allowed disabling bagging entirely (low=0); the
+        new spec keeps bagging always on with a tighter cap.
+        """
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        row = catalog["bagging_freq"]
+        assert row["default_mode"] == "range"
+        assert row["default_range"] == {"low": 1, "high": 10, "log": False}
+
+    def test_search_space_catalog_lambda_l1_fixed_only(self) -> None:
+        """lambda_l1 is Fixed-only at default 0 per #459 spec.
+
+        Previously offered Range mode with {1e-8, 1.0, log=True}; the new
+        spec keeps L1 disabled by default so the model relies on L2 alone.
+        """
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        row = catalog["lambda_l1"]
+        assert row["modes"] == ["fixed"]
+        assert row["default"] == 0.0
+        assert "default_mode" not in row
+        assert "default_range" not in row
+
+    def test_search_space_catalog_lambda_l2_canonical(self) -> None:
+        """lambda_l2 default_range must be {1e-6, 1e-2} log per #459 spec."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        row = catalog["lambda_l2"]
+        assert row["default_mode"] == "range"
+        assert row["default_range"] == {"low": 1e-6, "high": 1e-2, "log": True}
+
+    def test_search_space_catalog_early_stopping_rounds_canonical(self) -> None:
+        """early_stopping.rounds default_range must be {50, 200} per #459 spec.
+
+        Previous {40, 240} was wider on both ends; the new spec narrows
+        toward typical early-stopping cadence for the new n_estimators
+        range (500-2000).
+        """
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        row = catalog["early_stopping.rounds"]
+        assert row["default_mode"] == "range"
+        assert row["default_range"] == {"low": 50, "high": 200, "log": False}
+
+    def test_option_sets_objective_regression_no_cross_entropy(self) -> None:
+        """option_sets.objective.regression must NOT contain cross_entropy.
+
+        P-0104 Wave 2.2 / Issue #459: cross_entropy is a binary-task
+        objective only; its presence in the regression list was a long
+        standing UX bug exposing an invalid choice.
+        """
+        schema = LizyMLAdapter().get_ui_schema()
+        regression_objectives = schema["option_sets"]["objective"]["regression"]
+        assert "cross_entropy" not in regression_objectives
 
     def test_step_map_includes_expanded_params(self) -> None:
         """step_map should include entries for newly added params."""

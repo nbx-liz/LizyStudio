@@ -959,18 +959,48 @@ Fixed パラメータは `space` に含めず、`model.params` の値がその�
 | distribution | Select | `log: true/false` | Uniform（`log: false`）/ Log-uniform（`log: true`） |
 | step | NumberInput（integer のみ） | `step` | ステップ幅。省略可。float には表示しない |
 
-Range のデフォルト初期値:
+Range / Choice / Fixed のデフォルト初期値（P-0104 Wave 2.2 / Issue #459、binary task の canonical spec）。出典は `lizyml_ui_schema.search_space_catalog`。regression / multiclass のデフォルトは後続 Issue で確定する。
 
-| パラメータ | low | high | log | step |
-|-----------|-----|------|-----|------|
-| learning_rate | 0.005 | 0.3 | true | — |
-| num_leaves | 10 | 200 | false | 1 |
-| n_estimators | 100 | 3000 | false | 100 |
-| max_depth | 3 | 12 | false | 1 |
-| subsample | 0.5 | 1.0 | false | — |
-| colsample_bytree | 0.5 | 1.0 | false | — |
-| reg_alpha | 1e-8 | 10.0 | true | — |
-| reg_lambda | 1e-8 | 10.0 | true | — |
+**Smart Params グループ:**
+
+| パラメータ | default_mode | low / 値 | high | log | 備考 |
+|-----------|-------------|---------|------|-----|------|
+| `auto_num_leaves` | Fixed | `True` | — | — | true 時は `num_leaves_ratio`、false 時は `num_leaves` のみ表示 |
+| `num_leaves_ratio` | Range | 0.4 | 1.0 | false | `auto_num_leaves=True` で表示 |
+| `num_leaves` | Fixed | 256 | — | — | `auto_num_leaves=False` で表示 |
+| `min_data_in_leaf_ratio` | Range | 0.01 | 0.2 | false | — |
+| `min_data_in_bin_ratio` | Range | 0.01 | 0.2 | false | — |
+| `feature_weights` | Fixed | `None`（disabled） | — | — | — |
+| `balanced` | Fixed | `True` | — | — | — |
+
+**Model Params グループ:**
+
+| パラメータ | default_mode | low / 値 | high | log | 備考 |
+|-----------|-------------|---------|------|-----|------|
+| `objective` | Choice | `option_sets.objective[task]` 全列挙 | — | — | binary: `[binary, cross_entropy, cross_entropy_lambda]` |
+| `metric` | Choice | `option_sets.model_metric[task]` のサブセット | — | — | binary 推奨: `[auc, binary_logloss, binary_error, cross_entropy, brier]` |
+| `first_metric_only` | Fixed | `True` | — | — | — |
+| `n_estimators` | Range | 500 | 2000 | false | step=100（`step_map`） |
+| `learning_rate` | Range | 1e-4 | 1e-2 | **true** | log-uniform |
+| `max_depth` | Range | 3 | 9 | false | step=1 |
+| `max_bin` | Choice | `[15, 63, 127, 255, 511]` | — | — | 1023 は新 learning_rate 範囲で収束しにくいため除外 |
+| `feature_fraction` | Range | 0.5 | 1.0 | false | — |
+| `bagging_fraction` | Range | 0.5 | 1.0 | false | — |
+| `bagging_freq` | Range | 1 | 10 | false | 0（disabled）は許可しない |
+| `lambda_l1` | **Fixed** | 0 | — | — | デフォルトで L1 は無効、L2 のみで正則化 |
+| `lambda_l2` | Range | 1e-6 | 1e-2 | **true** | log-uniform |
+
+**Training グループ:**
+
+| パラメータ | default_mode | low / 値 | high | log | 備考 |
+|-----------|-------------|---------|------|-----|------|
+| `seed` | Fixed | **1120** | — | — | Studio が library default 42 を上書き（Fit / Tune 両タブで統一） |
+| `early_stopping.enabled` | Fixed | `True` | — | — | — |
+| `early_stopping.rounds` | Range | 50 | 200 | false | n_estimators 500-2000 に対応する短縮レンジ |
+| `validation_ratio` | Range | 0.1 | 0.3 | false | — |
+| `inner_valid` | Fixed | CV strategy 推奨値 | — | — | Wave 2.3 で `cv-state.ts::recommendedInnerValid(strategy)` 経由のピッカー化 |
+
+> **凡例 default_mode** — Fixed: `tuning.optuna.space` に出さず `model.params` 値で固定。Range: float / integer の探索範囲、log=true で log-uniform。Choice: 列挙からマルチ選択。step は integer の Range で `step_map` から供給。
 
 **Mode = Choice（categorical）:**
 

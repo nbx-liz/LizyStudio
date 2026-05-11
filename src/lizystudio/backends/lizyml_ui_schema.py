@@ -39,7 +39,6 @@ def build_ui_schema(
                     "mae",
                     "quantile",
                     "mape",
-                    "cross_entropy",
                 ],
                 "binary": [
                     "binary",
@@ -217,7 +216,8 @@ def build_ui_schema(
                 "modes": ["fixed", "range"],
                 "group": "smart_params",
                 "default": 1.0,
-                "default_range": {"low": 0.5, "high": 1.0, "log": False},
+                "default_mode": "range",
+                "default_range": {"low": 0.4, "high": 1.0, "log": False},
             },
             {
                 "key": "num_leaves",
@@ -234,6 +234,7 @@ def build_ui_schema(
                 "modes": ["fixed", "range"],
                 "group": "smart_params",
                 "default": 0.01,
+                "default_mode": "range",
                 "default_range": {"low": 0.01, "high": 0.2, "log": False},
             },
             {
@@ -243,6 +244,7 @@ def build_ui_schema(
                 "modes": ["fixed", "range"],
                 "group": "smart_params",
                 "default": 0.01,
+                "default_mode": "range",
                 "default_range": {"low": 0.01, "high": 0.2, "log": False},
             },
             {
@@ -302,7 +304,7 @@ def build_ui_schema(
                 "group": "model_params",
                 "default": 1500,
                 "default_mode": "range",
-                "default_range": {"low": 600, "high": 2500, "log": False},
+                "default_range": {"low": 500, "high": 2000, "log": False},
             },
             {
                 "key": "learning_rate",
@@ -312,7 +314,7 @@ def build_ui_schema(
                 "group": "model_params",
                 "default": 0.001,
                 "default_mode": "range",
-                "default_range": {"low": 0.0001, "high": 0.1, "log": True},
+                "default_range": {"low": 0.0001, "high": 0.01, "log": True},
             },
             {
                 "key": "max_depth",
@@ -322,7 +324,7 @@ def build_ui_schema(
                 "group": "model_params",
                 "default": 5,
                 "default_mode": "range",
-                "default_range": {"low": 3, "high": 12, "log": False},
+                "default_range": {"low": 3, "high": 9, "log": False},
             },
             {
                 "key": "max_bin",
@@ -332,7 +334,7 @@ def build_ui_schema(
                 "group": "model_params",
                 "default": 511,
                 "default_mode": "choice",
-                "default_choices": [15, 63, 127, 255, 511, 1023],
+                "default_choices": [15, 63, 127, 255, 511],
             },
             {
                 "key": "feature_fraction",
@@ -362,17 +364,15 @@ def build_ui_schema(
                 "group": "model_params",
                 "default": 10,
                 "default_mode": "range",
-                "default_range": {"low": 0, "high": 20, "log": False},
+                "default_range": {"low": 1, "high": 10, "log": False},
             },
             {
                 "key": "lambda_l1",
                 "title": "Lambda L1",
                 "paramType": "number",
-                "modes": ["fixed", "range"],
+                "modes": ["fixed"],
                 "group": "model_params",
                 "default": 0.0,
-                "default_mode": "range",
-                "default_range": {"low": 1e-8, "high": 1.0, "log": True},
             },
             {
                 "key": "lambda_l2",
@@ -382,7 +382,7 @@ def build_ui_schema(
                 "group": "model_params",
                 "default": 0.000001,
                 "default_mode": "range",
-                "default_range": {"low": 1e-8, "high": 1.0, "log": True},
+                "default_range": {"low": 1e-6, "high": 1e-2, "log": True},
             },
             {
                 "key": "verbose",
@@ -417,7 +417,7 @@ def build_ui_schema(
                 "group": "training",
                 "default": 150,
                 "default_mode": "range",
-                "default_range": {"low": 40, "high": 240, "log": False},
+                "default_range": {"low": 50, "high": 200, "log": False},
             },
             {
                 "key": "validation_ratio",

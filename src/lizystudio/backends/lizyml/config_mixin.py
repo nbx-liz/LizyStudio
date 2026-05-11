@@ -39,12 +39,18 @@ class ConfigMixin:
 
         is_classification = task in ("binary", "multiclass")
         split_method = "stratified_kfold" if is_classification else "kfold"
+        # P-0104 Wave 2.2 / Issue #459: Studio overrides the library default
+        # ``TrainingConfig.seed = 42`` with 1120 at the default-config layer.
+        # This keeps fresh Fit-tab configs aligned with the Tune-tab seed
+        # default already at 1120 (see ``lizyml_ui_schema.search_space_catalog``)
+        # so the Fit / Tune split is reproducible without manual override.
         minimal = {
             "config_version": 1,
             "task": task,
             "data": {"target": target},
             "model": {"name": "lgbm"},
             "split": {"method": split_method},
+            "training": {"seed": 1120},
         }
         validated = LizyMLConfig.model_validate(minimal)
         return validated.model_dump(mode="json")
