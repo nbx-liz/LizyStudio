@@ -15,6 +15,9 @@ UI_SCHEMA_KEYS = {
     "sections",
     "option_sets",
     "metric_direction",
+    # P-0104 Wave 3.1a / Issue #461: hyper-parameter bounds from
+    # LizyML LGBMProvider.parameter_bounds(task).
+    "parameter_bounds",
     "parameter_hints",
     "search_space_catalog",
     "step_map",

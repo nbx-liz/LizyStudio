@@ -1972,6 +1972,14 @@ export interface components {
                     [key: string]: string;
                 };
             } | null;
+            /** Parameter Bounds */
+            parameter_bounds?: {
+                [key: string]: {
+                    [key: string]: {
+                        [key: string]: number;
+                    };
+                };
+            } | null;
             /** Parameter Hints */
             parameter_hints: components["schemas"]["ParameterHintResponse"][];
             /** Search Space Catalog */

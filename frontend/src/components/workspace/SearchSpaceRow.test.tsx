@@ -392,6 +392,53 @@ describe("SearchSpaceRow – range mode expanded", () => {
     fireEvent.click(screen.getByRole("button", { name: /learning_rate/i }));
     expect(onToggleExpand).toHaveBeenCalledWith("learning_rate");
   });
+
+  // P-0104 Wave 3.1a / Issue #461 — the ``bounds`` prop clamps the Range
+  // Min/Max NumberInputs to LizyML's parameter_bounds on blur.
+  it("clamps Range Max to the supplied bounds.max on blur", () => {
+    const onUpdateEntry = vi.fn();
+    renderWithQuery(
+      <SearchSpaceRow
+        {...makeProps({
+          space: rangeSpace,
+          isExpanded: true,
+          onUpdateEntry,
+          bounds: { min: 1e-8, max: 1.0 },
+        })}
+      />,
+    );
+    const inputs = screen.getAllByRole("textbox");
+    // Second textbox is the Max input; type a value above the upper bound.
+    fireEvent.change(inputs[1], { target: { value: "5" } });
+    onUpdateEntry.mockClear();
+    fireEvent.blur(inputs[1]);
+    expect(onUpdateEntry).toHaveBeenCalledWith(
+      "learning_rate",
+      expect.objectContaining({ high: 1.0 }),
+    );
+  });
+
+  it("clamps Range Min to the supplied bounds.min on blur", () => {
+    const onUpdateEntry = vi.fn();
+    renderWithQuery(
+      <SearchSpaceRow
+        {...makeProps({
+          space: rangeSpace,
+          isExpanded: true,
+          onUpdateEntry,
+          bounds: { min: 0.0001, max: 1.0 },
+        })}
+      />,
+    );
+    const inputs = screen.getAllByRole("textbox");
+    fireEvent.change(inputs[0], { target: { value: "0.00001" } });
+    onUpdateEntry.mockClear();
+    fireEvent.blur(inputs[0]);
+    expect(onUpdateEntry).toHaveBeenCalledWith(
+      "learning_rate",
+      expect.objectContaining({ low: 0.0001 }),
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

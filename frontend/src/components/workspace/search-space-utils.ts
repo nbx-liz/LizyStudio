@@ -114,6 +114,12 @@ export interface SearchSpaceRowProps {
   /** Full list of inner_valid options from ``uiSchema.inner_valid_options``;
    * filtered per ``cvStrategy`` at render time. */
   innerValidOptions?: string[];
+  /** P-0104 Wave 3.1a / Issue #461: hyper-parameter bounds for this row's
+   * param, resolved from ``uiSchema.parameter_bounds[task][param.key]``
+   * (with the dotted ``early_stopping.rounds`` key mapped to the
+   * underscored LizyML name upstream). Clamps the Range Min/Max
+   * NumberInputs. ``undefined`` when the param has no declared bound. */
+  bounds?: { min?: number; max?: number };
   onModelParamChange?: (key: string, value: unknown) => void;
   specialSearchSpaceFields?: Record<string, string>;
   columns?: string[];

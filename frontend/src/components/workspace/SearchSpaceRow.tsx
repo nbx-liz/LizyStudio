@@ -36,6 +36,7 @@ export function SearchSpaceRow({
   metricOptions,
   cvStrategy,
   innerValidOptions,
+  bounds,
   onModelParamChange,
   specialSearchSpaceFields,
   columns,
@@ -232,6 +233,8 @@ export function SearchSpaceRow({
               onChange={(v) => onUpdateEntry(param.key, { low: v ?? 0 })}
               step={isInteger ? 1 : (stepMap?.[param.key] ?? 0.001)}
               paramType={isInteger ? "integer" : "number"}
+              min={bounds?.min}
+              max={bounds?.max}
               ariaLabel={`${param.key} min`}
             />
           </div>
@@ -242,6 +245,8 @@ export function SearchSpaceRow({
               onChange={(v) => onUpdateEntry(param.key, { high: v ?? 0 })}
               step={isInteger ? 1 : (stepMap?.[param.key] ?? 0.001)}
               paramType={isInteger ? "integer" : "number"}
+              min={bounds?.min}
+              max={bounds?.max}
               ariaLabel={`${param.key} max`}
             />
           </div>

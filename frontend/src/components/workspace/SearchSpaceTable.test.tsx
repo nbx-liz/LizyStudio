@@ -1414,4 +1414,84 @@ describe("SearchSpaceTable", () => {
       expect(spaceArg.learning_rate.step).toBe(0.001);
     });
   });
+
+  // P-0104 Wave 3.1a / Issue #461 — parameterBounds forwarded per-row,
+  // resolving the dotted catalog key (``early_stopping.rounds``) onto the
+  // underscored LizyML bound key (``early_stopping_rounds``).
+  describe("parameterBounds", () => {
+    it("clamps a Range Max to the resolved bound on blur (direct key)", () => {
+      const onChange = vi.fn();
+      const intCatalog: SearchSpaceCatalogEntry[] = [
+        {
+          key: "n_estimators",
+          title: "N Estimators",
+          paramType: "integer",
+          modes: ["fixed", "range"],
+          group: "model_params",
+        },
+      ];
+      render(
+        <SearchSpaceTable
+          space={{
+            n_estimators: { type: "int", low: 50, high: 500, log: false },
+          }}
+          modelParams={{}}
+          onChange={onChange}
+          catalog={intCatalog}
+          parameterBounds={{ n_estimators: { min: 10, max: 10000 } }}
+        />,
+      );
+      const row = screen.getByText("n_estimators").closest('[role="button"]');
+      if (row) fireEvent.click(row);
+      const maxInput = screen.getByRole("textbox", {
+        name: /n_estimators max/i,
+      });
+      fireEvent.change(maxInput, { target: { value: "999999" } });
+      onChange.mockClear();
+      fireEvent.blur(maxInput);
+      const spaceArg = onChange.mock.calls.at(-1)?.[0];
+      expect(spaceArg.n_estimators.high).toBe(10000);
+    });
+
+    it("resolves the dotted catalog key onto the underscored bound key", () => {
+      const onChange = vi.fn();
+      const esCatalog: SearchSpaceCatalogEntry[] = [
+        {
+          key: "early_stopping.rounds",
+          title: "Early Stopping Rounds",
+          paramType: "integer",
+          modes: ["fixed", "range"],
+          group: "training",
+        },
+      ];
+      render(
+        <SearchSpaceTable
+          space={{
+            "early_stopping.rounds": {
+              type: "int",
+              low: 50,
+              high: 200,
+              log: false,
+            },
+          }}
+          modelParams={{}}
+          onChange={onChange}
+          catalog={esCatalog}
+          parameterBounds={{ early_stopping_rounds: { min: 1, max: 5000 } }}
+        />,
+      );
+      const row = screen
+        .getByText("early_stopping.rounds")
+        .closest('[role="button"]');
+      if (row) fireEvent.click(row);
+      const maxInput = screen.getByRole("textbox", {
+        name: /early_stopping\.rounds max/i,
+      });
+      fireEvent.change(maxInput, { target: { value: "99999" } });
+      onChange.mockClear();
+      fireEvent.blur(maxInput);
+      const spaceArg = onChange.mock.calls.at(-1)?.[0];
+      expect(spaceArg["early_stopping.rounds"].high).toBe(5000);
+    });
+  });
 });
