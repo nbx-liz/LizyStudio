@@ -166,7 +166,7 @@ export function SearchSpaceRow({
                   >
                     {opt}
                     {isCustomFeval && (
-                      <span className="rounded-sm bg-amber-500/15 px-1 text-[8px] uppercase tracking-wide text-amber-700 dark:text-amber-400">
+                      <span className="rounded-sm bg-warning px-1 text-[8px] uppercase tracking-wide text-warning-fg">
                         Custom (slow)
                       </span>
                     )}

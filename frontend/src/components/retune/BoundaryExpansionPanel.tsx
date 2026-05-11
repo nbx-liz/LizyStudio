@@ -79,7 +79,7 @@ export function BoundaryExpansionPanel({
                   {dim.clamped_to_bound && (
                     <Badge
                       variant="outline"
-                      className="shrink-0 border-amber-500/40 text-[8px] uppercase tracking-wide text-amber-700 dark:text-amber-400"
+                      className="shrink-0 border-warning-border text-[8px] uppercase tracking-wide text-warning-fg"
                       title="Expansion clipped by the LizyML parameter_bounds limit"
                     >
                       bounded
