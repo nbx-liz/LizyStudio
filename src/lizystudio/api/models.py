@@ -527,6 +527,11 @@ class UiSchemaResponse(BaseModel):
     sections: list[UiSection]
     option_sets: dict[str, dict[str, list[str]]]
     metric_direction: dict[str, dict[str, str]] | None = None
+    # P-0104 Wave 3.1a / Issue #461: ``{task: {param: {"min": ..., "max": ...}}}``
+    # straight from LizyML ``LGBMProvider.parameter_bounds(task)``. Keys use
+    # LizyML's canonical parameter names (``early_stopping_rounds``); the
+    # frontend maps the dotted ``search_space_catalog`` key onto it.
+    parameter_bounds: dict[str, dict[str, dict[str, float]]] | None = None
     parameter_hints: list[ParameterHintResponse]
     search_space_catalog: list[SearchSpaceCatalogEntryResponse]
     step_map: dict[str, float]

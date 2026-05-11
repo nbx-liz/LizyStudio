@@ -977,7 +977,7 @@ Range / Choice / Fixed のデフォルト初期値（P-0104 Wave 2.2 / Issue #45
 
 | パラメータ | default_mode | low / 値 | high | log | 備考 |
 |-----------|-------------|---------|------|-----|------|
-| `objective` | Choice | `option_sets.objective[task]` 全列挙 | — | — | binary: `[binary, cross_entropy, cross_entropy_lambda]` |
+| `objective` | Choice | `option_sets.objective[task]` 全列挙（LizyML `LGBMProvider.objective_choices(task)` SSOT — P-0104 Wave 3.1a） | — | — | regression: `[regression, regression_l1, huber, fair, poisson, quantile, mape, gamma, tweedie]` / binary: `[binary, cross_entropy, cross_entropy_lambda]` / multiclass: `[multiclass, multiclassova]` |
 | `metric` | Choice | `option_sets.model_metric[task]` のサブセット | — | — | binary 推奨: `[auc, binary_logloss, binary_error, cross_entropy, brier]` |
 | `first_metric_only` | Fixed | `True` | — | — | — |
 | `n_estimators` | Range | 500 | 2000 | false | step=100（`step_map`） |
@@ -1001,6 +1001,8 @@ Range / Choice / Fixed のデフォルト初期値（P-0104 Wave 2.2 / Issue #45
 | `inner_valid` | Fixed | CV strategy 推奨値 | — | — | Wave 2.3 で `cv-state.ts::recommendedInnerValid(strategy)` 経由のピッカー化 |
 
 > **凡例 default_mode** — Fixed: `tuning.optuna.space` に出さず `model.params` 値で固定。Range: float / integer の探索範囲、log=true で log-uniform。Choice: 列挙からマルチ選択。step は integer の Range で `step_map` から供給。
+
+> **Range Min/Max の妥当性検証（P-0104 Wave 2.4 + 3.1a）** — Range の Min/Max NumberInput は (1) `paramType="integer"` のとき小数入力を拒否（Wave 2.4）、(2) `ui_schema.parameter_bounds[task][param]` の `min`/`max` でクランプ（Wave 3.1a）。さらに backend の `validate_config` が `tuning.optuna.space` を LizyML `parse_space()` に通し、`low >= high` / log-distribution で `low <= 0` の場合は `search_space_invalid` エラーとして「Fix validation errors first」バナーに表示する。
 
 **Mode = Choice（categorical）:**
 
@@ -2638,9 +2640,9 @@ Workspace の `workspace_result` は完了時に自動更新される。
   ],
   "option_sets": {
     "objective": {
-      "regression": ["huber", "mse", "mae", "..."],
-      "binary": ["binary", "cross_entropy", "..."],
-      "multiclass": ["multiclass", "softmax", "..."]
+      "regression": ["regression", "regression_l1", "huber", "fair", "poisson", "quantile", "mape", "gamma", "tweedie"],
+      "binary": ["binary", "cross_entropy", "cross_entropy_lambda"],
+      "multiclass": ["multiclass", "multiclassova"]
     },
     "metric": {
       "regression": ["mae", "mape", "rmse", "..."],
@@ -2657,6 +2659,11 @@ Workspace の `workspace_result` は完了時に自動更新される。
       "binary": {"auc": "maximize", "logloss": "minimize", "...": "..."},
       "multiclass": {"multi_logloss": "minimize", "...": "..."}
     }
+  },
+  "parameter_bounds": {
+    "regression": {"learning_rate": {"min": 1e-8, "max": 1.0}, "n_estimators": {"min": 10, "max": 10000}, "...": "..."},
+    "binary": {"learning_rate": {"min": 1e-8, "max": 1.0}, "...": "..."},
+    "multiclass": {"learning_rate": {"min": 1e-8, "max": 1.0}, "...": "..."}
   },
   "n_trials_presets": [10, 50, 100, 200, 500],
   "parameter_hints": [
@@ -2709,7 +2716,8 @@ Workspace の `workspace_result` は完了時に自動更新される。
 | フィールド | 説明 |
 |-----------|------|
 | `sections` | Fit タブの Accordion セクション定義 |
-| `option_sets` | Task 別の選択肢リスト（objective, metric, model_metric, metric_direction） |
+| `option_sets` | Task 別の選択肢リスト（objective, metric, model_metric, metric_direction）。`objective` は LizyML `LGBMProvider.objective_choices(task)` の canonical 全列挙を SSOT として読込む（P-0104 Wave 3.1a）— Studio 側でハードコードしない |
+| `parameter_bounds` | Task 別の hyper-parameter 上下限（`{task: {param: {"min": ..., "max": ...}}}`）。LizyML `LGBMProvider.parameter_bounds(task)` を SSOT として読込む（P-0104 Wave 3.1a）。キーは LizyML 正規名（`early_stopping_rounds`）。フロントエンドは `search_space_catalog` のドット記法キー（`early_stopping.rounds`）をアンダースコア記法に正規化して参照し、Tune Search Space の Range Min/Max NumberInput をこの範囲にクランプする |
 | `parameter_hints` | Model Params セクションに常時表示するパラメータ定義 |
 | `search_space_catalog` | Tune Search Space に表示するパラメータ定義（`group` でグループ分け）。各エントリの詳細は下記参照 |
 | `step_map` | NumberInput のステップ値マップ |

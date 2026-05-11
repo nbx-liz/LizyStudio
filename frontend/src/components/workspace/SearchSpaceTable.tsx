@@ -45,6 +45,10 @@ interface SearchSpaceTableProps {
   /** Full inner_valid options from ``uiSchema.inner_valid_options``;
    * filtered per ``cvStrategy`` inside SearchSpaceRow. */
   innerValidOptions?: string[];
+  /** P-0104 Wave 3.1a / Issue #461: ``{paramName: {min, max}}`` for the
+   * current task, resolved from ``uiSchema.parameter_bounds[task]``.
+   * Forwarded per-row to clamp the Range Min/Max NumberInputs. */
+  parameterBounds?: Record<string, { min?: number; max?: number }>;
 }
 
 export function SearchSpaceTable({
@@ -64,6 +68,7 @@ export function SearchSpaceTable({
   columns,
   cvStrategy,
   innerValidOptions,
+  parameterBounds,
 }: SearchSpaceTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   // Initialize addedParams from space keys that exist in additionalParams
@@ -293,6 +298,12 @@ export function SearchSpaceTable({
                 metricOptions={metricOptions}
                 cvStrategy={cvStrategy}
                 innerValidOptions={innerValidOptions}
+                bounds={
+                  // Catalog uses the dotted key ``early_stopping.rounds``;
+                  // LizyML's parameter_bounds uses ``early_stopping_rounds``.
+                  parameterBounds?.[param.key] ??
+                  parameterBounds?.[param.key.replace(/\./g, "_")]
+                }
                 onModelParamChange={onModelParamChange}
                 specialSearchSpaceFields={specialSearchSpaceFields}
                 columns={columns}

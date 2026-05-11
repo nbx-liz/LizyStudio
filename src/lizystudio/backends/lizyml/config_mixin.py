@@ -9,7 +9,11 @@ import yaml
 
 from lizystudio.backends.types import BackendInfo, ConfigSchema
 
-from .config_compat import strip_internal_keys, task_params_compat_errors
+from .config_compat import (
+    search_space_compat_errors,
+    strip_internal_keys,
+    task_params_compat_errors,
+)
 
 
 class ConfigMixin:
@@ -67,6 +71,7 @@ class ConfigMixin:
             errors.extend(exc.errors())  # type: ignore[arg-type]
 
         errors.extend(task_params_compat_errors(clean))
+        errors.extend(search_space_compat_errors(clean))
         return errors
 
     @staticmethod

@@ -121,6 +121,13 @@ export function TuneTab({
     return [];
   }, [task, uiSchema]);
 
+  // P-0104 Wave 3.1a / Issue #461: hyper-parameter bounds for the current
+  // task, forwarded to SearchSpaceTable so Range Min/Max NumberInputs clamp.
+  const parameterBounds = useMemo(() => {
+    if (!task) return undefined;
+    return uiSchema?.parameter_bounds?.[task] ?? undefined;
+  }, [task, uiSchema]);
+
   // Per-parameter option sets — exclude "metric" to avoid overriding
   // SearchSpaceTable's getChoiceOptions which correctly uses model_metric.
   const paramOptionSets = useMemo((): Record<string, string[]> => {
@@ -222,6 +229,7 @@ export function TuneTab({
               columns={columns}
               cvStrategy={cvStrategy}
               innerValidOptions={innerValidOptions}
+              parameterBounds={parameterBounds}
             />
           </div>
         </AccordionContent>

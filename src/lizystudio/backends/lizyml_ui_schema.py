@@ -1,12 +1,17 @@
 """UI schema for the LizyML backend (H-0026).
 
 Ported from LizyML-Widget's adapter_contract.py.
-Contains only static data structures — no ML logic.
+Contains only static data structures — no ML logic, except for the
+``option_sets.objective`` and ``parameter_bounds`` blocks which are
+sourced from LizyML's ``LGBMProvider`` (P-0104 Wave 3.1a) so the Studio
+UI always reflects the canonical objective list / hyper-parameter bounds
+shipped with the installed LizyML version.
 """
 
 from __future__ import annotations
 
-from typing import Any
+import threading
+from typing import TYPE_CHECKING, Any, Literal
 
 from lizystudio.backends.lizyml_constants import _build_additional_params
 from lizystudio.backends.lizyml_metrics import (
@@ -15,6 +20,56 @@ from lizystudio.backends.lizyml_metrics import (
 from lizystudio.backends.lizyml_metrics import (
     get_metric_directions,
 )
+
+if TYPE_CHECKING:
+    from lizyml.estimators.lgbm.provider import LGBMProvider
+
+# --- LizyML EstimatorProvider (SSOT for objective / parameter bounds) ---
+
+_Task = Literal["regression", "binary", "multiclass"]
+
+_provider_cache: LGBMProvider | None = None
+_provider_lock: threading.Lock = threading.Lock()
+
+# Tasks the LizyML LGBM provider recognises, in canonical UI order.
+_TASKS: tuple[_Task, ...] = ("regression", "binary", "multiclass")
+
+
+def _get_lgbm_provider() -> LGBMProvider:
+    """Return a process-wide cached ``LGBMProvider`` instance.
+
+    ``build_ui_schema`` is invoked per ``GET /ui-schema`` request; the
+    provider is stateless and cheap to keep alive, so a singleton avoids
+    re-instantiating it on every call.
+    """
+    global _provider_cache  # noqa: PLW0603
+    if _provider_cache is not None:
+        return _provider_cache
+    with _provider_lock:
+        if _provider_cache is not None:
+            return _provider_cache
+        from lizyml.estimators.lgbm.provider import LGBMProvider
+
+        _provider_cache = LGBMProvider()
+        return _provider_cache
+
+
+def _build_objective_option_sets() -> dict[str, list[str]]:
+    """``{task: [objective, ...]}`` straight from LizyML canonical list."""
+    provider = _get_lgbm_provider()
+    return {task: list(provider.objective_choices(task)) for task in _TASKS}
+
+
+def _build_parameter_bounds() -> dict[str, dict[str, dict[str, float | int]]]:
+    """``{task: {param: {"min": ..., "max": ...}}}`` from the provider.
+
+    Keys use LizyML's canonical parameter names (e.g. ``early_stopping_rounds``);
+    the frontend maps the dotted ``search_space_catalog`` key
+    (``early_stopping.rounds``) onto the underscored bound key.
+    """
+    provider = _get_lgbm_provider()
+    return {task: dict(provider.parameter_bounds(task)) for task in _TASKS}
+
 
 # --- UI schema builder ---
 
@@ -32,25 +87,7 @@ def build_ui_schema(
             {"key": "evaluation", "title": "Evaluation"},
         ],
         "option_sets": {
-            "objective": {
-                "regression": [
-                    "huber",
-                    "mse",
-                    "mae",
-                    "quantile",
-                    "mape",
-                ],
-                "binary": [
-                    "binary",
-                    "cross_entropy",
-                    "cross_entropy_lambda",
-                ],
-                "multiclass": [
-                    "multiclass",
-                    "softmax",
-                    "multiclassova",
-                ],
-            },
+            "objective": _build_objective_option_sets(),
             "metric": dict(all_metrics_by_task),
             "model_metric": {
                 "regression": [
@@ -93,6 +130,13 @@ def build_ui_schema(
             },
         },
         "metric_direction": metric_directions,
+        # P-0104 Wave 3.1a / Issue #461: hyper-parameter bounds straight
+        # from LizyML's ``LGBMProvider.parameter_bounds(task)``. The
+        # frontend clamps SearchSpace Range Min/Max inputs to these.
+        # Keys are LizyML's canonical names (``early_stopping_rounds``);
+        # the dotted ``search_space_catalog`` key (``early_stopping.rounds``)
+        # is mapped onto it client-side.
+        "parameter_bounds": _build_parameter_bounds(),
         "n_trials_presets": [10, 50, 100, 200, 500],
         "parameter_hints": [
             {

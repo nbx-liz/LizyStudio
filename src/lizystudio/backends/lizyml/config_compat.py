@@ -122,6 +122,54 @@ def strip_internal_keys(config: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def search_space_compat_errors(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return pydantic-style errors for an invalid ``tuning.optuna.space``.
+
+    P-0104 Wave 3.1a / Issue #461: LizyStudio's ``validate_config`` runs
+    ``LizyMLConfig.model_validate`` plus its own task/objective compat
+    checks, but never exercised LizyML's ``parse_space`` — so a Tune
+    search space with an inverted Range (``low >= high``) or a
+    log-distribution dim whose lower bound is ``<= 0`` slipped past the
+    workspace validator and only blew up deep inside the tuning loop.
+
+    Calling ``parse_space`` here surfaces those typed
+    ``LizyMLError(CONFIG_INVALID)`` cases as a 400 in the workspace
+    "Fix validation errors first" banner, alongside the existing
+    Studio-side NumberInput guard (Wave 2.4).
+
+    Defensive: if ``config`` is malformed, or ``tuning.optuna.space`` is
+    missing / not a dict / empty, returns ``[]`` (pydantic / runtime
+    layers handle the rest).
+    """
+    if not isinstance(config, dict):
+        return []
+    tuning = config.get("tuning")
+    if not isinstance(tuning, dict):
+        return []
+    optuna = tuning.get("optuna")
+    if not isinstance(optuna, dict):
+        return []
+    space = optuna.get("space")
+    if not isinstance(space, dict) or not space:
+        return []
+
+    from lizyml.core.exceptions import LizyMLError
+    from lizyml.tuning.search_space import parse_space
+
+    try:
+        parse_space(space)
+    except LizyMLError as exc:
+        return [
+            {
+                "type": "search_space_invalid",
+                "loc": ("tuning", "optuna", "space"),
+                "msg": getattr(exc, "user_message", str(exc)),
+                "input": getattr(exc, "context", None),
+            }
+        ]
+    return []
+
+
 def task_params_compat_errors(config: dict[str, Any]) -> list[dict[str, Any]]:
     """Return pydantic-style validation errors for task / objective /
     metric mismatches.
