@@ -7,6 +7,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
+import { filterInnerValidOptions, recommendedInnerValid } from "./cv-state";
 import { groupToCategory, SearchSpaceTable } from "./SearchSpaceTable";
 import { TuneEvaluationSection } from "./TuneEvaluationSection";
 import { TuneSettings } from "./TuneSettings";
@@ -157,6 +158,35 @@ export function TuneTab({
     [config, modelParams, onChange],
   );
 
+  // P-0104 Wave 2.3 / Issue #459 — inner_valid auto-reset on CV strategy
+  // change.
+  //
+  // When the outer CV strategy switches between time / group / standard
+  // families, the persisted ``model.params.inner_valid`` may no longer be
+  // a member of the strategy's allowed set (e.g. ``time_holdout`` is only
+  // valid under ``time_series_*`` strategies). This effect reconciles the
+  // persisted value to the strategy-recommended default so the UI and the
+  // wire payload converge before the user runs a tune.
+  const cvStrategy = useMemo(() => {
+    const split = (config.split as Record<string, unknown>) ?? {};
+    return typeof split.method === "string" ? split.method : "";
+  }, [config.split]);
+
+  const innerValidOptions = useMemo(
+    () => uiSchema?.inner_valid_options ?? [],
+    [uiSchema],
+  );
+
+  useEffect(() => {
+    if (!cvStrategy || innerValidOptions.length === 0) return;
+    const filtered = filterInnerValidOptions(innerValidOptions, cvStrategy);
+    const current = modelParams.inner_valid;
+    if (typeof current === "string" && filtered.includes(current)) return;
+    const recommended = recommendedInnerValid(cvStrategy);
+    if (current === recommended) return;
+    handleModelParamChange("inner_valid", recommended);
+  }, [cvStrategy, innerValidOptions, modelParams, handleModelParamChange]);
+
   return (
     <Accordion
       type="multiple"
@@ -190,6 +220,8 @@ export function TuneTab({
                 uiSchema?.special_search_space_fields ?? undefined
               }
               columns={columns}
+              cvStrategy={cvStrategy}
+              innerValidOptions={innerValidOptions}
             />
           </div>
         </AccordionContent>

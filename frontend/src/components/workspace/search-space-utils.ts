@@ -108,6 +108,12 @@ export interface SearchSpaceRowProps {
   task?: string | null;
   objectiveOptions?: string[];
   metricOptions?: string[];
+  /** Outer CV strategy from ``config.split.method`` — drives the
+   * ``inner_valid_picker`` row's filtered options. */
+  cvStrategy?: string;
+  /** Full list of inner_valid options from ``uiSchema.inner_valid_options``;
+   * filtered per ``cvStrategy`` at render time. */
+  innerValidOptions?: string[];
   onModelParamChange?: (key: string, value: unknown) => void;
   specialSearchSpaceFields?: Record<string, string>;
   columns?: string[];
