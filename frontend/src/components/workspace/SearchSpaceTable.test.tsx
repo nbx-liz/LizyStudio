@@ -585,6 +585,107 @@ describe("SearchSpaceTable", () => {
       fireEvent.click(screen.getByText("f1"));
       expect(onModelParamChange).toHaveBeenCalledWith("metric", ["auc"]);
     });
+
+    // P-0104 Wave 2.3 / Issue #459 — inner_valid_picker special field
+    const innerValidCatalog: SearchSpaceCatalogEntry[] = [
+      {
+        key: "inner_valid",
+        title: "Inner Validation",
+        paramType: "string",
+        modes: ["fixed"],
+        group: "training",
+        default: "holdout",
+      },
+    ];
+
+    it("renders inner_valid_picker filtered to [holdout] under kfold strategy", () => {
+      const onModelParamChange = vi.fn();
+      render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{ inner_valid: "holdout" }}
+          onChange={vi.fn()}
+          catalog={innerValidCatalog}
+          task="binary"
+          onModelParamChange={onModelParamChange}
+          specialSearchSpaceFields={{ inner_valid: "inner_valid_picker" }}
+          cvStrategy="kfold"
+          innerValidOptions={["holdout", "group_holdout", "time_holdout"]}
+        />,
+      );
+      const radios = screen.getAllByRole("radio");
+      const radioNames = radios.map((r) => r.textContent?.trim());
+      expect(radioNames).toContain("holdout");
+      expect(radioNames).not.toContain("group_holdout");
+      expect(radioNames).not.toContain("time_holdout");
+    });
+
+    it("renders inner_valid_picker with time_holdout under time_series strategy", () => {
+      const onModelParamChange = vi.fn();
+      render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{ inner_valid: "time_holdout" }}
+          onChange={vi.fn()}
+          catalog={innerValidCatalog}
+          task="binary"
+          onModelParamChange={onModelParamChange}
+          specialSearchSpaceFields={{ inner_valid: "inner_valid_picker" }}
+          cvStrategy="time_series"
+          innerValidOptions={["holdout", "group_holdout", "time_holdout"]}
+        />,
+      );
+      const radios = screen.getAllByRole("radio");
+      const radioNames = radios.map((r) => r.textContent?.trim());
+      expect(radioNames).toContain("holdout");
+      expect(radioNames).toContain("time_holdout");
+      expect(radioNames).not.toContain("group_holdout");
+    });
+
+    it("renders inner_valid_picker with group_holdout under group_kfold strategy", () => {
+      const onModelParamChange = vi.fn();
+      render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{ inner_valid: "group_holdout" }}
+          onChange={vi.fn()}
+          catalog={innerValidCatalog}
+          task="binary"
+          onModelParamChange={onModelParamChange}
+          specialSearchSpaceFields={{ inner_valid: "inner_valid_picker" }}
+          cvStrategy="group_kfold"
+          innerValidOptions={["holdout", "group_holdout", "time_holdout"]}
+        />,
+      );
+      const radios = screen.getAllByRole("radio");
+      const radioNames = radios.map((r) => r.textContent?.trim());
+      expect(radioNames).toContain("holdout");
+      expect(radioNames).toContain("group_holdout");
+      expect(radioNames).not.toContain("time_holdout");
+    });
+
+    it("calls onModelParamChange when inner_valid segment is clicked", () => {
+      const onModelParamChange = vi.fn();
+      render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{ inner_valid: "holdout" }}
+          onChange={vi.fn()}
+          catalog={innerValidCatalog}
+          task="binary"
+          onModelParamChange={onModelParamChange}
+          specialSearchSpaceFields={{ inner_valid: "inner_valid_picker" }}
+          cvStrategy="time_series"
+          innerValidOptions={["holdout", "group_holdout", "time_holdout"]}
+        />,
+      );
+      const timeHoldout = screen.getByRole("radio", { name: /time_holdout/i });
+      fireEvent.click(timeHoldout);
+      expect(onModelParamChange).toHaveBeenCalledWith(
+        "inner_valid",
+        "time_holdout",
+      );
+    });
   });
 
   describe("precision_at_k k-value row", () => {

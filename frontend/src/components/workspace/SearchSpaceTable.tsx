@@ -39,6 +39,12 @@ interface SearchSpaceTableProps {
   specialSearchSpaceFields?: Record<string, string>;
   /** Column names for feature_weights editor. */
   columns?: string[];
+  /** Outer CV strategy from ``config.split.method`` — forwarded to the
+   * ``inner_valid_picker`` row in SearchSpaceRow. */
+  cvStrategy?: string;
+  /** Full inner_valid options from ``uiSchema.inner_valid_options``;
+   * filtered per ``cvStrategy`` inside SearchSpaceRow. */
+  innerValidOptions?: string[];
 }
 
 export function SearchSpaceTable({
@@ -56,6 +62,8 @@ export function SearchSpaceTable({
   conditionalVisibility,
   specialSearchSpaceFields,
   columns,
+  cvStrategy,
+  innerValidOptions,
 }: SearchSpaceTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   // Initialize addedParams from space keys that exist in additionalParams
@@ -283,6 +291,8 @@ export function SearchSpaceTable({
                 task={task}
                 objectiveOptions={objectiveOptions}
                 metricOptions={metricOptions}
+                cvStrategy={cvStrategy}
+                innerValidOptions={innerValidOptions}
                 onModelParamChange={onModelParamChange}
                 specialSearchSpaceFields={specialSearchSpaceFields}
                 columns={columns}

@@ -8,6 +8,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ChoiceInput } from "./ChoiceInput";
+import { filterInnerValidOptions, recommendedInnerValid } from "./cv-state";
 import { FeatureWeightsEditor } from "./FeatureWeightsEditor";
 import { FixedValueEditor } from "./FixedValueEditor";
 import { NumberInput } from "./NumberInput";
@@ -33,6 +34,8 @@ export function SearchSpaceRow({
   task,
   objectiveOptions,
   metricOptions,
+  cvStrategy,
+  innerValidOptions,
   onModelParamChange,
   specialSearchSpaceFields,
   columns,
@@ -158,6 +161,37 @@ export function SearchSpaceRow({
                 );
               })}
             </div>
+          ) : onModelParamChange &&
+            specialSearchSpaceFields?.[param.key] === "inner_valid_picker" ? (
+            // P-0104 Wave 2.3 / Issue #459: inner_valid renders as a
+            // SegmentGroup whose options depend on the outer CV strategy
+            // (kfold -> [holdout]; group_* -> [holdout, group_holdout];
+            // time_series_* -> [holdout, time_holdout]). The displayed
+            // value falls back to ``recommendedInnerValid(strategy)`` when
+            // the persisted value is not in the filtered list, so a CV
+            // strategy switch from kfold -> time_series automatically
+            // promotes "holdout" to "time_holdout" in the UI even before
+            // the TuneTab auto-reset effect persists the change.
+            (() => {
+              const filtered = filterInnerValidOptions(
+                innerValidOptions ?? [],
+                cvStrategy ?? "",
+              );
+              const persisted = modelParams[param.key];
+              const persistedStr =
+                typeof persisted === "string" ? persisted : undefined;
+              const display =
+                persistedStr && filtered.includes(persistedStr)
+                  ? persistedStr
+                  : recommendedInnerValid(cvStrategy ?? "");
+              return (
+                <SegmentGroup
+                  options={filtered}
+                  value={display}
+                  onChange={(v) => onModelParamChange(param.key, v)}
+                />
+              );
+            })()
           ) : onModelParamChange && param.paramType === "object" ? (
             <FeatureWeightsEditor
               weights={
