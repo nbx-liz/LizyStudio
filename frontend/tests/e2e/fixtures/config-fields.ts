@@ -88,8 +88,10 @@ const trainingSeed: FixtureEntry = {
   spec: {
     name: "training.seed via Seed NumberInput",
     configPath: "training.seed",
-    // lizyml defaults endpoint sets training.seed=42 for binary tasks.
-    defaultValue: 42,
+    // P-0104 Wave 2.2 / Issue #459: Studio overrides library seed=42 with
+    // 1120 at the default-config layer so fresh Fit-tab configs match the
+    // Tune-tab catalog seed default.
+    defaultValue: 1120,
     testValue: 7,
     // FormField wires <Label htmlFor> to the NumberInput's underlying
     // <input>. The schema-rendered Training section produces a
