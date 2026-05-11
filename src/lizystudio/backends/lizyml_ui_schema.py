@@ -2,10 +2,13 @@
 
 Ported from LizyML-Widget's adapter_contract.py.
 Contains only static data structures — no ML logic, except for the
-``option_sets.objective`` and ``parameter_bounds`` blocks which are
-sourced from LizyML's ``LGBMProvider`` (P-0104 Wave 3.1a) so the Studio
-UI always reflects the canonical objective list / hyper-parameter bounds
-shipped with the installed LizyML version.
+``option_sets.objective`` / ``option_sets.metric`` / ``parameter_bounds``
+blocks which are sourced from LizyML's ``LGBMProvider`` (P-0104 Wave
+3.1a / 3.1b) so the Studio UI always reflects the canonical objective
+list / model-metric choices / hyper-parameter bounds shipped with the
+installed LizyML version. The ``option_sets.eval_metric`` block is the
+eval-metrics registry list (LizyML post-hoc reporting metrics, distinct
+from the LightGBM ``metric`` param) used by the Tune Evaluation section.
 """
 
 from __future__ import annotations
@@ -60,6 +63,37 @@ def _build_objective_option_sets() -> dict[str, list[str]]:
     return {task: list(provider.objective_choices(task)) for task in _TASKS}
 
 
+def _build_metric_option_sets() -> dict[str, dict[str, list[str]]]:
+    """``{task: {"native": [...], "feval": [...]}}`` from the provider.
+
+    ``native`` are LightGBM's built-in ``metric`` names; ``feval`` are
+    LizyML's custom feval implementations (slower — they re-evaluate the
+    model in Python on every boosting round). The UI shows both as
+    model-metric (``model.params.metric``) options and badges the feval
+    ones as "Custom (slow)" so the speed trade-off is visible (P-0104 Q2).
+    """
+    provider = _get_lgbm_provider()
+    out: dict[str, dict[str, list[str]]] = {}
+    for task in _TASKS:
+        choices = provider.metric_choices(task)
+        out[task] = {
+            "native": list(choices["native"]),
+            "feval": list(choices["feval"]),
+        }
+    return out
+
+
+def _build_eval_metric_option_sets() -> dict[str, list[str]]:
+    """``{task: [metric, ...]}`` from LizyML's eval-metrics registry.
+
+    These are the post-hoc reporting metrics LizyML computes after a fit
+    / tune (``auc_pr``, ``logloss``, ...), *not* the LightGBM ``metric``
+    param. Used by the Tune Evaluation section (Optimization Metric /
+    Additional Metrics).
+    """
+    return {task: list(ms) for task, ms in get_eval_metrics_by_task().items()}
+
+
 def _build_parameter_bounds() -> dict[str, dict[str, dict[str, float | int]]]:
     """``{task: {param: {"min": ..., "max": ...}}}`` from the provider.
 
@@ -74,9 +108,7 @@ def _build_parameter_bounds() -> dict[str, dict[str, dict[str, float | int]]]:
 # --- UI schema builder ---
 
 
-def build_ui_schema(
-    all_metrics_by_task: dict[str, list[str]],
-) -> dict[str, Any]:
+def build_ui_schema() -> dict[str, Any]:
     """Build the full UI schema for the LizyML backend contract."""
     metric_directions = get_metric_directions()
     return {
@@ -86,48 +118,16 @@ def build_ui_schema(
             {"key": "calibration", "title": "Calibration"},
             {"key": "evaluation", "title": "Evaluation"},
         ],
+        # P-0104 Wave 3.1b / Issue #461 (Q3): ``option_sets.model_metric``
+        # was removed and folded into ``option_sets.metric``. ``metric`` is
+        # now the nested ``{task: {native, feval}}`` shape sourced straight
+        # from ``LGBMProvider.metric_choices(task)`` — the LightGBM
+        # ``model.params.metric`` options. The eval-metrics registry list
+        # (post-hoc reporting metrics) moved to ``option_sets.eval_metric``.
         "option_sets": {
             "objective": _build_objective_option_sets(),
-            "metric": dict(all_metrics_by_task),
-            "model_metric": {
-                "regression": [
-                    "l1",
-                    "l2",
-                    "rmse",
-                    "quantile",
-                    "mape",
-                    "huber",
-                    "fair",
-                    "poisson",
-                    "gamma",
-                    "gamma_deviance",
-                    "tweedie",
-                    "r2",
-                    "rmsle",
-                ],
-                "binary": [
-                    "auc",
-                    "binary_logloss",
-                    "binary_error",
-                    "average_precision",
-                    "cross_entropy",
-                    "cross_entropy_lambda",
-                    "kullback_leibler",
-                    "f1",
-                    "accuracy",
-                    "brier",
-                    "ece",
-                    "precision_at_k",
-                ],
-                "multiclass": [
-                    "multi_logloss",
-                    "multi_error",
-                    "auc_mu",
-                    "f1",
-                    "accuracy",
-                    "brier",
-                ],
-            },
+            "metric": _build_metric_option_sets(),
+            "eval_metric": _build_eval_metric_option_sets(),
         },
         "metric_direction": metric_directions,
         # P-0104 Wave 3.1a / Issue #461: hyper-parameter bounds straight
@@ -152,7 +152,7 @@ def build_ui_schema(
             {
                 "key": "metric",
                 "label": "Metric",
-                "kind": "model_metric",
+                "kind": "metric",
                 "default": {
                     "regression": ["huber", "mae", "mape"],
                     "binary": ["auc", "binary_logloss"],
@@ -614,7 +614,7 @@ def build_ui_schema(
         "additional_params": _build_additional_params(),
         "special_search_space_fields": {
             "objective": "objective",
-            "metric": "model_metric",
+            "metric": "metric",
             "inner_valid": "inner_valid_picker",
         },
     }

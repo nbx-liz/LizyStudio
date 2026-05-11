@@ -27,7 +27,11 @@ interface SearchSpaceTableProps {
   stepMap?: Record<string, number>;
   task?: string | null;
   objectiveOptions?: string[];
+  /** Flat model-metric option list (``native`` followed by ``feval``). */
   metricOptions?: string[];
+  /** Subset of ``metricOptions`` that are LizyML custom feval metrics
+   * (badged "Custom (slow)" — P-0104 Wave 3.1b / Q2). */
+  fevalMetrics?: string[];
   additionalParams?: string[];
   /** Per-parameter option sets for generic choice mode (keyed by param name). */
   paramOptionSets?: Record<string, string[]>;
@@ -35,7 +39,7 @@ interface SearchSpaceTableProps {
   onModelParamChange?: (key: string, value: unknown) => void;
   /** Conditional visibility rules: {paramKey: {depKey: requiredValue}} */
   conditionalVisibility?: Record<string, Record<string, unknown>>;
-  /** Special field rendering hints: {paramKey: "objective"|"model_metric"|...} */
+  /** Special field rendering hints: {paramKey: "objective"|"metric"|"inner_valid_picker"} */
   specialSearchSpaceFields?: Record<string, string>;
   /** Column names for feature_weights editor. */
   columns?: string[];
@@ -60,6 +64,7 @@ export function SearchSpaceTable({
   task,
   objectiveOptions,
   metricOptions,
+  fevalMetrics,
   additionalParams,
   paramOptionSets,
   onModelParamChange,
@@ -296,6 +301,7 @@ export function SearchSpaceTable({
                 task={task}
                 objectiveOptions={objectiveOptions}
                 metricOptions={metricOptions}
+                fevalMetrics={fevalMetrics}
                 cvStrategy={cvStrategy}
                 innerValidOptions={innerValidOptions}
                 bounds={

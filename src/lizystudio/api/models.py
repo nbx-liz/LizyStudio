@@ -525,7 +525,12 @@ class UiSchemaResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     sections: list[UiSection]
-    option_sets: dict[str, dict[str, list[str]]]
+    # ``option_sets`` is a heterogeneous map. ``objective`` / ``eval_metric``
+    # are ``{task: [name, ...]}``; ``metric`` (P-0104 Wave 3.1b) is the
+    # nested ``{task: {"native": [...], "feval": [...]}}`` shape sourced
+    # from ``LGBMProvider.metric_choices(task)``. The ``model_metric`` key
+    # was removed in Wave 3.1b (Q3 — folded into ``metric``).
+    option_sets: dict[str, dict[str, list[str] | dict[str, list[str]]]]
     metric_direction: dict[str, dict[str, str]] | None = None
     # P-0104 Wave 3.1a / Issue #461: ``{task: {param: {"min": ..., "max": ...}}}``
     # straight from LizyML ``LGBMProvider.parameter_bounds(task)``. Keys use

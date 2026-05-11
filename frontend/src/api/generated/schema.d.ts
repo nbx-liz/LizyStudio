@@ -1963,7 +1963,9 @@ export interface components {
             /** Option Sets */
             option_sets: {
                 [key: string]: {
-                    [key: string]: string[];
+                    [key: string]: string[] | {
+                        [key: string]: string[];
+                    };
                 };
             };
             /** Metric Direction */

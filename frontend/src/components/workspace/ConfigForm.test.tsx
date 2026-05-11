@@ -404,9 +404,9 @@ describe("ConfigForm", () => {
             binary: ["binary", "cross_entropy"],
             regression: ["huber", "regression_l1"],
           },
-          model_metric: {
-            binary: ["auc", "binary_logloss"],
-            regression: ["rmse", "huber"],
+          metric: {
+            binary: { native: ["auc", "binary_logloss"], feval: [] },
+            regression: { native: ["rmse", "huber"], feval: [] },
           },
         },
       } as unknown as UiSchema,
@@ -469,9 +469,9 @@ describe("ConfigForm", () => {
             binary: ["binary", "cross_entropy"],
             regression: ["huber", "regression_l1"],
           },
-          model_metric: {
-            binary: ["auc", "binary_logloss"],
-            regression: ["rmse", "huber"],
+          metric: {
+            binary: { native: ["auc", "binary_logloss"], feval: [] },
+            regression: { native: ["rmse", "huber"], feval: [] },
           },
         },
       } as unknown as UiSchema,
@@ -735,12 +735,12 @@ describe("ConfigForm — getOptionsForHint", () => {
   const uiSchemaWithOptionSets = {
     parameter_hints: [
       { key: "objective", kind: "objective", label: "Objective" },
-      { key: "metric", kind: "model_metric", label: "Metric" },
+      { key: "metric", kind: "metric", label: "Metric" },
       { key: "learning_rate", kind: "number", label: "LR" },
     ],
     option_sets: {
       objective: { binary: ["binary", "cross_entropy"] },
-      model_metric: { binary: ["auc", "binary_logloss"] },
+      metric: { binary: { native: ["auc", "binary_logloss"], feval: [] } },
     },
   } as unknown as UiSchema;
 
@@ -758,7 +758,7 @@ describe("ConfigForm — getOptionsForHint", () => {
     expect(objCall?.options).toEqual(["binary", "cross_entropy"]);
   });
 
-  it("passes model_metric options for task when kind is model_metric", () => {
+  it("passes metric options for task when kind is metric", () => {
     renderConfigForm({
       schema: minimalSchema,
       config: minimalConfig,
@@ -772,7 +772,7 @@ describe("ConfigForm — getOptionsForHint", () => {
     expect(metricCall?.options).toEqual(["auc", "binary_logloss"]);
   });
 
-  it("returns empty options for non-objective/model_metric kind", () => {
+  it("returns empty options for non-objective/metric kind", () => {
     renderConfigForm({
       schema: minimalSchema,
       config: minimalConfig,
@@ -823,21 +823,17 @@ describe("ConfigForm — getValueForHint", () => {
     expect(objCall?.value).toBe("binary");
   });
 
-  it("returns model.params.metric for model_metric kind", () => {
+  it("returns model.params.metric for metric kind", () => {
     renderConfigForm({
       schema: minimalSchema,
       config: { model: { name: "lgbm", params: { metric: "auc" } } },
       onChange: vi.fn(),
       uiSchema: {
-        parameter_hints: [
-          { key: "metric", kind: "model_metric", label: "Metric" },
-        ],
+        parameter_hints: [{ key: "metric", kind: "metric", label: "Metric" }],
       } as unknown as UiSchema,
     });
 
-    const metricCall = dynParamCalls.find(
-      (c) => c.hint.kind === "model_metric",
-    );
+    const metricCall = dynParamCalls.find((c) => c.hint.kind === "metric");
     expect(metricCall?.value).toBe("auc");
   });
 
@@ -889,16 +885,14 @@ describe("ConfigForm — handleHintChange (onChange propagation)", () => {
     expect(updatedConfig.model.params.objective).toBe("__changed__");
   });
 
-  it("calls onChange with updated metric when model_metric DynParam changes", () => {
+  it("calls onChange with updated metric when metric DynParam changes", () => {
     const onChange = vi.fn();
     renderConfigForm({
       schema: minimalSchema,
       config: minimalConfig,
       onChange,
       uiSchema: {
-        parameter_hints: [
-          { key: "metric", kind: "model_metric", label: "Metric" },
-        ],
+        parameter_hints: [{ key: "metric", kind: "metric", label: "Metric" }],
       } as unknown as UiSchema,
     });
 
@@ -979,7 +973,7 @@ describe("ConfigForm — auto-select useEffect", () => {
       uiSchema: {
         parameter_hints: [],
         option_sets: {
-          model_metric: { binary: ["auc", "binary_logloss"] },
+          metric: { binary: { native: ["auc", "binary_logloss"], feval: [] } },
         },
       } as unknown as UiSchema,
     });
@@ -1028,7 +1022,7 @@ describe("ConfigForm — auto-select useEffect", () => {
         parameter_hints: [],
         option_sets: {
           objective: { binary: ["binary"] },
-          model_metric: { binary: ["auc"] },
+          metric: { binary: { native: ["auc"], feval: [] } },
         },
       } as unknown as UiSchema,
     });
@@ -1117,7 +1111,7 @@ describe("ConfigForm — auto-select useEffect", () => {
         parameter_hints: [
           {
             key: "metric",
-            kind: "model_metric",
+            kind: "metric",
             default: {
               binary: ["auc", "binary_logloss"],
               multiclass: ["auc_mu", "multi_logloss"],
@@ -1125,9 +1119,9 @@ describe("ConfigForm — auto-select useEffect", () => {
           },
         ],
         option_sets: {
-          model_metric: {
-            binary: ["auc", "binary_logloss"],
-            multiclass: ["auc_mu", "multi_logloss"],
+          metric: {
+            binary: { native: ["auc", "binary_logloss"], feval: [] },
+            multiclass: { native: ["auc_mu", "multi_logloss"], feval: [] },
           },
         },
       } as unknown as UiSchema,
@@ -1171,8 +1165,8 @@ describe("ConfigForm — auto-select useEffect", () => {
           objective: {
             binary: ["binary", "cross_entropy"],
           },
-          model_metric: {
-            binary: ["auc", "binary_logloss"],
+          metric: {
+            binary: { native: ["auc", "binary_logloss"], feval: [] },
           },
         },
       } as unknown as UiSchema,
@@ -1432,7 +1426,7 @@ describe("ConfigForm — MetricsChips integration", () => {
     expect(screen.getByText("Evaluation")).toBeInTheDocument();
   });
 
-  it("passes metricsByTask from uiSchema option_sets.metric to MetricsChips", () => {
+  it("passes metricsByTask from uiSchema option_sets.eval_metric to MetricsChips", () => {
     renderConfigForm({
       schema: minimalSchema,
       config: {
@@ -1443,7 +1437,7 @@ describe("ConfigForm — MetricsChips integration", () => {
       task: "binary",
       uiSchema: {
         option_sets: {
-          metric: {
+          eval_metric: {
             binary: ["auc", "ks", "logloss"],
           },
         },

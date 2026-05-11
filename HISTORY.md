@@ -3688,19 +3688,19 @@ LizyML v0.15.0 の出荷（2026-05-10）により、Studio の Tune workflow を
 
 #### Acceptance criteria
 
-- [ ] `pyproject.toml` の lizyml pin が `>=0.15.0,<0.16.0`（Wave 1.2）
-- [ ] `lizyml_ui_schema.py` が `LGBMProvider()` の `objective_choices` / `metric_choices` / `parameter_bounds` を SSOT として読む（Wave 2.2 / 3.1）
-- [ ] `option_sets.model_metric` フィールド削除 + 参照 code path の `option_sets.metric` 移行（Wave 2.2 / 3.1）
-- [ ] `option_sets.objective.regression` の `cross_entropy` 除去（Wave 2.2）
-- [ ] `option_sets.metric.multiclass` の `auc` 除去 + 対応 fixture / e2e snapshot 更新（Wave 3.1）
-- [ ] `RetuneSettingsSection` の Switch 復活 + null payload 後方互換テスト（Wave 2.1）
-- [ ] `SearchSpaceRow` inner_valid picker + Range Min/Max クランプ + BoundaryDimStatus バッジ（Wave 2.3 / 3.1）
-- [ ] NumberInput integer 強制 + inline 警告（Wave 2.4）
-- [ ] feval 由来 metric 項目に "Custom (slow)" バッジ（Wave 3.1）
-- [ ] BLUEPRINT.md §4.2.2 の default-range 表を SSOT 連動後の値に更新（Wave 2.2 / 3.1 でまとめて）
-- [ ] `tests/contract/test_lizyml_objective_metric_drift.py` 新設（Wave 3.1）
-- [ ] `tests/contract/test_ui_schema_matches_pydantic.py` を新規 schema に整合（Wave 2.2 以降の各 PR で）
-- [ ] `pnpm test:e2e --grep workspace-fit|workspace-tune|workspace-retune` 全 green（Wave 2 / 3 完了時）
+- [x] `pyproject.toml` の lizyml pin が `>=0.15.0,<0.16.0`（Wave 1.2 — #464）
+- [x] `lizyml_ui_schema.py` が `LGBMProvider()` の `objective_choices` / `metric_choices` / `parameter_bounds` を SSOT として読む（Wave 3.1a #473 で objective / bounds、Wave 3.1b で metric）
+- [x] `option_sets.model_metric` フィールド削除 + 参照 code path の `option_sets.metric` 移行（Wave 3.1b）。eval-metrics registry は `option_sets.eval_metric`（新規, flat）に分離
+- [x] `option_sets.objective.regression` の `cross_entropy` 除去（Wave 2.2 #468 / 3.1a #473 — provider 由来で自動）
+- [x] `option_sets.metric.multiclass` の `auc` 除去（Wave 3.1b — provider 由来で自動。`auc_mu` のみ）
+- [x] `RetuneSettingsSection` の Switch 復活 + null payload 後方互換テスト（Wave 2.1 #467）
+- [x] `SearchSpaceRow` inner_valid picker + Range Min/Max クランプ + BoundaryDimStatus バッジ（inner_valid: Wave 2.3 #470 / クランプ: Wave 3.1a #473 / `clamped_to_bound` バッジ: Wave 3.1b）
+- [x] NumberInput integer 強制 + inline 警告（Wave 2.4 #472）
+- [x] feval 由来 metric 項目に "Custom (slow)" バッジ（Wave 3.1b — SearchSpaceRow metric チップ + ModelParamsSection ChipGroup）
+- [x] BLUEPRINT.md §4.2.2 の default-range 表 / objective・metric テーブルを SSOT 連動後の値に更新（Wave 2.2 / 3.1a / 3.1b でまとめて）
+- [x] objective / metric drift CI 新設（`tests/contract/test_lizyml_objective_drift.py` を Wave 3.1b で metric drift / `option_sets` 構造検証まで拡張）
+- [x] `tests/contract/test_ui_schema_matches_pydantic.py` を新規 schema に整合（`build_ui_schema()` 引数削除に追従）
+- [ ] `pnpm test:e2e --grep workspace-fit|workspace-tune|workspace-retune` 全 green（Wave 3.1b PR の CI で確認）
 
 #### Alternatives considered
 
@@ -3715,5 +3715,8 @@ LizyML v0.15.0 の出荷（2026-05-10）により、Studio の Tune workflow を
 #### Decision
 
 - 2026-05-11 **Approved** — Wave 2.1（#458 Re-tune Switch）→ 2.2（#459 backend canonical defaults）→ 2.3（#459 frontend inner_valid + auto-populate）→ 2.4（#460 NumberInput usability）→ 3.1（#461 UiSchema SSOT 統合 + auc 除去 + drift CI）の 5 PR 直列実装。Wave 1.2 dep bump（lizyml v0.15）は本 Proposal 採用と並行で先行 PR 化。Q1-Q3 は本セッションで確定（Q1=full canonical / Q2=feval badge / Q3=model_metric 撤廃）
+- 2026-05-11 **Wave 1.2 / 2.1 / 2.2 / 2.3 / 2.4 着地** — #464（lizyml pin）/ #467（Re-tune Switch）/ #468（canonical defaults + Fit seed=1120）/ #470（inner_valid picker + Tune Evaluation auto-populate）/ #472（NumberInput integer guard）
+- 2026-05-11 **Wave 3.1a 着地** — #473（`option_sets.objective` + `parameter_bounds` を `LGBMProvider` SSOT に配線、Range Min/Max クランプ、objective drift CI）。当初同梱予定だった `validate_config` の `parse_space()` 化は e2e regression（`validate_config` が保存ゲートも兼ねるため過渡状態の空 Choice / `low>high` を弾いてしまう）で取り下げ、Issue #474 に deferred
+- 2026-05-11 **Wave 3.1b 着地（#461 残り）** — `option_sets.model_metric` 撤廃 →`option_sets.metric` を `LGBMProvider.metric_choices(task)` 由来の `{native, feval}` ネスト構造に統合（Q3）。eval-metrics registry の post-hoc 評価メトリクスは新フィールド `option_sets.eval_metric`（flat）に分離（Tune Evaluation セクション用）。`parameter_hints.metric.kind` / `special_search_space_fields.metric` を `model_metric`→`metric` にリネーム。`config_compat.py::task_params_compat_errors` の `allowed_metric` を `option_sets.metric` の `native ∪ feval` 参照に切替。frontend は `metric-options.ts` ヘルパで `option_sets` の narrowing を一元化。feval 由来 metric に "Custom (slow)" バッジ（Q2 — SearchSpaceRow metric チップ + ModelParamsSection ChipGroup）。`BoundaryDimStatus.clamped_to_bound`（lizyml v0.15）を `serialize_boundary_report` で wire に露出し Re-tune の Boundary Expansion パネルに「bounded」バッジ。残るは **#474（deferred parse_space validation）** と **#457（Residuals plot kind selector）** — いずれも P-0104 本体からは独立
 
 

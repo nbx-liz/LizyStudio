@@ -50,6 +50,7 @@ const boundaryReport = (name: string, best: number | null): BoundaryReport => ({
       expanded: false,
       new_low: null,
       new_high: null,
+      clamped_to_bound: false,
     },
   ],
   expanded_names: [],

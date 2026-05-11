@@ -34,6 +34,7 @@ export function SearchSpaceRow({
   task,
   objectiveOptions,
   metricOptions,
+  fevalMetrics,
   cvStrategy,
   innerValidOptions,
   bounds,
@@ -131,18 +132,24 @@ export function SearchSpaceRow({
               onChange={(v) => onModelParamChange(param.key, v)}
             />
           ) : onModelParamChange &&
-            specialSearchSpaceFields?.[param.key] === "model_metric" ? (
+            specialSearchSpaceFields?.[param.key] === "metric" ? (
             <div className="flex flex-wrap gap-1">
               {(metricOptions ?? []).map((opt) => {
                 const currentValue = modelParams[param.key];
                 const selected = Array.isArray(currentValue)
                   ? currentValue.includes(opt)
                   : false;
+                const isCustomFeval = (fevalMetrics ?? []).includes(opt);
                 return (
                   <button
                     key={opt}
                     type="button"
-                    className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                    title={
+                      isCustomFeval
+                        ? "Custom feval metric — re-evaluated in Python each round (slower)"
+                        : undefined
+                    }
+                    className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors ${
                       selected
                         ? "bg-primary text-primary-foreground border-transparent"
                         : "bg-transparent text-muted-foreground border-muted-foreground/30 hover:bg-muted"
@@ -158,6 +165,11 @@ export function SearchSpaceRow({
                     }}
                   >
                     {opt}
+                    {isCustomFeval && (
+                      <span className="rounded-sm bg-warning px-1 text-[8px] uppercase tracking-wide text-warning-fg">
+                        Custom (slow)
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -298,7 +310,7 @@ export function SearchSpaceRow({
       )}
 
       {/* precision_at_k k-value row — Fixed and Choice modes */}
-      {specialSearchSpaceFields?.[param.key] === "model_metric" &&
+      {specialSearchSpaceFields?.[param.key] === "metric" &&
         onModelParamChange &&
         (() => {
           // Fixed: check modelParams; Choice: check space choices

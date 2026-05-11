@@ -72,7 +72,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["auc", "f1", "accuracy"] },
+              eval_metric: { binary: ["auc", "f1", "accuracy"] },
             },
           } as unknown as UiSchema
         }
@@ -87,7 +87,7 @@ describe("TuneTab", () => {
         config={tuneConfig}
         onChange={vi.fn()}
         task="binary"
-        uiSchema={{ option_sets: { metric: {} } } as unknown as UiSchema}
+        uiSchema={{ option_sets: { eval_metric: {} } } as unknown as UiSchema}
       />,
     );
     expect(screen.queryByText("Optimization Metric")).not.toBeInTheDocument();
@@ -112,7 +112,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["auc", "f1", "accuracy"] },
+              eval_metric: { binary: ["auc", "f1", "accuracy"] },
             },
           } as unknown as UiSchema
         }
@@ -140,7 +140,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["auc", "f1"] },
+              eval_metric: { binary: ["auc", "f1"] },
             },
             metric_direction: {
               binary: { auc: "maximize", f1: "maximize" },
@@ -189,7 +189,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["auc", "f1", "accuracy"] },
+              eval_metric: { binary: ["auc", "f1", "accuracy"] },
             },
           } as unknown as UiSchema
         }
@@ -222,7 +222,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["auc", "f1"] },
+              eval_metric: { binary: ["auc", "f1"] },
             },
             metric_direction: { binary: { auc: "maximize", f1: "maximize" } },
           } as unknown as UiSchema
@@ -250,7 +250,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["auc", "f1"] },
+              eval_metric: { binary: ["auc", "f1"] },
             },
             metric_direction: { binary: { auc: "maximize", f1: "maximize" } },
           } as unknown as UiSchema
@@ -288,7 +288,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["auc", "f1"] },
+              eval_metric: { binary: ["auc", "f1"] },
             },
             metric_direction: { binary: { auc: "maximize", f1: "maximize" } },
           } as unknown as UiSchema
@@ -317,7 +317,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["auc", "f1"] },
+              eval_metric: { binary: ["auc", "f1"] },
             },
             // metric_direction has no entry for "binary"
             metric_direction: {},
@@ -357,7 +357,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["precision_at_k", "auc"] },
+              eval_metric: { binary: ["precision_at_k", "auc"] },
             },
           } as unknown as UiSchema
         }
@@ -386,7 +386,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["precision_at_k", "auc"] },
+              eval_metric: { binary: ["precision_at_k", "auc"] },
             },
           } as unknown as UiSchema
         }
@@ -424,7 +424,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["auc", "f1", "accuracy"] },
+              eval_metric: { binary: ["auc", "f1", "accuracy"] },
             },
           } as unknown as UiSchema
         }
@@ -608,7 +608,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { ranking: ["precision_at_k", "auc"] },
+              eval_metric: { ranking: ["precision_at_k", "auc"] },
             },
             metric_direction: {
               ranking: { precision_at_k: "maximize", auc: "maximize" },
@@ -666,7 +666,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { ranking: ["precision_at_k", "auc"] },
+              eval_metric: { ranking: ["precision_at_k", "auc"] },
             },
           } as unknown as import("@/api/types").UiSchema
         }
@@ -717,7 +717,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["unknown_metric", "auc"] },
+              eval_metric: { binary: ["unknown_metric", "auc"] },
             },
             metric_direction: { binary: { auc: "maximize" } },
           } as unknown as import("@/api/types").UiSchema
@@ -780,7 +780,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["auc", "f1", "accuracy"] },
+              eval_metric: { binary: ["auc", "f1", "accuracy"] },
             },
             metric_direction: {
               binary: { auc: "maximize", f1: "maximize", accuracy: "maximize" },
@@ -838,7 +838,7 @@ describe("TuneTab", () => {
           uiSchema={
             {
               option_sets: {
-                metric: {
+                eval_metric: {
                   binary: ["auc", "auc_pr", "brier", "logloss", "f1"],
                 },
               },
@@ -879,7 +879,7 @@ describe("TuneTab", () => {
           uiSchema={
             {
               option_sets: {
-                metric: { binary: ["auc", "auc_pr", "brier", "logloss"] },
+                eval_metric: { binary: ["auc", "auc_pr", "brier", "logloss"] },
               },
             } as unknown as UiSchema
           }
@@ -909,7 +909,7 @@ describe("TuneTab", () => {
           uiSchema={
             {
               option_sets: {
-                metric: { regression: ["rmse", "mae", "mape"] },
+                eval_metric: { regression: ["rmse", "mae", "mape"] },
               },
             } as unknown as UiSchema
           }
@@ -945,7 +945,7 @@ describe("TuneTab", () => {
           uiSchema={
             {
               inner_valid_options: ["holdout", "group_holdout", "time_holdout"],
-              option_sets: { metric: { binary: ["auc"] } },
+              option_sets: { eval_metric: { binary: ["auc"] } },
             } as unknown as UiSchema
           }
         />,
@@ -979,7 +979,7 @@ describe("TuneTab", () => {
           uiSchema={
             {
               inner_valid_options: ["holdout", "group_holdout", "time_holdout"],
-              option_sets: { metric: { binary: ["auc"] } },
+              option_sets: { eval_metric: { binary: ["auc"] } },
             } as unknown as UiSchema
           }
         />,

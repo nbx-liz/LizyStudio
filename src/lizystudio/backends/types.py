@@ -58,7 +58,8 @@ class TuningSummary:
     rounds: list[dict[str, Any]] | None = None
     # Final-round BoundaryReport. Keys:
     #   dims: list of per-dim status (name, best_value, low, high,
-    #         position_pct, edge, expanded, new_low, new_high),
+    #         position_pct, edge, expanded, new_low, new_high,
+    #         clamped_to_bound),
     #   expanded_names: list[str].
     boundary_report: dict[str, Any] | None = None
 

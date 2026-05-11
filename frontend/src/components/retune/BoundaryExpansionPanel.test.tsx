@@ -14,6 +14,7 @@ const baseDim: BoundaryDimStatus = {
   expanded: false,
   new_low: null,
   new_high: null,
+  clamped_to_bound: false,
 };
 
 function makeReport(dims: BoundaryDimStatus[]): BoundaryReport {
@@ -103,6 +104,19 @@ describe("BoundaryExpansionPanel", () => {
     expect(screen.getByText("\u25b2")).toBeInTheDocument();
     expect(screen.getByText("\u25bc")).toBeInTheDocument();
     expect(screen.getByText("\u2013")).toBeInTheDocument();
+  });
+
+  it("renders a 'bounded' badge for dims clamped by parameter_bounds", () => {
+    render(
+      <BoundaryExpansionPanel
+        report={makeReport([
+          { ...baseDim, name: "lr", clamped_to_bound: true, expanded: true },
+          { ...baseDim, name: "num_leaves", clamped_to_bound: false },
+        ])}
+      />,
+    );
+    const badges = screen.getAllByText(/^bounded$/i);
+    expect(badges).toHaveLength(1);
   });
 
   it("renders categorical best_value as its string representation", () => {

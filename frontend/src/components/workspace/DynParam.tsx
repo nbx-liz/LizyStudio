@@ -9,11 +9,13 @@ interface DynParamProps {
   hint: ParameterHint;
   value: unknown;
   onChange: (value: unknown) => void;
-  /** Options list for objective / model_metric kinds (task-filtered). */
+  /** Options list for objective / metric kinds (task-filtered). */
   options?: string[];
+  /** Feval subset of ``options`` (metric kind) — badged "Custom (slow)". */
+  customMetricOptions?: string[];
   /** Whether the field is visible (conditional_visibility). */
   visible?: boolean;
-  /** precision_at_k k-value (for model_metric kind). */
+  /** precision_at_k k-value (for metric kind). */
   precisionAtKValue?: number;
   /** Callback for precision_at_k k-value change. */
   onPrecisionAtKChange?: (k: number) => void;
@@ -23,17 +25,18 @@ interface DynParamProps {
  * Renders a single parameter based on its ParameterHint.kind.
  *
  * Maps:
- *   objective    -> SegmentGroup  (single-select)
- *   model_metric -> ChipGroup     (multi-select among task metrics)
- *   integer      -> CompactStepper
- *   number       -> CompactStepper
- *   boolean      -> CompactToggle
+ *   objective -> SegmentGroup  (single-select)
+ *   metric    -> ChipGroup     (multi-select among task metrics)
+ *   integer   -> CompactStepper
+ *   number    -> CompactStepper
+ *   boolean   -> CompactToggle
  */
 export function DynParam({
   hint,
   value,
   onChange,
   options,
+  customMetricOptions,
   visible = true,
   precisionAtKValue,
   onPrecisionAtKChange,
@@ -55,7 +58,7 @@ export function DynParam({
       );
     }
 
-    case "model_metric": {
+    case "metric": {
       const opts = options ?? [];
       if (opts.length === 0) return null;
       const selected = Array.isArray(value)
@@ -72,6 +75,7 @@ export function DynParam({
               selected={selected}
               onChange={(v) => onChange(v)}
               minSelected={1}
+              customOptions={customMetricOptions}
             />
           </FormRow>
           {showK && (

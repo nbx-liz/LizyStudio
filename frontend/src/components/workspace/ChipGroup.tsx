@@ -4,6 +4,9 @@ interface ChipGroupProps {
   onChange: (selected: string[]) => void;
   minSelected?: number;
   labels?: Record<string, string>;
+  /** Options that should render a small "Custom (slow)" badge — used for
+   * LizyML custom feval metrics (P-0104 Wave 3.1b / Q2). */
+  customOptions?: string[];
 }
 
 export function ChipGroup({
@@ -12,7 +15,9 @@ export function ChipGroup({
   onChange,
   minSelected = 0,
   labels,
+  customOptions,
 }: ChipGroupProps) {
+  const customSet = new Set(customOptions ?? []);
   const handleClick = (option: string) => {
     const isSelected = selected.includes(option);
     if (isSelected) {
@@ -29,15 +34,26 @@ export function ChipGroup({
       {options.map((option) => {
         const isActive = selected.includes(option);
         const label = labels?.[option] ?? option;
+        const isCustom = customSet.has(option);
         return (
           <button
             key={option}
             type="button"
             className={`lzs-chip${isActive ? " lzs-chip--active" : ""}`}
             aria-pressed={isActive}
+            title={
+              isCustom
+                ? "Custom feval metric — re-evaluated in Python each round (slower)"
+                : undefined
+            }
             onClick={() => handleClick(option)}
           >
             {label}
+            {isCustom && (
+              <span className="ml-1 rounded-sm bg-warning px-1 text-[8px] uppercase tracking-wide text-warning-fg">
+                Custom (slow)
+              </span>
+            )}
           </button>
         );
       })}

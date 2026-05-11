@@ -54,11 +54,11 @@ describe("DynParam", () => {
     });
   });
 
-  describe("kind=model_metric → ChipGroup (multi-select)", () => {
+  describe("kind=metric → ChipGroup (multi-select)", () => {
     it("renders a ChipGroup with options", () => {
       render(
         <DynParam
-          hint={hint({ kind: "model_metric", key: "metric" })}
+          hint={hint({ kind: "metric", key: "metric" })}
           value={["auc"]}
           onChange={vi.fn()}
           options={["auc", "logloss", "f1"]}
@@ -75,7 +75,7 @@ describe("DynParam", () => {
       const onChange = vi.fn();
       render(
         <DynParam
-          hint={hint({ kind: "model_metric", key: "metric" })}
+          hint={hint({ kind: "metric", key: "metric" })}
           value={["auc"]}
           onChange={onChange}
           options={["auc", "logloss"]}
@@ -88,7 +88,7 @@ describe("DynParam", () => {
     it("selected chips have aria-pressed=true", () => {
       render(
         <DynParam
-          hint={hint({ kind: "model_metric", key: "metric" })}
+          hint={hint({ kind: "metric", key: "metric" })}
           value={["auc"]}
           onChange={vi.fn()}
           options={["auc", "logloss"]}

@@ -128,4 +128,18 @@ describe("ChipGroup", () => {
     );
     expect(container.querySelector(".lzs-chip-group")).toBeInTheDocument();
   });
+
+  it("badges options listed in customOptions as 'Custom (slow)'", () => {
+    render(
+      <ChipGroup
+        options={["auc", "f1", "brier"]}
+        selected={[]}
+        onChange={vi.fn()}
+        customOptions={["f1", "brier"]}
+      />,
+    );
+    expect(screen.getAllByText(/^Custom \(slow\)$/i)).toHaveLength(2);
+    // The native option keeps a plain accessible name.
+    expect(screen.getByRole("button", { name: "auc" })).toBeInTheDocument();
+  });
 });

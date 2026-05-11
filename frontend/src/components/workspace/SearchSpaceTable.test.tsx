@@ -528,7 +528,7 @@ describe("SearchSpaceTable", () => {
       },
     ];
 
-    it("renders model_metric badge buttons for metric special field", () => {
+    it("renders metric badge buttons for metric special field", () => {
       const onModelParamChange = vi.fn();
       render(
         <SearchSpaceTable
@@ -539,10 +539,10 @@ describe("SearchSpaceTable", () => {
           task="binary"
           metricOptions={["auc", "f1", "accuracy"]}
           onModelParamChange={onModelParamChange}
-          specialSearchSpaceFields={{ metric: "model_metric" }}
+          specialSearchSpaceFields={{ metric: "metric" }}
         />,
       );
-      // model_metric renders badge buttons for each option
+      // metric renders badge buttons for each option
       expect(screen.getByText("auc")).toBeInTheDocument();
       expect(screen.getByText("f1")).toBeInTheDocument();
       expect(screen.getByText("accuracy")).toBeInTheDocument();
@@ -559,7 +559,7 @@ describe("SearchSpaceTable", () => {
           task="binary"
           metricOptions={["auc", "f1"]}
           onModelParamChange={onModelParamChange}
-          specialSearchSpaceFields={{ metric: "model_metric" }}
+          specialSearchSpaceFields={{ metric: "metric" }}
         />,
       );
       // Click "f1" to add it
@@ -578,7 +578,7 @@ describe("SearchSpaceTable", () => {
           task="binary"
           metricOptions={["auc", "f1"]}
           onModelParamChange={onModelParamChange}
-          specialSearchSpaceFields={{ metric: "model_metric" }}
+          specialSearchSpaceFields={{ metric: "metric" }}
         />,
       );
       // Click "f1" to remove it (it's currently selected)
@@ -711,7 +711,7 @@ describe("SearchSpaceTable", () => {
           task="binary"
           metricOptions={["auc", "precision_at_k"]}
           onModelParamChange={onModelParamChange}
-          specialSearchSpaceFields={{ metric: "model_metric" }}
+          specialSearchSpaceFields={{ metric: "metric" }}
         />,
       );
       // The k-value row shows "precision_at_k: k" label
@@ -729,7 +729,7 @@ describe("SearchSpaceTable", () => {
           task="binary"
           metricOptions={["auc", "precision_at_k"]}
           onModelParamChange={onModelParamChange}
-          specialSearchSpaceFields={{ metric: "model_metric" }}
+          specialSearchSpaceFields={{ metric: "metric" }}
         />,
       );
       expect(screen.queryByText("precision_at_k: k")).not.toBeInTheDocument();
@@ -746,7 +746,7 @@ describe("SearchSpaceTable", () => {
           task="binary"
           metricOptions={["precision_at_k"]}
           onModelParamChange={onModelParamChange}
-          specialSearchSpaceFields={{ metric: "model_metric" }}
+          specialSearchSpaceFields={{ metric: "metric" }}
         />,
       );
       // The k-value row has a NumberInput with increment button
@@ -1328,7 +1328,7 @@ describe("SearchSpaceTable", () => {
           task="binary"
           metricOptions={["auc", "precision_at_k"]}
           onModelParamChange={onModelParamChange}
-          specialSearchSpaceFields={{ metric: "model_metric" }}
+          specialSearchSpaceFields={{ metric: "metric" }}
         />,
       );
       expect(screen.getByText("precision_at_k: k")).toBeInTheDocument();
@@ -1347,7 +1347,7 @@ describe("SearchSpaceTable", () => {
           task="binary"
           metricOptions={["auc", "precision_at_k"]}
           onModelParamChange={onModelParamChange}
-          specialSearchSpaceFields={{ metric: "model_metric" }}
+          specialSearchSpaceFields={{ metric: "metric" }}
         />,
       );
       expect(screen.queryByText("precision_at_k: k")).not.toBeInTheDocument();

@@ -32,6 +32,7 @@ const boundaryReport: BoundaryReport = {
       expanded: false,
       new_low: null,
       new_high: null,
+      clamped_to_bound: false,
     },
   ],
   expanded_names: [],
