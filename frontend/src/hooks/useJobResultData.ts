@@ -61,6 +61,16 @@ export interface UseJobResultData {
   importancePlot: PlotResponse | undefined;
   isImportancePlotLoading: boolean;
   /**
+   * Issue #457 / P-0105: residuals plot kind state + data. ``"all"`` (the
+   * default) renders the legacy 3-panel layout; ``scatter`` / ``histogram``
+   * / ``qq`` render a single readable panel.
+   */
+  residualsKind: string;
+  setResidualsKind: (kind: string) => void;
+  residualsPlot: PlotResponse | undefined;
+  isResidualsPlotLoading: boolean;
+  isResidualsPlotError: boolean;
+  /**
    * PR-B2 / P-0097: top-N projection state for the importance table.
    * `null` means "show all" (no top_n forwarded). The default of 30
    * keeps the wide-DataFrame UX responsive.
@@ -100,7 +110,8 @@ export function useJobResultData({
     enabled:
       !!selectedPlot &&
       selectedPlot !== "learning-curve" &&
-      selectedPlot !== "importance",
+      selectedPlot !== "importance" &&
+      selectedPlot !== "residuals",
     retry: false,
   });
 
@@ -111,6 +122,10 @@ export function useJobResultData({
   // some metrics through feval callables.)
   // --------------------------------------------------------------------
   const [lcMetric, setLcMetric] = useState<string | null>(null);
+  // Issue #457 / P-0105: residuals plot kind. Declared up here (rather
+  // than in the Residuals section below) so the job-hot-swap reset
+  // effect can call ``setResidualsKind`` without a use-before-define.
+  const [residualsKind, setResidualsKind] = useState("all");
   const lcInitialized = useRef(false);
   const lcEnabled =
     selectedPlot === "learning-curve" &&
@@ -144,6 +159,8 @@ export function useJobResultData({
       lastJobIdRef.current = job.job_id;
       setLcMetric(null);
       lcInitialized.current = false;
+      // Issue #457: a hot-swapped job starts fresh on the 3-panel view.
+      setResidualsKind("all");
     }
   }, [job.job_id]);
 
@@ -220,6 +237,27 @@ export function useJobResultData({
   );
 
   // --------------------------------------------------------------------
+  // Residuals (Issue #457 / P-0105) — split out of the generic plotData
+  // query so the kind selector can refetch per-kind without invalidating
+  // the other plots. Default ``"all"`` preserves the legacy 3-panel view.
+  // (``residualsKind`` state is declared near the top — see comment there.)
+  // --------------------------------------------------------------------
+  const residualsEnabled =
+    selectedPlot === "residuals" && (plots?.includes("residuals") ?? false);
+
+  const {
+    data: residualsPlot,
+    isLoading: isResidualsPlotLoading,
+    isError: isResidualsPlotError,
+  } = useQuery({
+    queryKey: queryKeys.jobPlotResiduals(job.job_id, residualsKind),
+    queryFn: () =>
+      fetchJobPlot(job.job_id, "residuals", { kind: residualsKind }),
+    enabled: residualsEnabled,
+    retry: false,
+  });
+
+  // --------------------------------------------------------------------
   // Split summary + tuning plot
   // --------------------------------------------------------------------
   const { data: splitSummary } = useQuery({
@@ -280,6 +318,11 @@ export function useJobResultData({
     importance,
     importancePlot,
     isImportancePlotLoading,
+    residualsKind,
+    setResidualsKind,
+    residualsPlot,
+    isResidualsPlotLoading,
+    isResidualsPlotError,
     importanceTopN,
     setImportanceTopN,
     splitSummary,

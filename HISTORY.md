@@ -3720,3 +3720,72 @@ LizyML v0.15.0 の出荷（2026-05-10）により、Studio の Tune workflow を
 - 2026-05-11 **Wave 3.1b 着地（#461 残り）** — `option_sets.model_metric` 撤廃 →`option_sets.metric` を `LGBMProvider.metric_choices(task)` 由来の `{native, feval}` ネスト構造に統合（Q3）。eval-metrics registry の post-hoc 評価メトリクスは新フィールド `option_sets.eval_metric`（flat）に分離（Tune Evaluation セクション用）。`parameter_hints.metric.kind` / `special_search_space_fields.metric` を `model_metric`→`metric` にリネーム。`config_compat.py::task_params_compat_errors` の `allowed_metric` を `option_sets.metric` の `native ∪ feval` 参照に切替。frontend は `metric-options.ts` ヘルパで `option_sets` の narrowing を一元化。feval 由来 metric に "Custom (slow)" バッジ（Q2 — SearchSpaceRow metric チップ + ModelParamsSection ChipGroup）。`BoundaryDimStatus.clamped_to_bound`（lizyml v0.15）を `serialize_boundary_report` で wire に露出し Re-tune の Boundary Expansion パネルに「bounded」バッジ。残るは **#474（deferred parse_space validation）** と **#457（Residuals plot kind selector）** — いずれも P-0104 本体からは独立
 
 
+
+### P-0105: Residuals plot に kind selector を追加（3-panel layout → Importance パターン mirror、Issue #457）
+
+- **Date:** 2026-05-11 起票・即承認（Issue #457 で詳細仕様確定済 + ユーザ go-ahead）
+- **Related:** Issue #457、`src/lizystudio/backends/lizyml/evaluation_mixin.py`、`src/lizystudio/api/jobs.py`、`frontend/src/hooks/useJobResultData.ts`、`frontend/src/api/queryKeys.ts`、`frontend/src/components/workspace/PlotSection.tsx`、`frontend/src/components/shared/JobResultsBody.tsx`、BLUEPRINT.md §4.3、`docs/plot-matrix.md`、lizyml `Model.residuals_plot(*, kind="all")`（lizyml 0.9.0+ で kind dispatch 出荷済）
+
+#### Motivation
+
+regression Fit 結果の Residuals plot は現在「1 figure に 3 panel（Actual vs Predicted / Residual Distribution / QQ）」を横並びで描画する。Workspace 右パネルが狭い（laptop / Inspector docked）ときに 3 panel が潰れて読めなくなる。Importance タブは既に `SegmentGroup`（`split / gain / shap`）で 1 panel ずつ切替えられる UX を持っており、Residuals も同じパターンに揃える。lizyml 側は `residuals_plot(kind="scatter"|"histogram"|"qq"|"all")` を既にサポート済（`_VALID_KINDS = ("scatter","histogram","qq","all")`）、Studio 側の配線のみが残っている。
+
+#### Purpose
+
+- backend dispatch（`evaluation_mixin.plot()`）が `plot_type == "residuals"` のとき `kind` を `Model.residuals_plot(kind=...)` に転送する（`importance` と同じ枠で）。
+- API（`GET /api/jobs/{id}/plot/{plot_type}`）が `residuals` でも `?kind=` を受け付ける。`{"scatter","histogram","qq","all"}` 以外は `INVALID_PARAM`（400）。
+- frontend hook（`useJobResultData.ts`）に `residualsKind` state（default `"all"`）+ `setResidualsKind` を追加、residuals タブが active のとき `fetchJobPlot(jobId, "residuals", {kind})` で取得。`queryKeys.jobPlotResiduals(jobId, kind)` を追加し generic plotData query から split（importance と同じ手法）。
+- frontend UI（`PlotSection.tsx`）に residuals 用 `SegmentGroup`（`Scatter / Histogram / QQ / All`）を importance kind selector と同じ slot に追加。
+- `pnpm generate:api` で `schema.d.ts` 再生成（手書きしない）。
+
+#### Invariants
+
+- **INV-resid-1**: `kind` 未指定の `GET /api/jobs/{id}/plot/residuals` は従来通り `"all"`（3-panel）図を返す — 既存クライアントのバイト列を変えない（後方互換）。
+- **INV-resid-2**: `PlotSection` の residuals kind selector が描画する選択肢は backend `Model.residuals_plot` の `_VALID_KINDS` と一致する（`RESIDUAL_KIND_LABELS` のキー集合で固定）。
+- **INV-resid-3**: `evaluation_mixin.plot()` の `kind` 転送は `plot_type ∈ {"importance","residuals"}` に限る（`shap-summary` は `kind="shap"` 固定の別経路、他は転送しない）。
+
+#### Impact
+
+**Public API:**
+- `GET /api/jobs/{job_id}/plot/{plot_type}` が `residuals` でも `?kind=` を受理（後方互換 — 省略時 `"all"`）。invalid kind は `400 INVALID_PARAM`。docstring 更新。`schema.d.ts` 再生成。
+
+**Backend:**
+- `evaluation_mixin.py`: `plot()` の `kind` 転送条件に `residuals` を追加。`_RESIDUALS_KINDS` module-level 定数（`_PLOT_DISPATCH` style）を新設し、`available_plots` の `shap-summary` probe と同様の方針で使う。
+- `api/jobs.py`: residuals 用 `kind` バリデーション（`_RESIDUALS_KINDS` に対する membership check）。
+
+**Frontend:**
+- `useJobResultData.ts`: `residualsKind` state（default `"all"`）+ `setResidualsKind` + `residualsPlot` query（`enabled = selectedPlot === "residuals" && plots.includes("residuals")`）。generic `plotData` query の `enabled` 条件から `residuals` を除外。
+- `queryKeys.ts`: `jobPlotResiduals(jobId, kind)`。
+- `PlotSection.tsx`: `residualsKinds` / `selectedResidualsKind` / `onResidualsKindChange` / `residualsPlot` props 追加。`selectedPlot === "residuals"` のとき `SegmentGroup`（`RESIDUAL_KIND_LABELS = {scatter:"Scatter", histogram:"Histogram", qq:"QQ", all:"All"}`）を importance kind selector と同じ位置に。fullscreen dialog title は `kind !== "all"` のとき `Residuals — <Kind>`。
+- `JobResultsBody.tsx`: hook の新 state を `PlotSection` に配線。
+
+**Behavior change for users:**
+- Residuals タブに `Scatter / Histogram / QQ / All` の SegmentGroup が出る。default は `All` で従来の 3-panel と完全一致。
+
+**Compatibility:**
+- 後方互換（kind 省略 = `"all"` = 従来図）。保存形式・他 API 変更なし。
+
+**Testing:**
+- backend unit（`tests/test_backends_lizyml.py`）: `plot("residuals", kind=...)` 4 種 + invalid kind が typed error。
+- API contract（`tests/test_jobs_api.py` 相当）: `?kind=scatter` → 200、`?kind=bogus` → 400、kind 省略 → 200。
+- frontend Vitest（`PlotSection.test.tsx`）: residuals タブ active で selector 描画 / クリックで `onResidualsKindChange`。`useJobResultData.test.ts`: `residualsKind` の state 遷移。
+- e2e（軽量）: `workspace-fit.spec.ts` の regression path に `all → scatter` 切替の smoke を 1 件追加。
+
+#### Acceptance criteria
+
+- [ ] Residuals タブが `Scatter / Histogram / QQ / All` の SegmentGroup を表示、default `All`。
+- [ ] 各 kind が対応する lizyml 図を描画、`kind=all` は従来の 3-panel と一致。
+- [ ] `GET /api/jobs/{id}/plot/residuals?kind=bogus` → `400 INVALID_PARAM`。
+- [ ] `GET /api/jobs/{id}/plot/residuals`（kind 省略）→ 従来の `"all"` 図。
+- [ ] `uv run pytest` / `pnpm test` / `pnpm test:e2e --grep workspace-fit` / `pnpm check` / `pnpm build` 全 green。
+- [ ] BLUEPRINT.md の Residuals plot 記述 + `docs/plot-matrix.md` を更新。
+
+#### Alternatives considered
+
+- **(a) default を 3-panel から単一 panel に変更**: 拒否。現行ビューに依存しているユーザを無言で壊す（Issue #457 Out of scope に明記）。
+- **(b) Residuals を Importance と同様にバックエンドで kind 別キャッシュ**: 不要。`residuals_plot` は安価で、frontend query cache（`jobPlotResiduals(jobId, kind)` キー）で十分。
+- **(c) per-fold residuals breakdown / 新 kind 追加**: 拒否（Issue #457 Out of scope — lizyml がサポートする 4 kind のみ）。
+
+#### Decision
+
+- 2026-05-11 **Approved** — Issue #457 の詳細仕様（target shape 1-5）+ UI spec をそのまま採用。実装は単一 PR（Proposal commit → 実装 commit）。`shap-summary` を top-level タブに昇格する件（#373）とは独立。

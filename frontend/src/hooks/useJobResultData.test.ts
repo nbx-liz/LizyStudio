@@ -262,6 +262,72 @@ describe("useJobResultData", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Residuals (Issue #457 / P-0105)
+  // -------------------------------------------------------------------------
+  it("defaults residualsKind to 'all'", () => {
+    const job = makeJob();
+    const { result } = renderHook(
+      () => useJobResultData({ job, selectedPlot: "" }),
+      { wrapper },
+    );
+    expect(result.current.residualsKind).toBe("all");
+  });
+
+  it("does NOT fetch the residuals plot when residuals is not the active tab", async () => {
+    const job = makeJob();
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce(["residuals"]);
+    renderHook(() => useJobResultData({ job, selectedPlot: "importance" }), {
+      wrapper,
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fetchJobPlot).not.toHaveBeenCalledWith(
+      "j1",
+      "residuals",
+      expect.anything(),
+    );
+  });
+
+  it("fetches the residuals plot with the selected kind when the tab is active", async () => {
+    const job = makeJob();
+    vi.mocked(fetchJobPlots).mockResolvedValueOnce(["residuals"]);
+    const { result } = renderHook(
+      () => useJobResultData({ job, selectedPlot: "residuals" }),
+      { wrapper },
+    );
+    await waitFor(() => {
+      expect(fetchJobPlot).toHaveBeenCalledWith("j1", "residuals", {
+        kind: "all",
+      });
+    });
+    act(() => {
+      result.current.setResidualsKind("scatter");
+    });
+    await waitFor(() => {
+      expect(fetchJobPlot).toHaveBeenCalledWith("j1", "residuals", {
+        kind: "scatter",
+      });
+    });
+  });
+
+  it("resets residualsKind to 'all' when job_id changes", async () => {
+    const job1 = makeJob({ job_id: "j1" });
+    const job2 = makeJob({ job_id: "j2" });
+    vi.mocked(fetchJobPlots).mockResolvedValue(["residuals"]);
+    const { result, rerender } = renderHook(
+      ({ job }) => useJobResultData({ job, selectedPlot: "residuals" }),
+      { wrapper, initialProps: { job: job1 } },
+    );
+    act(() => {
+      result.current.setResidualsKind("qq");
+    });
+    expect(result.current.residualsKind).toBe("qq");
+    rerender({ job: job2 });
+    await waitFor(() => {
+      expect(result.current.residualsKind).toBe("all");
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Tuning plot (H-0070 fallback)
   // -------------------------------------------------------------------------
   it("fetches tuning plot only for tune jobs", async () => {

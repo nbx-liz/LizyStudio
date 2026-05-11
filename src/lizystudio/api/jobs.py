@@ -61,6 +61,11 @@ from lizystudio.ws.progress import ProgressBroadcaster
 
 _MAX_METRICS = 20
 _VALID_PARAM_RE = re.compile(r"^[a-zA-Z0-9_]+$")
+# Issue #457 / P-0105: valid ``?kind=`` values for the residuals plot.
+# Mirrors ``LizyMLEvaluationMixin.RESIDUALS_KINDS`` (and lizyml's
+# ``plot_residuals._VALID_KINDS``); ``tests/test_jobs_api.py`` locks the
+# match so a future lizyml change can't silently desync the API guard.
+_RESIDUALS_KINDS: tuple[str, ...] = ("scatter", "histogram", "qq", "all")
 
 # P-0097: hard cap on the JSON-serialised importance payload. When the
 # unbounded response would exceed this many bytes the route falls back
@@ -506,6 +511,8 @@ def get_job_plot_endpoint(
 
     For ``learning-curve``, pass ``?metrics=auc,f1`` to filter subplots.
     For ``importance``, pass ``?kind=split|gain|shap`` to select kind.
+    For ``residuals``, pass ``?kind=scatter|histogram|qq|all`` to select
+    which panel to render (default ``all`` — the 3-panel layout).
     """
     job = _get_job_or_404(job_id, job_store)
     _require_completed(job)
@@ -529,6 +536,17 @@ def get_job_plot_endpoint(
     if kind is not None and plot_type == "importance":
         if not _VALID_PARAM_RE.match(kind):
             raise StudioError("INVALID_PARAM", f"Invalid kind: {kind!r}", 400)
+        kwargs["kind"] = kind
+    if kind is not None and plot_type == "residuals":
+        # Issue #457: explicit allowlist so an unknown kind surfaces as
+        # 400 INVALID_PARAM rather than a deep lizyml CONFIG_INVALID
+        # (which the generic handler would map to 500).
+        if kind not in _RESIDUALS_KINDS:
+            raise StudioError(
+                "INVALID_PARAM",
+                f"Invalid residuals kind {kind!r}; valid: {list(_RESIDUALS_KINDS)}",
+                400,
+            )
         kwargs["kind"] = kind
     try:
         plot_data = get_job_plot(

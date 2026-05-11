@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
+import { setupAndFit, waitForJobDone } from "./helpers/api";
 import {
   isMobileProject,
   openWorkspaceSectionIfMobile,
@@ -507,5 +508,51 @@ test.describe("Workspace Fit Flow", () => {
     // model.params.balanced must NOT be set — that path is silently
     // dropped by lizyml and is the wrong target.
     expect(putBody.model.params?.balanced).toBeUndefined();
+  });
+
+  /**
+   * Issue #457 / P-0105: the Residuals plot (regression jobs only) renders
+   * a kind SegmentGroup (Scatter / Histogram / QQ / All, defaulting to
+   * All). Switching to "scatter" refetches ``/plot/residuals?kind=scatter``.
+   * Set up via the API + ``?job_id=`` deep-link (the
+   * session-restore.spec.ts pattern) since this is a results-panel check,
+   * not a config-write-path check.
+   */
+  test("UI: residuals plot kind selector switches the rendered panel", async ({
+    page,
+    request,
+  }, testInfo) => {
+    test.setTimeout(120_000);
+
+    const csvPath = createTestCsv();
+    const jobId = await setupAndFit(request, csvPath, "target", "regression");
+    const finished = await waitForJobDone(request, jobId);
+    expect(finished.status).toBe("completed");
+
+    await dismissOnboarding(page);
+    await page.goto(`/?job_id=${encodeURIComponent(jobId)}`);
+    await page.waitForLoadState("networkidle");
+    await openWorkspaceSectionIfMobile(page, testInfo, "results");
+    await expect(page.getByText("Completed").first()).toBeVisible({
+      timeout: 30_000,
+    });
+
+    // The Residuals tab is present for regression jobs (available_plots).
+    await page.getByRole("button", { name: "Residuals" }).click();
+
+    // Kind SegmentGroup: 4 options, "All" selected by default.
+    const scatterRadio = page.getByRole("radio", { name: "Scatter" });
+    await expect(scatterRadio).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole("radio", { name: "All" })).toBeChecked();
+
+    // Switching kind refetches the figure for that kind.
+    const kindResponse = page.waitForResponse(
+      (res) =>
+        res.url().includes("/plot/residuals") &&
+        res.url().includes("kind=scatter"),
+      { timeout: 15_000 },
+    );
+    await scatterRadio.click();
+    expect((await kindResponse).status()).toBe(200);
   });
 });

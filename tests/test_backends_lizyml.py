@@ -1623,6 +1623,45 @@ def test_plot_non_learning_curve_ignores_metrics_kwarg() -> None:
     mock_model.plot_oof_distribution.assert_called_once_with()
 
 
+# --- plot("residuals", kind=...) (Issue #457 / P-0105) ---
+
+
+def test_plot_residuals_forwards_kind() -> None:
+    """plot('residuals', kind=...) forwards the kind to residuals_plot()."""
+    adapter = LizyMLAdapter()
+    for kind in ("scatter", "histogram", "qq", "all"):
+        mock_model = MagicMock()
+        mock_fig = MagicMock()
+        mock_fig.to_json.return_value = '{"data": []}'
+        mock_model.residuals_plot.return_value = mock_fig
+
+        result = adapter.plot(mock_model, "residuals", kind=kind)
+
+        mock_model.residuals_plot.assert_called_once_with(kind=kind)
+        assert isinstance(result, PlotData)
+
+
+def test_plot_residuals_without_kind_calls_no_kwargs() -> None:
+    """plot('residuals') without kind passes no kwargs (lizyml defaults to 'all')."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_fig = MagicMock()
+    mock_fig.to_json.return_value = '{"data": []}'
+    mock_model.residuals_plot.return_value = mock_fig
+
+    adapter.plot(mock_model, "residuals")
+
+    mock_model.residuals_plot.assert_called_once_with()
+
+
+def test_residuals_kinds_constant_matches_lizyml() -> None:
+    """RESIDUALS_KINDS mirrors lizyml ``plot_residuals._VALID_KINDS``."""
+    from lizyml.plots.residuals import _VALID_KINDS
+
+    assert LizyMLAdapter.RESIDUALS_KINDS == ("scatter", "histogram", "qq", "all")
+    assert tuple(LizyMLAdapter.RESIDUALS_KINDS) == tuple(_VALID_KINDS)
+
+
 # --- export_model ---
 
 

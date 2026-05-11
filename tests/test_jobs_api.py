@@ -1137,6 +1137,83 @@ def test_get_job_plot_non_learning_curve_ignores_metrics(
     assert "metrics" not in kwargs
 
 
+# --- Residuals plot kind selector (Issue #457 / P-0105) ---
+
+
+def _mock_plot_backend() -> object:
+    """Build a mock backend whose plot() returns a fake figure."""
+    from unittest.mock import MagicMock
+
+    mock_backend = _make_mock_backend()
+    fake_plot = MagicMock()
+    fake_plot.plotly_json = '{"data":[],"layout":{}}'
+    mock_backend.plot.return_value = fake_plot  # type: ignore[union-attr]
+    return mock_backend
+
+
+def test_get_job_plot_residuals_forwards_kind(
+    client: TestClient, sample_data_ref: DataRef, tmp_path: Path
+) -> None:
+    """GET /api/jobs/{id}/plot/residuals?kind=scatter forwards kind to plot()."""
+    job_id = _create_completed_job_with_model(
+        client, sample_data_ref, str(tmp_path / "model")
+    )
+    mock_backend = _mock_plot_backend()
+    app = client.app  # type: ignore[union-attr]
+    original = app.state.workspace.backend
+    app.state.workspace.backend = mock_backend
+    try:
+        res = client.get(f"/api/jobs/{job_id}/plot/residuals?kind=scatter")
+    finally:
+        app.state.workspace.backend = original
+
+    assert res.status_code == 200
+    _, kwargs = mock_backend.plot.call_args  # type: ignore[union-attr]
+    assert kwargs == {"kind": "scatter"}
+
+
+def test_get_job_plot_residuals_default_no_kind(
+    client: TestClient, sample_data_ref: DataRef, tmp_path: Path
+) -> None:
+    """GET /api/jobs/{id}/plot/residuals (no kind) returns the default figure."""
+    job_id = _create_completed_job_with_model(
+        client, sample_data_ref, str(tmp_path / "model")
+    )
+    mock_backend = _mock_plot_backend()
+    app = client.app  # type: ignore[union-attr]
+    original = app.state.workspace.backend
+    app.state.workspace.backend = mock_backend
+    try:
+        res = client.get(f"/api/jobs/{job_id}/plot/residuals")
+    finally:
+        app.state.workspace.backend = original
+
+    assert res.status_code == 200
+    # No kind kwarg forwarded — lizyml's residuals_plot defaults to "all".
+    _, kwargs = mock_backend.plot.call_args  # type: ignore[union-attr]
+    assert "kind" not in kwargs
+
+
+def test_get_job_plot_residuals_invalid_kind_rejected(
+    client: TestClient, sample_data_ref: DataRef, tmp_path: Path
+) -> None:
+    """GET /api/jobs/{id}/plot/residuals?kind=bogus → 400 INVALID_PARAM."""
+    job_id = _create_completed_job_with_model(
+        client, sample_data_ref, str(tmp_path / "model")
+    )
+    res = client.get(f"/api/jobs/{job_id}/plot/residuals?kind=bogus")
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "INVALID_PARAM"
+
+
+def test_residuals_kinds_api_constant_matches_backend() -> None:
+    """jobs._RESIDUALS_KINDS stays in sync with the lizyml backend mixin."""
+    from lizystudio.api.jobs import _RESIDUALS_KINDS
+    from lizystudio.backends.lizyml import LizyMLAdapter
+
+    assert tuple(LizyMLAdapter.RESIDUALS_KINDS) == _RESIDUALS_KINDS
+
+
 # --- Log with content ---
 
 
