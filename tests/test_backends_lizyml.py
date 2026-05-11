@@ -1168,6 +1168,27 @@ def test_get_default_config_multiclass() -> None:
     assert config["split"]["method"] == "stratified_kfold"
 
 
+def test_get_default_config_training_seed_overrides_library_default() -> None:
+    """get_default_config() injects training.seed=1120 across all tasks.
+
+    P-0104 Wave 2.2 / Issue #459: the library default ``TrainingConfig.seed=42``
+    is overridden at the Studio default-config layer so fresh Fit-tab configs
+    match the Tune-tab catalog seed default already at 1120. This keeps the
+    Fit / Tune split reproducible without manual override.
+    """
+    adapter = LizyMLAdapter()
+    for task, target in (
+        ("binary", "label"),
+        ("regression", "price"),
+        ("multiclass", "class"),
+    ):
+        config = adapter.get_default_config(task=task, target=target)
+        assert config["training"]["seed"] == 1120, (
+            f"task={task} default seed must be 1120 (Wave 2.2), got "
+            f"{config['training']['seed']}"
+        )
+
+
 # --- validate_config success path ---
 
 

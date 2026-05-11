@@ -119,7 +119,9 @@ def test_config_defaults_binary(client: TestClient) -> None:
     assert body["model"]["name"] == "lgbm"
     assert body["split"]["method"] == "stratified_kfold"
     assert body["split"]["n_splits"] == 5
-    assert body["training"]["seed"] == 42
+    # P-0104 Wave 2.2 / Issue #459: Studio overrides library seed=42 with 1120
+    # so fresh Fit-tab configs match the Tune-tab catalog seed default.
+    assert body["training"]["seed"] == 1120
     assert body["training"]["early_stopping"]["enabled"] is True
     assert body["training"]["early_stopping"]["rounds"] == 150
 
