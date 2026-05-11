@@ -111,6 +111,12 @@ class EvaluationMixin:
         "shap-summary": "importance_plot",
     }
 
+    # Issue #457 / P-0105: valid ``kind`` values for ``residuals_plot``.
+    # Mirrors lizyml ``plot_residuals._VALID_KINDS``; the API layer
+    # validates ``?kind=`` against this set so an invalid value surfaces
+    # as 400 instead of a deep lizyml ``LizyMLError(CONFIG_INVALID)``.
+    RESIDUALS_KINDS: tuple[str, ...] = ("scatter", "histogram", "qq", "all")
+
     def plot(self, model: Any, plot_type: str, **kwargs: Any) -> PlotData:
         method_name = self._PLOT_DISPATCH.get(plot_type)
         if method_name is None:
@@ -121,7 +127,9 @@ class EvaluationMixin:
         call_kwargs: dict[str, Any] = {}
         if plot_type == "learning-curve" and "metrics" in kwargs:
             call_kwargs["metrics"] = kwargs["metrics"]
-        if plot_type == "importance" and "kind" in kwargs:
+        # Issue #457: ``residuals`` accepts ``kind`` in the same way as
+        # ``importance`` — INV-resid-3 limits kind forwarding to these two.
+        if plot_type in ("importance", "residuals") and "kind" in kwargs:
             call_kwargs["kind"] = kwargs["kind"]
         if plot_type == "shap-summary":
             # Force kind="shap" regardless of caller-supplied kwargs;

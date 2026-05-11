@@ -31,7 +31,7 @@ same PR.
 | `roc-curve`                | `roc_curve_plot`            | `ROC`             | binary              | |
 | `calibration`              | `calibration_plot`          | `Calibration`     | binary + cal enabled | |
 | `probability-histogram`    | `probability_histogram_plot`| `Prob Hist`       | binary + cal enabled | |
-| `residuals`                | `residuals_plot`            | `Residuals`       | regression          | |
+| `residuals`                | `residuals_plot`            | `Residuals`       | regression          | accepts `kind={scatter,histogram,qq,all}` (default `all` = 3-panel; Issue #457 / P-0105) |
 | `importance`               | `importance_plot`           | `Importance`      | all                 | accepts `kind={split,gain,shap}`; `top_n` query (P-0097) |
 | `shap-summary`             | `importance_plot`           | _(see notes)_     | all + shap installed| alias of `importance_plot(kind="shap")` (Issue #373). NOT in Workspace `PLOT_LABELS` (Issue #393): Workspace surfaces SHAP via `Importance kind=shap`; Inference renders the SHAP Summary accordion (`ResultsPredOnly` / `ResultsWithGT`) which does not consume `PlotSection`. |
 | `tuning`                   | `tuning_plot`               | _(in TuneTrialsSection)_ | tune jobs    | NOT in `PLOT_LABELS` — rendered by `TuneTrialsSection`, intentionally absent from the tab strip |
@@ -46,6 +46,8 @@ same PR.
 | API render endpoint | `src/lizystudio/api/jobs.py` | `GET /api/jobs/{id}/plot/{plot_type}` |
 | Frontend labels | `frontend/src/components/workspace/PlotSection.tsx` | `PLOT_LABELS` |
 | Importance kind labels | `frontend/src/components/workspace/PlotSection.tsx` | `KIND_LABELS` |
+| Residuals kind labels | `frontend/src/components/workspace/PlotSection.tsx` | `RESIDUAL_KINDS` / `RESIDUAL_KIND_LABELS` |
+| Residuals kind allowlist (API) | `src/lizystudio/api/jobs.py` | `_RESIDUALS_KINDS` (mirrors `EvaluationMixin.RESIDUALS_KINDS`) |
 
 ---
 

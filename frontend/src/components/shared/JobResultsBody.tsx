@@ -62,6 +62,11 @@ export function JobResultsBody({
     importance,
     importancePlot,
     isImportancePlotLoading,
+    residualsKind,
+    setResidualsKind,
+    residualsPlot,
+    isResidualsPlotLoading,
+    isResidualsPlotError,
     importanceTopN,
     setImportanceTopN,
     splitSummary,
@@ -103,9 +108,17 @@ export function JobResultsBody({
           isLoading={
             selectedPlot === "importance"
               ? isImportancePlotLoading
-              : isPlotLoading
+              : selectedPlot === "residuals"
+                ? isResidualsPlotLoading
+                : isPlotLoading
           }
-          isError={selectedPlot === "learning-curve" ? isLcError : isPlotError}
+          isError={
+            selectedPlot === "learning-curve"
+              ? isLcError
+              : selectedPlot === "residuals"
+                ? isResidualsPlotError
+                : isPlotError
+          }
           lcMetric={lcMetric}
           onLcMetricChange={setLcMetric}
           availableEvalMetrics={availableEvalMetrics}
@@ -114,6 +127,9 @@ export function JobResultsBody({
           onImportanceKindChange={setImportanceKind}
           importanceData={importance}
           importancePlot={importancePlot}
+          residualsPlot={residualsPlot}
+          selectedResidualsKind={residualsKind}
+          onResidualsKindChange={setResidualsKind}
           importanceTopN={importanceTopN}
           onImportanceTopNChange={setImportanceTopN}
         />

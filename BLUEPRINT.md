@@ -2502,16 +2502,18 @@ Workspace の `workspace_result` は完了時に自動更新される。
 
 **`plot_type` の値:**
 
-| plot_type | 条件 |
-|-----------|------|
-| `learning-curve` | 全タスク |
-| `importance` | 全タスク |
-| `oof-distribution` | 全タスク |
-| `residuals` | regression |
-| `roc-curve` | binary |
-| `calibration` | binary + calibration有効 |
-| `probability-histogram` | binary |
-| `tuning` | tune実行済み |
+| plot_type | 条件 | `?kind=` |
+|-----------|------|----------|
+| `learning-curve` | 全タスク | — (`?metrics=` で subplot フィルタ) |
+| `importance` | 全タスク | `split` / `gain` / `shap`（`?top_n=` も — P-0097） |
+| `oof-distribution` | 全タスク | — |
+| `residuals` | regression | `scatter` / `histogram` / `qq` / `all`（既定 `all` = 3-panel layout、Issue #457 / P-0105）。不正値は `400 INVALID_PARAM` |
+| `roc-curve` | binary | — |
+| `calibration` | binary + calibration有効 | — |
+| `probability-histogram` | binary | — |
+| `tuning` | tune実行済み | — |
+
+> Residuals の kind selector（`PlotSection` の `SegmentGroup`、`Scatter / Histogram / QQ / All`）は Importance の kind selector と同じ位置に描画され、狭い結果パネルでも 1 panel ずつ読めるようにする（Issue #457）。`all` は従来の 3-panel 表示と完全一致。
 
 ### 5.4 Inference API
 

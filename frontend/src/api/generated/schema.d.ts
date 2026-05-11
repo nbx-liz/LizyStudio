@@ -753,6 +753,8 @@ export interface paths {
          *
          *     For ``learning-curve``, pass ``?metrics=auc,f1`` to filter subplots.
          *     For ``importance``, pass ``?kind=split|gain|shap`` to select kind.
+         *     For ``residuals``, pass ``?kind=scatter|histogram|qq|all`` to select
+         *     which panel to render (default ``all`` — the 3-panel layout).
          */
         get: operations["get_job_plot_endpoint_api_jobs__job_id__plot__plot_type__get"];
         put?: never;
