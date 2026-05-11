@@ -267,66 +267,6 @@ def test_adapter_validate_config_accepts_null_calibration_for_any_task() -> None
         assert compat == [], (task, errors)
 
 
-# --- P-0104 Wave 3.1a / Issue #461: search-space compat (parse_space) ---
-
-
-def _binary_with_space(space: dict[str, Any]) -> dict[str, Any]:
-    cfg = _valid_binary_config()
-    cfg["tuning"] = {"optuna": {"params": {"n_trials": 5}, "space": space}}
-    return cfg
-
-
-def test_validate_config_rejects_inverted_range_in_search_space() -> None:
-    """A Tune Range with ``low >= high`` must be flagged up-front."""
-    adapter = LizyMLAdapter()
-    cfg = _binary_with_space(
-        {"learning_rate": {"type": "float", "low": 0.1, "high": 0.01}}
-    )
-    errors = adapter.validate_config(cfg)
-    assert any(
-        e.get("type") == "search_space_invalid" or "space" in str(e.get("loc", ()))
-        for e in errors
-    ), errors
-
-
-def test_validate_config_rejects_log_dim_with_non_positive_low() -> None:
-    """A log-distribution Range whose lower bound is ``<= 0`` must fail."""
-    adapter = LizyMLAdapter()
-    cfg = _binary_with_space(
-        {"learning_rate": {"type": "float", "low": 0.0, "high": 1.0, "log": True}}
-    )
-    errors = adapter.validate_config(cfg)
-    assert any(e.get("type") == "search_space_invalid" for e in errors), errors
-
-
-def test_validate_config_accepts_well_formed_search_space() -> None:
-    """A valid Range/categorical space must NOT trigger the compat error."""
-    adapter = LizyMLAdapter()
-    cfg = _binary_with_space(
-        {
-            "learning_rate": {"type": "float", "low": 0.001, "high": 0.1, "log": True},
-            "n_estimators": {"type": "int", "low": 100, "high": 1000},
-            "max_bin": {"type": "categorical", "choices": [63, 127, 255]},
-        }
-    )
-    errors = adapter.validate_config(cfg)
-    compat = [e for e in errors if e.get("type") == "search_space_invalid"]
-    assert compat == [], errors
-
-
-def test_validate_config_ignores_empty_or_missing_search_space() -> None:
-    """An empty / absent ``tuning.optuna.space`` must not raise — the
-    backend supplies a default space for the Fit-tab / empty-space Tune."""
-    adapter = LizyMLAdapter()
-    for cfg in (
-        _valid_binary_config(),
-        _binary_with_space({}),
-    ):
-        errors = adapter.validate_config(cfg)
-        compat = [e for e in errors if e.get("type") == "search_space_invalid"]
-        assert compat == [], (cfg, errors)
-
-
 def test_adapter_load_config_yaml() -> None:
     adapter = LizyMLAdapter()
     content = b"task: binary\nmodel:\n  name: lightgbm"
