@@ -114,7 +114,7 @@ class TuningSummary:
     # Re-tune (Phase A) — いずれも後方互換のため optional。
     # re_tune 未指定の単一ラウンド tune では None が入る (H-0061)。
     rounds: list[dict[str, Any]] | None = None         # 各ラウンドの n_trials / best_score_before / best_score_after / expanded_dims / space_snapshot
-    boundary_report: dict[str, Any] | None = None      # 最終ラウンド後の BoundaryReport（per-dim: best_value / position_pct / edge / expanded / new bounds）
+    boundary_report: dict[str, Any] | None = None      # 最終ラウンド後の BoundaryReport（per-dim: best_value / position_pct / edge / expanded / new bounds / clamped_to_bound）
 
 @dataclass
 class PredictionSummary:
@@ -702,7 +702,7 @@ Fit タブと Tune タブは**同一の Config オブジェクト**を操作す�
 │     inner_valid [holdout    ▼]  │ ← enabled=ON時のみ
 │                                  │
 │ ▸ Evaluation           ← config.evaluation │
-│   ☑ AUC  ☑ LogLoss              │ ← ui_schema.option_sets.metric から
+│   ☑ AUC  ☑ LogLoss              │ ← ui_schema.option_sets.eval_metric から
 │   ☐ Accuracy  ☐ F1              │
 │                                  │
 │ ▸ Calibration          ← config.calibration │
@@ -752,8 +752,8 @@ JSON Schema から動的生成する LGBMConfig 固有フィールド。
 
 | 要素 | コンポーネント | Config パス | 説明 |
 |------|-------------|------------|------|
-| objective | Segment buttons（task 別） | `model.params.objective` | `ui_schema.option_sets.objective[task]` から選択肢生成 |
-| metric | Chip buttons（multi-select） | `model.params.metric` | `ui_schema.option_sets.model_metric[task]` から選択肢生成 |
+| objective | Segment buttons（task 別） | `model.params.objective` | `ui_schema.option_sets.objective[task]`（LizyML `LGBMProvider.objective_choices(task)` SSOT — P-0104 Wave 3.1a）から選択肢生成 |
+| metric | Chip buttons（multi-select） | `model.params.metric` | `ui_schema.option_sets.metric[task]`（`{native, feval}` — LizyML `LGBMProvider.metric_choices(task)` SSOT）から `native ∪ feval` を選択肢生成。`feval` 由来の項目には "Custom (slow)" バッジ（P-0104 Wave 3.1b / Q2） |
 | n_estimators | NumberInput (int, step=100) | `model.params.n_estimators` | |
 | learning_rate | NumberInput (float, step=0.001) | `model.params.learning_rate` | |
 | max_depth | NumberInput (int, step=1) | `model.params.max_depth` | |
@@ -793,11 +793,11 @@ step 値は `ui_schema.step_map` から取得。値が未設定の場合は plac
 
 **Evaluation セクション（config.evaluation）:**
 
-`evaluation.metrics` は `MetricEntry[]` 型（`MetricEntry = string | { metric_name: { param: value } }`）。選択肢は `ui_schema.option_sets.metric[task]` から動的取得する（フロントエンドにハードコードしない）。パラメータ付きメトリクス（例: `{"precision_at_k": {"k": 20}}`）は dict 形式で格納する（LizyML v0.7.0 / H-0065）。
+`evaluation.metrics` は `MetricEntry[]` 型（`MetricEntry = string | { metric_name: { param: value } }`）。選択肢は `ui_schema.option_sets.eval_metric[task]`（LizyML の eval-metrics registry — `model.params.metric` の LightGBM 生名とは別物）から動的取得する（フロントエンドにハードコードしない）。パラメータ付きメトリクス（例: `{"precision_at_k": {"k": 20}}`）は dict 形式で格納する（LizyML v0.7.0 / H-0065）。
 
 | 要素 | コンポーネント | 説明 |
 |------|-------------|------|
-| メトリクス | Chip グループ（Toggle） | `ui_schema.option_sets.metric[task]` から選択肢を生成。Task 変更時にデフォルト選択にリセット。クリックで ON/OFF |
+| メトリクス | Chip グループ（Toggle） | `ui_schema.option_sets.eval_metric[task]` から選択肢を生成。Task 変更時にデフォルト選択にリセット。クリックで ON/OFF |
 
 Data Panel で Task が変更されたとき、`evaluation.metrics` をそのタスクのデフォルト値にリセットする。空選択の場合は Backend のランタイムデフォルトが使用される。
 
@@ -878,7 +878,7 @@ Fit タブと Tune タブは**同一の Config オブジェクト**の異なる�
 
 SegmentedControl: プリセット値をボタン群で表示し、「カスタム」を選ぶと NumberInput が出現する。
 
-> 注: `direction` は廃止。Optimization Metric の選択に応じて `ui_schema.option_sets.metric_direction[task][metric]` から自動判定する（H-0031）。
+> 注: `direction` は廃止。Optimization Metric の選択に応じて `ui_schema.metric_direction[task][metric]` から自動判定する（H-0031）。
 
 **Re-tune Settings セクション（config.tuning.re_tune, H-0061 Phase A）:**
 
@@ -978,7 +978,7 @@ Range / Choice / Fixed のデフォルト初期値（P-0104 Wave 2.2 / Issue #45
 | パラメータ | default_mode | low / 値 | high | log | 備考 |
 |-----------|-------------|---------|------|-----|------|
 | `objective` | Choice | `option_sets.objective[task]` 全列挙（LizyML `LGBMProvider.objective_choices(task)` SSOT — P-0104 Wave 3.1a） | — | — | regression: `[regression, regression_l1, huber, fair, poisson, quantile, mape, gamma, tweedie]` / binary: `[binary, cross_entropy, cross_entropy_lambda]` / multiclass: `[multiclass, multiclassova]` |
-| `metric` | Choice | `option_sets.model_metric[task]` のサブセット | — | — | binary 推奨: `[auc, binary_logloss, binary_error, cross_entropy, brier]` |
+| `metric` | Choice | `option_sets.metric[task]`（`{native, feval}` — LizyML `LGBMProvider.metric_choices(task)` SSOT）の `native ∪ feval` | — | — | binary native: `[binary_logloss, binary_error, auc, average_precision, cross_entropy, cross_entropy_lambda, kullback_leibler]` / feval（"Custom (slow)" バッジ）: `[f1, brier, ece, precision_at_k, accuracy]` |
 | `first_metric_only` | Fixed | `True` | — | — | — |
 | `n_estimators` | Range | 500 | 2000 | false | step=100（`step_map`） |
 | `learning_rate` | Range | 1e-4 | 1e-2 | **true** | log-uniform |
@@ -1016,7 +1016,7 @@ Tune 時の評価メトリクスを Fit の `evaluation.metrics` とは独立し
 
 | 要素 | コンポーネント | Config パス | 説明 |
 |------|-------------|------------|------|
-| Optimization Metric | Segment buttons（single select） | `tuning.evaluation.metrics[0]` | Optuna の objective として使用されるメトリクス。`ui_schema.option_sets.metric[task]` から選択肢生成。`direction` は `metric_direction[task][metric]` から自動判定 |
+| Optimization Metric | Segment buttons（single select） | `tuning.evaluation.metrics[0]` | Optuna の objective として使用されるメトリクス。`ui_schema.option_sets.eval_metric[task]` から選択肢生成。`direction` は `metric_direction[task][metric]` から自動判定 |
 | Additional Metrics | Chip buttons（multi-select） | `tuning.evaluation.metrics[1..]` | Optuna が全メトリクスを計算するが objective は metrics[0] のみ。Optimization Metric は候補から除外 |
 
 **Tune ボタン有効条件:**
@@ -1269,7 +1269,7 @@ Model Panel 全体のコンポーネントスタイルを定義する。shadcn/u
 | セパレータ | `<Separator />` | `border-t my-3` | グループ間の視覚分離 |
 | Model Params 行 | Label + NumberInput | 前述のフォームフィールド仕様 | `parameter_hints` から生成。step は `step_map` から |
 | Objective | Segment buttons | 前述の SegmentedControl 仕様 | `option_sets.objective[task]` から選択肢 |
-| Metric | Chip buttons | 前述のメトリクスチップ仕様 | `option_sets.model_metric[task]` から選択肢 |
+| Metric | Chip buttons | 前述のメトリクスチップ仕様 | `option_sets.metric[task]` の `native ∪ feval` から選択肢（`feval` 由来は "Custom (slow)" バッジ） |
 | Additional Params 選択 | `Select` | `h-7 w-40 text-xs` | `ui_schema.additional_params` から未使用のパラメータ |
 | Additional Params 値 | NumberInput / Input | `h-7 w-24 text-xs text-right` | step は `step_map` から |
 | 削除ボタン | `Button variant="ghost" size="icon"` | `h-6 w-6` | lucide `X` (12px) |
@@ -1600,7 +1600,7 @@ Fit 完了と同じ評価項目に加え、探索結果（Best Params・収束�
 |--------|-------------|-------------|---------|
 | Round History | `RoundHistoryTable` | `rounds[*].{n_rounds, best_score_before, best_score_after, expanded_dims}` | `rounds.length >= 1` |
 | Search Space Evolution | `SearchSpaceEvolutionPanel` | `rounds[*].space_snapshot` + `boundary_report` | 少なくとも 1 ラウンドが非 null の `space_snapshot` を持つ |
-| Boundary Expansion | `BoundaryExpansionPanel` | `boundary_report.dims[*].{best_value, position_pct, edge, expanded, new_low, new_high}` | `boundary_report != null` |
+| Boundary Expansion | `BoundaryExpansionPanel` | `boundary_report.dims[*].{best_value, position_pct, edge, expanded, new_low, new_high, clamped_to_bound}` | `boundary_report != null`。`clamped_to_bound=true` の dim には「bounded」バッジ（探索範囲の拡張が LizyML `parameter_bounds` の上限で頭打ちになったことを示す — P-0104 Wave 3.1b） |
 | Convergence Signal | `ConvergenceSignalPanel` | 最終ラウンドの `expanded_dims` + `rounds[*].best_score_after` 推移 | `rounds.length >= 1` |
 
 **Convergence の判定ロジック（Studio 側の責務）:**
@@ -2645,20 +2645,20 @@ Workspace の `workspace_result` は完了時に自動更新される。
       "multiclass": ["multiclass", "multiclassova"]
     },
     "metric": {
-      "regression": ["mae", "mape", "rmse", "..."],
-      "binary": ["auc", "logloss", "auc_pr", "..."],
-      "multiclass": ["multi_logloss", "auc_mu", "..."]
+      "regression": {"native": ["rmse", "mae", "mape", "..."], "feval": ["rmsle", "r2", "smape", "wape"]},
+      "binary": {"native": ["binary_logloss", "binary_error", "auc", "..."], "feval": ["f1", "brier", "ece", "precision_at_k", "accuracy"]},
+      "multiclass": {"native": ["multi_logloss", "multi_error", "auc_mu", "multiclassova"], "feval": ["f1", "brier", "accuracy"]}
     },
-    "model_metric": {
-      "regression": ["huber", "mae", "rmse", "..."],
-      "binary": ["auc", "binary_logloss", "..."],
-      "multiclass": ["multi_logloss", "auc_mu", "..."]
-    },
-    "metric_direction": {
-      "regression": {"mae": "minimize", "r2": "maximize", "...": "..."},
-      "binary": {"auc": "maximize", "logloss": "minimize", "...": "..."},
-      "multiclass": {"multi_logloss": "minimize", "...": "..."}
+    "eval_metric": {
+      "regression": ["rmse", "mae", "mape", "huber", "r2", "..."],
+      "binary": ["auc", "logloss", "auc_pr", "brier", "..."],
+      "multiclass": ["auc", "logloss", "f1", "..."]
     }
+  },
+  "metric_direction": {
+    "regression": {"mae": "minimize", "r2": "maximize", "...": "..."},
+    "binary": {"auc": "maximize", "logloss": "minimize", "...": "..."},
+    "multiclass": {"multi_logloss": "minimize", "...": "..."}
   },
   "parameter_bounds": {
     "regression": {"learning_rate": {"min": 1e-8, "max": 1.0}, "n_estimators": {"min": 10, "max": 10000}, "...": "..."},
@@ -2668,7 +2668,7 @@ Workspace の `workspace_result` は完了時に自動更新される。
   "n_trials_presets": [10, 50, 100, 200, 500],
   "parameter_hints": [
     {"key": "objective", "label": "Objective", "kind": "objective"},
-    {"key": "metric", "label": "Metric", "kind": "model_metric"},
+    {"key": "metric", "label": "Metric", "kind": "metric"},
     {"key": "n_estimators", "label": "N Estimators", "kind": "integer", "step": 100},
     {"key": "learning_rate", "label": "Learning Rate", "kind": "number", "step": 0.001},
     "..."
@@ -2716,7 +2716,7 @@ Workspace の `workspace_result` は完了時に自動更新される。
 | フィールド | 説明 |
 |-----------|------|
 | `sections` | Fit タブの Accordion セクション定義 |
-| `option_sets` | Task 別の選択肢リスト（objective, metric, model_metric, metric_direction）。`objective` は LizyML `LGBMProvider.objective_choices(task)` の canonical 全列挙を SSOT として読込む（P-0104 Wave 3.1a）— Studio 側でハードコードしない |
+| `option_sets` | Task 別の選択肢リスト。`objective`（`{task: [...]}`）は LizyML `LGBMProvider.objective_choices(task)` の canonical 全列挙（P-0104 Wave 3.1a）、`metric`（`{task: {native, feval}}`）は `LGBMProvider.metric_choices(task)` の `model.params.metric` 選択肢で `feval` 由来は "Custom (slow)" バッジ表示（P-0104 Wave 3.1b / Q2-Q3）、`eval_metric`（`{task: [...]}`）は LizyML eval-metrics registry の post-hoc 評価メトリクス（Tune Evaluation セクション用）。いずれも Studio 側でハードコードしない。`model_metric` は Wave 3.1b で撤廃（`metric` に統合） |
 | `parameter_bounds` | Task 別の hyper-parameter 上下限（`{task: {param: {"min": ..., "max": ...}}}`）。LizyML `LGBMProvider.parameter_bounds(task)` を SSOT として読込む（P-0104 Wave 3.1a）。キーは LizyML 正規名（`early_stopping_rounds`）。フロントエンドは `search_space_catalog` のドット記法キー（`early_stopping.rounds`）をアンダースコア記法に正規化して参照し、Tune Search Space の Range Min/Max NumberInput をこの範囲にクランプする |
 | `parameter_hints` | Model Params セクションに常時表示するパラメータ定義 |
 | `search_space_catalog` | Tune Search Space に表示するパラメータ定義（`group` でグループ分け）。各エントリの詳細は下記参照 |

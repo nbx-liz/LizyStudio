@@ -88,6 +88,11 @@ def serialize_boundary_report(report: Any) -> dict[str, Any] | None:
                 "expanded": bool(d.expanded),
                 "new_low": d.new_low,
                 "new_high": d.new_high,
+                # P-0104 Wave 3.1b / Issue #461: lizyml v0.15 flags dims
+                # whose proposed expansion was clipped by ``parameter_bounds``.
+                # The Re-tune UI badges these so the user knows the search
+                # range hit the hard library limit.
+                "clamped_to_bound": bool(getattr(d, "clamped_to_bound", False)),
             }
             for d in dims
         ],

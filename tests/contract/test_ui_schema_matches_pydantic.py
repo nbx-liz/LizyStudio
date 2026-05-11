@@ -19,10 +19,7 @@ from typing import Any
 
 import pytest
 
-from lizystudio.backends.lizyml_ui_schema import (
-    build_ui_schema,
-    get_eval_metrics_by_task,
-)
+from lizystudio.backends.lizyml_ui_schema import build_ui_schema
 
 pytestmark = pytest.mark.unit
 
@@ -56,7 +53,7 @@ def test_cv_strategy_fields_match_pydantic_or_data() -> None:
     """
     from lizyml.config.schema import LizyMLConfig
 
-    ui_schema = build_ui_schema(get_eval_metrics_by_task())
+    ui_schema = build_ui_schema()
     cv_strategy_fields = ui_schema["capabilities"]["cv_strategy_fields"]
 
     defs = LizyMLConfig.model_json_schema().get("$defs", {})
@@ -88,7 +85,7 @@ def test_every_ui_method_has_matching_pydantic_variant() -> None:
     """
     from lizyml.config.schema import LizyMLConfig
 
-    ui_schema = build_ui_schema(get_eval_metrics_by_task())
+    ui_schema = build_ui_schema()
     cv_strategy_fields = ui_schema["capabilities"]["cv_strategy_fields"]
 
     defs = LizyMLConfig.model_json_schema().get("$defs", {})
@@ -118,7 +115,7 @@ def test_frontend_fallback_matches_backend_cv_strategy_fields() -> None:
     import re
     from pathlib import Path
 
-    ui_schema = build_ui_schema(get_eval_metrics_by_task())
+    ui_schema = build_ui_schema()
     backend = ui_schema["capabilities"]["cv_strategy_fields"]
 
     ts_path = (
@@ -241,7 +238,7 @@ def test_parameter_hints_do_not_shadow_smart_params() -> None:
     """
     from lizyml.config.schema import LizyMLConfig
 
-    ui_schema = build_ui_schema(get_eval_metrics_by_task())
+    ui_schema = build_ui_schema()
     hint_keys = {h["key"] for h in ui_schema["parameter_hints"]}
 
     defs = LizyMLConfig.model_json_schema().get("$defs", {})

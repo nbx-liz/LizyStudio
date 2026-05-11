@@ -107,7 +107,11 @@ export interface SearchSpaceRowProps {
   stepMap?: Record<string, number>;
   task?: string | null;
   objectiveOptions?: string[];
+  /** Flat model-metric option list (``native`` followed by ``feval``). */
   metricOptions?: string[];
+  /** Subset of ``metricOptions`` that are LizyML custom feval metrics —
+   * rendered with a "Custom (slow)" badge (P-0104 Wave 3.1b / Q2). */
+  fevalMetrics?: string[];
   /** Outer CV strategy from ``config.split.method`` — drives the
    * ``inner_valid_picker`` row's filtered options. */
   cvStrategy?: string;

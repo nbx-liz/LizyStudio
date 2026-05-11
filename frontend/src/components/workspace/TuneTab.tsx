@@ -8,6 +8,12 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { filterInnerValidOptions, recommendedInnerValid } from "./cv-state";
+import {
+  evalMetricOptionsFor,
+  metricChoicesFor,
+  metricOptionsFor,
+  objectiveOptionsFor,
+} from "./metric-options";
 import { groupToCategory, SearchSpaceTable } from "./SearchSpaceTable";
 import { TuneEvaluationSection } from "./TuneEvaluationSection";
 import { TuneSettings } from "./TuneSettings";
@@ -92,13 +98,13 @@ export function TuneTab({
   const modelSection = (config.model as Record<string, unknown>) ?? {};
   const modelParams = (modelSection.params as Record<string, unknown>) ?? {};
 
-  // Metric options for the current task (used for optimization + additional metrics)
-  const metricOptions = useMemo(() => {
-    if (!task) return [];
-    const opts = uiSchema?.option_sets?.metric;
-    if (opts?.[task]) return opts[task];
-    return [];
-  }, [task, uiSchema]);
+  // Eval-metrics registry list for the current task — used by the Tune
+  // Evaluation section (Optimization Metric / Additional Metrics). These
+  // are LizyML post-hoc reporting metrics, NOT the LightGBM ``metric`` param.
+  const evalMetricOptions = useMemo(
+    () => evalMetricOptionsFor(uiSchema, task),
+    [task, uiSchema],
+  );
 
   // metric_direction map for auto direction
   const metricDirection = useMemo(() => {
@@ -106,20 +112,22 @@ export function TuneTab({
   }, [uiSchema]);
 
   // Objective options for task
-  const objectiveOptions = useMemo(() => {
-    if (!task) return [];
-    const opts = uiSchema?.option_sets?.objective;
-    if (opts?.[task]) return opts[task];
-    return [];
-  }, [task, uiSchema]);
+  const objectiveOptions = useMemo(
+    () => objectiveOptionsFor(uiSchema, task),
+    [task, uiSchema],
+  );
 
-  // Model metric options (for search space catalog metric choices)
-  const modelMetricOptions = useMemo(() => {
-    if (!task) return [];
-    const opts = uiSchema?.option_sets?.model_metric;
-    if (opts?.[task]) return opts[task];
-    return [];
-  }, [task, uiSchema]);
+  // Model-metric options (``model.params.metric``) — flat native ∪ feval
+  // list for the Search Space catalog ``metric`` row, plus the feval
+  // subset for the "Custom (slow)" badge (P-0104 Wave 3.1b / Q2/Q3).
+  const modelMetricOptions = useMemo(
+    () => metricOptionsFor(uiSchema, task),
+    [task, uiSchema],
+  );
+  const fevalMetrics = useMemo(
+    () => metricChoicesFor(uiSchema, task).feval,
+    [task, uiSchema],
+  );
 
   // P-0104 Wave 3.1a / Issue #461: hyper-parameter bounds for the current
   // task, forwarded to SearchSpaceTable so Range Min/Max NumberInputs clamp.
@@ -128,25 +136,15 @@ export function TuneTab({
     return uiSchema?.parameter_bounds?.[task] ?? undefined;
   }, [task, uiSchema]);
 
-  // Per-parameter option sets — exclude "metric" to avoid overriding
-  // SearchSpaceTable's getChoiceOptions which correctly uses model_metric.
+  // Per-parameter option sets keyed by Search Space catalog param name.
+  // Only ``objective`` has a catalog row with choices; ``metric`` is
+  // handled by SearchSpaceTable via the ``metricOptions`` prop, and
+  // ``eval_metric`` is not a catalog param.
   const paramOptionSets = useMemo((): Record<string, string[]> => {
-    if (!uiSchema?.option_sets) return {};
     const result: Record<string, string[]> = {};
-    for (const [paramKey, value] of Object.entries(uiSchema.option_sets)) {
-      // Skip "metric" — SearchSpaceTable handles it via metricOptions prop
-      if (paramKey === "metric") continue;
-      if (Array.isArray(value)) {
-        result[paramKey] = value as string[];
-      } else if (task && typeof value === "object" && value !== null) {
-        const taskMap = value as Record<string, string[]>;
-        if (taskMap[task]) {
-          result[paramKey] = taskMap[task];
-        }
-      }
-    }
+    if (objectiveOptions.length > 0) result.objective = objectiveOptions;
     return result;
-  }, [task, uiSchema]);
+  }, [objectiveOptions]);
 
   const handleParamsChange = (params: Record<string, unknown>) => {
     onChange(updateOptunaField(config, "params", params));
@@ -219,6 +217,7 @@ export function TuneTab({
               task={task}
               objectiveOptions={objectiveOptions}
               metricOptions={modelMetricOptions}
+              fevalMetrics={fevalMetrics}
               additionalParams={uiSchema?.additional_params ?? undefined}
               paramOptionSets={paramOptionSets}
               onModelParamChange={handleModelParamChange}
@@ -243,7 +242,7 @@ export function TuneTab({
             config={config}
             onChange={onChange}
             task={task}
-            metricOptions={metricOptions}
+            metricOptions={evalMetricOptions}
             metricDirection={metricDirection}
             evaluation={evaluation}
             tuningParams={tuningParams}

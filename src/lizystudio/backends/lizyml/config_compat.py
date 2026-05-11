@@ -151,12 +151,17 @@ def task_params_compat_errors(config: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(params, dict):
         return []
 
-    from lizystudio.backends.lizyml_metrics import get_eval_metrics_by_task
     from lizystudio.backends.lizyml_ui_schema import build_ui_schema
 
-    option_sets = build_ui_schema(get_eval_metrics_by_task()).get("option_sets", {})
+    option_sets = build_ui_schema().get("option_sets", {})
     allowed_objective = set(option_sets.get("objective", {}).get(task, []))
-    allowed_metric = set(option_sets.get("model_metric", {}).get(task, []))
+    # P-0104 Wave 3.1b: ``option_sets.metric`` is now the nested
+    # ``{task: {native, feval}}`` shape — a model-metric is valid if it
+    # appears in either section.
+    metric_choices = option_sets.get("metric", {}).get(task, {})
+    allowed_metric = set(metric_choices.get("native", [])) | set(
+        metric_choices.get("feval", [])
+    )
 
     errors: list[dict[str, Any]] = []
 

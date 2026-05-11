@@ -22,12 +22,9 @@ class ConfigMixin:
         return BackendInfo(name="lizyml", version=lizyml.__version__)
 
     def get_ui_schema(self) -> dict[str, Any]:
-        from lizystudio.backends.lizyml_ui_schema import (
-            build_ui_schema,
-            get_eval_metrics_by_task,
-        )
+        from lizystudio.backends.lizyml_ui_schema import build_ui_schema
 
-        return build_ui_schema(get_eval_metrics_by_task())
+        return build_ui_schema()
 
     def get_config_schema(self) -> ConfigSchema:
         from lizyml.config.schema import LizyMLConfig

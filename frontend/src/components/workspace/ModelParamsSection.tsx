@@ -15,6 +15,7 @@ export function ModelParamsSection({
   getValueForHint,
   handleHintChange,
   getOptionsForHint,
+  fevalMetrics,
   shouldShowField,
   precisionAtKValue,
   onPrecisionAtKChange,
@@ -26,6 +27,8 @@ export function ModelParamsSection({
     value: unknown,
   ) => void;
   getOptionsForHint: (hint: import("@/api/types").ParameterHint) => string[];
+  /** Feval subset of the model-metric options — badged "Custom (slow)". */
+  fevalMetrics?: string[];
   shouldShowField: (key: string) => boolean;
   precisionAtKValue?: number;
   onPrecisionAtKChange?: (k: number) => void;
@@ -35,24 +38,25 @@ export function ModelParamsSection({
   const essential = hints.filter((h) => ESSENTIAL_PARAM_KEYS.has(h.key));
   const advanced = hints.filter((h) => !ESSENTIAL_PARAM_KEYS.has(h.key));
 
+  const renderHint = (hint: import("@/api/types").ParameterHint) => (
+    <DynParam
+      key={hint.key}
+      hint={hint}
+      value={getValueForHint(hint)}
+      onChange={(v) => handleHintChange(hint, v)}
+      options={getOptionsForHint(hint)}
+      customMetricOptions={hint.kind === "metric" ? fevalMetrics : undefined}
+      visible={shouldShowField(hint.key)}
+      precisionAtKValue={hint.kind === "metric" ? precisionAtKValue : undefined}
+      onPrecisionAtKChange={
+        hint.kind === "metric" ? onPrecisionAtKChange : undefined
+      }
+    />
+  );
+
   return (
     <>
-      {essential.map((hint) => (
-        <DynParam
-          key={hint.key}
-          hint={hint}
-          value={getValueForHint(hint)}
-          onChange={(v) => handleHintChange(hint, v)}
-          options={getOptionsForHint(hint)}
-          visible={shouldShowField(hint.key)}
-          precisionAtKValue={
-            hint.kind === "model_metric" ? precisionAtKValue : undefined
-          }
-          onPrecisionAtKChange={
-            hint.kind === "model_metric" ? onPrecisionAtKChange : undefined
-          }
-        />
-      ))}
+      {essential.map(renderHint)}
       {advanced.length > 0 && (
         <>
           <button
@@ -65,25 +69,7 @@ export function ModelParamsSection({
               ? `▾ Hide advanced (${advanced.length})`
               : `▸ Show advanced (${advanced.length})`}
           </button>
-          {showAdvanced &&
-            advanced.map((hint) => (
-              <DynParam
-                key={hint.key}
-                hint={hint}
-                value={getValueForHint(hint)}
-                onChange={(v) => handleHintChange(hint, v)}
-                options={getOptionsForHint(hint)}
-                visible={shouldShowField(hint.key)}
-                precisionAtKValue={
-                  hint.kind === "model_metric" ? precisionAtKValue : undefined
-                }
-                onPrecisionAtKChange={
-                  hint.kind === "model_metric"
-                    ? onPrecisionAtKChange
-                    : undefined
-                }
-              />
-            ))}
+          {showAdvanced && advanced.map(renderHint)}
         </>
       )}
     </>
