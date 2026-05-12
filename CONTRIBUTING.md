@@ -121,6 +121,12 @@ Every PR must pass these checks before merge:
 | Format | `ruff format --check .` | `pnpm check` (Biome) |
 | Types | `mypy src/lizystudio/` | TypeScript strict via `pnpm build` |
 | Tests | `pytest` (80%+ coverage) | `vitest run --coverage` |
+| E2E | — | `playwright test --project=chromium` (functional only on PRs) |
+| Orphan goldens | — | [`scripts/check_orphan_goldens.sh`](scripts/check_orphan_goldens.sh) — every committed `frontend/tests/e2e/__screenshots__/<project>/` must be run by some workflow's `--project=<project>` |
+
+If you add a new Playwright project, also reference it from a workflow (or
+keep its goldens out of git); if you retire one, delete its goldens in the
+same PR — regenerate later via `pnpm test:e2e:update` if it returns.
 
 ## Test fixtures
 
