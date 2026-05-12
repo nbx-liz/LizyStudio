@@ -1,5 +1,7 @@
 # Handoff — 2026-05-11 (post Wave 5, P-0104 完了 + P-0105 着地)
 
+> **⚠️ SUPERSEDED 2026-05-12 — 最新は [`docs/handoff-2026-05-12-post-wave6.md`](./handoff-2026-05-12-post-wave6.md) を参照。** 本書は履歴参照のみ（Wave 6 の #403/P-0106・#456・#452 partial はそちらに反映済）。
+
 **Status**: 🟢 P-0104（Tune workflow 全面整備）全 Wave 着地。`docs/issue-cleanup-plan-2026-05-10.md` の Wave 1〜5 完了（**PR #480 = Wave 5.2 マージ済 2026-05-12**）。残るは **Wave 6（技術負債 + reconcile）** のみ。
 **Date**: 2026-05-11（2026-05-12 更新: #480 マージ + #454/#455 クローズ反映）
 **Trigger**: 前セッション（post-Wave-3.1a）の引継ぎを受けて Wave 3.1b → Wave 4 → Wave 5（5.1/5.2/5.3）を 1 セッションで連続着地。翌日（05-12）に #480 マージ + 周辺 issue 整理。
