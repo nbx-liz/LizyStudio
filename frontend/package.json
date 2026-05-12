@@ -27,7 +27,7 @@
     "check:api-types": "bash scripts/check-api-types.sh"
   },
   "dependencies": {
-    "@tanstack/react-query": "^5.100.6",
+    "@tanstack/react-query": "^5.100.9",
     "@tanstack/react-virtual": "^3.13.24",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -41,7 +41,7 @@
     "react-dom": "^19.2.6",
     "react-plotly.js": "^2.6.0",
     "react-resizable-panels": "^4",
-    "react-router-dom": "^7.14.2",
+    "react-router-dom": "^7.15.0",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.5.0"
   },
