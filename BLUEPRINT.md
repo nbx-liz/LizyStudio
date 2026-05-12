@@ -208,6 +208,8 @@ class BackendCore(Protocol):
         re_tune: dict[str, Any] | None = None,       # H-0061 多ラウンド再チューニング
         checkpoint_dir: Any = None,                  # H-0062 試行ごとのチェックポイント
         resume: bool = False,                        # H-0062 Phase B
+        storage: str | None = None,                  # P-0099 v3-20b: Optuna persistent storage URL（in-place resume 用）
+        study_name: str | None = None,               # P-0099 v3-20b: Optuna study 名（同 study に load_if_exists=True で re-attach）
     ) -> TuningSummary: ...
 
     def predict(
@@ -318,6 +320,8 @@ class BackendAdapter(
 - ブラウザ再アクセス時は `workspace_result = None`（右パネル空）
 - 過去のJob結果は表示しない（混乱防止）
 - **Active job lock (P-0089)**: `active_job_id` がセットされている間、`PUT /api/workspace/config` および `PATCH /api/workspace/config` は 409 `WORKSPACE_LOCKED` を返す。これは UI 上の cross-hook race（CV strategy 切り替え / target 変更等）が走行中ジョブの config を後から書き換えるのを構造的に防ぐ。INV: `meta.json` に保存される config は `claim_active` 直前の workspace config と完全一致する
+- **Startup reconciliation (P-0099 v3-22a / R-1.5b)**: `active_job_id` はインメモリだが、サーバ再起動時に `JobStore.reconcile_at_startup()` が on-disk `meta.json` をスキャンして再構築する。`running` / `pending` の orphan は `failed` 化（worker thread / subprocess は前プロセスと共に消えているため）、`paused` job は `active_job_id` に再 attach（INV-7: WS 切断は active slot を release しない / restart 越しに paused slot を保持）、terminal states は rewrite しない、idempotent。
+- **Reload restoration (P-0102 / v3-24 / R-2.2)**: `current_job_id` を `GET /api/workspace/status` で露出している。frontend は `?job_id=` 不在時にこれを fallback として 1 回だけ hydrate し（latch は `workspace_reset` までクリアされない）、長時間学習中のリロードで進捗を見失わないようにする。dirty な config form を持つ状態の `beforeunload` は browser default confirm dialog を出す（誤リロード防止）。`current_job_id` が null なら従来どおり空状態。1 名利用前提のため multi-tab 衝突制御は scope 外。
 
 #### 3.4.2 Job 状態（永続・ディスク）
 
@@ -326,7 +330,7 @@ class BackendAdapter(
 | 状態 | 型 | 説明 |
 |------|-----|------|
 | `job_id` | `str` | 一意識別子 |
-| `status` | `pending \| running \| completed \| failed \| cancelled` | ジョブの実行状態 (H-0057) |
+| `status` | `pending \| running \| paused \| completed \| failed \| cancelled` | ジョブの実行状態 (H-0057。`paused` は P-0099 v3-20a で追加 — Tune long-run resumability 用の非 terminal 状態) |
 | `backend_name` | `str` | 使用バックエンド名 |
 | `config` | `dict` | 使用Config |
 | `data_ref` | `DataRef` | データ参照（パス + フィンガープリント） |
@@ -337,6 +341,29 @@ class BackendAdapter(
 | `tune_result` | `TuningSummary \| None` | Tune 実行結果（Fit Job の場合は `None`） |
 | `model_path` | `Path \| None` | 学習済みモデルの保存パス |
 | `error` | `str \| None` | エラーメッセージ（失敗時） |
+
+**状態遷移と不変条件（P-0099 R-1）:** Job state machine の合法遷移は以下のみ。illegal transitions は `JobStore.set_status` が `AssertionError` で reject する（runtime guard）。invariant test は `tests/regression/test_inv_*.py`。
+
+```
+[*] → pending          (POST /fit / /tune)
+pending → running      (worker thread が claim_active)
+pending → cancelled    (start 前の DELETE / cancel)
+running → completed    (terminal write OK)
+running → failed       (exception / subprocess died)
+running → cancelled    (cancel signal を mid-run で観測)
+running → paused       (Tune trial 完了時に user pause、R-1.4)
+paused  → running      (POST /unpause / restart 時の再 attach)
+paused  → cancelled    (paused 中の cancel — worker 不在なので明示遷移)
+paused  → failed       (resume 時に storage corruption を検出)
+```
+
+- **INV-1**: `active_job_id` は同時に高々 1 つの running-or-paused job を保持。release は completion / cancel / exception / SIGKILL / WebSocket 切断 / browser 閉じる の 6 経路すべて（`paused` だけは例外で slot を保持し続ける — `POST /unpause` のための Optuna sqlite を所有しているため）。
+- **INV-2**: `meta.json` は atomic write（tmpfile + `fsync` + `os.replace` + parent-dir `fsync`、`storage/versions.py:write_versioned_json`）。`kill -9` mid-write でも JSON 整合性が破れない。
+- **INV-3**: 上記の合法遷移以外は assert で reject。
+- **INV-4**: `paused` job は trial-level checkpoint（Optuna sqlite `storage` + `study_name`）+ `meta.json` から完全復元可能。`load_if_exists=True` で同 study に re-attach し trial 番号が monotonic に蓄積される（`tests/integration/test_tune_resume_round_trip.py`）。
+- **INV-5**: cancel observation は monotonic — `is_cancel_requested(job_id)` が一度 True を返したら job 完了まで連続 True。
+- **INV-6**: subprocess crash recovery — 子 process が SIGKILL で死ぬと既存 reconcile path が `failed (reason="subprocess died")` で terminal write + slot release（専用 watchdog は audit の結果不要と判明）。
+- **INV-7**: WebSocket 切断は active slot を release **しない**。進行中 job は subscriber 数に依らず terminal まで走り、restart 越しに paused slot を復元する。
 
 #### 3.4.3 DataRef（データ参照）
 
@@ -378,6 +405,13 @@ class DataRef:
 - `model.pkl`: Tune 実行中に各 trial 完了毎に atomic rename で上書き保存される（クラッシュ耐性のための best-effort）。加えて `Model.tune()` が `self._study` をセットしてから `return` する前に、**確定版の最終 save を必ず 1 回実行する**。lizyml の `Model.tune()` は study を関数末尾でのみ内部フィールドに代入する契約のため、毎 trial save だけだと pickle に `_study=None` しか残らず、Re-tune / Resume で `load_checkpoint()` した Model が `lizyml: Cannot resume tuning: no previous tune() call` を発生させる（H-0062 Bugfix 2026-04-14）。再tune / resume 時はこの最終 save をソース・オブ・トゥルースとして `load_checkpoint()` でモデル状態（Optuna study 含む）を復元する。
 - `model_meta.json`: pickle schema version + saved_at + lizyml/lightgbm/optuna のバージョン記録。メジャーバージョン不一致時は `PICKLE_INCOMPATIBLE` で load を拒否する。
 - `meta.json.parent_job_id`: Re-tune / Resume の child job では parent の job_id を参照する。非 child job では `null`。
+
+**format_version と legacy 保護（P-0103 / v3-25 / R-4.1）:** ディスク上の `meta.json` 等は `storage/versions.py` 経由で読み書きし、`STUDIO_FORMAT_VERSION`（現行 `2` — P-0099 v3-20a で `1`→`2`）の値を `format_version` キーに記録する。
+
+- 旧 version の読み込みは常に許可（in-memory で自動 migration、現状 v0→v1→v2 はすべて identity migration）。
+- 旧 version（`format_version < STUDIO_FORMAT_VERSION`）の同名ファイルが既に disk に存在する場合、それを上書きする write は環境変数 `LIZYSTUDIO_ALLOW_LEGACY_WRITE=1` が無いと `LegacyFormatProtectionError` を raise する（INV-fmt-2）。将来の structural change で旧 workspace を silent に破壊するのを防ぐため。
+- 新規ファイルや同 version への上書きは常に許可（INV-fmt-3）。
+- `format-version-matrix` CI job が `tests/fixtures/legacy_workspaces/{v0,v1}/` の captured fixture を v0→v1→v2 round-trip し、migration の idempotence を gating する（INV-fmt-4 / P-0095 拡張）。
 
 #### 3.4.5 Inference 履歴（永続・ディスク）
 
@@ -1968,8 +2002,10 @@ Optimization History → Best Params → Score → Learning Curve → Plots（�
 | **Inference ▸** | Inference 画面に遷移。このジョブのモデルを自動選択 | Completed（Fit / Tune） |
 | **Export ▸** | Export ダイアログを開く | Completed（Fit / Tune） |
 | **Re-fit ▸** | Config を Workspace の Model Panel にロードし、Workspace に遷移 | Completed / Failed |
+| **Pause** | 実行中 Tune を次の trial 完了時に paused に遷移（ダイアログなし、`PauseCircle` アイコン）(P-0099 v3-20f) | Running（Tune のみ） |
+| **Resume** | paused Tune を同じ Optuna study から再開（in-place。ダイアログなし、`PlayCircle` アイコン）。failed→child job を作る既存 **Resume (X trials remaining)**（§4.3.3「Re-tune / Resume アクション」、lineage）とは責務が別 (P-0099 v3-20f) | Paused（Tune のみ） |
 | **Delete** | ジョブの削除。確認ダイアログあり | 全状態（Running 以外） |
-| **Cancel** | 実行中ジョブのキャンセル。確認ダイアログあり | Running |
+| **Cancel** | 実行中 / paused ジョブのキャンセル。確認ダイアログあり（paused 用に本文を切り替え）(P-0099 v3-20c) | Running / Paused |
 
 **Re-fit の動作:**
 1. 選択ジョブの Config（data / features / split / model / training / evaluation）を Workspace の各パネルに反映
@@ -2485,9 +2521,11 @@ Workspace の `workspace_result` は完了時に自動更新される。
 | POST | `/api/jobs/{job_id}/export` | モデル/レポートを指定パスにExport |
 | GET | `/api/jobs/{job_id}/export-code` | LizyML 非依存コードを ZIP でダウンロード（H-0027） |
 | GET | `/api/jobs/{job_id}/log` | 実行ログ取得（H-0006） |
-| POST | `/api/jobs/{job_id}/cancel` | Running ジョブのキャンセル（H-0011） |
+| POST | `/api/jobs/{job_id}/cancel` | Running / Paused ジョブのキャンセル（H-0011 / P-0099 v3-20c） |
+| POST | `/api/jobs/{job_id}/pause` | Running Tune を paused に遷移（次の trial 完了時）。Fit ジョブは `JOB_NOT_PAUSEABLE`、running 以外は `JOB_NOT_RUNNING`（P-0099 v3-20d） |
+| POST | `/api/jobs/{job_id}/unpause` | Paused Tune を同 job_id で in-place 再開（Optuna `load_if_exists=True` で trial 継続）。data 再ロード必須。paused 以外は `JOB_NOT_PAUSED`、data 未読込は `WORKSPACE_NO_DATA`（P-0099 v3-20d） |
 | POST | `/api/jobs/{job_id}/retune` | 完了 Tune を起点に再チューニング子ジョブを作成（H-0062） |
-| POST | `/api/jobs/{job_id}/resume` | 失敗/中断 Tune の再開子ジョブを作成（H-0062 Phase B） |
+| POST | `/api/jobs/{job_id}/resume` | 失敗/中断 Tune の再開子ジョブを作成（H-0062 Phase B。`unpause` とは別 — こちらは lineage child を作る） |
 | GET | `/api/jobs/{job_id}/lineage` | ジョブ系譜のサブツリー（H-0062） |
 | DELETE | `/api/jobs/{job_id}` | ジョブを削除（query: `cascade=true` で子孫も削除） |
 
@@ -2607,6 +2645,15 @@ Workspace の `workspace_result` は完了時に自動更新される。
 
 ```json
 {
+  "type": "paused",
+  "job_id": "job_042",
+  "trial_number": 7,
+  "message": "Paused."
+}
+```
+
+```json
+{
   "type": "ping",
   "job_id": "job_042"
 }
@@ -2614,7 +2661,9 @@ Workspace の `workspace_result` は完了時に自動更新される。
 
 `ping` は 30 秒間隔の keepalive メッセージ（H-0058）。クライアントは受信しても無視してよい（WebSocket 接続維持のため）。
 
-**Schema SSOT (H-0069):** 上記 4 variant は `src/lizystudio/ws/messages.py` の Pydantic discriminated union として単一定義される。サーバ側送信は `WsMessage.model_dump_json(exclude_none=True)` を通り、フロントは生成 `schema.d.ts` から `WsMessage` 型を import する。optional フィールド (`fold_results` / `trial_results`) は値が存在するときだけ wire に現れ、`null` フィールドはシリアライズしない（既存 wire format と bit-identical）。
+`paused` は Tune が user pause で中断したことを通知する（P-0099 v3-20e）。`trial_number` は最初の paused emit 時点で worker が trial に到達していなければ `null`。**terminal メッセージではない** — pause は resumable なので late-subscriber replay cache（下記 Terminal replay）には載せず、frontend は WS 接続を維持したまま `unpause` 後の live stream 継続に備える。
+
+**Schema SSOT (H-0069):** 上記 5 variant は `src/lizystudio/ws/messages.py` の Pydantic discriminated union として単一定義される。サーバ側送信は `WsMessage.model_dump_json(exclude_none=True)` を通り、フロントは生成 `schema.d.ts` から `WsMessage` 型を import する。optional フィールド (`fold_results` / `trial_results`) は値が存在するときだけ wire に現れ、`null` フィールドはシリアライズしない（既存 wire format と bit-identical）。
 
 **Terminal replay (P-0093 / Issue #327):** `completed` / `error` メッセージは `ProgressBroadcaster._last_terminal` に per-jobId でキャッシュされ、subscribe より前に送信された場合でも late subscriber に replay される。TTL は default 5 分（環境変数 `LIZYSTUDIO_WS_TERMINAL_TTL_S` で上書き可）。これにより高速 fit (< 3 秒) の subscribe-vs-send race が解消される。INV-1: terminal メッセージは subscribe タイミングに関わらず subscriber に **少なくとも一度** 届く。INV-2: live broadcast 経路と replay 経路は subscriber の登録タイミングを境に disjoint なので、同一 subscriber への重複配信は発生しない。replay 発生は `lizystudio_progress_terminal_replayed_total` Counter で観測可能。
 
@@ -2899,6 +2948,11 @@ lizystudio_active_jobs 0.0
 | `PARENT_HAS_ACTIVE_CHILDREN` | DELETE 対象 parent に active children がある（cascade=true 必須）(H-0062) | 409 |
 | `CHECKPOINT_MISSING` | Re-tune/Resume 対象 job に model.pkl が存在しない (H-0062) | 400 |
 | `JOB_NOT_FAILED` | Resume は failed tune job のみ対象 (H-0062) | 400 |
+| `JOB_NOT_RUNNING` | Cancel / Pause は running（または paused — Cancel のみ）job が対象 (P-0099 v3-20c/d) | 400 |
+| `JOB_NOT_PAUSEABLE` | Pause は tune job のみ対象（fit job は paused にできない）(P-0099 v3-20d) | 400 |
+| `JOB_NOT_PAUSED` | Unpause は paused job のみ対象 (P-0099 v3-20d) | 400 |
+
+> `LegacyFormatProtectionError`（§3.4.4 / P-0103）は専用エラーコードを持たず、`INTERNAL_ERROR` (500) として surface する。発生条件（旧 format_version の disk ファイル上書き）は通常運用では起きないため。recovery 手順は環境変数 `LIZYSTUDIO_ALLOW_LEGACY_WRITE=1`。
 
 ### 6.2 バックエンドエラーの伝播
 
@@ -3240,4 +3294,4 @@ Phase B では `{jobs_dir}/{job_id}/model.pkl` に cloudpickle で Tune Job の�
 
 ---
 
-_Last reconciled: 2026-05-01 against develop @ ad4c581. P-0086 (config body) / P-0088 (`files_root`) / P-0089 (active-job lock + `WORKSPACE_LOCKED`) / P-0093 (WS terminal-replay) / P-0094 (perf baseline) / `JOB_CONFLICT` / `preflight_checkpoint_dir` を本サイクルで反映。Tier 3 派生 doc（`docs/architecture.md` / `api.md` / `adapter-guide.md`）は #332 で同期済み。_
+_Last reconciled: 2026-05-12 against develop @ 82d4ec3 (Issue #453). 2026-05-01 (@ ad4c581): P-0086 (config body) / P-0088 (`files_root`) / P-0089 (active-job lock + `WORKSPACE_LOCKED`) / P-0093 (WS terminal-replay) / P-0094 (perf baseline) / `JOB_CONFLICT` / `preflight_checkpoint_dir`。2026-05-12 (@ 82d4ec3): P-0099 (`paused` job state + state-machine invariants INV-1〜INV-7 + startup reconciliation v3-22a + `POST /jobs/{id}/pause`・`/unpause` + `WsPaused` message + `JOB_NOT_RUNNING`・`JOB_NOT_PAUSEABLE`・`JOB_NOT_PAUSED`) / P-0102 (reload restoration) / P-0103 (`LegacyFormatProtectionError` + `format-version-matrix` CI gate) / P-0104 (Tune workflow 整備) / P-0105 (Residuals kind selector) / P-0106 (metric-compat を `BackendCore` capability の裏へ) を反映。Tier 3 派生 doc（`docs/architecture.md` / `api.md` / `adapter-guide.md`）は #332 で同期済み。_

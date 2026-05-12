@@ -1,7 +1,10 @@
 # LizyStudio Architecture (As-Implemented)
 
-2026-04-17 時点の実装から逆算した、現行アーキテクチャの可視化。
+2026-05-12 時点（develop @ 82d4ec3）の実装から逆算した、現行アーキテクチャの可視化。
 BLUEPRINT.md は設計意図、本書は**実装された姿**を示す。
+
+- 2026-04-17 baseline。
+- 2026-05-12 (Issue #453): v0.5.0 を反映 — `paused` job state（P-0099 v3-20a）、state-machine invariants INV-1〜INV-7、server restart reconciliation（v3-22a）、pause/unpause API + `WsPaused` message（v3-20d/e）、reload restoration（P-0102）、`LegacyFormatProtectionError` + `format-version-matrix` CI gate（P-0103）。severity envelope flow（§5.4）は v0.4.1 で確立済（変更なし）。
 
 ---
 
@@ -150,7 +153,7 @@ flowchart TB
 | Prefix | Router | 代表エンドポイント |
 |---|---|---|
 | `/api/workspace` | `api/workspace.py` | GET `/status`, POST `/reset`, POST `/data/path`, POST `/data/upload`, GET `/data/preview\|columns\|describe\|split-preview\|column-stats/{c}`, GET/PUT/PATCH `/config`, POST `/config/validate\|upload`, GET `/config/download`, POST `/fit`, POST `/tune` |
-| `/api/jobs` | `api/jobs.py` + `api/retune.py` | GET `/`, GET `/{id}` / `{id}/log` / `{id}/config`, DELETE `/{id}?cascade=`, POST `/{id}/cancel`, GET `/{id}/{metrics\|split-summary\|importance\|importance-kinds\|learning-curve/metrics\|plot/{type}\|plots}`, POST `/{id}/export`, GET `/{id}/export-code`, POST `/{id}/retune`, POST `/{id}/resume`, GET `/{id}/lineage` |
+| `/api/jobs` | `api/jobs.py` + `api/retune.py` | GET `/`, GET `/{id}` / `{id}/log` / `{id}/config`, DELETE `/{id}?cascade=`, POST `/{id}/cancel`, POST `/{id}/pause`, POST `/{id}/unpause` (P-0099 v3-20d), GET `/{id}/{metrics\|split-summary\|importance\|importance-kinds\|learning-curve/metrics\|plot/{type}\|plots}`, POST `/{id}/export`, GET `/{id}/export-code`, POST `/{id}/retune`, POST `/{id}/resume`, GET `/{id}/lineage` |
 | `/api/inference` | `api/inference.py` | POST `/run`, POST `/upload`, GET `/history`, GET `/{inf_id}`, GET `/{inf_id}/{predictions\|metrics\|download\|plot/{type}}`, GET `/{inf_id}/comparison/{other_inf_id}` |
 | `/api/backends` | `api/backends.py` | GET `""`, GET `/ui-schema` |
 | `/api/files` | `api/files.py` | GET `""` |
@@ -174,7 +177,7 @@ classDiagram
     +load_config_from_file(p)
     +create_model(cfg)
     +fit(model, on_progress)
-    +tune(model, on_progress, re_tune, checkpoint_dir, resume)
+    +tune(model, on_progress, re_tune, checkpoint_dir, resume, storage, study_name)
     +predict(model, df)
     +evaluate_table(model)
     +split_summary(model)
@@ -224,37 +227,56 @@ stateDiagram-v2
   pending --> running : _run_job_core starts<br/>claim_active (idempotent)
   running --> completed : terminal write + release_active
   running --> failed : exception + release_active
-  running --> canceled : is_cancel_requested==true<br/>CancelledError<br/>release_active + clear_cancel
-  pending --> canceled : DELETE or /cancel before start
+  running --> cancelled : is_cancel_requested==true<br/>CancelledError<br/>release_active + clear_cancel
+  running --> paused : is_pause_requested==true (tune)<br/>PausedError → status=paused<br/>**slot 保持** (release_active skip)
+  paused --> running : POST /unpause (same job_id)<br/>or restart reconcile re-attach
+  paused --> cancelled : POST /cancel (no worker → 明示遷移)
+  paused --> failed : storage corruption on resume
+  pending --> cancelled : DELETE or /cancel before start
   completed --> [*]
   failed --> [*]
-  canceled --> [*]
+  cancelled --> [*]
   note right of running
-    Invariants (declared):
-    INV-1: active_job_id holds at most one
-    INV-2: release_active on every exit path
-    INV-3: metrics.record_job_terminal fires once
+    Invariants (P-0099, tests/regression/test_inv_*.py):
+    INV-1: active_job_id holds at most one running-or-paused; released on
+           6 paths (completion/cancel/exc/SIGKILL/WS-disconnect/browser-close)
+    INV-2: meta.json atomic write (tmpfile + fsync + os.replace + dir fsync)
+    INV-3: illegal transitions rejected by JobStore.set_status assert
+    INV-4: paused job fully restorable from Optuna sqlite (storage,study_name)
+    INV-5: is_cancel_requested monotonic; INV-6: subprocess crash recovery
+    INV-7: WS disconnect never releases active slot
   end note
 ```
 
+サーバ再起動時は `JobStore.reconcile_at_startup()`（`server.py:lifespan` から呼ぶ）が on-disk `meta.json` をスキャンし、`running` / `pending` の orphan を `failed` 化、`paused` を `_active_job_id` に再 attach（多重 paused は newest 残し他 failed）、terminal は rewrite せず、idempotent（v3-22a / R-1.5b）。
+
 ### In-memory primitives (`services/jobs.py:JobStore`)
 - `_active_job_id: str | None` + `_active_lock: threading.Lock`
-- `_cancel_requested: set[str]` + `_cancel_lock`
+- `_cancel_requested: set[str]` + `_cancel_lock`（IPC は `<job_dir>/CANCEL` flag — subprocess child 用）
+- `_pause_requested: set[str]` + `_pause_lock`（IPC は `<job_dir>/PAUSE` flag）(P-0099 v3-20c)
 - `_parent_locks: dict[parent_id, child_id]` + `_parent_lock_mutex` （Re-tune/Resume の at-most-one 保証）
+- `set_status(job_id, new_status)` が `LEGAL_TRANSITIONS` を runtime assert（INV-3）
 
 ### Disk layout per job (`{jobs_dir}/{job_id}/`)
-- `meta.json` — status, config, data_ref, parent_job_id, error
+- `meta.json` — `format_version` (現行 2), status, config, data_ref, parent_job_id, error。`storage/versions.py:write_versioned_json` で atomic write（INV-2）。旧 version 上書きは `LIZYSTUDIO_ALLOW_LEGACY_WRITE=1` が無いと `LegacyFormatProtectionError`（P-0103 v3-25c）
 - `fit_result.json` / `tune_result.json`
 - `model/` （adapter export） / `model.pkl` + `model_meta.json` （checkpoint）
 - `tuning_plot.json` — export前にキャプチャ
 - `execution.log` — captured stdout/stderr
+- `CANCEL` / `PAUSE` — subprocess child 向け IPC flag（worker thread モードでは in-memory set のみ）
 - `inferences/{inf_id}/` — `meta.json`, `predictions.parquet`, `metrics.json`
 
 ### Thread vs Subprocess（`services/openmp_detect.py:should_use_subprocess`）
 - デフォルト: in-process thread
 - OpenMP検出 or `LIZYSTUDIO_FORCE_SUBPROCESS=1` → `subprocess.Popen` 分離
 - 子プロセス: `python -m lizystudio.services.subprocess_runner`、JSONL progress file を tail
-- 親: `_ProgressReader` が JSONL を読み `ProgressBroadcaster.send_progress` に forward
+- 親: `_ProgressReader` が JSONL を読み `ProgressBroadcaster.send_progress` に forward。子が `status="paused"` を書き込んだ場合は親の `finally` で `release_active` を skip（v3-20d、in-process 修正と対称）
+
+### Pause / Resume (Tune long-run resumability, P-0099 R-1.4)
+- `POST /api/jobs/{id}/pause` → `request_pause`。worker の trial 完了 callback が `is_pause_requested` を見て `PausedError` を raise → `_run_job_core` の `except PausedError` が `status="paused"` + `completed_at=None`、`finally` で slot を保持。`ProgressBroadcaster.send_paused`（`WsPaused` message、terminal cache には載せない）
+- `POST /api/jobs/{id}/unpause` → data 再ロード必須、`clear_pause` 後に **同 job_id** で `start_tune_async`。lizyml の Optuna `load_if_exists=True` で同 `(storage, study_name)` に re-attach、trial 番号が継続（INV-4、`tests/integration/test_tune_resume_round_trip.py`）
+- `POST /api/jobs/{id}/cancel` は paused も accept — worker 不在のため signal pass-through ではなく direct `paused → cancelled` + slot release + clear_pause
+- frontend: `usePauseJob` / `useUnpauseJob` mutation hooks、`PauseActionButton` / `UnpauseActionButton`（`ResumeActionButton` = failed→child job とは責務分離）
 
 ---
 
@@ -447,12 +469,11 @@ flowchart LR
 
 ## 8. 設計と実装の主なギャップ（参考）
 
+旧 Issue #158（BLUEPRINT §3.3.2 / §5.3 / §10 sync）と #159（Re-tune UI 配置）は close 済。残る軽微なギャップ:
+
 | 観点 | 実装 | BLUEPRINT との差分 |
 |---|---|---|
-| Re-tune/Resume/Lineage UI の配置 | Workspace 側 (ResultsCompletedView) | §4.3 は Jobs 画面配置を想定 |
-| Protocol のメソッド | save_checkpoint / load_checkpoint / learning_curve_metrics あり | §3.3.2 のコードブロックから一部抜け |
-| API `/api/jobs/:id/retune\|resume\|lineage` | 実装済 | §5.3 表に未記載 |
-| §10 ディレクトリ構成 | `metrics.py`, `security.py`, `api/health.py`, `api/metrics_api.py`, `api/retune.py`, `backends/lizyml/`（パッケージ化）, `services/subprocess_runner.py` など多数 | 旧ツリーのまま |
-| §8.2 frontend テスト | Vitest + Playwright + Storybook + MSW が運用中 | 「初期段階は未整備」のまま陳腐化 |
+| Re-tune/Resume/Lineage UI の配置 | Workspace `ResultsCompletedView` + Jobs `JobDetail` の両方が `components/retune/` の共有コンポーネントを import（挙動は厳密に一致） | §4.3.2/§4.3.3 は共有コンポーネント前提に更新済（ギャップ解消） |
+| §10 ディレクトリ構成 | `services/_job_*.py`（#451 分割後）, `services/subprocess_runner.py` の helper 群, `services/_training_core.py` の helper 群 など、CLAUDE.md「many small files」方針で随時細分化が進む | §10 の tree は代表ファイルのみで網羅的ではない（運用上 OK — 完全列挙はしない方針） |
 
-詳細は Issue #158 / #159 を参照。
+> 本書は「実装の現状 snapshot」。Tier 1 の正は BLUEPRINT。drift を見つけたら BLUEPRINT 側を真として更新し、本表に残骸を残さない。
