@@ -3789,3 +3789,69 @@ regression Fit 結果の Residuals plot は現在「1 figure に 3 panel（Actua
 #### Decision
 
 - 2026-05-11 **Approved** — Issue #457 の詳細仕様（target shape 1-5）+ UI spec をそのまま採用。実装は単一 PR（Proposal commit → 実装 commit）。`shap-summary` を top-level タブに昇格する件（#373）とは独立。
+
+### P-0106: metric 不適合判定を `BackendCore` capability の裏へ移す（Change Gate、Issue #403）
+
+- **Date:** 2026-05-12 起票・即承認（Issue #403 で詳細仕様確定済 + ユーザ go-ahead）
+- **Related:** Issue #403（v0.4.1 pre-release code review HIGH-2 follow-up）、`src/lizystudio/backends/base.py::BackendCore`、`src/lizystudio/backends/types.py::IncompatibleMetric`、`src/lizystudio/backends/lizyml/config_mixin.py::ConfigMixin.get_incompatible_metrics`、`src/lizystudio/services/workspace.py::_workspace_metric_compatibility_errors`、`tests/test_backends_lizyml.py::TestGetIncompatibleMetrics`、`tests/contract/test_validate_metric_compatibility.py`、`tests/contract/test_fit_tune_severity_filter.py`、BLUEPRINT.md §3（backend abstraction）、`docs/coupling-analysis.md`、PR #399（validator 導入 = PR-C2 / Issue #394）/ PR #400（severity gating = PR-D1）
+
+#### Motivation
+
+`Service.validate_config` が呼ぶ `_workspace_metric_compatibility_errors`（PR #399 で導入）は lizyml 固有の regression metric 名（`mape` / `rmsle` / `r2`）の前提条件チェックと、lizyml 0.11.0 の sMAPE / WAPE を指す `suggested_fix` prose を **Service 層に直書き**していた。さらに「`task=regression` のときだけチェックする」という gate も Service 層にあり、これも lizyml の metric 語彙への暗黙の coupling。BLUEPRINT §3 の「Service 層は backend-agnostic、per-backend ロジックは `BackendAdapter` に委譲」に反するドリフトで、2nd backend（sklearn Pipeline / XGBoost native 等）が別 metric 名を使うと Service 層ガードはその backend の不適合 metric を silent に見逃す。
+
+#### Purpose
+
+- `BackendCore` Protocol に `get_incompatible_metrics(task: str, target_series: pd.Series, metric_names: set[str]) -> list[IncompatibleMetric]` を追加。Protocol 本体は `return []`（実装しない backend = 不適合 metric ゼロ）を既定とする。
+- 共通型 `IncompatibleMetric`（`@dataclass(frozen=True)`、フィールド `metric` / `message` / `suggested_fix`）を `backends/types.py` に新設。
+- lizyml adapter（`ConfigMixin`）が `get_incompatible_metrics` を実装し、watchlist（`_REGRESSION_METRIC_WATCHLIST = {"mape","rmsle","r2"}`）・各前提条件・`task=regression` gate・non-numeric target gate・sMAPE/WAPE suggestion 文言の所有を adapter 側に持つ。
+- `_workspace_metric_compatibility_errors` を thin envelope（≤ 60 行）に縮小: dataframe / target / `evaluation.metrics` の存在チェック + metric 名パース → `ws.backend.get_incompatible_metrics(...)` 呼び出し → 戻り値を既存の `{path:"evaluation.metrics", message, severity:"warning", suggested_fix}` envelope に map。
+
+#### Invariants
+
+- **INV-metric-1**: `validate_config` が返す metric-compat 警告の envelope（`path` / `message` / `severity="warning"` / `suggested_fix`）は本変更前後で byte-identical（frontend 変更ゼロ・既存 contract test 無改修 pass）。
+- **INV-metric-2**: `task != "regression"` のとき lizyml adapter は不適合 metric を一切返さない（constant 0/1 の binary target が misleading な R² 警告を出さない — PR-D1 / #394 HIGH-1 で確立した挙動を adapter 側で維持）。
+- **INV-metric-3**: metric watchlist と precondition ロジックは backend が所有する（Service 層は metric 名を一切知らない）。
+
+#### Impact
+
+**共通型 / Protocol（← Change Gate 対象）:**
+- `backends/types.py`: `IncompatibleMetric` 追加。
+- `backends/base.py`: `BackendCore.get_incompatible_metrics` 追加（Config セクション、`validate_config` の直後）。Protocol 本体に `return []` のデフォルト。`BackendAdapter` alias は `BackendCore` を継承しているので自動的に新メソッドを含む。
+
+**Backend（lizyml adapter）:**
+- `backends/lizyml/config_mixin.py`: `import pandas as pd` 追加。module-level `_REGRESSION_METRIC_WATCHLIST` 定数。`ConfigMixin.get_incompatible_metrics` 実装（旧 Service 層ロジックの完全移植 — mape→zero、rmsle→negative、r2→constant variance / <2 non-null、`task != "regression"` / non-numeric target は `[]`）。
+
+**Service:**
+- `services/workspace.py`: `_workspace_metric_compatibility_errors` を thin envelope に縮小（109 行 → 約 55 行）。`pd.api.types.is_numeric_dtype` チェックは adapter 側へ移動（`pd` は `WorkspaceState.dataframe` の型注釈で引き続き使用）。`validate_config` の呼び出し箇所（`normalized.extend(_workspace_metric_compatibility_errors(ws, config))`）は不変。
+- これにより Issue #452 の sub-PR 1（`_workspace_metric_compatibility_errors` を 3 helper に分割）は obsolete（thin envelope なので分割不要）。
+
+**Behavior change for users:**
+- なし（INV-metric-1）。
+
+**Compatibility:**
+- 後方互換。API レスポンス不変、保存形式変更なし、frontend 変更なし。新メソッドは Protocol デフォルト `[]` を持つので、構造的に satisfy するだけの将来の backend にも非破壊（呼び出し時に `AttributeError` を避けたい場合は、その backend が `BackendCore` を base class として継承すればデフォルトが効く）。
+
+**Testing:**
+- `tests/test_backends_lizyml.py::TestGetIncompatibleMetrics`（新規 14 ケース）: mape/rmsle/r2 の発火・非発火、複数同時、単一観測（std NaN）、未登録 metric 無視、non-regression task / 空 task は空、non-numeric target は空、空 metric set、all-NaN target、inf 含み target。
+- `tests/contract/test_validate_metric_compatibility.py`（既存 15 ケース）・`tests/contract/test_fit_tune_severity_filter.py`: 無改修 pass を確認（INV-metric-1）。
+- `uv run pytest tests/ --ignore=tests/e2e --ignore=tests/integration --ignore=tests/bench -k "not slow"` 全 pass / `uv run ruff check .` / `uv run ruff format --check .` / `uv run mypy src/lizystudio/` 全 green。
+
+#### Acceptance criteria
+
+- [x] `BackendCore` に `get_incompatible_metrics` 追加、Protocol 本体デフォルト `return []`、`IncompatibleMetric` TypedDict（frozen dataclass）定義。
+- [x] lizyml adapter が現ロジックを完全移植して実装。watchlist と sMAPE/WAPE 文言の所有が adapter 側に移る。
+- [x] `_workspace_metric_compatibility_errors` は thin envelope（≤ 60 行）。#452 sub-PR 1 obsolete。
+- [x] `tests/contract/test_validate_metric_compatibility.py` 全ケース無改修 pass。`tests/contract/test_fit_tune_severity_filter.py` 無 regression。
+- [x] 新規 adapter ユニットテストで lizyml の不適合 metric リストを直接検証。
+- [x] `uv run pytest` / `uv run ruff check .` / `uv run ruff format --check .` / `uv run mypy src/lizystudio/` 全 green。
+- [x] BLUEPRINT.md §3 の adapter capability 一覧に `get_incompatible_metrics` を追記。HISTORY.md Decision row 記入。
+
+#### Alternatives considered
+
+- **(a) 現状維持（drift 放置）**: 拒否。2nd backend 導入時に silent miss のリスク。Issue #403 / `docs/coupling-analysis.md` が明示的に flagging 済。
+- **(b) `backends/lizyml_metrics.py` にモジュール関数として置くだけ**: 拒否。Protocol を経由しないので「backend が自分の metric 語彙を所有する」abstraction にならず、Service 層が `lizyml_metrics` を import する coupling が残る。
+- **(c) `_workspace_split_errors`（行数チェック）も同じパターンに移す**: scope 外。n_rows は universal precondition で Service 層に居てよい（Issue #403 も out-of-scope と明記）。
+
+#### Decision
+
+- 2026-05-12 **Approved** — Issue #403 の提案どおり `BackendCore.get_incompatible_metrics` を追加。実装は単一 PR（commit 順: Proposal → `feat(backend)` Protocol+型 → `refactor(services)` thin envelope → `test(backend)` adapter watchlist）。`task` 引数を adapter に渡す設計（Service 層から `task=regression` gate を排除）まで含めて承認 — これにより abstraction が「どの task に適用されるか」も backend 所有になる。

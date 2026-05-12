@@ -5,11 +5,18 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pandas as pd
 import yaml
 
-from lizystudio.backends.types import BackendInfo, ConfigSchema
+from lizystudio.backends.types import BackendInfo, ConfigSchema, IncompatibleMetric
 
 from .config_compat import strip_internal_keys, task_params_compat_errors
+
+# Regression metrics whose value is undefined / degenerate for certain target
+# distributions. The Service layer used to hardcode this watchlist (Issue #394);
+# P-0106 (#403) moved it here so the metric vocabulary stays owned by the
+# backend — a second backend declares its own watchlist (or none).
+_REGRESSION_METRIC_WATCHLIST = frozenset({"mape", "rmsle", "r2"})
 
 
 class ConfigMixin:
@@ -65,6 +72,81 @@ class ConfigMixin:
 
         errors.extend(task_params_compat_errors(clean))
         return errors
+
+    def get_incompatible_metrics(
+        self,
+        task: str,
+        target_series: pd.Series,
+        metric_names: set[str],
+    ) -> list[IncompatibleMetric]:
+        """Regression metrics whose preconditions ``target_series`` violates.
+
+        Implements :meth:`BackendCore.get_incompatible_metrics` for lizyml.
+        The watchlist is regression-specific (lizyml/metrics/regression.py
+        raises mid-fit for these), so non-regression tasks and non-numeric
+        targets short-circuit to ``[]``:
+
+        * ``mape``  — undefined when ``y_true`` contains zeros
+        * ``rmsle`` — undefined when ``y_true`` contains negative values
+        * ``r2``    — degenerate (NaN / +/-inf) when the target is constant
+                      (variance == 0, or < 2 non-null observations)
+
+        Each entry's ``suggested_fix`` names the metric to drop and, for
+        ``mape``, points at lizyml >= 0.11.0's zero-tolerant ``smape`` /
+        ``wape`` as alternatives.
+        """
+        if task != "regression":
+            return []
+        if not pd.api.types.is_numeric_dtype(target_series):
+            return []
+        watched = metric_names & _REGRESSION_METRIC_WATCHLIST
+        if not watched:
+            return []
+
+        col = str(target_series.name)
+        out: list[IncompatibleMetric] = []
+        if "mape" in watched and bool((target_series == 0).any()):
+            out.append(
+                IncompatibleMetric(
+                    metric="mape",
+                    message=(
+                        f"MAPE is undefined when target column '{col}' contains zeros."
+                    ),
+                    suggested_fix=(
+                        "Remove 'mape' from evaluation.metrics — or replace it "
+                        "with 'smape' / 'wape' which tolerate zero targets "
+                        "(lizyml >= 0.11.0)."
+                    ),
+                )
+            )
+        if "rmsle" in watched and bool((target_series < 0).any()):
+            out.append(
+                IncompatibleMetric(
+                    metric="rmsle",
+                    message=(
+                        f"RMSLE is undefined when target column '{col}' "
+                        f"contains negative values."
+                    ),
+                    suggested_fix="Remove 'rmsle' from evaluation.metrics.",
+                )
+            )
+        if "r2" in watched:
+            # Constant target → variance == 0. ``std(skipna=True)`` returns
+            # NaN for < 2 non-null observations, which we also treat as
+            # "cannot compute R²".
+            std = target_series.std(skipna=True)
+            if pd.isna(std) or float(std) == 0.0:
+                out.append(
+                    IncompatibleMetric(
+                        metric="r2",
+                        message=(
+                            f"R² is undefined when target column '{col}' is "
+                            f"constant (variance == 0)."
+                        ),
+                        suggested_fix="Remove 'r2' from evaluation.metrics.",
+                    )
+                )
+        return out
 
     @staticmethod
     def _strip_internal_keys(config: dict[str, Any]) -> dict[str, Any]:
