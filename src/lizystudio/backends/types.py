@@ -28,6 +28,23 @@ class ConfigSchema:
     json_schema: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class IncompatibleMetric:
+    """Advisory entry for a configured metric whose preconditions the
+    loaded target column violates (e.g. MAPE on a target containing zeros).
+
+    Returned by :meth:`BackendCore.get_incompatible_metrics`. The
+    ``suggested_fix`` string may reference backend-specific replacements
+    (e.g. lizyml's sMAPE / WAPE for MAPE). The Service layer wraps each
+    entry in its ``severity="warning"`` validation envelope; it does not
+    block Fit.
+    """
+
+    metric: str
+    message: str
+    suggested_fix: str
+
+
 @dataclass
 class FitSummary:
     """Training result summary."""
