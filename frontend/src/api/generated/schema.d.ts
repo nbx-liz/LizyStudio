@@ -41,55 +41,11 @@ export interface paths {
          * Workspace Reset
          * @description Reset all workspace state.
          *
-         *     H-0063 / Issue #99: if a fit / tune is still running in the
-         *     background, reset must also cancel it and release the JobStore
-         *     active slot. Otherwise the next Fit / Tune click gets a
-         *     JOB_CONFLICT 409, directly contradicting the user's expectation
-         *     that "reset" yields a clean slate.
-         *
-         *     The cancel path mirrors the existing ``POST /jobs/{id}/cancel``
-         *     endpoint: we call ``request_cancel`` and rely on the runner (either
-         *     the in-process thread via ``_run_job_core``'s cancel-aware callback
-         *     or the subprocess via ``_poll_progress``'s cancel polling) to
-         *     transition the job to ``cancelled`` and release the slot from its
-         *     finally block. We then wait briefly for the slot to become free
-         *     so the caller can immediately start a new Fit / Tune without
-         *     racing the cancel.
-         *
-         *     Degraded paths we explicitly tolerate:
-         *
-         *     1. **Terminal holder (crashed runner finally)** — if the slot is
-         *        held but the job's on-disk status is already terminal, no one
-         *        will ever call ``release_active`` for it. We short-circuit by
-         *        calling ``force_release_active_if`` directly.
-         *     2. **No live runner (orphan slot)** — the slot may have been
-         *        claimed by a previous process / test / client that died
-         *        without draining the slot. The cancel flag lands in memory but
-         *        no runner observes it, so the wait loop would time out. In
-         *        that case we **force-release the slot** from reset itself.
-         *        Rationale: the user clicked reset expressly to clear state;
-         *        returning 200 with the slot still held would reintroduce the
-         *        exact ``JOB_CONFLICT`` regression this fix is trying to remove.
-         *        The wait budget (``_RESET_WAIT_TIMEOUT``) is deliberately set
-         *        longer than ``subprocess_runner._WAIT_TIMEOUT`` so that a
-         *        legitimate subprocess runner has time to finish its
-         *        ``proc.terminate`` / ``proc.wait`` cycle and call
-         *        ``release_active`` from its own finally, before we fall
-         *        through to the force-release branch. If we still time out,
-         *        the most plausible explanation is an orphaned slot with no
-         *        runner behind it, and force-releasing is strictly better than
-         *        leaving the user with a broken reset button.
-         *
-         *     The force-release uses ``force_release_active_if`` which is
-         *     atomic under ``JobStore._active_lock``: the slot is released only
-         *     if it still holds the exact id we observed, so a racy
-         *     ``create_and_claim_active`` from another thread between the
-         *     observation and the release cannot accidentally clear the new
-         *     owner's slot.
-         *
-         *     Workspace state is cleared AFTER the cancel + slot wait so the
-         *     shutting-down runner thread still sees live ``ws.dataframe`` /
-         *     ``ws.model`` references during its finally path.
+         *     Cancels and drains any background fit / tune first (see
+         *     :func:`_teardown_active_job` for the cancel + slot-release choreography
+         *     and its degraded paths), then clears workspace state. The order matters:
+         *     workspace state is cleared *after* the slot wait so the shutting-down
+         *     runner thread still sees live ``ws.dataframe`` / ``ws.model`` references.
          */
         post: operations["workspace_reset_api_workspace_reset_post"];
         delete?: never;

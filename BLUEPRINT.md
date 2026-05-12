@@ -96,6 +96,15 @@ class ConfigSchema:
     """Config の JSON Schema。フォーム生成用。"""
     json_schema: dict[str, Any]        # JSON Schema形式
 
+@dataclass(frozen=True)
+class IncompatibleMetric:
+    """設定済みメトリクスのうち、ロード済み target 列が前提条件を満たさないものの advisory（P-0106）。
+    suggested_fix はバックエンド固有の代替を指してよい（lizyml: MAPE→sMAPE/WAPE 等）。
+    Service 層が severity="warning" envelope に包む（Fit は止めない）。"""
+    metric: str                        # メトリクス名 ("mape" 等)
+    message: str                       # 警告文（target 列名を含む）
+    suggested_fix: str                 # 修正案
+
 @dataclass
 class FitSummary:
     """学習結果のサマリー。"""
@@ -172,6 +181,11 @@ class BackendCore(Protocol):
     # --- Config ---
     def get_config_schema(self) -> ConfigSchema: ...
     def validate_config(self, config: dict[str, Any]) -> list[dict[str, Any]]: ...  # エラー一覧 (空=valid)
+    def get_incompatible_metrics(                                                    # P-0106 (#403)
+        self, task: str, target_series: pd.Series, metric_names: set[str]
+    ) -> list[IncompatibleMetric]: ...
+        # task/target 前提条件に反する設定済みメトリクスの advisory（watchlist と suggested_fix prose は backend 所有）。
+        # デフォルトは [] — 実装しない backend は不適合メトリクスを宣言しない。Service が severity="warning" に包む。
     def get_default_config(self, task: str, target: str) -> dict[str, Any]: ...  # H-0025
     def load_config_from_file(self, content: bytes, filename: str) -> dict[str, Any]: ...
 

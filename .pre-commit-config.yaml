@@ -14,3 +14,10 @@ repos:
         language: system
         files: ^frontend/src/.*\.(ts|tsx)$
         pass_filenames: false
+
+      - id: block-stray-artifacts
+        name: block stray artefacts
+        entry: scripts/check_stray.sh
+        language: system
+        pass_filenames: false
+        always_run: true

@@ -16,6 +16,7 @@ from lizystudio.backends.types import (
     BackendInfo,
     ConfigSchema,
     FitSummary,
+    IncompatibleMetric,
     PlotData,
     PredictionSummary,
     TuningSummary,
@@ -60,6 +61,29 @@ class BackendCore(Protocol):
     def validate_config(self, config: dict[str, Any]) -> list[dict[str, Any]]:
         """Return a list of validation errors (empty == valid)."""
         ...
+
+    def get_incompatible_metrics(
+        self,
+        task: str,
+        target_series: pd.Series,
+        metric_names: set[str],
+    ) -> list[IncompatibleMetric]:
+        """Advisory: configured metrics whose preconditions the target violates.
+
+        Called by ``Service.validate_config`` once it has confirmed a target
+        column is loaded — *task* is the configured task (``"regression"`` /
+        ``"binary"`` / ``"multiclass"`` / ``""`` if absent), *target_series*
+        the loaded column, *metric_names* the set of metric names parsed from
+        ``evaluation.metrics``. The backend owns which of those names have
+        target preconditions (e.g. lizyml: MAPE undefined on zeros, RMSLE on
+        negatives, R² on a constant target) and the ``suggested_fix`` text,
+        which may reference backend-specific replacements.
+
+        The Service wraps each entry in a ``severity="warning"`` envelope; it
+        does not block Fit. A minimal backend declares no incompatibilities
+        (default below).
+        """
+        return []
 
     def get_default_config(self, task: str, target: str) -> dict[str, Any]:
         """Return a complete valid config with all defaults."""

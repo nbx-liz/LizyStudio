@@ -16,6 +16,7 @@ from lizystudio.backends.registry import get_adapter
 from lizystudio.backends.types import (
     BackendInfo,
     ConfigSchema,
+    IncompatibleMetric,
     PlotData,
     PredictionSummary,
 )
@@ -1898,3 +1899,146 @@ def test_tune_real_tuning_result_empty_rounds_yields_none() -> None:
     assert summary.rounds is None
     assert summary.boundary_report is None
     assert summary.best_params == {"lr": 0.01}
+
+
+class TestGetIncompatibleMetrics:
+    """LizyMLAdapter.get_incompatible_metrics — the regression-metric watchlist
+    (mape / rmsle / r2 + the sMAPE/WAPE suggestion text) that P-0106 (#403)
+    moved off the Service layer and behind the BackendCore Protocol.
+    """
+
+    @pytest.fixture
+    def adapter(self) -> LizyMLAdapter:
+        return LizyMLAdapter()
+
+    def test_mape_with_zero_target(self, adapter: LizyMLAdapter) -> None:
+        out = adapter.get_incompatible_metrics(
+            "regression", pd.Series([0.0, 1.0, 2.0], name="y"), {"mape", "mae"}
+        )
+        assert all(isinstance(m, IncompatibleMetric) for m in out)
+        assert [m.metric for m in out] == ["mape"]
+        assert "zero" in out[0].message.lower()
+        assert "'y'" in out[0].message
+        assert "smape" in out[0].suggested_fix.lower()
+        assert "wape" in out[0].suggested_fix.lower()
+
+    def test_mape_clean_when_no_zero(self, adapter: LizyMLAdapter) -> None:
+        assert (
+            adapter.get_incompatible_metrics(
+                "regression", pd.Series([1.0, 2.0, 3.0], name="y"), {"mape"}
+            )
+            == []
+        )
+
+    def test_rmsle_with_negative_target(self, adapter: LizyMLAdapter) -> None:
+        out = adapter.get_incompatible_metrics(
+            "regression", pd.Series([-1.0, 1.0, 2.0], name="y"), {"rmsle"}
+        )
+        assert [m.metric for m in out] == ["rmsle"]
+        assert "negative" in out[0].message.lower()
+
+    def test_rmsle_clean_when_nonnegative(self, adapter: LizyMLAdapter) -> None:
+        # exact zero is allowed for RMSLE (log1p(0) == 0), only negatives fail
+        assert (
+            adapter.get_incompatible_metrics(
+                "regression", pd.Series([0.0, 1.0, 2.0], name="y"), {"rmsle"}
+            )
+            == []
+        )
+
+    def test_r2_with_constant_target(self, adapter: LizyMLAdapter) -> None:
+        out = adapter.get_incompatible_metrics(
+            "regression", pd.Series([5.0, 5.0, 5.0], name="y"), {"r2"}
+        )
+        assert [m.metric for m in out] == ["r2"]
+        assert "constant" in out[0].message.lower()
+
+    def test_r2_clean_when_target_varies(self, adapter: LizyMLAdapter) -> None:
+        assert (
+            adapter.get_incompatible_metrics(
+                "regression", pd.Series([1.0, 2.0, 3.0], name="y"), {"r2"}
+            )
+            == []
+        )
+
+    def test_r2_single_observation_flagged(self, adapter: LizyMLAdapter) -> None:
+        # std() of <2 non-null observations is NaN → "cannot compute R²"
+        out = adapter.get_incompatible_metrics(
+            "regression", pd.Series([5.0], name="y"), {"r2"}
+        )
+        assert [m.metric for m in out] == ["r2"]
+
+    def test_multiple_issues_one_entry_each(self, adapter: LizyMLAdapter) -> None:
+        # all-zero target: mape (zeros) + r2 (constant) fire; rmsle needs negatives
+        out = adapter.get_incompatible_metrics(
+            "regression",
+            pd.Series([0.0, 0.0, 0.0], name="y"),
+            {"mape", "rmsle", "r2"},
+        )
+        assert sorted(m.metric for m in out) == ["mape", "r2"]
+
+    def test_unwatched_metrics_ignored(self, adapter: LizyMLAdapter) -> None:
+        assert (
+            adapter.get_incompatible_metrics(
+                "regression", pd.Series([0.0, 1.0], name="y"), {"mae", "rmse", "auc"}
+            )
+            == []
+        )
+
+    def test_non_regression_task_returns_empty(self, adapter: LizyMLAdapter) -> None:
+        # a constant 0/1 binary target must NOT surface a misleading R² warning
+        assert (
+            adapter.get_incompatible_metrics(
+                "binary", pd.Series([0, 0, 0], name="label"), {"r2", "mape"}
+            )
+            == []
+        )
+        assert (
+            adapter.get_incompatible_metrics(
+                "multiclass", pd.Series([1.0], name="y"), {"r2"}
+            )
+            == []
+        )
+        # absent task ("") is treated as non-regression
+        assert (
+            adapter.get_incompatible_metrics("", pd.Series([0.0], name="y"), {"r2"})
+            == []
+        )
+
+    def test_non_numeric_target_returns_empty(self, adapter: LizyMLAdapter) -> None:
+        assert (
+            adapter.get_incompatible_metrics(
+                "regression",
+                pd.Series(["a", "b", "c"], name="y"),
+                {"mape", "rmsle", "r2"},
+            )
+            == []
+        )
+
+    def test_empty_metric_set_returns_empty(self, adapter: LizyMLAdapter) -> None:
+        assert (
+            adapter.get_incompatible_metrics(
+                "regression", pd.Series([0.0, 1.0], name="y"), set()
+            )
+            == []
+        )
+
+    def test_all_nan_target_flags_only_r2(self, adapter: LizyMLAdapter) -> None:
+        # NaN comparisons are False, so mape/rmsle stay quiet; std() is NaN → r2
+        out = adapter.get_incompatible_metrics(
+            "regression",
+            pd.Series([float("nan")] * 5, name="y"),
+            {"mape", "rmsle", "r2"},
+        )
+        assert [m.metric for m in out] == ["r2"]
+
+    @pytest.mark.filterwarnings("ignore:invalid value encountered:RuntimeWarning")
+    def test_inf_in_target_does_not_crash(self, adapter: LizyMLAdapter) -> None:
+        # +inf is not 0 and not < 0; -inf qualifies as negative → rmsle.
+        # std with non-finite values is NaN → r2. mape stays quiet (no exact 0).
+        out = adapter.get_incompatible_metrics(
+            "regression",
+            pd.Series([float("inf"), float("-inf"), 1.0, 2.0, 3.0], name="y"),
+            {"mape", "rmsle", "r2"},
+        )
+        assert sorted(m.metric for m in out) == ["r2", "rmsle"]

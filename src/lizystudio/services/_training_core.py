@@ -23,7 +23,8 @@ import io
 import logging
 import time
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -135,48 +136,73 @@ def _emit_terminal_metric(job_store: JobStore, job: Job, duration: float = 0.0) 
         job_store.record_job_terminal(job.job_type, "cancelled", duration=duration)
 
 
-def _run_job_core(
-    *,
+def _claim_active_or_fail(
     job: Job,
     job_store: JobStore,
     broadcaster: ProgressBroadcaster | None,
-    execute_fn: Callable[
-        [ProgressCallback],
-        tuple[FitSummary, TuningSummary | None, str],
-    ],
-) -> Job:
-    """Shared execution wrapper for fit / tune / retune jobs.
+) -> bool:
+    """Claim the single active slot for *job*. Return ``True`` on success.
 
-    Handles status transitions, log capture, error handling, and
-    persistence.
+    On contention the job is transitioned to ``failed`` (with a
+    ``JOB_CONFLICT`` broadcast and a terminal-metric bump) and ``False`` is
+    returned — the caller short-circuits and returns the failed job.
     """
-    if not job_store.claim_active(job.job_id):
-        job.status = "failed"
-        job.error = "Another job is already running"
-        job.completed_at = datetime.now(timezone.utc).isoformat()
-        job_store.update(job)
-        if broadcaster is not None:
-            broadcaster.send_error(
-                job.job_id, "Another job is already running", code="JOB_CONFLICT"
-            )
-        job_store.record_job_terminal(job.job_type, "failed")
-        return job
-
-    job.status = "running"
+    if job_store.claim_active(job.job_id):
+        return True
+    job.status = "failed"
+    job.error = "Another job is already running"
+    job.completed_at = datetime.now(timezone.utc).isoformat()
     job_store.update(job)
+    if broadcaster is not None:
+        broadcaster.send_error(
+            job.job_id, "Another job is already running", code="JOB_CONFLICT"
+        )
+    job_store.record_job_terminal(job.job_type, "failed")
+    return False
 
-    # H-0066: wall-clock start for the duration histogram.
-    start_time = time.monotonic()
 
-    cb = _make_cancel_aware_cb(job.job_id, job_store, broadcaster)
+@contextmanager
+def _capture_job_logs(job_id: str) -> Iterator[io.StringIO]:
+    """Attach a DEBUG ``StreamHandler`` to the per-job logger; detach on exit.
 
+    Yields the in-memory buffer so the caller can persist captured records
+    (see :func:`_persist_job_log`) while the handler is still attached.
+    """
     log_buffer = io.StringIO()
     handler = logging.StreamHandler(log_buffer)
     handler.setLevel(logging.DEBUG)
-    job_logger = logging.getLogger(f"lizystudio.training.{job.job_id}")
+    job_logger = logging.getLogger(f"lizystudio.training.{job_id}")
     job_logger.addHandler(handler)
     job_logger.setLevel(logging.DEBUG)
+    try:
+        yield log_buffer
+    finally:
+        job_logger.removeHandler(handler)
+        handler.close()
 
+
+def _apply_job_outcome(
+    job: Job,
+    job_store: JobStore,
+    broadcaster: ProgressBroadcaster | None,
+    *,
+    execute_fn: Callable[
+        [ProgressCallback], tuple[FitSummary, TuningSummary | None, str]
+    ],
+    cb: ProgressCallback,
+) -> None:
+    """Run *execute_fn* and stamp the resulting terminal (or ``paused``) state.
+
+    Stamps ``running`` (so the Jobs list reflects it before *execute_fn*
+    starts), then maps the worker's exit to a job status — ``completed`` on
+    success; ``paused`` on :class:`PausedError` (a NON-terminal unwind: the
+    caller's finally keeps slot ownership and the cancel flag, and the no-op
+    ``_emit_terminal_metric`` skips it); ``cancelled`` on
+    :class:`CancelledError` / ``KeyboardInterrupt``; ``failed`` on any other
+    exception — and updates the store + notifies subscribers for each.
+    """
+    job.status = "running"
+    job_store.update(job)
     try:
         fit_result, tune_result, model_dir = execute_fn(cb)
         job.status = "completed"
@@ -189,18 +215,15 @@ def _run_job_core(
             broadcaster.send_completed(job.job_id)
     except PausedError:
         # P-0099 v3-20c (R-1.4): paused is a NON-terminal unwind. The
-        # finally-block below preserves slot ownership AND the cancel
-        # flag so a co-pending cancel survives into the resume worker.
-        # The terminal-metric emit is also skipped — pause is not a
-        # terminal transition.
+        # caller's finally preserves slot ownership AND the cancel flag so a
+        # co-pending cancel survives into the resume worker.
         job.status = "paused"
         job.completed_at = None
         job_store.update(job)
-        # P-0099 v3-20e: notify subscribers via WsPaused so the
-        # frontend Jobs UI flips state without waiting for the next
-        # jobs list refresh. The broadcaster does NOT cache this
-        # message for late-subscriber replay — pause is resumable, so
-        # a stale paused frame from a previous session would mislead a
+        # P-0099 v3-20e: notify subscribers via WsPaused so the frontend
+        # Jobs UI flips state without waiting for the next jobs-list refresh.
+        # NOT cached for late-subscriber replay — pause is resumable, so a
+        # stale paused frame from a previous session would mislead a
         # subscriber that connects after the user clicked Resume.
         if broadcaster is not None:
             broadcaster.send_paused(job.job_id)
@@ -216,49 +239,80 @@ def _run_job_core(
         job.completed_at = datetime.now(timezone.utc).isoformat()
         job_store.update(job)
         if broadcaster is not None:
-            safe_msg = f"{type(exc).__name__}: {exc}"
-            broadcaster.send_error(job.job_id, safe_msg)
-    finally:
-        # P-0099 v3-20c: paused is non-terminal — KEEP slot ownership and
-        # KEEP the cancel flag so the resume worker can short-circuit if
-        # the user cancelled while paused.  Every other branch (completed
-        # / cancelled / failed) is terminal and must release.
-        if job.status != "paused":
-            job_store.release_active(job.job_id)
-            job_store.clear_cancel(job.job_id)
-        elapsed = time.monotonic() - start_time
-        _emit_terminal_metric(job_store, job, duration=elapsed)  # H-0065 / H-0066
-        job_logger.removeHandler(handler)
-        handler.close()
-        # Persist captured logs. OSError here must not propagate —
-        # doing so would short-circuit the worker thread and leave a
-        # zombie thread handle on the workspace.
-        #
-        # Issue #328: append (not overwrite) so any stdout/stderr that
-        # the parent's ``Popen`` captured into the same path stays
-        # intact. The child's stdout fd is closed by Python's stdio
-        # shutdown before this finally block runs, so the parent has
-        # finished its writes by the time we open in append mode here.
-        # When ``log_buffer`` is empty AND the file does not yet exist
-        # (in-process callers that do not go through the subprocess
-        # plumbing), touch an empty file so existing callers that
-        # assert the artifact path exists keep working.
+            broadcaster.send_error(job.job_id, f"{type(exc).__name__}: {exc}")
+
+
+def _persist_job_log(job_store: JobStore, job_id: str, captured: str) -> None:
+    """Append captured Python-logger records to the job's log artifact.
+
+    OSError here must not propagate — doing so would short-circuit the
+    worker thread and leave a zombie thread handle on the workspace.
+
+    Issue #328: append (not overwrite) so any stdout/stderr the parent's
+    ``Popen`` captured into the same path stays intact — the child's stdout
+    fd is closed by Python's stdio shutdown before this runs, so the parent
+    has finished its writes. When *captured* is empty AND the file does not
+    yet exist (in-process callers that bypass the subprocess plumbing), touch
+    an empty file so callers that assert the artifact path exists keep
+    working.
+    """
+    try:
+        log_path = job_store.path_for(job_id, "log")
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        if captured:
+            with log_path.open("a", encoding="utf-8") as f:
+                f.write("\n--- captured Python logger records ---\n")
+                f.write(captured)
+        elif not log_path.exists():
+            log_path.touch()
+    except OSError:
+        _logger.warning(
+            "Failed to persist execution log for job %s", job_id, exc_info=True
+        )
+
+
+def _run_job_core(
+    *,
+    job: Job,
+    job_store: JobStore,
+    broadcaster: ProgressBroadcaster | None,
+    execute_fn: Callable[
+        [ProgressCallback],
+        tuple[FitSummary, TuningSummary | None, str],
+    ],
+) -> Job:
+    """Shared execution wrapper for fit / tune / retune jobs.
+
+    Claims the active slot, runs *execute_fn* under captured logging, stamps
+    the resulting status, and releases the slot — except for ``paused``,
+    which is a non-terminal unwind that keeps the slot AND the cancel flag so
+    a resume worker can short-circuit if the user cancelled while paused
+    (P-0099 v3-20c).
+    """
+    if not _claim_active_or_fail(job, job_store, broadcaster):
+        return job
+
+    start_time = time.monotonic()  # H-0066: wall-clock for the duration histogram
+    cb = _make_cancel_aware_cb(job.job_id, job_store, broadcaster)
+
+    with _capture_job_logs(job.job_id) as log_buffer:
         try:
-            captured = log_buffer.getvalue()
-            log_path = job_store.path_for(job.job_id, "log")
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            if captured:
-                with log_path.open("a", encoding="utf-8") as f:
-                    f.write("\n--- captured Python logger records ---\n")
-                    f.write(captured)
-            elif not log_path.exists():
-                log_path.touch()
-        except OSError:
-            _logger.warning(
-                "Failed to persist execution log for job %s",
-                job.job_id,
-                exc_info=True,
+            _apply_job_outcome(
+                job, job_store, broadcaster, execute_fn=execute_fn, cb=cb
             )
+        finally:
+            # P-0099 v3-20c: paused is non-terminal — KEEP slot ownership and
+            # KEEP the cancel flag so the resume worker can short-circuit if
+            # the user cancelled while paused. Every other branch (completed /
+            # cancelled / failed) is terminal and must release.
+            if job.status != "paused":
+                job_store.release_active(job.job_id)
+                job_store.clear_cancel(job.job_id)
+            # H-0065 / H-0066: no-op when paused (not a terminal transition).
+            _emit_terminal_metric(
+                job_store, job, duration=time.monotonic() - start_time
+            )
+            _persist_job_log(job_store, job.job_id, log_buffer.getvalue())
 
     return job
 
