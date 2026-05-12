@@ -113,36 +113,32 @@ def test_delete(job_store: JobStore, sample_data_ref: DataRef) -> None:
 
 
 # ---------------------------------------------------------------------------
-# _job_dir — path traversal guard
+# job_dir — path traversal guard (#451: implemented in JobMetadataStore,
+# delegated through JobStore.job_dir)
 # ---------------------------------------------------------------------------
 
 
 def test_job_dir_traversal_guard_raises(job_store: JobStore) -> None:
-    """_job_dir must raise ValueError when job_id escapes jobs_dir."""
+    """job_dir must raise ValueError when job_id escapes jobs_dir."""
     with pytest.raises(ValueError, match="outside allowed root"):
-        job_store._job_dir("../escape")
+        job_store.job_dir("../escape")
 
 
 # ---------------------------------------------------------------------------
-# list — empty jobs_dir branch
+# list — empty jobs_dir branch (#451: lives in JobMetadataStore)
 # ---------------------------------------------------------------------------
 
 
 def test_list_returns_empty_when_jobs_dir_missing(tmp_path: Path) -> None:
     """list() must return [] when the jobs directory does not exist yet."""
+    from lizystudio.services.jobs import JobMetadataStore
+
     jobs_dir = tmp_path / "missing_dir"
-    # Do NOT create the directory — simulate fresh store with no jobs_dir
-    store = JobStore.__new__(JobStore)
-    store.jobs_dir = jobs_dir
-    store._cancel_requested = set()
-    import threading
-
-    store._cancel_lock = threading.Lock()
-    store._active_job_id = None
-    store._active_lock = threading.Lock()
-
-    result = store.list()
-    assert result == []
+    # Do NOT create the directory — simulate a metadata store whose
+    # jobs_dir vanished after construction.
+    meta = JobMetadataStore.__new__(JobMetadataStore)
+    meta.jobs_dir = jobs_dir
+    assert meta.list() == []
 
 
 # ---------------------------------------------------------------------------
@@ -485,20 +481,20 @@ def test_get_returns_none_for_missing_meta(
 def test_load_job_corrupt_meta_raises(
     job_store: JobStore,
 ) -> None:
-    """_load_job raises on corrupt meta.json."""
+    """load_job raises on corrupt meta.json (#451: JobMetadataStore.load_job)."""
     import json
 
     job_dir = job_store.jobs_dir / "job_corrupt"
     job_dir.mkdir(parents=True)
     (job_dir / "meta.json").write_text("not json{{{", encoding="utf-8")
     with pytest.raises(json.JSONDecodeError):
-        job_store._load_job("job_corrupt")
+        job_store._meta.load_job("job_corrupt")
 
 
 def test_load_job_missing_field_raises(
     job_store: JobStore,
 ) -> None:
-    """_load_job raises KeyError when required fields are missing."""
+    """load_job raises KeyError when required fields are missing."""
     import json
 
     job_dir = job_store.jobs_dir / "job_partial"
@@ -508,7 +504,7 @@ def test_load_job_missing_field_raises(
         encoding="utf-8",
     )
     with pytest.raises(KeyError):
-        job_store._load_job("job_partial")
+        job_store._meta.load_job("job_partial")
 
 
 def test_list_skips_dirs_without_meta(

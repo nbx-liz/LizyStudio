@@ -1,4 +1,13 @@
-"""Job persistence — CRUD for fit/tune jobs on disk (BLUEPRINT §3.4.2/§3.4.4)."""
+"""Job persistence — orchestrates the on-disk job store (BLUEPRINT §3.4.2/§3.4.4).
+
+The disk-CRUD half (the ``Job`` dataclass, the §3.4.4 layout, and
+``meta.json`` / ``fit_result.json`` / ``tune_result.json`` round-trips)
+lives in :mod:`lizystudio.services._job_metadata`. ``JobStore`` wires
+that ``JobMetadataStore`` together with the concurrency (active slot),
+cancel/pause-flag and lineage concerns and the owned model cache. The
+metadata symbols are re-exported here for backward compatibility with
+``from lizystudio.services.jobs import Job, artifact_path, ...``.
+"""
 
 from __future__ import annotations
 
@@ -9,19 +18,26 @@ import logging
 import os
 import shutil
 import threading
-from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
-from uuid import uuid4
 
 from fastapi import Request
 
-from lizystudio.backends.types import DataRef, FitSummary, TuningSummary
-from lizystudio.security import validate_path_within  # noqa: E402
-from lizystudio.storage.versions import (  # noqa: E402
-    read_versioned_json,
-    write_versioned_json,
+from lizystudio.backends.types import DataRef
+
+# Most of these are pure re-exports kept in ``__all__`` so existing
+# import sites (``from lizystudio.services.jobs import Job / artifact_path
+# / CANCEL_FLAG_FILENAME / ...``) keep working after the #451 split.
+from lizystudio.services._job_metadata import (
+    ARTIFACT_FILENAMES,
+    CANCEL_FLAG_FILENAME,
+    PAUSE_FLAG_FILENAME,
+    ArtifactKind,
+    Job,
+    JobMetadataStore,
+    artifact_path,
+    read_job_json,
 )
 
 if TYPE_CHECKING:
@@ -29,97 +45,6 @@ if TYPE_CHECKING:
     from lizystudio.metrics import JobType, MetricsRegistry, TerminalStatus
 
 _logger = logging.getLogger(__name__)
-
-
-# Issue #152: filename of the on-disk cancel flag. In subprocess mode
-# the child constructs a fresh JobStore whose in-memory
-# ``_cancel_requested`` set is disjoint from the parent's. The flag
-# file is the IPC channel that lets the child observe the parent's
-# ``request_cancel`` between trials, so cooperative cancel (H-0011)
-# actually fires before the SIGTERM escalation.
-CANCEL_FLAG_FILENAME = "CANCEL"
-
-# P-0099 v3-20c: on-disk pause flag mirrors the cancel-flag IPC pattern
-# so the subprocess child's fresh JobStore observes pause requests at
-# the cancel-aware callback boundary even though its in-memory
-# ``_pause_requested`` set is disjoint from the parent's.
-PAUSE_FLAG_FILENAME = "PAUSE"
-
-
-# A-10: BLUEPRINT §3.4.4 on-disk layout for a single job. Centralising
-# this map is the core of the path-layout SSOT — every artifact filename
-# lives here, and every caller goes through ``JobStore.path_for`` (or
-# the module-level :func:`artifact_path` helper, used by call sites
-# that have a ``jobs_dir`` but no ``JobStore`` instance).
-ArtifactKind = Literal[
-    "meta",
-    "fit_result",
-    "tune_result",
-    "model",
-    "log",
-    "tuning_plot",
-    "cancel_flag",
-    "pause_flag",
-]
-
-ARTIFACT_FILENAMES: dict[ArtifactKind, str] = {
-    "meta": "meta.json",
-    "fit_result": "fit_result.json",
-    "tune_result": "tune_result.json",
-    "model": "model",  # directory (see load/save in adapters)
-    "log": "execution.log",
-    "tuning_plot": "tuning_plot.json",
-    "cancel_flag": CANCEL_FLAG_FILENAME,
-    "pause_flag": PAUSE_FLAG_FILENAME,
-}
-
-
-def artifact_path(jobs_dir: Path, job_id: str, kind: ArtifactKind) -> Path:
-    """Resolve ``{jobs_dir}/{job_id}/<artifact>`` without a ``JobStore``.
-
-    ``JobStore.path_for`` is the preferred entry point (it also applies
-    path-traversal guards). This helper exists for call sites — e.g.
-    :mod:`lizystudio.services.job_results` — that hold a ``Job`` and can
-    derive ``jobs_dir`` from ``Job.model_path`` but do not own the
-    ``JobStore`` instance. Callers are responsible for validating
-    ``job_id`` when it is user-controlled.
-    """
-    return jobs_dir / job_id / ARTIFACT_FILENAMES[kind]
-
-
-@dataclass
-class Job:
-    """Persistent job metadata."""
-
-    job_id: str
-    # P-0099 v3-20a: ``paused`` is a non-terminal state introduced for
-    # R-1.4 (Tune long-run resumability, Issue #360). The state machine
-    # contract (legal transitions, slot ownership, terminal vs non-
-    # terminal classification) is declared in
-    # ``tests/regression/test_inv_state_machine.py``; runtime assertion
-    # of illegal transitions lands in v3-20c alongside the
-    # ``request_pause`` / ``PausedError`` plumbing.
-    status: Literal[
-        "pending",
-        "running",
-        "completed",
-        "failed",
-        "cancelled",
-        "paused",
-    ]
-    backend_name: str
-    config: dict[str, Any]
-    data_ref: DataRef
-    job_type: Literal["fit", "tune"]
-    created_at: str  # ISO-8601
-    completed_at: str | None = None
-    fit_result: FitSummary | None = None
-    tune_result: TuningSummary | None = None
-    model_path: str | None = None
-    error: str | None = None
-    # H-0062: job lineage for Re-tune / Resume child jobs. Optional so
-    # existing jobs on disk (written before Phase B) continue to load.
-    parent_job_id: str | None = None
 
 
 class JobStore:
@@ -138,8 +63,12 @@ class JobStore:
         jobs_dir: Path,
         metrics: MetricsRegistry | None = None,
     ) -> None:
-        self.jobs_dir = jobs_dir
-        self.jobs_dir.mkdir(parents=True, exist_ok=True)
+        # #451: the disk-CRUD half (path resolution, create/get/list/update,
+        # meta.json round-trips) is delegated to ``JobMetadataStore``.
+        # ``self.jobs_dir`` is kept (and aliases the metadata store's) for
+        # the many call sites that read it directly.
+        self._meta = JobMetadataStore(jobs_dir)
+        self.jobs_dir = self._meta.jobs_dir
         self._cancel_requested: set[str] = set()
         self._cancel_lock = threading.Lock()
         # P-0099 v3-20c: pause primitives mirror cancel exactly — same
@@ -211,34 +140,19 @@ class JobStore:
             return
         self._metrics.record_job_terminal(job_type, status, duration=duration)
 
-    def _job_dir(self, job_id: str) -> Path:
-        """Resolve job directory with traversal guard."""
-        candidate = (self.jobs_dir / job_id).resolve()
-        validate_path_within(candidate, self.jobs_dir)
-        return candidate
-
-    # --- Path resolution (A-10) ---
+    # --- Path resolution (A-10) — delegated to JobMetadataStore (#451) ---
 
     def job_dir(self, job_id: str) -> Path:
-        """Public job directory resolver with traversal guard.
-
-        Callers outside :class:`JobStore` should prefer :meth:`path_for`
-        for named artifacts and reserve :meth:`job_dir` for cases that
-        need the directory itself (e.g. checkpoint base dir for
-        subprocess runners).
-        """
-        return self._job_dir(job_id)
+        """Resolve the job directory (traversal-guarded). See
+        :meth:`JobMetadataStore.job_dir`."""
+        return self._meta.job_dir(job_id)
 
     def path_for(self, job_id: str, kind: ArtifactKind) -> Path:
-        """Resolve the on-disk path of a named job artifact.
+        """Resolve a named job artifact path. See
+        :meth:`JobMetadataStore.path_for`."""
+        return self._meta.path_for(job_id, kind)
 
-        Backed by the module-level :data:`ARTIFACT_FILENAMES` map so the
-        layout stays a single source of truth. The returned path is
-        already guarded against traversal via :meth:`_job_dir`.
-        """
-        return self._job_dir(job_id) / ARTIFACT_FILENAMES[kind]
-
-    # --- CRUD ---
+    # --- CRUD — delegated to JobMetadataStore (#451) ---
 
     def create(
         self,
@@ -252,81 +166,36 @@ class JobStore:
         """Create a new pending job and persist its metadata.
 
         When *parent_job_id* is provided the new job is recorded as a
-        child in the lineage graph (H-0062).
+        child in the lineage graph (H-0062). See
+        :meth:`JobMetadataStore.create`.
         """
-        job_id = f"job_{uuid4().hex[:8]}"
-        job = Job(
-            job_id=job_id,
-            status="pending",
+        return self._meta.create(
             backend_name=backend_name,
             config=config,
             data_ref=data_ref,
             job_type=job_type,
-            created_at=datetime.now(timezone.utc).isoformat(),
             parent_job_id=parent_job_id,
         )
-        self._save_meta(job)
-        return job
 
     def get(self, job_id: str) -> Job | None:
-        """Load a job by ID. Returns ``None`` if not found."""
-        if not self.path_for(job_id, "meta").exists():
-            return None
-        return self._load_job(job_id)
+        """Load a job by ID. Returns ``None`` if not found. See
+        :meth:`JobMetadataStore.get`."""
+        return self._meta.get(job_id)
 
     def list(
         self,
         *,
         status: str | None = None,
         sort: str = "created_at",
-    ) -> list[Job]:
-        """List all jobs, optionally filtered/sorted.
-
-        Entries that disappear or become unreadable between ``iterdir``
-        and ``_load_job`` (concurrent delete, partial write, corrupted
-        meta.json) are skipped with a warning rather than crashing the
-        whole listing.
-        """
-        jobs: list[Job] = []
-        if not self.jobs_dir.exists():
-            return jobs
-        for d in self.jobs_dir.iterdir():
-            if not d.is_dir() or not (d / "meta.json").exists():
-                continue
-            try:
-                job = self._load_job(d.name)
-            except (FileNotFoundError, OSError, json.JSONDecodeError, KeyError):
-                _logger.warning(
-                    "Skipping unreadable job directory %s", d.name, exc_info=True
-                )
-                continue
-            if status is None or job.status == status:
-                jobs.append(job)
-        _SORTABLE_FIELDS = {
-            "created_at",
-            "completed_at",
-            "status",
-            "job_type",
-            "backend_name",
-        }
-        safe_sort = sort if sort in _SORTABLE_FIELDS else "created_at"
-        reverse = True  # newest first
-        jobs.sort(key=lambda j: getattr(j, safe_sort) or "", reverse=reverse)
-        return jobs
+    ) -> builtins.list[Job]:
+        """List all jobs, optionally filtered/sorted. See
+        :meth:`JobMetadataStore.list`."""
+        return self._meta.list(status=status, sort=sort)
 
     def update(self, job: Job) -> None:
-        """Persist updated job state to disk."""
-        self._save_meta(job)
-        if job.fit_result is not None:
-            self._write_json(
-                self.path_for(job.job_id, "fit_result"),
-                asdict(job.fit_result),
-            )
-        if job.tune_result is not None:
-            self._write_json(
-                self.path_for(job.job_id, "tune_result"),
-                asdict(job.tune_result),
-            )
+        """Persist updated job state to disk (meta + result sidecars).
+        See :meth:`JobMetadataStore.update`."""
+        self._meta.update(job)
 
     def delete(self, job_id: str, *, cascade: bool = False) -> builtins.list[str]:
         """Delete a job directory. Returns the list of removed job IDs.
@@ -378,7 +247,7 @@ class JobStore:
             if not d.is_dir() or not (d / "meta.json").exists():
                 continue
             try:
-                meta = self._read_json(d / "meta.json")
+                meta = read_job_json(d / "meta.json")
             except (OSError, json.JSONDecodeError):
                 continue
             if meta.get("parent_job_id") == parent_job_id:
@@ -868,7 +737,7 @@ class JobStore:
         if holder is None:
             return False
         try:
-            job = self._load_job(holder)
+            job = self._meta.load_job(holder)
         except (FileNotFoundError, OSError, json.JSONDecodeError, KeyError):
             # Meta gone or unreadable -> definitely stale.
             return True
@@ -943,83 +812,6 @@ class JobStore:
             return ""
         return log_path.read_text(encoding="utf-8")
 
-    # --- Internal helpers ---
-
-    def _save_meta(self, job: Job) -> None:
-        job_dir = self.job_dir(job.job_id)
-        job_dir.mkdir(parents=True, exist_ok=True)
-        meta = {
-            "job_id": job.job_id,
-            "status": job.status,
-            "backend_name": job.backend_name,
-            "config": job.config,
-            "data_ref": asdict(job.data_ref),
-            "job_type": job.job_type,
-            "created_at": job.created_at,
-            "completed_at": job.completed_at,
-            "model_path": job.model_path,
-            "error": job.error,
-            "parent_job_id": job.parent_job_id,
-        }
-        self._write_json(self.path_for(job.job_id, "meta"), meta)
-
-    def _load_job(self, job_id: str) -> Job:
-        meta = self._read_json(self.path_for(job_id, "meta"))
-
-        fit_result = None
-        fit_path = self.path_for(job_id, "fit_result")
-        if fit_path.exists():
-            d = self._read_json(fit_path)
-            fit_result = FitSummary(**d)
-
-        tune_result = None
-        tune_path = self.path_for(job_id, "tune_result")
-        if tune_path.exists():
-            d = self._read_json(tune_path)
-            tune_result = TuningSummary(**d)
-
-        data_ref_dict = meta["data_ref"]
-        data_ref_dict["shape"] = tuple(data_ref_dict["shape"])
-        return Job(
-            job_id=meta["job_id"],
-            status=meta["status"],
-            backend_name=meta["backend_name"],
-            config=meta["config"],
-            data_ref=DataRef(**data_ref_dict),
-            job_type=meta["job_type"],
-            created_at=meta["created_at"],
-            completed_at=meta.get("completed_at"),
-            fit_result=fit_result,
-            tune_result=tune_result,
-            model_path=meta.get("model_path"),
-            error=meta.get("error"),
-            parent_job_id=meta.get("parent_job_id"),
-        )
-
-    @staticmethod
-    def _write_json(path: Path, data: dict[str, Any]) -> None:
-        """Write a Studio-owned JSON artefact with ``format_version`` embedded.
-
-        Routes through :func:`lizystudio.storage.versions.write_versioned_json`
-        (C-9 / H-0081) so every persisted file declares its schema
-        version. ``data`` must already be a dict — fit/tune results and
-        job meta all derive from ``asdict(...)`` so this is satisfied
-        at the one call site that serialises a dataclass directly.
-        """
-        write_versioned_json(path, data)
-
-    @staticmethod
-    def _read_json(path: Path) -> dict[str, Any]:
-        """Load a versioned JSON artefact and run migrations if needed.
-
-        Returns the migrated domain payload with the ``format_version``
-        sentinel stripped, so callers consume the same shape regardless
-        of whether the file was written by a pre-C-9 or post-C-9
-        runtime (missing key is treated as v0 per H-0081).
-        """
-        _, payload = read_versioned_json(path)
-        return payload
-
 
 def get_job_store(request: Request) -> JobStore:
     """FastAPI dependency — retrieve job store from app.state."""
@@ -1046,11 +838,16 @@ from lizystudio.services.job_results import (  # noqa: E402
 )
 
 __all__ = [
+    "ARTIFACT_FILENAMES",
     "CANCEL_FLAG_FILENAME",
+    "PAUSE_FLAG_FILENAME",
+    "ArtifactKind",
     "Job",
+    "JobMetadataStore",
     "JobStore",
     "_get_jobs_dir",
     "_load_tuning_plot_from_file",
+    "artifact_path",
     "get_available_plots",
     "get_importance",
     "get_importance_kinds",
@@ -1059,4 +856,5 @@ __all__ = [
     "get_learning_curve_metrics",
     "get_metrics_table",
     "get_split_summary",
+    "read_job_json",
 ]
