@@ -1,16 +1,18 @@
 # Handoff — 2026-05-11 (post Wave 5, P-0104 完了 + P-0105 着地)
 
-**Status**: 🟢 P-0104（Tune workflow 全面整備）全 Wave 着地。`docs/issue-cleanup-plan-2026-05-10.md` の Wave 1〜5 完了（Wave 5.2 = PR #480 のみ CI 待ち）。残るは **Wave 6（技術負債 + reconcile）** のみ。
-**Date**: 2026-05-11
-**Trigger**: 前セッション（post-Wave-3.1a）の引継ぎを受けて Wave 3.1b → Wave 4 → Wave 5（5.1/5.2/5.3）を 1 セッションで連続着地。
-**Tier**: 4（アクティブな個別計画 — `docs/issue-cleanup-plan-2026-05-10.md` の派生）。**前 handoff（`docs/handoff-2026-05-11-post-wave31a.md` = PR #475 / `docs/handoff-2026-05-11.md` = PR #471）は本書が supersede。両 docs-only PR はクローズ推奨。**
+**Status**: 🟢 P-0104（Tune workflow 全面整備）全 Wave 着地。`docs/issue-cleanup-plan-2026-05-10.md` の Wave 1〜5 完了（**PR #480 = Wave 5.2 マージ済 2026-05-12**）。残るは **Wave 6（技術負債 + reconcile）** のみ。
+**Date**: 2026-05-11（2026-05-12 更新: #480 マージ + #454/#455 クローズ反映）
+**Trigger**: 前セッション（post-Wave-3.1a）の引継ぎを受けて Wave 3.1b → Wave 4 → Wave 5（5.1/5.2/5.3）を 1 セッションで連続着地。翌日（05-12）に #480 マージ + 周辺 issue 整理。
+**Tier**: 4（アクティブな個別計画 — `docs/issue-cleanup-plan-2026-05-10.md` の派生）。**前 handoff（`docs/handoff-2026-05-11-post-wave31a.md` = PR #475 / `docs/handoff-2026-05-11.md` = PR #471）は本書が supersede — 両 docs-only PR は 2026-05-12 クローズ済。**
 
 ---
 
 ## TL;DR
 
-- **develop HEAD = `ffc6327`**（PR #479 マージ後）。**PR #480（Wave 5.2）が CI 待ち** — green になったら squash merge し #442/#445/#446 をクローズすればこのサイクル完了。
-- 次に着手するなら **Wave 6**（`docs/issue-cleanup-plan-2026-05-10.md` §3）: #456（stray-file 防止機構）/ #403（metric-compat watchlist を BackendAdapter 抽象の裏へ）/ #452（5 関数の縮小）/ #451（JobStore split, 5 sub-PR）/ #453（BLUEPRINT / architecture-as-implemented reconcile）。順序は bandwidth 次第（プラン Decision 5）。
+- **develop HEAD = `0558185`**（PR #480 マージ後）。Wave 5 サイクル完了 — #442/#445/#446 クローズ済。
+- **2026-05-12 整理**: Issue #455（superseded handoff docs 削除）は既に PR #465 で実施済だったため stale クローズ。Issue #454（repo-root stray artefacts）はローカル掃除（spike PNG 9枚 + `coverage.json` 削除、`dist/` を dev439 のみに）で完了クローズ — 全て gitignore 済のため commit 不要。docs-only PR #475/#471 クローズ済。
+- 次に着手するなら **Wave 6**（`docs/issue-cleanup-plan-2026-05-10.md` §3）: #456（stray-file 防止機構, 5層/5 PR — L1 が baseline）/ #403（metric-compat watchlist を BackendAdapter 抽象の裏へ — **Change Gate 必要**）/ #452（5 関数の縮小 — #403 が sub-PR 1 を obsolete）/ #451（JobStore split, 5 sub-PR — v0.5 R-1 後）/ #453（BLUEPRINT / architecture-as-implemented reconcile — 最終）。順序は bandwidth 次第（プラン Decision 5）。
+- ほか open: **#474**（P-0104 Wave 3.1a deferred — inverted-range / log+low≤0 search-space バリデーションの早期 surface）、#125（Tailwind v4）、#28（offline tests）、#27（load tests）。
 - **新規 follow-up issue 候補**: `JobDetail.handleRefit` が `navigate("/", {state:{refitJobId}})` で `refitJobId` を渡すが `WorkspacePage` がそれを **読んでいない** → Jobs ページの「Re-fit」ボタンは Workspace に遷移するだけで config/data を再読込しない（後続の Fit は永続化された workspace state に依存）。「`refitJobId` を配線する」か「dead state を削除する」かのどちらかが要。本セッションで発見、#446 の e2e はそのため navigation-only に縮退済。
 
 ---
@@ -23,7 +25,7 @@
 | [#477](https://github.com/nbx-liz/LizyStudio/pull/477) | Wave 4 / #457（Proposal **P-0105**） | Residuals plot の kind selector（`Scatter / Histogram / QQ / All`、既定 `all` = 従来 3-panel）。`evaluation_mixin.plot()` が `residuals` でも `kind` を転送、`EvaluationMixin.RESIDUALS_KINDS` 定数。`GET /api/jobs/{id}/plot/residuals?kind=` を受理、不正値は `400 INVALID_PARAM`。frontend: `useJobResultData.residualsKind` state（既定 `all`、generic plotData query から split）、`queryKeys.jobPlotResiduals`、`PlotSection` に `SegmentGroup`。BLUEPRINT §5.3 + `docs/plot-matrix.md` 更新。#457 クローズ済 | ✅ merged |
 | [#478](https://github.com/nbx-liz/LizyStudio/pull/478) | Wave 5.1 / #443/#444/#448 | `frontend/tests/e2e/inference-coverage.spec.ts`（real backend）: Download CSV ボタン（href + download イベント）、labelled Results panel（Plots + Predictions accordion → table + Download CSV）、unlabelled（Predictions heading + table）、Comparison section（2nd inference 後）、`task ∈ {binary, multiclass, regression}` の fixture loop（fit → inference → results-render）。#443/#444/#448 クローズ済。**#447 は not-applicable でクローズ済**（`POST /inference/run` は同期処理 — long-running state も cancel も running-lock も無く 409 conflict の概念が無い） | ✅ merged |
 | [#479](https://github.com/nbx-liz/LizyStudio/pull/479) | Wave 5.3 / #449/#450 | `tests/test_progress.py` `TestQueueFullEviction`（INV-5 — terminal-eviction-on-queue-full）: terminal が head non-terminal を evict + `progress_dropped_total` bump / 通過時に terminal preserve / queue 全 terminal 時は新 terminal を WARNING ログ付きで drop / non-terminal は silently drop。`tests/regression/test_inv_startup_reconcile.py`（INV-1 — multi-paused reconcile）: loser が "only the newest" error + `completed_at` を持つ / created_at が creation order の逆順の 3 paused job で newest-by-created_at が survive（on-disk meta.json も検証）。#449/#450 クローズ済 | ✅ merged |
-| [#480](https://github.com/nbx-liz/LizyStudio/pull/480) | Wave 5.2 / #442/#445/#446 | `jobs-ui.spec.ts`: Export dialog の Format toggle（model/report ごとに `export_type` 配線 + dialog dismiss、出力パスは `/tmp` 配下）+ Pause/Resume ボタン（`@ci-flaky`、長時間 tune subprocess 依存）。`jobs-refit.spec.ts`: Re-fit ボタン → Workspace 遷移（navigation-only に縮退、root-cause は上記 follow-up）| 🟡 **CI 待ち（3rd run）** — green なら merge + #442/#445/#446 クローズ |
+| [#480](https://github.com/nbx-liz/LizyStudio/pull/480) | Wave 5.2 / #442/#445/#446 | `jobs-ui.spec.ts`: Export dialog の Format toggle（model/report ごとに `export_type` 配線 + dialog dismiss、出力パスは `/tmp` 配下）+ Pause/Resume ボタン（`@ci-flaky`、長時間 tune subprocess 依存）。`jobs-refit.spec.ts`: Re-fit ボタン → Workspace 遷移（navigation-only に縮退、root-cause は上記 follow-up）| ✅ **merged 2026-05-12** — #442/#445/#446 クローズ済 |
 
 ---
 
@@ -54,7 +56,8 @@
 
 ### その他 open issue（プラン外 / 棚卸し）
 
-- **#454**（stray repo-root artefacts cleanup）、**#455**（superseded session-handoff docs 削除 — 本書がさらに増やしたので一緒に整理を）— ともに tier-1 priority-low。
+- ~~**#454** / **#455**~~ — 2026-05-12 クローズ済（#455 は PR #465 で既済、#454 はローカル掃除で完了）。
+- **#474**（P-0104 Wave 3.1a deferred）— inverted-range / log+low≤0 の search-space エラーを config validate 時に早期 surface。
 - **新規 follow-up（要起票）**: `refitJobId` dead state（上記）。「`JobDetail.handleRefit` の `location.state.refitJobId` を `WorkspacePage` で消費して config+data を再読込する」or「dead state を削除する」。
 - **新規 follow-up（任意）**: #444 の deferred 分 — Inference Results の `Prediction Distribution` セクション（`probability-histogram` 利用可 = calibrated binary fit のみ）と `Score` セクション（`metrics` に `inf/is/oos` キーがある時のみ）の e2e アサーション。
 - **#125**（Tailwind v4 移行）、**#28**（offline tests）、**#27**（load tests）— 旧来からの open（プラン外）。
