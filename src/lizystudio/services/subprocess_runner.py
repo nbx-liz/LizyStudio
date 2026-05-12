@@ -141,8 +141,60 @@ def run_job_in_subprocess(
     ``retune_*`` arguments are forwarded so the child can reconstruct
     the Re-tune inputs without needing the in-memory WorkspaceState
     from the parent process.
+
+    Orchestrates three phases (extracted as private helpers for #452):
+    :func:`_write_child_args` → :func:`_supervise_child` →
+    :func:`_reconcile_subprocess_result`.
     """
-    # Prepare arguments for the child process
+    args_path, progress_path = _write_child_args(
+        job=job,
+        job_store=job_store,
+        backend_name=backend_name,
+        data_path=data_path,
+        mode=mode,
+        parent_job_id=parent_job_id,
+        retune_n_trials=retune_n_trials,
+        retune_expand_boundary=retune_expand_boundary,
+        retune_boundary_threshold=retune_boundary_threshold,
+    )
+    returncode = _supervise_child(
+        job=job,
+        job_store=job_store,
+        broadcaster=broadcaster,
+        args_path=args_path,
+        progress_path=progress_path,
+    )
+    return _reconcile_subprocess_result(
+        job=job,
+        job_store=job_store,
+        broadcaster=broadcaster,
+        returncode=returncode,
+    )
+
+
+def _write_child_args(
+    *,
+    job: Job,
+    job_store: JobStore,
+    backend_name: str,
+    data_path: str,
+    mode: str,
+    parent_job_id: str | None,
+    retune_n_trials: int,
+    retune_expand_boundary: bool | None,
+    retune_boundary_threshold: float | None,
+) -> tuple[str, str]:
+    """Serialize the child's launch arguments to a temp JSON file.
+
+    Returns ``(args_path, progress_path)`` — the JSON arguments file the
+    child reads and the (not-yet-created) JSONL progress file it appends
+    to. Both live in the same temp directory so a single ``unlink`` pass
+    in :func:`_supervise_child` cleans them up.
+
+    Raises ``ValueError`` when *mode* is ``"retune"`` but the required
+    ``parent_job_id`` / ``retune_n_trials`` arguments are missing — this
+    fails before any subprocess is spawned.
+    """
     args_dict: dict[str, Any] = {
         "job_id": job.job_id,
         "jobs_dir": str(job_store.jobs_dir),
@@ -175,14 +227,32 @@ def run_job_in_subprocess(
 
     args_p = Path(args_path)
     progress_path = str(args_p.parent / (args_p.stem + "_progress.jsonl"))
+    return args_path, progress_path
 
-    # Issue #328: route the child's stdout AND stderr to
-    # ``execution.log`` via a parent-owned file descriptor so the UI's
-    # "View Full Log" dialog renders real content. Merging stderr into
-    # stdout (``stderr=subprocess.STDOUT``) preserves the chronological
-    # order of trace output relative to the print that triggered it,
-    # and avoids the OS pipe-buffer deadlock that motivated #150 (no
-    # pipe in this path — writes go straight to the file).
+
+def _supervise_child(
+    *,
+    job: Job,
+    job_store: JobStore,
+    broadcaster: ProgressBroadcaster | None,
+    args_path: str,
+    progress_path: str,
+) -> int | None:
+    """Launch the child, forward progress, wait for exit, then clean up.
+
+    Returns the child's exit code (``proc.returncode``) so the caller
+    can reconcile a non-terminal on-disk state. Returns ``None`` only if
+    the child never produced an exit code (e.g. it survived the SIGKILL
+    escalation window). If :func:`subprocess.Popen` itself fails the
+    exception propagates after the cleanup ``finally`` runs.
+
+    Issue #328: the child's stdout AND stderr are routed to
+    ``execution.log`` via a parent-owned file descriptor so the UI's
+    "View Full Log" dialog renders real content. Merging stderr into
+    stdout (``stderr=subprocess.STDOUT``) preserves the chronological
+    order of trace output and avoids the OS pipe-buffer deadlock that
+    motivated #150 (no pipe in this path — writes go straight to file).
+    """
     log_path = job_store.path_for(job.job_id, "log")
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_fp = log_path.open("ab")
@@ -238,8 +308,27 @@ def run_job_in_subprocess(
             )
         Path(args_path).unlink(missing_ok=True)
         Path(progress_path).unlink(missing_ok=True)
+    return proc.returncode if proc is not None else None
 
-    # Reload job from disk (subprocess persisted the result)
+
+def _reconcile_subprocess_result(
+    *,
+    job: Job,
+    job_store: JobStore,
+    broadcaster: ProgressBroadcaster | None,
+    returncode: int | None,
+) -> Job:
+    """Reload the job the child persisted and fix up a stuck state.
+
+    If the child was killed mid-run (Cancel -> SIGTERM, or hard kill
+    after ``_WAIT_TIMEOUT``) it never reached ``_run_job_core.finally``
+    and so never wrote a terminal state back to disk. Reconcile here
+    based on the cancel flag so waiters downstream (E2E, UI) see the
+    final status instead of spinning on ``running`` forever.
+
+    *returncode* is :func:`_supervise_child`'s return value; it appears
+    in the "without persisting a terminal status" error message.
+    """
     updated = job_store.get(job.job_id)
     if updated is None:
         # Fallback: mark as failed if subprocess didn't persist
@@ -247,11 +336,6 @@ def run_job_in_subprocess(
         job.error = "Subprocess did not persist job result"
         return job
 
-    # If the child was killed mid-run (Cancel -> SIGTERM, or hard kill
-    # after _WAIT_TIMEOUT), it never reached ``_run_job_core.finally``
-    # and so never wrote a terminal state back to disk. Reconcile here
-    # based on the cancel flag so waiters downstream (E2E, UI) see the
-    # final status instead of spinning on ``running`` forever.
     if updated.status in ("pending", "running"):
         now = datetime.now(timezone.utc).isoformat()
         if job_store.is_cancel_requested(job.job_id):
@@ -263,7 +347,7 @@ def run_job_in_subprocess(
         else:
             updated.status = "failed"
             updated.error = (
-                f"Subprocess exited with code {proc.returncode} "
+                f"Subprocess exited with code {returncode} "
                 f"without persisting a terminal status"
             )
             if broadcaster is not None:
