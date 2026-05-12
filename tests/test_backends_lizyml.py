@@ -1848,8 +1848,8 @@ def test_tune_serializes_real_lizyml_tuning_result() -> None:
 def test_tuning_summary_backward_compat_old_json_shape() -> None:
     """TuningSummary(**old_dict) accepts legacy JSON without rounds/boundary_report.
 
-    Guards against JobStore._load_job failing to rehydrate jobs that were
-    persisted before H-0061 landed.
+    Guards against JobMetadataStore.load_job failing to rehydrate jobs that
+    were persisted before H-0061 landed.
     """
     from lizystudio.backends.types import TuningSummary
 
