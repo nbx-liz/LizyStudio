@@ -279,3 +279,75 @@ def test_reconcile_at_startup_is_idempotent(fresh_store: JobStore) -> None:
     assert reborn.active_job_id == paused.job_id
     assert reborn.get(completed.job_id) is not None
     assert reborn.get(completed.job_id).status == "completed"  # type: ignore[union-attr]
+
+
+# ---------------------------------------------------------------------------
+# Issue #450 — INV-1 multi-paused reconcile branch (services/jobs.py:768-789).
+# The existing ``test_reconcile_at_startup_multiple_paused_keeps_newest_only``
+# above hits the branch for two paused jobs but does not assert the failed
+# rows' error text / ``completed_at`` nor exercise non-monotonic timestamps
+# (the ``sort(key=created_at)`` vs. insertion-order distinction).
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_at_startup_two_paused_loser_carries_inv1_error(
+    fresh_store: JobStore,
+) -> None:
+    older = _create_with_status(fresh_store, "paused")
+    newer = _create_with_status(fresh_store, "paused")
+    assert newer.created_at >= older.created_at
+
+    reborn = JobStore(fresh_store.jobs_dir)
+    reborn.reconcile_at_startup()
+
+    loser = reborn.get(older.job_id)
+    assert loser is not None
+    assert loser.status == "failed"
+    assert "only the newest" in (loser.error or ""), loser.error
+    assert loser.completed_at is not None
+    # The survivor keeps a clean record (no error / completed_at written).
+    survivor = reborn.get(newer.job_id)
+    assert survivor is not None and survivor.status == "paused"
+
+
+def test_reconcile_at_startup_three_paused_picks_latest_timestamp_not_insertion_order(
+    fresh_store: JobStore,
+) -> None:
+    """Three paused jobs whose ``created_at`` order is the *reverse* of
+    their creation order — reconciliation must keep the one with the
+    newest ``created_at`` (the sort key), not the last-created one.
+    """
+    j_a = _create_with_status(fresh_store, "paused")  # created 1st
+    j_b = _create_with_status(fresh_store, "paused")  # created 2nd
+    j_c = _create_with_status(fresh_store, "paused")  # created 3rd
+    # Timestamp them in reverse: j_a newest, j_c oldest.
+    j_a.created_at = "2026-05-03T00:00:00+00:00"
+    j_b.created_at = "2026-05-02T00:00:00+00:00"
+    j_c.created_at = "2026-05-01T00:00:00+00:00"
+    for j in (j_a, j_b, j_c):
+        fresh_store.update(j)
+
+    reborn = JobStore(fresh_store.jobs_dir)
+    reborn.reconcile_at_startup()
+
+    jobs = reborn.list()
+    paused = [j for j in jobs if j.status == "paused"]
+    failed = [j for j in jobs if j.status == "failed"]
+    assert len(paused) == 1
+    assert paused[0].job_id == j_a.job_id  # newest created_at, not last-created
+    assert {j.job_id for j in failed} == {j_b.job_id, j_c.job_id}
+    for j in failed:
+        assert "only the newest" in (j.error or ""), j.error
+        assert j.completed_at is not None
+    # The surviving paused job holds the active slot (INV-1).
+    assert reborn.active_job_id == j_a.job_id
+
+    # On-disk state matches the in-memory reconciliation (a 2nd fresh
+    # JobStore re-reads meta.json from scratch).
+    reread = JobStore(fresh_store.jobs_dir)
+    survivor = reread.get(j_a.job_id)
+    loser_b = reread.get(j_b.job_id)
+    loser_c = reread.get(j_c.job_id)
+    assert survivor is not None and survivor.status == "paused"
+    assert loser_b is not None and loser_b.status == "failed"
+    assert loser_c is not None and loser_c.status == "failed"
