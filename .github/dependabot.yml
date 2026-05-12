@@ -12,6 +12,12 @@ updates:
     cooldown:
       default-days: 5
       semver-major-days: 14
+    ignore:
+      # Vite 8 (Rolldown bundler) breaks the e2e dev-server /api/ws proxy —
+      # see issue #488. Hold the major until that migration lands; minor/patch
+      # on v6 still flow through dev-minor-patch.
+      - dependency-name: "vite"
+        update-types: ["version-update:semver-major"]
     groups:
       # Keep react + react-dom + their types in lock-step.
       react-ecosystem:
