@@ -6,7 +6,7 @@
 - このファイルは **横串インデックス** であり、詳細はリンク先で確認すること。
 - 着手する際は HISTORY に Proposal を起票（変更ゲート対象の場合）→ PLAN にフェーズ追加 → 実装、の順で進める。
 
-最終更新: 2026-05-13（**v0.5.0 release 済 (2026-05-07)** + **`issue-cleanup-plan-2026-05-10.md` Wave 1〜6 完了** — Wave 6.4 #451 JobStore 分割 (PR #499〜#503: `services/jobs.py` 1062→522 行 + 4 module 化) / Wave 6.5 #453 docs reconcile (PR #497) 着地。Wave 6 の残りは **#452 の `lifecycle_mixin.tune` 分割（2nd-adapter 議論後に gated）** と **#495（#456 L5 weekly stale-doc cron, deferred tier-3）** のみ。残る v0.5 phase は **v3-26 (R-4.2 Pickle compat nightly)**。次の節目候補は **v0.6**: 第 2 backend (#403 残・#452-b 解禁トリガ)、Tailwind v4、P-0087 Phase 3、typed error 体系 (R-3.1〜R-3.3) など）
+最終更新: 2026-05-13（**v0.5.0 release 済 (2026-05-07)** + **`issue-cleanup-plan-2026-05-10.md` Wave 1〜6 完了** + **v3-26 (R-4.2 Pickle compat nightly + P-0107 envelope) 着地** — `PLAN.md` v0.5 phase 全消化。Wave 6 の残りは **#452 の `lifecycle_mixin.tune` 分割（2nd-adapter 議論後に gated）** と **#495（#456 L5 weekly stale-doc cron, deferred tier-3）** のみ。直近の Tier 1 next は **#474 (P-0104 deferred search-space 早期 validate)**。次の節目候補は **v0.6**: 第 2 backend (#403 残・#452-b 解禁トリガ)、Tailwind v4、P-0087 Phase 3、typed error 体系 (R-3.1〜R-3.3) など）
 
 ---
 
@@ -282,10 +282,10 @@ Wave 6 完了後の Open Issue は **4 件**（#451 / #453 は 2026-05-13 close 
 |---|---|---|---|
 | `BLUEPRINT.md` | ✅ 2026-05-12 reconciled (Issue #453) | — | P-0099（`paused` state + INV-1〜7 + pause/unpause API + `WsPaused` + startup reconcile）/ P-0102（reload restoration）/ P-0103（`LegacyFormatProtectionError` + format-version matrix）/ P-0104〜P-0106 を §3.4 / §5.3 / §5.5 / §6.1 に反映。`tune(storage, study_name)` を §3.3.2 に追記 |
 | `HISTORY.md` Decision 記録 | ✅ 2026-05-12 P-0106 まで | — | v0.5.0 の P-0099〜P-0103、Tune workflow の P-0104〜P-0106 まで Decision 記録済 |
-| `PLAN.md` v3-N | ✅ 2026-05-12 v3-26 まで | — | v3-16〜v3-26 追加済（v3-26 のみ 🟡 未着手 — R-4.2 Pickle compat nightly） |
+| `PLAN.md` v3-N | ✅ 2026-05-13 v3-26 完了 | — | v3-16〜v3-26 全て着地（v3-26: P-0107 envelope + nightly pickle-compat matrix） |
 | `docs/architecture.md` / `api.md` / `adapter-guide.md` | ✅ 2026-05-01 reconciled | — | 棚卸し完了。`tests/contract/test_adapter_guide_method_names.py` で adapter-guide.md ↔ Protocol の drift を gating |
 | `docs/architecture-as-implemented.md` | ✅ 2026-05-13 reconciled (Issue #453 / S-4 / #451) | — | `paused` state + INV-1〜7 を state diagram に反映、§5 を #451 後の `JobStore` → `_job_metadata`/`_job_active_slot`/`_job_control_flags`/`_job_lineage` 4-module 構成に更新 |
-| `docs/v0.4-business-readiness-plan.md` | ✅ 2026-05-12 (S-3 — `Status: ✅ shipped 2026-05-07`) | — | R-1 / R-2 / R-4.1 は v0.5.0 着地。残るは R-4.2 (v3-26) と R-3.1〜R-3.3 (v0.6+ deferred) のみ。Tier 5 相当（ファイル移動はしない） |
+| `docs/v0.4-business-readiness-plan.md` | ✅ 2026-05-13 (R-4.2 done) | — | R-1 / R-2 / R-4.1 / R-4.2 全て着地（R-4.2 は P-0107 envelope + nightly matrix）。残るは R-3.1〜R-3.3 (v0.6+ deferred) のみ。Tier 5 相当（ファイル移動はしない） |
 | `docs/issue-cleanup-plan-2026-05-10.md` | 🟡 2026-05-13 | 低 | Wave 1〜6 完了。残るは #452-b（2nd-adapter gated）+ #495（deferred tier-3）のみ。それらが片付いたら header に `Status: ✅ shipped` を付けて Tier 5 へ |
 | `MEMORY.md` 古いノート | 🟡 要更新 | 低 | `project_2026_05_12_wave6_progress` まで反映済だが v0.5.0 release / v3-20〜v3-25 着地 + #451 JobStore 分割 + #453 reconcile が memory 未記録（次セッションで反映） |
 | `analysis/` 削除済み | 2026-04 期間 | `python-analyst` ↔ `lizystudio-analyst` パイプライン成果物の置き場が無い | 🟡 意図的削除か要確認、別 issue 検討 |
@@ -298,10 +298,11 @@ Wave 6 完了後の Open Issue は **4 件**（#451 / #453 は 2026-05-13 close 
 
 ### Tier 1：直近の着手候補（ROI 順）
 
-1. **v3-26 (R-4.2 Pickle compat nightly CI)** — `PLAN.md` v3-26 の唯一の未着手 v0.5 phase。`.github/workflows/nightly.yml` に過去 N=3 minor の lizyml で fit→現行で load round-trip job、`PICKLE_INCOMPATIBLE` エラーに recovery_hint。これで v0.5 Exit Criteria の format/pickle 互換が完全に gating される（残る Exit #5 = 業務利用 KPI は要 verify）
-2. **#474** — P-0104 Wave 3.1a deferred: inverted-range / log+low≤0 の search-space エラーを backend `validate_config` で早期 surface（中規模・独立）
-3. **#495** — #456 L5: weekly stale-doc audit cron（`scripts/audit_stale_docs.py` + `.github/workflows/audit-stale-docs.yml` cron weekly、tracking issue 自動更新。tier-3/low、deferred）
-4. **#452-b `lifecycle_mixin.tune` 分割** — 🔒 2nd-adapter 議論（§3.3）後に解禁。それまで着手しない
+1. **#474** — P-0104 Wave 3.1a deferred: inverted-range / log+low≤0 の search-space エラーを `POST /tune` run-gate で早期 surface（中規模・独立、approach C = Issue 推奨）
+2. **#495** — #456 L5: weekly stale-doc audit cron（`scripts/audit_stale_docs.py` + `.github/workflows/audit-stale-docs.yml` cron weekly、tracking issue 自動更新。tier-3/low、deferred）
+3. **#452-b `lifecycle_mixin.tune` 分割** — 🔒 2nd-adapter 議論（§3.3）後に解禁。それまで着手しない
+
+> ~~v3-26 (R-4.2 Pickle compat nightly CI)~~ ✅ 完了 (feat/v3-26-pickle-compat-nightly / P-0107 envelope + `scripts/pickle_compat_matrix.sh` + `.github/workflows/nightly.yml::pickle-compat` job) — v0.5 Exit Criteria の format/pickle 互換が完全に gating された。残る Exit #5 = 業務利用 KPI のみ要 verify
 
 ### Tier 2：v0.6 候補（要長期計画）
 
@@ -325,16 +326,16 @@ Wave 6 完了後の Open Issue は **4 件**（#451 / #453 は 2026-05-13 close 
 | v3-23 | R-2.1 WS 再接続 (5min ceiling + indefinite retry + jitter) | ✅ 完了 (PR #427) |
 | v3-24 | R-2.2 ブラウザリロード復元 (P-0102) | ✅ 完了 (PR #429 + #430 + #435) |
 | v3-25 | R-4.1 format_version migration matrix CI gate (P-0103) | ✅ 完了 (PR #432 + #434 + #436 + #438) |
-| v3-26 | R-4.2 Pickle compatibility nightly CI | 🟡 **未着手 — 上記 Tier 1 候補 1** |
+| v3-26 | R-4.2 Pickle compatibility nightly CI | ✅ 完了 (feat/v3-26-pickle-compat-nightly / P-0107) |
 
-直近の next: 上記 Tier 1 の **v3-26 (Pickle compat nightly)** または **#474 (search-space 早期 validate)**。v0.6 候補は上記 Tier 2 を参照。
+直近の next: 上記 Tier 1 の **#474 (search-space 早期 validate)**。v0.6 候補は上記 Tier 2 を参照。
 
 ---
 
 ## 8. 運用メモ
 
-- 新規 Proposal を起票するときは **P-0107 から採番**（P-0106 = metric-compat を `BackendCore` capability の裏へ、2026-05-12 で消化済）。`H-XXXX` 採番は終了。
-- 新規 PLAN フェーズは **v3-27 以降**を採番（v3-26 = R-4.2 Pickle compat、まだ 🟡 未着手）。
+- 新規 Proposal を起票するときは **P-0108 から採番**（P-0107 = `PICKLE_INCOMPATIBLE` structured envelope、2026-05-13 着地）。`H-XXXX` 採番は終了。
+- 新規 PLAN フェーズは **v3-27 以降**を採番（v3-26 = R-4.2 Pickle compat、2026-05-13 着地で v0.5 phase 完全消化）。
 - E2E 単独追加（仕様変更なし）は HISTORY 起票不要、本 ROADMAP の §3 を更新するだけで OK。
 - 本 ROADMAP はステータス変更時に都度更新。タスク完了時は §1 へ移動、新規着手時は §2/§3/§4 へ追加する。
 - 古い ID（B-N coupling、A.M Phase A など）は履歴参照のためそのまま残す。検索性のため改名はしない。

@@ -147,4 +147,5 @@ markers = [
     "flaky: Known-flaky tests — CI reruns via pytest-rerunfailures; local runs do not retry",
     "quarantine: Isolated tests — excluded from default runs, executed in a non-blocking CI job",
     "bench: Performance benchmarks (skipped by default; run with --benchmark-only via the nightly workflow)",
+    "pickle_compat: Cross-version pickle compatibility tests (skipped by default; run by the nightly pickle-compat job, v3-26)",
 ]
