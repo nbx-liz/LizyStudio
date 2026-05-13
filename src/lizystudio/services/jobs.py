@@ -12,10 +12,8 @@ metadata symbols are re-exported here for backward compatibility with
 from __future__ import annotations
 
 import builtins
-import json
 import logging
 import shutil
-import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -25,6 +23,7 @@ from fastapi import Request
 from lizystudio.backends.types import DataRef
 from lizystudio.services._job_active_slot import ActiveJobSlot
 from lizystudio.services._job_control_flags import JobControlFlags
+from lizystudio.services._job_lineage import JobLineage
 
 # Most of these are pure re-exports kept in ``__all__`` so existing
 # import sites (``from lizystudio.services.jobs import Job / artifact_path
@@ -67,23 +66,19 @@ class JobStore:
         # ``JobMetadataStore`` (disk CRUD: path resolution, create/get/
         # list/update, meta.json round-trips), ``ActiveJobSlot`` (the
         # at-most-one-running concurrency control), ``JobControlFlags``
-        # (cooperative-cancel + pause request flags). ``self.jobs_dir`` is
-        # kept (aliasing the metadata store's) for call sites that read it.
+        # (cooperative-cancel + pause request flags), ``JobLineage``
+        # (Re-tune/Resume parent/child graph + per-parent retune lock).
+        # ``self.jobs_dir`` is kept (aliasing the metadata store's) for
+        # call sites that read it directly.
         self._meta = JobMetadataStore(jobs_dir)
         self.jobs_dir = self._meta.jobs_dir
         self._slot = ActiveJobSlot(self._meta, metrics)
         self._flags = JobControlFlags(self._meta)
+        self._lineage = JobLineage(self._meta)
         # A-9: the metrics registry is also threaded through here for the
         # terminal-transition counters (``record_job_terminal``). The
         # active-slot gauge lives inside ``ActiveJobSlot``.
         self._metrics = metrics
-        # H-0062: per-parent exclusive lock for Re-tune / Resume children.
-        # Maps parent_job_id -> child_job_id currently holding the slot.
-        # In-memory only; cleared naturally on process restart because
-        # any child that was "running" when the old process died is
-        # already marked failed at restart time.
-        self._parent_locks: dict[str, str] = {}
-        self._parent_lock_mutex = threading.Lock()
         # H-0084 (Issue #235): model cache lives on the JobStore so two
         # app instances sharing a process keep their caches isolated.
         # Imported lazily to avoid a top-level cycle with job_results.
@@ -218,152 +213,46 @@ class JobStore:
             self.clear_model_cache_for(str(self.path_for(jid, "model")))
         return removed
 
-    # --- H-0062 lineage helpers ---
+    # --- H-0062 lineage + per-parent retune lock — delegated to JobLineage (#451) ---
 
     def get_child_job_ids(self, parent_job_id: str) -> builtins.list[str]:
-        """Return direct children of *parent_job_id* (H-0062)."""
-        children: builtins.list[str] = []
-        if not self.jobs_dir.exists():
-            return children
-        for d in self.jobs_dir.iterdir():
-            if not d.is_dir() or not (d / "meta.json").exists():
-                continue
-            try:
-                meta = read_job_json(d / "meta.json")
-            except (OSError, json.JSONDecodeError):
-                continue
-            if meta.get("parent_job_id") == parent_job_id:
-                children.append(d.name)
-        return children
+        """Return direct children of *parent_job_id* (H-0062). See
+        :meth:`JobLineage.get_child_job_ids`."""
+        return self._lineage.get_child_job_ids(parent_job_id)
 
     def get_lineage_tree(self, root_job_id: str) -> dict[str, Any] | None:
-        """Return ``{job_id, status, children: [...]}`` rooted at *root_job_id*.
-
-        Returns ``None`` when the root does not exist.  Walks the tree
-        recursively with a depth guard (20) to avoid runaway lineages.
-        Nodes that hit the depth cap are returned with ``children: []``
-        AND ``truncated: True`` so the UI can surface the cut-off
-        explicitly instead of silently dropping descendants.
-        """
-        root = self.get(root_job_id)
-        if root is None:
-            return None
-        max_depth = 20
-
-        def _build(job: Job, depth: int) -> dict[str, Any]:
-            node: dict[str, Any] = {
-                "job_id": job.job_id,
-                "status": job.status,
-                "job_type": job.job_type,
-                "children": [],
-                "truncated": False,
-            }
-            if depth >= max_depth:
-                # Mark truncated only if the node actually has children
-                # we are about to drop; otherwise it is a real leaf.
-                if self.get_child_job_ids(job.job_id):
-                    node["truncated"] = True
-                return node
-            for cid in self.get_child_job_ids(job.job_id):
-                child = self.get(cid)
-                if child is None:
-                    # Meta.json missing / corrupt. Log rather than
-                    # silently dropping so a broken child is visible
-                    # in the server log instead of the UI claiming a
-                    # clean lineage.
-                    _logger.warning(
-                        "lineage: child %s listed under %s but cannot be loaded",
-                        cid,
-                        job.job_id,
-                    )
-                    continue
-                node["children"].append(_build(child, depth + 1))
-            return node
-
-        return _build(root, 0)
+        """Return ``{job_id, status, children: [...]}`` rooted at *root_job_id*
+        (depth-guarded). See :meth:`JobLineage.get_lineage_tree`."""
+        return self._lineage.get_lineage_tree(root_job_id)
 
     def has_active_children(self, parent_job_id: str) -> bool:
-        """Return True when any direct child is pending, running, or
-        paused (H-0062, P-0099 v3-20c).
-
-        Only walks direct children, not the whole descendant tree. This
-        matches the Phase B MVP invariant that nested Re-tune is
-        rejected server-side (``_require_tune_job_with_checkpoint``
-        blocks grandchild creation), so no grandchildren can exist and
-        a direct-child scan is complete. If the nested-retune
-        restriction is ever relaxed, this helper must be rewritten as a
-        full subtree walk, otherwise cascade-delete guards will miss
-        running grandchildren and silently destroy their work.
-
-        v3-20c: ``paused`` also counts as active — a paused tune holds
-        the workspace's training slot AND owns the Optuna sqlite that
-        feeds the resume worker, so a non-cascade delete of the parent
-        would silently destroy resume state otherwise.
-        """
-        for cid in self.get_child_job_ids(parent_job_id):
-            child = self.get(cid)
-            if child is None:
-                continue
-            if child.status in ("pending", "running", "paused"):
-                return True
-        return False
-
-    # --- H-0062 per-parent exclusive retune / resume lock ---
+        """True when any direct child is pending/running/paused (H-0062,
+        P-0099 v3-20c). See :meth:`JobLineage.has_active_children`."""
+        return self._lineage.has_active_children(parent_job_id)
 
     def acquire_parent_lock(self, parent_job_id: str, child_job_id: str) -> bool:
-        """Try to claim the retune slot for *parent_job_id*.
-
-        Returns ``True`` when the caller now holds the slot, ``False``
-        when another child already has it.  The lock is stored in
-        memory only; a process restart clears all locks (matching the
-        fact that any "running" child from the previous process is
-        already considered failed on the next boot).
-        """
-        with self._parent_lock_mutex:
-            if parent_job_id in self._parent_locks:
-                return False
-            self._parent_locks[parent_job_id] = child_job_id
-            return True
+        """Try to claim the Re-tune/Resume slot for *parent_job_id* (H-0062).
+        See :meth:`JobLineage.acquire_parent_lock`."""
+        return self._lineage.acquire_parent_lock(parent_job_id, child_job_id)
 
     def release_parent_lock(self, parent_job_id: str) -> None:
-        """Release the retune slot for *parent_job_id* if held.
-
-        Unlocking an already-unlocked parent is a no-op; this lets
-        caller ``finally`` blocks call release unconditionally.
-        """
-        with self._parent_lock_mutex:
-            self._parent_locks.pop(parent_job_id, None)
+        """Release the Re-tune/Resume slot for *parent_job_id* if held. See
+        :meth:`JobLineage.release_parent_lock`."""
+        self._lineage.release_parent_lock(parent_job_id)
 
     def rebind_parent_lock(
         self, parent_job_id: str, expected_holder: str, new_holder: str
     ) -> bool:
-        """Atomically swap the lock holder from *expected_holder* to *new_holder*.
-
-        H-0062 Bugfix 2026-04-14 (4): the API layer acquires the parent
-        lock with a placeholder id first, then needs to swap that
-        placeholder for the real child job id after the child is
-        created. Doing it as ``release_parent_lock`` + ``acquire_parent_lock``
-        in two separate calls opens a race window where another
-        request can claim the slot between the two operations, and
-        the second ``acquire_parent_lock`` silently returns ``False``
-        without the caller noticing.
-
-        Returns ``True`` when the slot was successfully rebound.
-        Returns ``False`` when the slot is empty or held by a different
-        holder — in which case the caller must treat their lock grant
-        as lost and abort the retune attempt.
-        """
-        with self._parent_lock_mutex:
-            current = self._parent_locks.get(parent_job_id)
-            if current != expected_holder:
-                return False
-            self._parent_locks[parent_job_id] = new_holder
-            return True
+        """Atomically swap the lock holder from *expected_holder* to
+        *new_holder* (H-0062 Bugfix). See :meth:`JobLineage.rebind_parent_lock`."""
+        return self._lineage.rebind_parent_lock(
+            parent_job_id, expected_holder, new_holder
+        )
 
     def get_locked_child(self, parent_job_id: str) -> str | None:
-        """Return the child job currently holding *parent_job_id*'s lock."""
-        with self._parent_lock_mutex:
-            return self._parent_locks.get(parent_job_id)
+        """Return the child currently holding *parent_job_id*'s lock. See
+        :meth:`JobLineage.get_locked_child`."""
+        return self._lineage.get_locked_child(parent_job_id)
 
     # --- Cancel / pause request flags — delegated to JobControlFlags (#451) ---
 
