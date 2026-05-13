@@ -143,6 +143,51 @@ def test_verify_pickle_compatibility_rejects_lizyml_major_mismatch() -> None:
 
 
 # ---------------------------------------------------------------------------
+# P-0107 (v3-26c): structured error envelope on PickleIncompatibleError
+# ---------------------------------------------------------------------------
+#
+# The error must classify the failure (``kind``) and carry a
+# ``recovery_hint`` + ``suggested_fix`` so the API envelope can render
+# user-actionable guidance instead of a raw runtime trace. This is the
+# checkpoint-load equivalent of P-0100's ``severity`` + ``suggested_fix``
+# envelope for ``validate_config`` warnings.
+
+
+def test_pickle_incompatible_schema_mismatch_carries_recovery_hint() -> None:
+    meta = {
+        "pickle_schema": 99,
+        "lizyml_version": "0.15.0",
+        "lightgbm_version": "4.5.0",
+        "optuna_version": "4.0.0",
+    }
+    with pytest.raises(PickleIncompatibleError) as excinfo:
+        verify_pickle_compatibility(meta)
+    err = excinfo.value
+    assert err.kind == "schema_mismatch"
+    assert err.recovery_hint, "schema mismatch must carry a recovery_hint"
+    assert err.suggested_fix, "schema mismatch must carry a suggested_fix"
+    assert "99" in err.suggested_fix or "schema" in err.suggested_fix.lower()
+
+
+def test_pickle_incompatible_lizyml_mismatch_carries_recovery_hint() -> None:
+    meta = {
+        "pickle_schema": 1,
+        "lizyml_version": "0.7.0",
+        "lightgbm_version": "4.5.0",
+        "optuna_version": "4.0.0",
+    }
+    with pytest.raises(PickleIncompatibleError) as excinfo:
+        verify_pickle_compatibility(meta)
+    err = excinfo.value
+    assert err.kind == "lizyml_version_mismatch"
+    assert err.recovery_hint, "version mismatch must carry a recovery_hint"
+    assert err.suggested_fix, "version mismatch must carry a suggested_fix"
+    # The saved version string must appear in the hint so the user can
+    # paste it into a ``pip install lizyml==`` command.
+    assert "0.7.0" in err.suggested_fix
+
+
+# ---------------------------------------------------------------------------
 # Pre-flight check
 # ---------------------------------------------------------------------------
 

@@ -3855,3 +3855,74 @@ regression Fit 結果の Residuals plot は現在「1 figure に 3 panel（Actua
 #### Decision
 
 - 2026-05-12 **Approved** — Issue #403 の提案どおり `BackendCore.get_incompatible_metrics` を追加。実装は単一 PR（commit 順: Proposal → `feat(backend)` Protocol+型 → `refactor(services)` thin envelope → `test(backend)` adapter watchlist）。`task` 引数を adapter に渡す設計（Service 層から `task=regression` gate を排除）まで含めて承認 — これにより abstraction が「どの task に適用されるか」も backend 所有になる。
+
+---
+
+### P-0107: `PICKLE_INCOMPATIBLE` envelope に structured recovery hint を追加（v3-26 / R-4.2）
+
+- **Date:** 2026-05-13 起票・即承認（PLAN.md v3-26c DoD で要件確定済）
+- **Related:** `PLAN.md` §v3-26、`docs/v0.4-business-readiness-plan.md` §5.2、`src/lizystudio/backends/lizyml/pickle_compat.py::PickleIncompatibleError`、`src/lizystudio/backends/exceptions.py::CheckpointIncompatibleError`、`src/lizystudio/api/errors.py::PickleIncompatibleError`、`src/lizystudio/api/retune.py::_require_tune_job_with_checkpoint`、`tests/test_lizyml_checkpoint.py`、`tests/test_retune_api.py`、`tests/bench/test_bench_pickle_compat.py`、`scripts/pickle_compat_matrix.sh`、`.github/workflows/nightly.yml`、P-0100 (severity envelope の前例)
+
+#### Motivation
+
+`PICKLE_INCOMPATIBLE` 400 envelope は v0.4 まで `{code, message: "Checkpoint incompatible: <reason>"}` の 2 fields のみだった。Re-tune / Resume 時に lizyml minor バンプによる pickle 互換切れが起きると、`message` の自由文を frontend toast にそのまま流す以外に user に「何をすべきか」を伝える手段がない。R-3 の typed error 整備（`recovery_hint` / `is_user_error` 必須化）は v0.5 以降 deferred だが、`PICKLE_INCOMPATIBLE` だけは v3-26 Exit Criteria（過去 N=3 minor で fit→現行で load の round-trip）の DoD に「recovery_hint と suggested_fix を含む」と明記されているため、本 Proposal はその 1 envelope だけを先行で structured 化する。
+
+#### Purpose
+
+- backend 例外 `PickleIncompatibleError` / `CheckpointIncompatibleError` に optional kwargs `kind: str` / `recovery_hint: str | None` / `suggested_fix: str | None` を追加。raise site が分類済の情報を持っている（schema mismatch vs lizyml version mismatch vs corrupted meta）ので、API 層は string parse することなく forward する。
+- API envelope `api/errors.py::PickleIncompatibleError` が同 kwargs を受け取り `details` payload に `{kind, recovery_hint, suggested_fix}` を載せる。
+- `kind` の値は `"schema_mismatch"` / `"lizyml_version_mismatch"` / `"corrupt_meta"` / `"unknown"`（fallback）の closed set。
+- Nightly CI に `pickle-compat` job を新設（過去 3 minor の lizyml で fit→現行で load round-trip）。silent load は v0.5 R-4.2 invariant の regression として fail させる。
+
+#### Invariants
+
+- **INV-pickle-1**: 異なる lizyml major.minor で save された checkpoint を load しようとすると必ず `PickleIncompatibleError` が raise される（silent load 禁止）。
+- **INV-pickle-2**: `PickleIncompatibleError.kind` は schema/version/corrupt のいずれかを classify し、`recovery_hint` / `suggested_fix` は **non-empty 文字列**で同梱される（"unknown" fallback は backend raise site では使われない）。
+- **INV-pickle-3**: HTTP 400 `PICKLE_INCOMPATIBLE` envelope は `details.kind` を必ず含む。`recovery_hint` / `suggested_fix` は backend が classify できたケースで必ず含まれる（unknown kind では含まれない）。
+- **INV-pickle-4**: 既存 client（`error.code` / `error.message` のみ消費）は本変更後も無修正で動く（additive change、details 内の新 fields は ignore 可能）。
+
+#### Impact
+
+**Backend exceptions (additive, backward-compat):**
+- `backends/lizyml/pickle_compat.py::PickleIncompatibleError.__init__`: 既存 `message: str` に加えて keyword-only `kind` / `recovery_hint` / `suggested_fix` を accept。`verify_pickle_compatibility` の 2 raise sites がそれぞれ `schema_mismatch` / `lizyml_version_mismatch` を返す。
+- `backends/exceptions.py::CheckpointIncompatibleError`: 同 kwargs を accept。backend-agnostic envelope なので 2nd backend も同じ classification 語彙を使う。
+- `backends/lizyml/checkpoint_mixin.py::verify_checkpoint_compatibility`: JSON decode 失敗を `kind="corrupt_meta"` で classify、`PickleIncompatibleError` を catch して `kind`/`recovery_hint`/`suggested_fix` を forward。
+
+**API layer (additive):**
+- `api/errors.py::PickleIncompatibleError.__init__`: keyword-only `kind` / `recovery_hint` / `suggested_fix` を accept、`details` payload に `{kind, recovery_hint?, suggested_fix?}` を load。`kind` は必ず含まれる、他の 2 は non-None のときのみ含む（client は presence で判定する）。
+- `api/retune.py::_require_tune_job_with_checkpoint`: `CheckpointIncompatibleError` catch 時に backend が提供した 3 fields を forward。
+
+**Tests:**
+- `tests/test_lizyml_checkpoint.py`: schema mismatch / version mismatch の各 raise が新 attrs を carry する unit test 2 ケース。
+- `tests/test_retune_api.py`: HTTP 400 envelope の details に `kind="lizyml_version_mismatch"` + non-empty `recovery_hint`/`suggested_fix`、saved version 文字列が `suggested_fix` に含まれることを assert。
+- `tests/bench/test_bench_pickle_compat.py`（新規、`@slow + @pickle_compat`）: schema mismatch + N-3..N-1 minor の parametrize で全 drift クラスを cover、`adapter.load_checkpoint` が verify hook を通って raise することを E2E 確認。
+
+**Infrastructure:**
+- `scripts/pickle_compat_matrix.sh`: ephemeral venv で `lizyml==0.12.0/0.13.0/0.14.0` ごとに sidecar を save → 現行 runtime で `verify_pickle_compatibility` が `kind=lizyml_version_mismatch` か `schema_mismatch` で reject することを確認。silent load は exit 1。
+- `.github/workflows/nightly.yml::pickle-compat`: 上記スクリプト実行 + synthetic-drift unit gate（pickle_compat marker selection）。
+- `pyproject.toml`: `pickle_compat` marker を追加。
+
+**Compatibility:**
+- 後方互換。新 fields は `details` payload の追加で、既存 client（`error.code` / `error.message` のみ消費）に影響なし。`kind=unknown` fallback で legacy raise sites も無変更で OK。
+
+#### Acceptance criteria
+
+- [x] `PickleIncompatibleError` (backend & api) と `CheckpointIncompatibleError` が optional `kind`/`recovery_hint`/`suggested_fix` を accept。
+- [x] `verify_pickle_compatibility` が schema/version 各 raise で classification を埋める。
+- [x] `verify_checkpoint_compatibility` が corrupted meta を `kind="corrupt_meta"` で classify。
+- [x] API 400 envelope の `details` に `kind` が必ず含まれ、classified ケースでは `recovery_hint`/`suggested_fix` が non-empty。
+- [x] `tests/test_lizyml_checkpoint.py` + `tests/test_retune_api.py` で envelope shape を契約化。
+- [x] `tests/bench/test_bench_pickle_compat.py` が synthetic drift（schema + N-1/N-2/N-3 minor）を全 cover。
+- [x] `scripts/pickle_compat_matrix.sh` が ephemeral venv マトリクスで silent load を exit 1 にする。
+- [x] Nightly CI `pickle-compat` job が両方を実行。
+- [x] `uv run pytest` / `uv run ruff check .` / `uv run ruff format --check .` / `uv run mypy src/lizystudio/` 全 green。
+
+#### Alternatives considered
+
+- **(a) フル R-3.1.1 (`StudioError` 全部に `recovery_hint`/`is_user_error` 必須化)**: 拒否。v3-26 の scope を超え、全 errors.py の改訂が必要。v0.5 R-3 として deferred のまま。
+- **(b) string parse で API 層が message から classify**: 拒否。fragile（lizyml が message を書き換えると壊れる）かつ DRY 違反。classification 情報は raise site が既に持っている。
+- **(c) past minor も silently load を許可（policy 変更）**: 拒否。pickle の class identity を minor 境界で安定させる責任は lizyml 側にあるべきで、Studio が "best effort" load を試みると corrupt state が deeper code path で爆発する class の bug を呼ぶ。silent load を gating する強い stance は v0.5 R-4.2 の Exit Criteria と一致。
+
+#### Decision
+
+- 2026-05-13 **Approved** — `PICKLE_INCOMPATIBLE` envelope のみを先行で structured 化、R-3 typed error 体系全体は v0.5 以降に持ち越し。Nightly matrix は `PAST_VERSIONS` env 経由で minors を bump 可能（lizyml が 1.0 になったら matrix を `0.13.0 0.14.0 0.15.0` から `0.x 0.y 1.0` 系へ更新するメモを script header に記載）。

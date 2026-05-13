@@ -61,6 +61,48 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
+  pickle-compat:
+    # v3-26 (R-4.2): cross-minor lizyml pickle compatibility matrix.
+    # Every lizyml minor bump invalidates older checkpoints (internal
+    # class moves invalidate pickled state). The runtime check in
+    # ``verify_pickle_compatibility`` REJECTS such artefacts with a
+    # structured ``PICKLE_INCOMPATIBLE`` envelope (kind +
+    # recovery_hint + suggested_fix, P-0107). This nightly gate
+    # confirms that invariant against the previous three lizyml
+    # minor releases — silent load against an older minor is a
+    # regression of the v0.5 Exit Criteria (format/pickle compat).
+    #
+    # ``--benchmark-skip`` from pyproject.toml's addopts keeps the
+    # ``tests/bench/`` directory out of the default selection; we run
+    # this file by path so the marker-based selection is enough.
+    name: Pickle compatibility matrix (v3-26)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: develop
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.11"
+      - run: uv sync
+      - name: Run synthetic-drift unit gate
+        # The in-process tests rewrite ``model_meta.json`` to simulate
+        # past minor saves; they are fast and run before the venv
+        # matrix so a structural regression fails the job immediately.
+        run: |
+          uv run pytest tests/bench/test_bench_pickle_compat.py \
+            -m pickle_compat \
+            --override-ini="addopts=" \
+            -q
+      - name: Cross-minor lizyml matrix
+        # Provisions ephemeral venvs with the N-1, N-2, N-3 lizyml
+        # minors, saves a checkpoint with each, then verifies the
+        # runtime rejects them with the structured envelope.
+        env:
+          PAST_VERSIONS: "0.12.0 0.13.0 0.14.0"
+        run: bash scripts/pickle_compat_matrix.sh
+
   plotly-cdn:
     name: Plotly CDN reachability & SRI freshness
     runs-on: ubuntu-latest

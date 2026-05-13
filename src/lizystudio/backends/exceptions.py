@@ -55,7 +55,27 @@ class CheckpointIncompatibleError(Exception):
     Adapters translate their own pickle / dependency errors into this
     type so the API layer can return a consistent envelope without
     importing backend-specific symbols.
+
+    P-0107 (v3-26c): structured fields ``kind``, ``recovery_hint``, and
+    ``suggested_fix`` propagate the backend's classification through to
+    the HTTP envelope. ``kind`` should be one of:
+    ``"schema_mismatch"`` / ``"lizyml_version_mismatch"`` /
+    ``"corrupt_meta"`` / ``"unknown"`` (the last is the safe fallback
+    for legacy call sites and future second-backend extensions).
     """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: str = "unknown",
+        recovery_hint: str | None = None,
+        suggested_fix: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.recovery_hint = recovery_hint
+        self.suggested_fix = suggested_fix
 
 
 class CheckpointPreflightError(Exception):

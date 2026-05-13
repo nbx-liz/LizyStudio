@@ -64,13 +64,37 @@ class CheckpointMixin:
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
+            # P-0107: classify the failure so the API envelope can show
+            # the user a corruption-specific recovery hint (re-run the
+            # tune; the on-disk sidecar is unrecoverable) rather than
+            # the version-mismatch hint, which would be misleading here.
             raise CheckpointIncompatibleError(
-                f"Corrupted model_meta.json at {meta_path}: {exc}"
+                f"Corrupted model_meta.json at {meta_path}: {exc}",
+                kind="corrupt_meta",
+                recovery_hint=(
+                    "The checkpoint sidecar (model_meta.json) is unreadable. "
+                    "This usually means the file was truncated by a crash "
+                    "during save; the underlying model.pkl cannot be safely "
+                    "loaded without it."
+                ),
+                suggested_fix=(
+                    "Re-run the tune to produce a fresh checkpoint. The "
+                    "incompatible artefact can be safely deleted from the "
+                    "job directory."
+                ),
             ) from exc
         try:
             verify_pickle_compatibility(meta)
         except PickleIncompatibleError as exc:
-            raise CheckpointIncompatibleError(str(exc)) from exc
+            # P-0107: forward the lizyml-side classification (schema vs
+            # version mismatch) through the backend-agnostic envelope so
+            # the API layer never has to re-classify by parsing strings.
+            raise CheckpointIncompatibleError(
+                str(exc),
+                kind=exc.kind,
+                recovery_hint=exc.recovery_hint,
+                suggested_fix=exc.suggested_fix,
+            ) from exc
 
     def save_checkpoint(self, model: Any, path: Path) -> None:
         """Atomically persist *model* as ``path/model.pkl`` via temp+rename."""

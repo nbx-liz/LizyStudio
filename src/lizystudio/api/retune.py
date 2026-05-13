@@ -129,7 +129,16 @@ def _require_tune_job_with_checkpoint(
     try:
         backend.verify_checkpoint_compatibility(parent_dir)
     except CheckpointIncompatibleError as exc:
-        raise PickleIncompatibleApiError(f"{parent.job_id}: {exc}") from exc
+        # P-0107: forward the backend's structured classification through
+        # to the HTTP envelope so the frontend can render an actionable
+        # banner (kind-specific recovery hint + copyable suggested fix)
+        # instead of a raw "Checkpoint incompatible: ..." string.
+        raise PickleIncompatibleApiError(
+            f"{parent.job_id}: {exc}",
+            kind=exc.kind,
+            recovery_hint=exc.recovery_hint,
+            suggested_fix=exc.suggested_fix,
+        ) from exc
 
 
 def _claim_retune_slot(parent_job_id: str, job_store: JobStore) -> str:

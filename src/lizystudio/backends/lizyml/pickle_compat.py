@@ -24,7 +24,37 @@ class PicklePreflightError(RuntimeError):
 class PickleIncompatibleError(RuntimeError):
     """Raised by ``load_checkpoint`` / ``verify_pickle_compatibility`` when
     the on-disk ``model_meta.json`` points at a schema or major backend
-    version the current Studio cannot safely deserialize."""
+    version the current Studio cannot safely deserialize.
+
+    P-0107 (v3-26c): carries a structured ``kind`` classification, a
+    ``recovery_hint`` (one-sentence "what to do next" for the user),
+    and a ``suggested_fix`` (concrete command or value the UI can show
+    on a copy-paste affordance). The API envelope (``api/errors.py``)
+    surfaces these fields in ``details`` so the frontend can render
+    actionable guidance instead of a raw "Checkpoint incompatible: ..."
+    string.
+
+    ``kind`` values:
+
+    - ``"schema_mismatch"`` -- ``PICKLE_SCHEMA_VERSION`` bumped
+    - ``"lizyml_version_mismatch"`` -- saved lizyml major.minor differs
+      from the runtime
+    - ``"unknown"`` -- fallback when callers construct the error
+      without classification (legacy code paths, future error sources)
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: str = "unknown",
+        recovery_hint: str | None = None,
+        suggested_fix: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.recovery_hint = recovery_hint
+        self.suggested_fix = suggested_fix
 
 
 PICKLE_SCHEMA_VERSION = 1
@@ -99,7 +129,18 @@ def verify_pickle_compatibility(meta: dict[str, Any]) -> None:
     if schema != PICKLE_SCHEMA_VERSION:
         raise PickleIncompatibleError(
             f"Unsupported pickle_schema: expected {PICKLE_SCHEMA_VERSION}, "
-            f"got {schema!r}"
+            f"got {schema!r}",
+            kind="schema_mismatch",
+            recovery_hint=(
+                "The on-disk checkpoint format changed in this Studio release. "
+                "Past checkpoints cannot be loaded; you need to refit the model."
+            ),
+            suggested_fix=(
+                f"Refit the workspace to produce a model with "
+                f"pickle_schema={PICKLE_SCHEMA_VERSION}, or downgrade Studio "
+                f"to a release whose pickle_schema matches the saved "
+                f"value ({schema!r})."
+            ),
         )
 
     current = collect_pickle_versions()
@@ -110,7 +151,19 @@ def verify_pickle_compatibility(meta: dict[str, Any]) -> None:
         raise PickleIncompatibleError(
             "Incompatible lizyml version: checkpoint was saved with "
             f"{saved_lizyml!r}, current runtime is "
-            f"{current['lizyml_version']!r}"
+            f"{current['lizyml_version']!r}",
+            kind="lizyml_version_mismatch",
+            recovery_hint=(
+                "The lizyml major.minor changed since this checkpoint was "
+                "saved. Pickles cannot cross minor boundaries (internal "
+                "class moves invalidate the serialized state); refit on the "
+                "current lizyml to produce a fresh checkpoint."
+            ),
+            suggested_fix=(
+                f"Either refit the workspace under lizyml "
+                f"{current['lizyml_version']}, or pin the old runtime with "
+                f"``uv add lizyml=={saved_lizyml}`` to reload this artefact."
+            ),
         )
 
 

@@ -1487,13 +1487,13 @@ v2 で構築した基盤の上に、Widget 運用知見の移植・UX 改善・�
 
 | サブフェーズ | 内容 | 状態 | PR |
 |---|---|---|---|
-| v3-26a | `.github/workflows/nightly.yml` に pickle compat job 追加 | 🟡 | — |
-| v3-26b | `tests/bench/test_bench_pickle_compat.py` で過去 lizyml 版で fit → 現行で load の round-trip | 🟡 | — |
-| v3-26c | `cloudpickle` 互換切れ検出時の明示エラー (`PICKLE_INCOMPATIBLE`) | 🟡 | — |
+| v3-26a | `.github/workflows/nightly.yml` に pickle compat job 追加 | 🟢 | feat/v3-26-pickle-compat-nightly |
+| v3-26b | `tests/bench/test_bench_pickle_compat.py` で過去 lizyml 版で fit → 現行で load の round-trip | 🟢 | feat/v3-26-pickle-compat-nightly |
+| v3-26c | `cloudpickle` 互換切れ検出時の明示エラー (`PICKLE_INCOMPATIBLE`) — P-0107 envelope (kind + recovery_hint + suggested_fix) | 🟢 | feat/v3-26-pickle-compat-nightly |
 
 **DoD:**
-- [ ] Nightly CI で過去 3 minor version すべて green
-- [ ] 互換切れ時のエラーメッセージが recovery_hint と suggested_fix を含む（P-0100 envelope を再利用）
+- [x] Nightly CI で過去 3 minor version すべて expected envelope で reject（silent load なし、`scripts/pickle_compat_matrix.sh`）
+- [x] 互換切れ時のエラーメッセージが recovery_hint と suggested_fix を含む（P-0107 envelope、P-0100 と同パターン）
 
 ---
 
