@@ -85,6 +85,40 @@ class BackendCore(Protocol):
         """
         return []
 
+    def validate_search_space(self, space: dict[str, Any]) -> list[dict[str, Any]]:
+        """Structural validation of an Optuna ``tuning.optuna.space`` dict.
+
+        Called by ``Service.validate_search_space_for_tune`` from the
+        ``POST /tune`` run-gate (P-0108, Issue #474). The role is to
+        reject search-space entries that the backend cannot evaluate
+        even in principle — e.g. lizyml's ``parse_space()`` rejects an
+        inverted Range (``low >= high``) or a log distribution with
+        non-positive lower bound. Without this gate the bad space slips
+        past ``validate_config`` and only blows up deep inside the
+        tuning loop as "All tuning trials failed".
+
+        Returns ``[{path, message, severity, suggested_fix}]`` entries
+        mirroring the ``validate_config`` envelope (P-0100), with one
+        important shape constraint:
+
+        - ``path`` always starts with ``"tuning.optuna.space.<param>"``
+          so the frontend can surface the message next to the offending
+          row.
+        - ``severity`` is ``"error"`` (run-gate is blocking, unlike the
+          metric-compat warnings).
+
+        **Out of scope.** Empty-choices categoricals are NOT a backend
+        responsibility: the frontend's ``empty-choice-banner`` already
+        owns that UX (transient editing state, Tune button disabled).
+        The backend MUST filter that case out of the returned list so a
+        legitimately-empty WIP categorical does not produce a 400 on the
+        run-gate. See PR #473 (Wave 3.1a) post-mortem.
+
+        A minimal backend (or one that does not use Optuna-style search
+        spaces) returns ``[]`` (the default below).
+        """
+        return []
+
     def get_default_config(self, task: str, target: str) -> dict[str, Any]:
         """Return a complete valid config with all defaults."""
         ...
