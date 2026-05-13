@@ -2042,3 +2042,103 @@ class TestGetIncompatibleMetrics:
             {"mape", "rmsle", "r2"},
         )
         assert sorted(m.metric for m in out) == ["r2", "rmsle"]
+
+
+class TestValidateSearchSpace:
+    """LizyMLAdapter.validate_search_space — P-0108 / Issue #474.
+
+    The run-gate must reject the two structurally-broken cases lizyml's
+    ``parse_space()`` cannot evaluate even in principle (inverted Range,
+    log + low<=0) while leaving the empty-choices categorical case to
+    the frontend's ``empty-choice-banner``.
+    """
+
+    @pytest.fixture
+    def adapter(self) -> LizyMLAdapter:
+        return LizyMLAdapter()
+
+    def test_empty_space_returns_empty(self, adapter: LizyMLAdapter) -> None:
+        assert adapter.validate_search_space({}) == []
+
+    def test_non_dict_space_returns_empty(self, adapter: LizyMLAdapter) -> None:
+        # Defensive: malformed configs can arrive here mid-edit.
+        assert adapter.validate_search_space([1, 2, 3]) == []  # type: ignore[arg-type]
+        assert adapter.validate_search_space(None) == []  # type: ignore[arg-type]
+
+    def test_valid_space_returns_empty(self, adapter: LizyMLAdapter) -> None:
+        out = adapter.validate_search_space(
+            {
+                "lr": {"type": "float", "low": 0.01, "high": 0.3, "log": True},
+                "num_leaves": {"type": "int", "low": 16, "high": 256},
+                "subsample": {"type": "categorical", "choices": [0.6, 1.0]},
+            }
+        )
+        assert out == []
+
+    def test_inverted_range_is_flagged(self, adapter: LizyMLAdapter) -> None:
+        out = adapter.validate_search_space(
+            {"lr": {"type": "float", "low": 0.5, "high": 0.01}}
+        )
+        assert len(out) == 1
+        err = out[0]
+        assert err["path"] == "tuning.optuna.space.lr"
+        assert err["severity"] == "error"
+        assert "low" in err["message"].lower() and "high" in err["message"].lower()
+        assert "lr" in err["suggested_fix"]
+        # Suggested fix mentions the actual offending values so the user
+        # can paste them directly into the form.
+        assert "0.5" in err["suggested_fix"]
+
+    def test_log_with_zero_low_is_flagged(self, adapter: LizyMLAdapter) -> None:
+        out = adapter.validate_search_space(
+            {"lr": {"type": "float", "low": 0.0, "high": 0.3, "log": True}}
+        )
+        assert len(out) == 1
+        err = out[0]
+        assert err["path"] == "tuning.optuna.space.lr"
+        assert "log" in err["message"].lower()
+        assert "log" in err["suggested_fix"].lower()
+
+    def test_log_with_negative_low_is_flagged(self, adapter: LizyMLAdapter) -> None:
+        out = adapter.validate_search_space(
+            {"lr": {"type": "float", "low": -1.0, "high": 0.3, "log": True}}
+        )
+        assert len(out) == 1
+        assert out[0]["path"] == "tuning.optuna.space.lr"
+
+    def test_empty_categorical_choices_is_silently_dropped(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        # INV-E (P-0108): the frontend's empty-choice-banner owns the UX
+        # for this case; the run-gate must not return an entry for it.
+        out = adapter.validate_search_space(
+            {"objective": {"type": "categorical", "choices": []}}
+        )
+        assert out == []
+
+    def test_multiple_broken_entries_are_each_flagged(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        # A single broken row must not mask the rest of the space.
+        out = adapter.validate_search_space(
+            {
+                "lr": {"type": "float", "low": 0.5, "high": 0.01},
+                "max_depth": {"type": "int", "low": 0.0, "high": 1.0, "log": True},
+                "fine": {"type": "float", "low": 0.01, "high": 0.3},
+            }
+        )
+        paths = {err["path"] for err in out}
+        assert paths == {
+            "tuning.optuna.space.lr",
+            "tuning.optuna.space.max_depth",
+        }
+
+    def test_non_dict_entry_is_skipped(self, adapter: LizyMLAdapter) -> None:
+        # Defensive: tolerates a partially-typed config without crashing.
+        out = adapter.validate_search_space(
+            {
+                "lr": "not_a_dict",  # type: ignore[dict-item]
+                "ok": {"type": "float", "low": 0.01, "high": 0.3},
+            }
+        )
+        assert out == []

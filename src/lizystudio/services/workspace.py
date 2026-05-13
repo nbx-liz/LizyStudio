@@ -203,6 +203,39 @@ def validate_config(ws: WorkspaceState, config: dict[str, Any]) -> list[dict[str
     return normalized
 
 
+def validate_search_space_for_tune(
+    ws: WorkspaceState, config: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Run-gate check for ``tuning.optuna.space`` (P-0108, Issue #474).
+
+    Called from ``POST /api/workspace/tune`` (and retune) AFTER
+    ``validate_config`` so structurally-broken search spaces are
+    rejected with a clear 422 *before* the tune job launches.
+
+    Deliberately NOT folded into ``validate_config``: that function is
+    shared by the save gate (``PUT /config``), which must remain
+    permissive so users can ``PUT`` work-in-progress configs (inverted
+    Range mid-keystroke, log+low=0 while raising Min, etc.) without
+    losing their edits. See Issue #474 + PR #473 post-mortem.
+
+    Returns the same ``{path, message, severity, suggested_fix}``
+    envelope as ``validate_config`` so the same frontend renderer can
+    surface either source.
+    """
+    if not isinstance(config, dict):
+        return []
+    tuning = config.get("tuning")
+    if not isinstance(tuning, dict):
+        return []
+    optuna = tuning.get("optuna")
+    if not isinstance(optuna, dict):
+        return []
+    space = optuna.get("space")
+    if not isinstance(space, dict) or not space:
+        return []
+    return ws.backend.validate_search_space(space)
+
+
 def _workspace_split_errors(
     ws: WorkspaceState, config: dict[str, Any]
 ) -> list[dict[str, Any]]:

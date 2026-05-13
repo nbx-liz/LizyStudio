@@ -73,6 +73,7 @@ from lizystudio.services.workspace import (
     get_workspace,
     load_config_from_file,
     validate_config,
+    validate_search_space_for_tune,
 )
 from lizystudio.ws.progress import ProgressBroadcaster
 
@@ -701,6 +702,13 @@ def workspace_tune(
     blocking = _blocking_errors(errors)
     if blocking:
         raise ValidationError(blocking)
+    # P-0108 / Issue #474: run-gate-only check for structurally-broken
+    # tuning.optuna.space entries (inverted Range, log+low<=0). Kept out
+    # of ``validate_config`` so the save gate (``PUT /config``) stays
+    # permissive for WIP edits — see services.workspace docstring.
+    space_errors = validate_search_space_for_tune(ws, ws.config)
+    if space_errors:
+        raise ValidationError(space_errors)
     # CRITICAL-2: atomic create + slot claim, see workspace_fit above.
     job = job_store.create_and_claim_active(
         backend_name=get_backend_name(ws),

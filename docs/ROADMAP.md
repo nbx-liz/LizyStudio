@@ -298,11 +298,12 @@ Wave 6 完了後の Open Issue は **4 件**（#451 / #453 は 2026-05-13 close 
 
 ### Tier 1：直近の着手候補（ROI 順）
 
-1. **#474** — P-0104 Wave 3.1a deferred: inverted-range / log+low≤0 の search-space エラーを `POST /tune` run-gate で早期 surface（中規模・独立、approach C = Issue 推奨）
-2. **#495** — #456 L5: weekly stale-doc audit cron（`scripts/audit_stale_docs.py` + `.github/workflows/audit-stale-docs.yml` cron weekly、tracking issue 自動更新。tier-3/low、deferred）
-3. **#452-b `lifecycle_mixin.tune` 分割** — 🔒 2nd-adapter 議論（§3.3）後に解禁。それまで着手しない
+1. **#495** — #456 L5: weekly stale-doc audit cron（`scripts/audit_stale_docs.py` + `.github/workflows/audit-stale-docs.yml` cron weekly、tracking issue 自動更新。tier-3/low、deferred）
+2. **#452-b `lifecycle_mixin.tune` 分割** — 🔒 2nd-adapter 議論（§3.3）後に解禁。それまで着手しない
 
-> ~~v3-26 (R-4.2 Pickle compat nightly CI)~~ ✅ 完了 (feat/v3-26-pickle-compat-nightly / P-0107 envelope + `scripts/pickle_compat_matrix.sh` + `.github/workflows/nightly.yml::pickle-compat` job) — v0.5 Exit Criteria の format/pickle 互換が完全に gating された。残る Exit #5 = 業務利用 KPI のみ要 verify
+> ~~v3-26 (R-4.2 Pickle compat nightly CI)~~ ✅ 完了 (PR #506 / P-0107 envelope + `scripts/pickle_compat_matrix.sh` + `.github/workflows/nightly.yml::pickle-compat` job) — v0.5 Exit Criteria の format/pickle 互換が完全に gating された。残る Exit #5 = 業務利用 KPI のみ要 verify
+>
+> ~~#474 (P-0104 deferred — search-space 早期 validate)~~ ✅ 着地 (PR #507 / P-0108) — `BackendCore.validate_search_space` 追加 + `POST /tune` run-gate で 422、`PUT /config` は引き続き permissive。
 
 ### Tier 2：v0.6 候補（要長期計画）
 
@@ -334,7 +335,7 @@ Wave 6 完了後の Open Issue は **4 件**（#451 / #453 は 2026-05-13 close 
 
 ## 8. 運用メモ
 
-- 新規 Proposal を起票するときは **P-0108 から採番**（P-0107 = `PICKLE_INCOMPATIBLE` structured envelope、2026-05-13 着地）。`H-XXXX` 採番は終了。
+- 新規 Proposal を起票するときは **P-0109 から採番**（P-0107 = `PICKLE_INCOMPATIBLE` structured envelope / v3-26、P-0108 = search-space run-gate / #474、いずれも 2026-05-13 着地）。`H-XXXX` 採番は終了。
 - 新規 PLAN フェーズは **v3-27 以降**を採番（v3-26 = R-4.2 Pickle compat、2026-05-13 着地で v0.5 phase 完全消化）。
 - E2E 単独追加（仕様変更なし）は HISTORY 起票不要、本 ROADMAP の §3 を更新するだけで OK。
 - 本 ROADMAP はステータス変更時に都度更新。タスク完了時は §1 へ移動、新規着手時は §2/§3/§4 へ追加する。
