@@ -43,10 +43,17 @@ test.describe("Workspace UI Improvements", () => {
     // n_trials_presets should be [10, 50, 100, 200, 500]
     expect(data.n_trials_presets).toEqual([10, 50, 100, 200, 500]);
 
-    // model_metric should have task-keyed entries
-    expect(data.option_sets).toHaveProperty("model_metric");
-    expect(data.option_sets.model_metric).toHaveProperty("binary");
-    expect(data.option_sets.model_metric).toHaveProperty("regression");
+    // P-0104 Wave 3.1b: option_sets.metric is the nested {native, feval}
+    // shape; model_metric was removed and folded into it; eval_metric
+    // carries the post-hoc reporting metrics for the Tune Evaluation section.
+    expect(data.option_sets).not.toHaveProperty("model_metric");
+    expect(data.option_sets).toHaveProperty("metric");
+    expect(data.option_sets.metric.binary).toHaveProperty("native");
+    expect(data.option_sets.metric.binary).toHaveProperty("feval");
+    expect(data.option_sets.metric.regression).toHaveProperty("native");
+    expect(data.option_sets).toHaveProperty("eval_metric");
+    expect(data.option_sets.eval_metric).toHaveProperty("binary");
+    expect(data.option_sets.eval_metric).toHaveProperty("regression");
 
     // conditional_visibility should have num_leaves entries
     expect(data.conditional_visibility).toHaveProperty("num_leaves");

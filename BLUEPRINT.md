@@ -96,6 +96,15 @@ class ConfigSchema:
     """Config の JSON Schema。フォーム生成用。"""
     json_schema: dict[str, Any]        # JSON Schema形式
 
+@dataclass(frozen=True)
+class IncompatibleMetric:
+    """設定済みメトリクスのうち、ロード済み target 列が前提条件を満たさないものの advisory（P-0106）。
+    suggested_fix はバックエンド固有の代替を指してよい（lizyml: MAPE→sMAPE/WAPE 等）。
+    Service 層が severity="warning" envelope に包む（Fit は止めない）。"""
+    metric: str                        # メトリクス名 ("mape" 等)
+    message: str                       # 警告文（target 列名を含む）
+    suggested_fix: str                 # 修正案
+
 @dataclass
 class FitSummary:
     """学習結果のサマリー。"""
@@ -114,7 +123,7 @@ class TuningSummary:
     # Re-tune (Phase A) — いずれも後方互換のため optional。
     # re_tune 未指定の単一ラウンド tune では None が入る (H-0061)。
     rounds: list[dict[str, Any]] | None = None         # 各ラウンドの n_trials / best_score_before / best_score_after / expanded_dims / space_snapshot
-    boundary_report: dict[str, Any] | None = None      # 最終ラウンド後の BoundaryReport（per-dim: best_value / position_pct / edge / expanded / new bounds）
+    boundary_report: dict[str, Any] | None = None      # 最終ラウンド後の BoundaryReport（per-dim: best_value / position_pct / edge / expanded / new bounds / clamped_to_bound）
 
 @dataclass
 class PredictionSummary:
@@ -172,6 +181,11 @@ class BackendCore(Protocol):
     # --- Config ---
     def get_config_schema(self) -> ConfigSchema: ...
     def validate_config(self, config: dict[str, Any]) -> list[dict[str, Any]]: ...  # エラー一覧 (空=valid)
+    def get_incompatible_metrics(                                                    # P-0106 (#403)
+        self, task: str, target_series: pd.Series, metric_names: set[str]
+    ) -> list[IncompatibleMetric]: ...
+        # task/target 前提条件に反する設定済みメトリクスの advisory（watchlist と suggested_fix prose は backend 所有）。
+        # デフォルトは [] — 実装しない backend は不適合メトリクスを宣言しない。Service が severity="warning" に包む。
     def get_default_config(self, task: str, target: str) -> dict[str, Any]: ...  # H-0025
     def load_config_from_file(self, content: bytes, filename: str) -> dict[str, Any]: ...
 
@@ -194,6 +208,8 @@ class BackendCore(Protocol):
         re_tune: dict[str, Any] | None = None,       # H-0061 多ラウンド再チューニング
         checkpoint_dir: Any = None,                  # H-0062 試行ごとのチェックポイント
         resume: bool = False,                        # H-0062 Phase B
+        storage: str | None = None,                  # P-0099 v3-20b: Optuna persistent storage URL（in-place resume 用）
+        study_name: str | None = None,               # P-0099 v3-20b: Optuna study 名（同 study に load_if_exists=True で re-attach）
     ) -> TuningSummary: ...
 
     def predict(
@@ -304,6 +320,8 @@ class BackendAdapter(
 - ブラウザ再アクセス時は `workspace_result = None`（右パネル空）
 - 過去のJob結果は表示しない（混乱防止）
 - **Active job lock (P-0089)**: `active_job_id` がセットされている間、`PUT /api/workspace/config` および `PATCH /api/workspace/config` は 409 `WORKSPACE_LOCKED` を返す。これは UI 上の cross-hook race（CV strategy 切り替え / target 変更等）が走行中ジョブの config を後から書き換えるのを構造的に防ぐ。INV: `meta.json` に保存される config は `claim_active` 直前の workspace config と完全一致する
+- **Startup reconciliation (P-0099 v3-22a / R-1.5b)**: `active_job_id` はインメモリだが、サーバ再起動時に `JobStore.reconcile_at_startup()` が on-disk `meta.json` をスキャンして再構築する。`running` / `pending` の orphan は `failed` 化（worker thread / subprocess は前プロセスと共に消えているため）、`paused` job は `active_job_id` に再 attach（INV-7: WS 切断は active slot を release しない / restart 越しに paused slot を保持）、terminal states は rewrite しない、idempotent。
+- **Reload restoration (P-0102 / v3-24 / R-2.2)**: `current_job_id` を `GET /api/workspace/status` で露出している。frontend は `?job_id=` 不在時にこれを fallback として 1 回だけ hydrate し（latch は `workspace_reset` までクリアされない）、長時間学習中のリロードで進捗を見失わないようにする。dirty な config form を持つ状態の `beforeunload` は browser default confirm dialog を出す（誤リロード防止）。`current_job_id` が null なら従来どおり空状態。1 名利用前提のため multi-tab 衝突制御は scope 外。
 
 #### 3.4.2 Job 状態（永続・ディスク）
 
@@ -312,7 +330,7 @@ class BackendAdapter(
 | 状態 | 型 | 説明 |
 |------|-----|------|
 | `job_id` | `str` | 一意識別子 |
-| `status` | `pending \| running \| completed \| failed \| cancelled` | ジョブの実行状態 (H-0057) |
+| `status` | `pending \| running \| paused \| completed \| failed \| cancelled` | ジョブの実行状態 (H-0057。`paused` は P-0099 v3-20a で追加 — Tune long-run resumability 用の非 terminal 状態) |
 | `backend_name` | `str` | 使用バックエンド名 |
 | `config` | `dict` | 使用Config |
 | `data_ref` | `DataRef` | データ参照（パス + フィンガープリント） |
@@ -323,6 +341,29 @@ class BackendAdapter(
 | `tune_result` | `TuningSummary \| None` | Tune 実行結果（Fit Job の場合は `None`） |
 | `model_path` | `Path \| None` | 学習済みモデルの保存パス |
 | `error` | `str \| None` | エラーメッセージ（失敗時） |
+
+**状態遷移と不変条件（P-0099 R-1）:** Job state machine の合法遷移は以下のみ。illegal transitions は `JobStore.set_status` が `AssertionError` で reject する（runtime guard）。invariant test は `tests/regression/test_inv_*.py`。
+
+```
+[*] → pending          (POST /fit / /tune)
+pending → running      (worker thread が claim_active)
+pending → cancelled    (start 前の DELETE / cancel)
+running → completed    (terminal write OK)
+running → failed       (exception / subprocess died)
+running → cancelled    (cancel signal を mid-run で観測)
+running → paused       (Tune trial 完了時に user pause、R-1.4)
+paused  → running      (POST /unpause / restart 時の再 attach)
+paused  → cancelled    (paused 中の cancel — worker 不在なので明示遷移)
+paused  → failed       (resume 時に storage corruption を検出)
+```
+
+- **INV-1**: `active_job_id` は同時に高々 1 つの running-or-paused job を保持。release は completion / cancel / exception / SIGKILL / WebSocket 切断 / browser 閉じる の 6 経路すべて（`paused` だけは例外で slot を保持し続ける — `POST /unpause` のための Optuna sqlite を所有しているため）。
+- **INV-2**: `meta.json` は atomic write（tmpfile + `fsync` + `os.replace` + parent-dir `fsync`、`storage/versions.py:write_versioned_json`）。`kill -9` mid-write でも JSON 整合性が破れない。
+- **INV-3**: 上記の合法遷移以外は assert で reject。
+- **INV-4**: `paused` job は trial-level checkpoint（Optuna sqlite `storage` + `study_name`）+ `meta.json` から完全復元可能。`load_if_exists=True` で同 study に re-attach し trial 番号が monotonic に蓄積される（`tests/integration/test_tune_resume_round_trip.py`）。
+- **INV-5**: cancel observation は monotonic — `is_cancel_requested(job_id)` が一度 True を返したら job 完了まで連続 True。
+- **INV-6**: subprocess crash recovery — 子 process が SIGKILL で死ぬと既存 reconcile path が `failed (reason="subprocess died")` で terminal write + slot release（専用 watchdog は audit の結果不要と判明）。
+- **INV-7**: WebSocket 切断は active slot を release **しない**。進行中 job は subscriber 数に依らず terminal まで走り、restart 越しに paused slot を復元する。
 
 #### 3.4.3 DataRef（データ参照）
 
@@ -364,6 +405,13 @@ class DataRef:
 - `model.pkl`: Tune 実行中に各 trial 完了毎に atomic rename で上書き保存される（クラッシュ耐性のための best-effort）。加えて `Model.tune()` が `self._study` をセットしてから `return` する前に、**確定版の最終 save を必ず 1 回実行する**。lizyml の `Model.tune()` は study を関数末尾でのみ内部フィールドに代入する契約のため、毎 trial save だけだと pickle に `_study=None` しか残らず、Re-tune / Resume で `load_checkpoint()` した Model が `lizyml: Cannot resume tuning: no previous tune() call` を発生させる（H-0062 Bugfix 2026-04-14）。再tune / resume 時はこの最終 save をソース・オブ・トゥルースとして `load_checkpoint()` でモデル状態（Optuna study 含む）を復元する。
 - `model_meta.json`: pickle schema version + saved_at + lizyml/lightgbm/optuna のバージョン記録。メジャーバージョン不一致時は `PICKLE_INCOMPATIBLE` で load を拒否する。
 - `meta.json.parent_job_id`: Re-tune / Resume の child job では parent の job_id を参照する。非 child job では `null`。
+
+**format_version と legacy 保護（P-0103 / v3-25 / R-4.1）:** ディスク上の `meta.json` 等は `storage/versions.py` 経由で読み書きし、`STUDIO_FORMAT_VERSION`（現行 `2` — P-0099 v3-20a で `1`→`2`）の値を `format_version` キーに記録する。
+
+- 旧 version の読み込みは常に許可（in-memory で自動 migration、現状 v0→v1→v2 はすべて identity migration）。
+- 旧 version（`format_version < STUDIO_FORMAT_VERSION`）の同名ファイルが既に disk に存在する場合、それを上書きする write は環境変数 `LIZYSTUDIO_ALLOW_LEGACY_WRITE=1` が無いと `LegacyFormatProtectionError` を raise する（INV-fmt-2）。将来の structural change で旧 workspace を silent に破壊するのを防ぐため。
+- 新規ファイルや同 version への上書きは常に許可（INV-fmt-3）。
+- `format-version-matrix` CI job が `tests/fixtures/legacy_workspaces/{v0,v1}/` の captured fixture を v0→v1→v2 round-trip し、migration の idempotence を gating する（INV-fmt-4 / P-0095 拡張）。
 
 #### 3.4.5 Inference 履歴（永続・ディスク）
 
@@ -702,7 +750,7 @@ Fit タブと Tune タブは**同一の Config オブジェクト**を操作す�
 │     inner_valid [holdout    ▼]  │ ← enabled=ON時のみ
 │                                  │
 │ ▸ Evaluation           ← config.evaluation │
-│   ☑ AUC  ☑ LogLoss              │ ← ui_schema.option_sets.metric から
+│   ☑ AUC  ☑ LogLoss              │ ← ui_schema.option_sets.eval_metric から
 │   ☐ Accuracy  ☐ F1              │
 │                                  │
 │ ▸ Calibration          ← config.calibration │
@@ -752,8 +800,8 @@ JSON Schema から動的生成する LGBMConfig 固有フィールド。
 
 | 要素 | コンポーネント | Config パス | 説明 |
 |------|-------------|------------|------|
-| objective | Segment buttons（task 別） | `model.params.objective` | `ui_schema.option_sets.objective[task]` から選択肢生成 |
-| metric | Chip buttons（multi-select） | `model.params.metric` | `ui_schema.option_sets.model_metric[task]` から選択肢生成 |
+| objective | Segment buttons（task 別） | `model.params.objective` | `ui_schema.option_sets.objective[task]`（LizyML `LGBMProvider.objective_choices(task)` SSOT — P-0104 Wave 3.1a）から選択肢生成 |
+| metric | Chip buttons（multi-select） | `model.params.metric` | `ui_schema.option_sets.metric[task]`（`{native, feval}` — LizyML `LGBMProvider.metric_choices(task)` SSOT）から `native ∪ feval` を選択肢生成。`feval` 由来の項目には "Custom (slow)" バッジ（P-0104 Wave 3.1b / Q2） |
 | n_estimators | NumberInput (int, step=100) | `model.params.n_estimators` | |
 | learning_rate | NumberInput (float, step=0.001) | `model.params.learning_rate` | |
 | max_depth | NumberInput (int, step=1) | `model.params.max_depth` | |
@@ -793,11 +841,11 @@ step 値は `ui_schema.step_map` から取得。値が未設定の場合は plac
 
 **Evaluation セクション（config.evaluation）:**
 
-`evaluation.metrics` は `MetricEntry[]` 型（`MetricEntry = string | { metric_name: { param: value } }`）。選択肢は `ui_schema.option_sets.metric[task]` から動的取得する（フロントエンドにハードコードしない）。パラメータ付きメトリクス（例: `{"precision_at_k": {"k": 20}}`）は dict 形式で格納する（LizyML v0.7.0 / H-0065）。
+`evaluation.metrics` は `MetricEntry[]` 型（`MetricEntry = string | { metric_name: { param: value } }`）。選択肢は `ui_schema.option_sets.eval_metric[task]`（LizyML の eval-metrics registry — `model.params.metric` の LightGBM 生名とは別物）から動的取得する（フロントエンドにハードコードしない）。パラメータ付きメトリクス（例: `{"precision_at_k": {"k": 20}}`）は dict 形式で格納する（LizyML v0.7.0 / H-0065）。
 
 | 要素 | コンポーネント | 説明 |
 |------|-------------|------|
-| メトリクス | Chip グループ（Toggle） | `ui_schema.option_sets.metric[task]` から選択肢を生成。Task 変更時にデフォルト選択にリセット。クリックで ON/OFF |
+| メトリクス | Chip グループ（Toggle） | `ui_schema.option_sets.eval_metric[task]` から選択肢を生成。Task 変更時にデフォルト選択にリセット。クリックで ON/OFF |
 
 Data Panel で Task が変更されたとき、`evaluation.metrics` をそのタスクのデフォルト値にリセットする。空選択の場合は Backend のランタイムデフォルトが使用される。
 
@@ -878,7 +926,7 @@ Fit タブと Tune タブは**同一の Config オブジェクト**の異なる�
 
 SegmentedControl: プリセット値をボタン群で表示し、「カスタム」を選ぶと NumberInput が出現する。
 
-> 注: `direction` は廃止。Optimization Metric の選択に応じて `ui_schema.option_sets.metric_direction[task][metric]` から自動判定する（H-0031）。
+> 注: `direction` は廃止。Optimization Metric の選択に応じて `ui_schema.metric_direction[task][metric]` から自動判定する（H-0031）。
 
 **Re-tune Settings セクション（config.tuning.re_tune, H-0061 Phase A）:**
 
@@ -959,18 +1007,50 @@ Fixed パラメータは `space` に含めず、`model.params` の値がその�
 | distribution | Select | `log: true/false` | Uniform（`log: false`）/ Log-uniform（`log: true`） |
 | step | NumberInput（integer のみ） | `step` | ステップ幅。省略可。float には表示しない |
 
-Range のデフォルト初期値:
+Range / Choice / Fixed のデフォルト初期値（P-0104 Wave 2.2 / Issue #459、binary task の canonical spec）。出典は `lizyml_ui_schema.search_space_catalog`。regression / multiclass のデフォルトは後続 Issue で確定する。
 
-| パラメータ | low | high | log | step |
-|-----------|-----|------|-----|------|
-| learning_rate | 0.005 | 0.3 | true | — |
-| num_leaves | 10 | 200 | false | 1 |
-| n_estimators | 100 | 3000 | false | 100 |
-| max_depth | 3 | 12 | false | 1 |
-| subsample | 0.5 | 1.0 | false | — |
-| colsample_bytree | 0.5 | 1.0 | false | — |
-| reg_alpha | 1e-8 | 10.0 | true | — |
-| reg_lambda | 1e-8 | 10.0 | true | — |
+**Smart Params グループ:**
+
+| パラメータ | default_mode | low / 値 | high | log | 備考 |
+|-----------|-------------|---------|------|-----|------|
+| `auto_num_leaves` | Fixed | `True` | — | — | true 時は `num_leaves_ratio`、false 時は `num_leaves` のみ表示 |
+| `num_leaves_ratio` | Range | 0.4 | 1.0 | false | `auto_num_leaves=True` で表示 |
+| `num_leaves` | Fixed | 256 | — | — | `auto_num_leaves=False` で表示 |
+| `min_data_in_leaf_ratio` | Range | 0.01 | 0.2 | false | — |
+| `min_data_in_bin_ratio` | Range | 0.01 | 0.2 | false | — |
+| `feature_weights` | Fixed | `None`（disabled） | — | — | — |
+| `balanced` | Fixed | `True` | — | — | — |
+
+**Model Params グループ:**
+
+| パラメータ | default_mode | low / 値 | high | log | 備考 |
+|-----------|-------------|---------|------|-----|------|
+| `objective` | Choice | `option_sets.objective[task]` 全列挙（LizyML `LGBMProvider.objective_choices(task)` SSOT — P-0104 Wave 3.1a） | — | — | regression: `[regression, regression_l1, huber, fair, poisson, quantile, mape, gamma, tweedie]` / binary: `[binary, cross_entropy, cross_entropy_lambda]` / multiclass: `[multiclass, multiclassova]` |
+| `metric` | Choice | `option_sets.metric[task]`（`{native, feval}` — LizyML `LGBMProvider.metric_choices(task)` SSOT）の `native ∪ feval` | — | — | binary native: `[binary_logloss, binary_error, auc, average_precision, cross_entropy, cross_entropy_lambda, kullback_leibler]` / feval（"Custom (slow)" バッジ）: `[f1, brier, ece, precision_at_k, accuracy]` |
+| `first_metric_only` | Fixed | `True` | — | — | — |
+| `n_estimators` | Range | 500 | 2000 | false | step=100（`step_map`） |
+| `learning_rate` | Range | 1e-4 | 1e-2 | **true** | log-uniform |
+| `max_depth` | Range | 3 | 9 | false | step=1 |
+| `max_bin` | Choice | `[15, 63, 127, 255, 511]` | — | — | 1023 は新 learning_rate 範囲で収束しにくいため除外 |
+| `feature_fraction` | Range | 0.5 | 1.0 | false | — |
+| `bagging_fraction` | Range | 0.5 | 1.0 | false | — |
+| `bagging_freq` | Range | 1 | 10 | false | 0（disabled）は許可しない |
+| `lambda_l1` | **Fixed** | 0 | — | — | デフォルトで L1 は無効、L2 のみで正則化 |
+| `lambda_l2` | Range | 1e-6 | 1e-2 | **true** | log-uniform |
+
+**Training グループ:**
+
+| パラメータ | default_mode | low / 値 | high | log | 備考 |
+|-----------|-------------|---------|------|-----|------|
+| `seed` | Fixed | **1120** | — | — | Studio が library default 42 を上書き（Fit / Tune 両タブで統一） |
+| `early_stopping.enabled` | Fixed | `True` | — | — | — |
+| `early_stopping.rounds` | Range | 50 | 200 | false | n_estimators 500-2000 に対応する短縮レンジ |
+| `validation_ratio` | Range | 0.1 | 0.3 | false | — |
+| `inner_valid` | Fixed | CV strategy 推奨値 | — | — | Wave 2.3 で `cv-state.ts::recommendedInnerValid(strategy)` 経由のピッカー化 |
+
+> **凡例 default_mode** — Fixed: `tuning.optuna.space` に出さず `model.params` 値で固定。Range: float / integer の探索範囲、log=true で log-uniform。Choice: 列挙からマルチ選択。step は integer の Range で `step_map` から供給。
+
+> **Range Min/Max の妥当性検証（P-0104 Wave 2.4 + 3.1a）** — Range の Min/Max NumberInput は (1) `paramType="integer"` のとき小数入力を拒否（Wave 2.4）、(2) `ui_schema.parameter_bounds[task][param]` の `min`/`max` でクランプ（Wave 3.1a）。さらに backend の `validate_config` が `tuning.optuna.space` を LizyML `parse_space()` に通し、`low >= high` / log-distribution で `low <= 0` の場合は `search_space_invalid` エラーとして「Fix validation errors first」バナーに表示する。
 
 **Mode = Choice（categorical）:**
 
@@ -984,7 +1064,7 @@ Tune 時の評価メトリクスを Fit の `evaluation.metrics` とは独立し
 
 | 要素 | コンポーネント | Config パス | 説明 |
 |------|-------------|------------|------|
-| Optimization Metric | Segment buttons（single select） | `tuning.evaluation.metrics[0]` | Optuna の objective として使用されるメトリクス。`ui_schema.option_sets.metric[task]` から選択肢生成。`direction` は `metric_direction[task][metric]` から自動判定 |
+| Optimization Metric | Segment buttons（single select） | `tuning.evaluation.metrics[0]` | Optuna の objective として使用されるメトリクス。`ui_schema.option_sets.eval_metric[task]` から選択肢生成。`direction` は `metric_direction[task][metric]` から自動判定 |
 | Additional Metrics | Chip buttons（multi-select） | `tuning.evaluation.metrics[1..]` | Optuna が全メトリクスを計算するが objective は metrics[0] のみ。Optimization Metric は候補から除外 |
 
 **Tune ボタン有効条件:**
@@ -1237,7 +1317,7 @@ Model Panel 全体のコンポーネントスタイルを定義する。shadcn/u
 | セパレータ | `<Separator />` | `border-t my-3` | グループ間の視覚分離 |
 | Model Params 行 | Label + NumberInput | 前述のフォームフィールド仕様 | `parameter_hints` から生成。step は `step_map` から |
 | Objective | Segment buttons | 前述の SegmentedControl 仕様 | `option_sets.objective[task]` から選択肢 |
-| Metric | Chip buttons | 前述のメトリクスチップ仕様 | `option_sets.model_metric[task]` から選択肢 |
+| Metric | Chip buttons | 前述のメトリクスチップ仕様 | `option_sets.metric[task]` の `native ∪ feval` から選択肢（`feval` 由来は "Custom (slow)" バッジ） |
 | Additional Params 選択 | `Select` | `h-7 w-40 text-xs` | `ui_schema.additional_params` から未使用のパラメータ |
 | Additional Params 値 | NumberInput / Input | `h-7 w-24 text-xs text-right` | step は `step_map` から |
 | 削除ボタン | `Button variant="ghost" size="icon"` | `h-6 w-6` | lucide `X` (12px) |
@@ -1568,7 +1648,7 @@ Fit 完了と同じ評価項目に加え、探索結果（Best Params・収束�
 |--------|-------------|-------------|---------|
 | Round History | `RoundHistoryTable` | `rounds[*].{n_rounds, best_score_before, best_score_after, expanded_dims}` | `rounds.length >= 1` |
 | Search Space Evolution | `SearchSpaceEvolutionPanel` | `rounds[*].space_snapshot` + `boundary_report` | 少なくとも 1 ラウンドが非 null の `space_snapshot` を持つ |
-| Boundary Expansion | `BoundaryExpansionPanel` | `boundary_report.dims[*].{best_value, position_pct, edge, expanded, new_low, new_high}` | `boundary_report != null` |
+| Boundary Expansion | `BoundaryExpansionPanel` | `boundary_report.dims[*].{best_value, position_pct, edge, expanded, new_low, new_high, clamped_to_bound}` | `boundary_report != null`。`clamped_to_bound=true` の dim には「bounded」バッジ（探索範囲の拡張が LizyML `parameter_bounds` の上限で頭打ちになったことを示す — P-0104 Wave 3.1b） |
 | Convergence Signal | `ConvergenceSignalPanel` | 最終ラウンドの `expanded_dims` + `rounds[*].best_score_after` 推移 | `rounds.length >= 1` |
 
 **Convergence の判定ロジック（Studio 側の責務）:**
@@ -1922,8 +2002,10 @@ Optimization History → Best Params → Score → Learning Curve → Plots（�
 | **Inference ▸** | Inference 画面に遷移。このジョブのモデルを自動選択 | Completed（Fit / Tune） |
 | **Export ▸** | Export ダイアログを開く | Completed（Fit / Tune） |
 | **Re-fit ▸** | Config を Workspace の Model Panel にロードし、Workspace に遷移 | Completed / Failed |
+| **Pause** | 実行中 Tune を次の trial 完了時に paused に遷移（ダイアログなし、`PauseCircle` アイコン）(P-0099 v3-20f) | Running（Tune のみ） |
+| **Resume** | paused Tune を同じ Optuna study から再開（in-place。ダイアログなし、`PlayCircle` アイコン）。failed→child job を作る既存 **Resume (X trials remaining)**（§4.3.3「Re-tune / Resume アクション」、lineage）とは責務が別 (P-0099 v3-20f) | Paused（Tune のみ） |
 | **Delete** | ジョブの削除。確認ダイアログあり | 全状態（Running 以外） |
-| **Cancel** | 実行中ジョブのキャンセル。確認ダイアログあり | Running |
+| **Cancel** | 実行中 / paused ジョブのキャンセル。確認ダイアログあり（paused 用に本文を切り替え）(P-0099 v3-20c) | Running / Paused |
 
 **Re-fit の動作:**
 1. 選択ジョブの Config（data / features / split / model / training / evaluation）を Workspace の各パネルに反映
@@ -2439,9 +2521,11 @@ Workspace の `workspace_result` は完了時に自動更新される。
 | POST | `/api/jobs/{job_id}/export` | モデル/レポートを指定パスにExport |
 | GET | `/api/jobs/{job_id}/export-code` | LizyML 非依存コードを ZIP でダウンロード（H-0027） |
 | GET | `/api/jobs/{job_id}/log` | 実行ログ取得（H-0006） |
-| POST | `/api/jobs/{job_id}/cancel` | Running ジョブのキャンセル（H-0011） |
+| POST | `/api/jobs/{job_id}/cancel` | Running / Paused ジョブのキャンセル（H-0011 / P-0099 v3-20c） |
+| POST | `/api/jobs/{job_id}/pause` | Running Tune を paused に遷移（次の trial 完了時）。Fit ジョブは `JOB_NOT_PAUSEABLE`、running 以外は `JOB_NOT_RUNNING`（P-0099 v3-20d） |
+| POST | `/api/jobs/{job_id}/unpause` | Paused Tune を同 job_id で in-place 再開（Optuna `load_if_exists=True` で trial 継続）。data 再ロード必須。paused 以外は `JOB_NOT_PAUSED`、data 未読込は `WORKSPACE_NO_DATA`（P-0099 v3-20d） |
 | POST | `/api/jobs/{job_id}/retune` | 完了 Tune を起点に再チューニング子ジョブを作成（H-0062） |
-| POST | `/api/jobs/{job_id}/resume` | 失敗/中断 Tune の再開子ジョブを作成（H-0062 Phase B） |
+| POST | `/api/jobs/{job_id}/resume` | 失敗/中断 Tune の再開子ジョブを作成（H-0062 Phase B。`unpause` とは別 — こちらは lineage child を作る） |
 | GET | `/api/jobs/{job_id}/lineage` | ジョブ系譜のサブツリー（H-0062） |
 | DELETE | `/api/jobs/{job_id}` | ジョブを削除（query: `cascade=true` で子孫も削除） |
 
@@ -2470,16 +2554,18 @@ Workspace の `workspace_result` は完了時に自動更新される。
 
 **`plot_type` の値:**
 
-| plot_type | 条件 |
-|-----------|------|
-| `learning-curve` | 全タスク |
-| `importance` | 全タスク |
-| `oof-distribution` | 全タスク |
-| `residuals` | regression |
-| `roc-curve` | binary |
-| `calibration` | binary + calibration有効 |
-| `probability-histogram` | binary |
-| `tuning` | tune実行済み |
+| plot_type | 条件 | `?kind=` |
+|-----------|------|----------|
+| `learning-curve` | 全タスク | — (`?metrics=` で subplot フィルタ) |
+| `importance` | 全タスク | `split` / `gain` / `shap`（`?top_n=` も — P-0097） |
+| `oof-distribution` | 全タスク | — |
+| `residuals` | regression | `scatter` / `histogram` / `qq` / `all`（既定 `all` = 3-panel layout、Issue #457 / P-0105）。不正値は `400 INVALID_PARAM` |
+| `roc-curve` | binary | — |
+| `calibration` | binary + calibration有効 | — |
+| `probability-histogram` | binary | — |
+| `tuning` | tune実行済み | — |
+
+> Residuals の kind selector（`PlotSection` の `SegmentGroup`、`Scatter / Histogram / QQ / All`）は Importance の kind selector と同じ位置に描画され、狭い結果パネルでも 1 panel ずつ読めるようにする（Issue #457）。`all` は従来の 3-panel 表示と完全一致。
 
 ### 5.4 Inference API
 
@@ -2559,6 +2645,15 @@ Workspace の `workspace_result` は完了時に自動更新される。
 
 ```json
 {
+  "type": "paused",
+  "job_id": "job_042",
+  "trial_number": 7,
+  "message": "Paused."
+}
+```
+
+```json
+{
   "type": "ping",
   "job_id": "job_042"
 }
@@ -2566,7 +2661,9 @@ Workspace の `workspace_result` は完了時に自動更新される。
 
 `ping` は 30 秒間隔の keepalive メッセージ（H-0058）。クライアントは受信しても無視してよい（WebSocket 接続維持のため）。
 
-**Schema SSOT (H-0069):** 上記 4 variant は `src/lizystudio/ws/messages.py` の Pydantic discriminated union として単一定義される。サーバ側送信は `WsMessage.model_dump_json(exclude_none=True)` を通り、フロントは生成 `schema.d.ts` から `WsMessage` 型を import する。optional フィールド (`fold_results` / `trial_results`) は値が存在するときだけ wire に現れ、`null` フィールドはシリアライズしない（既存 wire format と bit-identical）。
+`paused` は Tune が user pause で中断したことを通知する（P-0099 v3-20e）。`trial_number` は最初の paused emit 時点で worker が trial に到達していなければ `null`。**terminal メッセージではない** — pause は resumable なので late-subscriber replay cache（下記 Terminal replay）には載せず、frontend は WS 接続を維持したまま `unpause` 後の live stream 継続に備える。
+
+**Schema SSOT (H-0069):** 上記 5 variant は `src/lizystudio/ws/messages.py` の Pydantic discriminated union として単一定義される。サーバ側送信は `WsMessage.model_dump_json(exclude_none=True)` を通り、フロントは生成 `schema.d.ts` から `WsMessage` 型を import する。optional フィールド (`fold_results` / `trial_results`) は値が存在するときだけ wire に現れ、`null` フィールドはシリアライズしない（既存 wire format と bit-identical）。
 
 **Terminal replay (P-0093 / Issue #327):** `completed` / `error` メッセージは `ProgressBroadcaster._last_terminal` に per-jobId でキャッシュされ、subscribe より前に送信された場合でも late subscriber に replay される。TTL は default 5 分（環境変数 `LIZYSTUDIO_WS_TERMINAL_TTL_S` で上書き可）。これにより高速 fit (< 3 秒) の subscribe-vs-send race が解消される。INV-1: terminal メッセージは subscribe タイミングに関わらず subscriber に **少なくとも一度** 届く。INV-2: live broadcast 経路と replay 経路は subscriber の登録タイミングを境に disjoint なので、同一 subscriber への重複配信は発生しない。replay 発生は `lizystudio_progress_terminal_replayed_total` Counter で観測可能。
 
@@ -2608,30 +2705,35 @@ Workspace の `workspace_result` は完了時に自動更新される。
   ],
   "option_sets": {
     "objective": {
-      "regression": ["huber", "mse", "mae", "..."],
-      "binary": ["binary", "cross_entropy", "..."],
-      "multiclass": ["multiclass", "softmax", "..."]
+      "regression": ["regression", "regression_l1", "huber", "fair", "poisson", "quantile", "mape", "gamma", "tweedie"],
+      "binary": ["binary", "cross_entropy", "cross_entropy_lambda"],
+      "multiclass": ["multiclass", "multiclassova"]
     },
     "metric": {
-      "regression": ["mae", "mape", "rmse", "..."],
-      "binary": ["auc", "logloss", "auc_pr", "..."],
-      "multiclass": ["multi_logloss", "auc_mu", "..."]
+      "regression": {"native": ["rmse", "mae", "mape", "..."], "feval": ["rmsle", "r2", "smape", "wape"]},
+      "binary": {"native": ["binary_logloss", "binary_error", "auc", "..."], "feval": ["f1", "brier", "ece", "precision_at_k", "accuracy"]},
+      "multiclass": {"native": ["multi_logloss", "multi_error", "auc_mu", "multiclassova"], "feval": ["f1", "brier", "accuracy"]}
     },
-    "model_metric": {
-      "regression": ["huber", "mae", "rmse", "..."],
-      "binary": ["auc", "binary_logloss", "..."],
-      "multiclass": ["multi_logloss", "auc_mu", "..."]
-    },
-    "metric_direction": {
-      "regression": {"mae": "minimize", "r2": "maximize", "...": "..."},
-      "binary": {"auc": "maximize", "logloss": "minimize", "...": "..."},
-      "multiclass": {"multi_logloss": "minimize", "...": "..."}
+    "eval_metric": {
+      "regression": ["rmse", "mae", "mape", "huber", "r2", "..."],
+      "binary": ["auc", "logloss", "auc_pr", "brier", "..."],
+      "multiclass": ["auc", "logloss", "f1", "..."]
     }
+  },
+  "metric_direction": {
+    "regression": {"mae": "minimize", "r2": "maximize", "...": "..."},
+    "binary": {"auc": "maximize", "logloss": "minimize", "...": "..."},
+    "multiclass": {"multi_logloss": "minimize", "...": "..."}
+  },
+  "parameter_bounds": {
+    "regression": {"learning_rate": {"min": 1e-8, "max": 1.0}, "n_estimators": {"min": 10, "max": 10000}, "...": "..."},
+    "binary": {"learning_rate": {"min": 1e-8, "max": 1.0}, "...": "..."},
+    "multiclass": {"learning_rate": {"min": 1e-8, "max": 1.0}, "...": "..."}
   },
   "n_trials_presets": [10, 50, 100, 200, 500],
   "parameter_hints": [
     {"key": "objective", "label": "Objective", "kind": "objective"},
-    {"key": "metric", "label": "Metric", "kind": "model_metric"},
+    {"key": "metric", "label": "Metric", "kind": "metric"},
     {"key": "n_estimators", "label": "N Estimators", "kind": "integer", "step": 100},
     {"key": "learning_rate", "label": "Learning Rate", "kind": "number", "step": 0.001},
     "..."
@@ -2679,7 +2781,8 @@ Workspace の `workspace_result` は完了時に自動更新される。
 | フィールド | 説明 |
 |-----------|------|
 | `sections` | Fit タブの Accordion セクション定義 |
-| `option_sets` | Task 別の選択肢リスト（objective, metric, model_metric, metric_direction） |
+| `option_sets` | Task 別の選択肢リスト。`objective`（`{task: [...]}`）は LizyML `LGBMProvider.objective_choices(task)` の canonical 全列挙（P-0104 Wave 3.1a）、`metric`（`{task: {native, feval}}`）は `LGBMProvider.metric_choices(task)` の `model.params.metric` 選択肢で `feval` 由来は "Custom (slow)" バッジ表示（P-0104 Wave 3.1b / Q2-Q3）、`eval_metric`（`{task: [...]}`）は LizyML eval-metrics registry の post-hoc 評価メトリクス（Tune Evaluation セクション用）。いずれも Studio 側でハードコードしない。`model_metric` は Wave 3.1b で撤廃（`metric` に統合） |
+| `parameter_bounds` | Task 別の hyper-parameter 上下限（`{task: {param: {"min": ..., "max": ...}}}`）。LizyML `LGBMProvider.parameter_bounds(task)` を SSOT として読込む（P-0104 Wave 3.1a）。キーは LizyML 正規名（`early_stopping_rounds`）。フロントエンドは `search_space_catalog` のドット記法キー（`early_stopping.rounds`）をアンダースコア記法に正規化して参照し、Tune Search Space の Range Min/Max NumberInput をこの範囲にクランプする |
 | `parameter_hints` | Model Params セクションに常時表示するパラメータ定義 |
 | `search_space_catalog` | Tune Search Space に表示するパラメータ定義（`group` でグループ分け）。各エントリの詳細は下記参照 |
 | `step_map` | NumberInput のステップ値マップ |
@@ -2845,6 +2948,11 @@ lizystudio_active_jobs 0.0
 | `PARENT_HAS_ACTIVE_CHILDREN` | DELETE 対象 parent に active children がある（cascade=true 必須）(H-0062) | 409 |
 | `CHECKPOINT_MISSING` | Re-tune/Resume 対象 job に model.pkl が存在しない (H-0062) | 400 |
 | `JOB_NOT_FAILED` | Resume は failed tune job のみ対象 (H-0062) | 400 |
+| `JOB_NOT_RUNNING` | Cancel / Pause は running（または paused — Cancel のみ）job が対象 (P-0099 v3-20c/d) | 400 |
+| `JOB_NOT_PAUSEABLE` | Pause は tune job のみ対象（fit job は paused にできない）(P-0099 v3-20d) | 400 |
+| `JOB_NOT_PAUSED` | Unpause は paused job のみ対象 (P-0099 v3-20d) | 400 |
+
+> `LegacyFormatProtectionError`（§3.4.4 / P-0103）は専用エラーコードを持たず、`INTERNAL_ERROR` (500) として surface する。発生条件（旧 format_version の disk ファイル上書き）は通常運用では起きないため。recovery 手順は環境変数 `LIZYSTUDIO_ALLOW_LEGACY_WRITE=1`。
 
 ### 6.2 バックエンドエラーの伝播
 
@@ -3186,4 +3294,4 @@ Phase B では `{jobs_dir}/{job_id}/model.pkl` に cloudpickle で Tune Job の�
 
 ---
 
-_Last reconciled: 2026-05-01 against develop @ ad4c581. P-0086 (config body) / P-0088 (`files_root`) / P-0089 (active-job lock + `WORKSPACE_LOCKED`) / P-0093 (WS terminal-replay) / P-0094 (perf baseline) / `JOB_CONFLICT` / `preflight_checkpoint_dir` を本サイクルで反映。Tier 3 派生 doc（`docs/architecture.md` / `api.md` / `adapter-guide.md`）は #332 で同期済み。_
+_Last reconciled: 2026-05-12 against develop @ 82d4ec3 (Issue #453). 2026-05-01 (@ ad4c581): P-0086 (config body) / P-0088 (`files_root`) / P-0089 (active-job lock + `WORKSPACE_LOCKED`) / P-0093 (WS terminal-replay) / P-0094 (perf baseline) / `JOB_CONFLICT` / `preflight_checkpoint_dir`。2026-05-12 (@ 82d4ec3): P-0099 (`paused` job state + state-machine invariants INV-1〜INV-7 + startup reconciliation v3-22a + `POST /jobs/{id}/pause`・`/unpause` + `WsPaused` message + `JOB_NOT_RUNNING`・`JOB_NOT_PAUSEABLE`・`JOB_NOT_PAUSED`) / P-0102 (reload restoration) / P-0103 (`LegacyFormatProtectionError` + `format-version-matrix` CI gate) / P-0104 (Tune workflow 整備) / P-0105 (Residuals kind selector) / P-0106 (metric-compat を `BackendCore` capability の裏へ) を反映。Tier 3 派生 doc（`docs/architecture.md` / `api.md` / `adapter-guide.md`）は #332 で同期済み。_

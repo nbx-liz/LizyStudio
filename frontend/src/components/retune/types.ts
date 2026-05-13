@@ -18,6 +18,11 @@ export interface BoundaryDimStatus {
   expanded: boolean;
   new_low: number | null;
   new_high: number | null;
+  // P-0104 Wave 3.1b / Issue #461: lizyml v0.15 sets this when a proposed
+  // boundary expansion was clipped by ``parameter_bounds`` (the hard
+  // library limit). Older lizyml versions / single-round tunes omit it,
+  // so the serializer defaults it to ``false``.
+  clamped_to_bound: boolean;
 }
 
 export interface BoundaryReport {

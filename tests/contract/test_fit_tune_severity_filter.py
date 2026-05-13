@@ -172,7 +172,7 @@ def test_post_tune_succeeds_when_only_warnings_present(
                 "direction": "minimize",
             },
             "space": {
-                "n_estimators": {"kind": "range", "low": 50, "high": 100, "log": False}
+                "n_estimators": {"type": "int", "low": 50, "high": 100, "log": False}
             },
         }
     }
@@ -199,7 +199,7 @@ def test_post_tune_with_body_config_succeeds_when_only_warnings_present(
                 "direction": "minimize",
             },
             "space": {
-                "n_estimators": {"kind": "range", "low": 50, "high": 100, "log": False}
+                "n_estimators": {"type": "int", "low": 50, "high": 100, "log": False}
             },
         }
     }

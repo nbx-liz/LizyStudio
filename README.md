@@ -168,6 +168,22 @@ pnpm generate:api                   # regenerate API types from OpenAPI
 pnpm storybook                      # component development
 ```
 
+### Cleaning local artefacts
+
+Day-to-day development leaves gitignored artefacts in the working tree
+(visual-spike PNGs, stale `coverage.json`, superseded `dist/*.whl` from
+local `uv build` runs). They are not tracked, so they never enter a
+commit, but they clutter file searches over time.
+
+```bash
+git clean -dxn                      # dry-run: list what would be removed
+git clean -dxf                      # actually remove everything gitignored
+```
+
+`-x` includes gitignored files; `-d` recurses into untracked directories.
+Run from the repo root only — the command is destructive for anything
+that is gitignored but locally important (e.g. `.env`).
+
 ## Documentation
 
 | Document | Description |

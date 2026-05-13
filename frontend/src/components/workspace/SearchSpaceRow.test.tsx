@@ -182,10 +182,10 @@ describe("SearchSpaceRow – objective SegmentGroup", () => {
 });
 
 // ---------------------------------------------------------------------------
-// model_metric chip buttons (lines 115-145)
+// metric chip buttons (lines 115-145)
 // ---------------------------------------------------------------------------
 
-describe("SearchSpaceRow – model_metric chips", () => {
+describe("SearchSpaceRow – metric chips", () => {
   it("renders metric chips", () => {
     const onModelParamChange = vi.fn();
     renderWithQuery(
@@ -194,7 +194,7 @@ describe("SearchSpaceRow – model_metric chips", () => {
           param: { ...baseParam, key: "metrics" },
           modelParams: { metrics: ["auc"] },
           onModelParamChange,
-          specialSearchSpaceFields: { metrics: "model_metric" },
+          specialSearchSpaceFields: { metrics: "metric" },
           metricOptions: ["auc", "logloss", "accuracy"],
         })}
       />,
@@ -212,7 +212,7 @@ describe("SearchSpaceRow – model_metric chips", () => {
           param: { ...baseParam, key: "metrics" },
           modelParams: { metrics: [] },
           onModelParamChange,
-          specialSearchSpaceFields: { metrics: "model_metric" },
+          specialSearchSpaceFields: { metrics: "metric" },
           metricOptions: ["auc", "logloss"],
         })}
       />,
@@ -229,13 +229,31 @@ describe("SearchSpaceRow – model_metric chips", () => {
           param: { ...baseParam, key: "metrics" },
           modelParams: { metrics: ["auc", "logloss"] },
           onModelParamChange,
-          specialSearchSpaceFields: { metrics: "model_metric" },
+          specialSearchSpaceFields: { metrics: "metric" },
           metricOptions: ["auc", "logloss"],
         })}
       />,
     );
     fireEvent.click(screen.getByText("auc"));
     expect(onModelParamChange).toHaveBeenCalledWith("metrics", ["logloss"]);
+  });
+
+  it("badges feval metrics as 'Custom (slow)'", () => {
+    renderWithQuery(
+      <SearchSpaceRow
+        {...makeProps({
+          param: { ...baseParam, key: "metrics" },
+          modelParams: { metrics: ["auc"] },
+          onModelParamChange: vi.fn(),
+          specialSearchSpaceFields: { metrics: "metric" },
+          metricOptions: ["auc", "binary_logloss", "f1", "brier"],
+          fevalMetrics: ["f1", "brier"],
+        })}
+      />,
+    );
+    const badges = screen.getAllByText(/^Custom \(slow\)$/i);
+    // f1 + brier → two badges; native auc / binary_logloss → none.
+    expect(badges).toHaveLength(2);
   });
 });
 
@@ -319,6 +337,71 @@ describe("SearchSpaceRow – range mode expanded", () => {
     expect(screen.getByText("Step")).toBeInTheDocument();
   });
 
+  // P-0104 Wave 2.4 / Issue #460 — integer paramType on Range Min/Max
+  // surfaces an inline warning when the user attempts a decimal value
+  // and does NOT propagate the decimal upward via onUpdateEntry.
+  it("Range Min for integer paramType rejects decimals and shows inline warning", () => {
+    const intSpace = {
+      n_estimators: { type: "int", low: 10, high: 500, log: false },
+    };
+    const onUpdateEntry = vi.fn();
+    renderWithQuery(
+      <SearchSpaceRow
+        {...makeProps({
+          param: { ...baseParam, key: "n_estimators", type: "integer" },
+          space: intSpace,
+          isExpanded: true,
+          onUpdateEntry,
+        })}
+      />,
+    );
+    const minInput = screen.getByRole("textbox", { name: /n_estimators min/i });
+    fireEvent.change(minInput, { target: { value: "10.5" } });
+    expect(screen.getByRole("alert")).toHaveTextContent("Integer values only");
+    expect(onUpdateEntry).not.toHaveBeenCalled();
+  });
+
+  it("Range Max for integer paramType rounds to int on blur", () => {
+    const intSpace = {
+      n_estimators: { type: "int", low: 10, high: 500, log: false },
+    };
+    const onUpdateEntry = vi.fn();
+    renderWithQuery(
+      <SearchSpaceRow
+        {...makeProps({
+          param: { ...baseParam, key: "n_estimators", type: "integer" },
+          space: intSpace,
+          isExpanded: true,
+          onUpdateEntry,
+        })}
+      />,
+    );
+    const maxInput = screen.getByRole("textbox", { name: /n_estimators max/i });
+    fireEvent.change(maxInput, { target: { value: "500.6" } });
+    onUpdateEntry.mockClear();
+    fireEvent.blur(maxInput);
+    expect(onUpdateEntry).toHaveBeenCalledWith(
+      "n_estimators",
+      expect.objectContaining({ high: 501 }),
+    );
+  });
+
+  it("Range Min for float paramType keeps decimal-typing behaviour", () => {
+    const onUpdateEntry = vi.fn();
+    renderWithQuery(
+      <SearchSpaceRow
+        {...makeProps({ space: rangeSpace, isExpanded: true, onUpdateEntry })}
+      />,
+    );
+    const inputs = screen.getAllByRole("textbox");
+    fireEvent.change(inputs[0], { target: { value: "0.0001" } });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(onUpdateEntry).toHaveBeenCalledWith(
+      "learning_rate",
+      expect.objectContaining({ low: 0.0001 }),
+    );
+  });
+
   it("calls onToggleExpand when summary button clicked in range mode", () => {
     const onToggleExpand = vi.fn();
     renderWithQuery(
@@ -326,6 +409,53 @@ describe("SearchSpaceRow – range mode expanded", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /learning_rate/i }));
     expect(onToggleExpand).toHaveBeenCalledWith("learning_rate");
+  });
+
+  // P-0104 Wave 3.1a / Issue #461 — the ``bounds`` prop clamps the Range
+  // Min/Max NumberInputs to LizyML's parameter_bounds on blur.
+  it("clamps Range Max to the supplied bounds.max on blur", () => {
+    const onUpdateEntry = vi.fn();
+    renderWithQuery(
+      <SearchSpaceRow
+        {...makeProps({
+          space: rangeSpace,
+          isExpanded: true,
+          onUpdateEntry,
+          bounds: { min: 1e-8, max: 1.0 },
+        })}
+      />,
+    );
+    const inputs = screen.getAllByRole("textbox");
+    // Second textbox is the Max input; type a value above the upper bound.
+    fireEvent.change(inputs[1], { target: { value: "5" } });
+    onUpdateEntry.mockClear();
+    fireEvent.blur(inputs[1]);
+    expect(onUpdateEntry).toHaveBeenCalledWith(
+      "learning_rate",
+      expect.objectContaining({ high: 1.0 }),
+    );
+  });
+
+  it("clamps Range Min to the supplied bounds.min on blur", () => {
+    const onUpdateEntry = vi.fn();
+    renderWithQuery(
+      <SearchSpaceRow
+        {...makeProps({
+          space: rangeSpace,
+          isExpanded: true,
+          onUpdateEntry,
+          bounds: { min: 0.0001, max: 1.0 },
+        })}
+      />,
+    );
+    const inputs = screen.getAllByRole("textbox");
+    fireEvent.change(inputs[0], { target: { value: "0.00001" } });
+    onUpdateEntry.mockClear();
+    fireEvent.blur(inputs[0]);
+    expect(onUpdateEntry).toHaveBeenCalledWith(
+      "learning_rate",
+      expect.objectContaining({ low: 0.0001 }),
+    );
   });
 });
 
@@ -427,7 +557,7 @@ describe("SearchSpaceRow – precision_at_k row", () => {
           param: { ...baseParam, key: "metrics" },
           modelParams: { metrics: ["precision_at_k"], _precision_at_k_k: 5 },
           onModelParamChange,
-          specialSearchSpaceFields: { metrics: "model_metric" },
+          specialSearchSpaceFields: { metrics: "metric" },
           metricOptions: ["precision_at_k", "auc"],
         })}
       />,
@@ -446,7 +576,7 @@ describe("SearchSpaceRow – precision_at_k row", () => {
           param: { ...baseParam, key: "metrics" },
           modelParams: { metrics: ["precision_at_k"] },
           onModelParamChange,
-          specialSearchSpaceFields: { metrics: "model_metric" },
+          specialSearchSpaceFields: { metrics: "metric" },
           metricOptions: ["precision_at_k"],
         })}
       />,
@@ -463,7 +593,7 @@ describe("SearchSpaceRow – precision_at_k row", () => {
           param: { ...baseParam, key: "metrics" },
           modelParams: { metrics: ["auc"] },
           onModelParamChange,
-          specialSearchSpaceFields: { metrics: "model_metric" },
+          specialSearchSpaceFields: { metrics: "metric" },
           metricOptions: ["precision_at_k", "auc"],
         })}
       />,
@@ -479,7 +609,7 @@ describe("SearchSpaceRow – precision_at_k row", () => {
           param: { ...baseParam, key: "metrics" },
           modelParams: { metrics: ["precision_at_k"], _precision_at_k_k: 10 },
           onModelParamChange,
-          specialSearchSpaceFields: { metrics: "model_metric" },
+          specialSearchSpaceFields: { metrics: "metric" },
           metricOptions: ["precision_at_k"],
         })}
       />,
@@ -505,7 +635,7 @@ describe("SearchSpaceRow – precision_at_k row", () => {
           space: choiceSpace,
           modelParams: { _precision_at_k_k: 3 },
           onModelParamChange,
-          specialSearchSpaceFields: { metrics: "model_metric" },
+          specialSearchSpaceFields: { metrics: "metric" },
           metricOptions: ["precision_at_k", "auc"],
         })}
       />,

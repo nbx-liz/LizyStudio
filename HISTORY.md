@@ -3602,3 +3602,410 @@ P-0095 の round-trip CI gate は単一 release 内のシリアライズ整合�
 - 2026-05-07 **Approved** — v3-25 phase で a (matrix regression test) → b (CI workflow + fixtures) → c (LegacyFormatProtectionError + env var gate) の 3 PR 構成で着手
 
 
+### P-0104: Tune workflow 全面整備（Re-tune UX + canonical defaults + validation guardrails + LizyML v0.15 SSOT 連動）
+
+- **Date:** 2026-05-11 起票・即承認
+- **Related:** Issue #458 / #459 / #460 / #461、LizyML #159（H-0079 v0.15.0）、`docs/issue-cleanup-plan-2026-05-10.md` Wave 1.1、BLUEPRINT.md §4.2.2、`src/lizystudio/backends/lizyml_ui_schema.py`、`src/lizystudio/backends/lizyml/config_compat.py`、`src/lizystudio/backends/lizyml/config_mixin.py`、`frontend/src/components/workspace/SearchSpaceRow.tsx`、`frontend/src/components/retune/RetuneSettingsSection.tsx`
+
+#### Motivation
+
+LizyML v0.15.0 の出荷（2026-05-10）により、Studio の Tune workflow を取り巻く上流ブロッカー（`parameter_bounds()` / `objective_choices()` / `metric_choices()` API、silent objective override fix）がすべて解消された。同時に Studio 側の Tune 周辺で 4 つの open Issue（#458 / #459 / #460 / #461）が並行して残っており、いずれも `lizyml_ui_schema.py` / `SearchSpaceRow.tsx` / BLUEPRINT.md §4.2.2 を編集する。これらを別々の Proposal として進めると以下の問題がある:
+
+1. **Spec 重複編集**: BLUEPRINT.md の Tune 関連節を 3 PR が連続して書き換え、conflict / churn が増える
+2. **objective / metric master の整合**: #459 で objective master を整理する一方、#461 で UiSchema 経由 LizyML SSOT に切替えるため、暫定状態が中間 PR で発生する
+3. **D6 確定の反映**: #460 を当初の bounds map ベース（Option A）から D6=Option C（usability-only）に縮退済だが、Issue body と実装計画が未だ齟齬を含む
+4. **multiclass `auc` 不整合**: LizyML Phase 3 で発覚した LightGBM 4.x 不整合（multiclass で `auc` を指定すると拒否）が Studio `option_sets.model_metric.multiclass` にも残存している
+
+これらは「Tune workflow 全体を v0.15 SSOT に揃え直す」という単一テーマの subset であり、1 Proposal にまとめることで Decision 整合・実装順序・後方互換戦略が一貫する。
+
+#### Purpose
+
+- **Scope-1 (#459)**: Tune 初期パラメータ仕様を 3 task（regression / binary / multiclass）で再確立。`get_default_config()` の Fit seed default を `1120` に統一。`SearchSpaceRow` で inner_valid を選択できる UI を追加。`option_sets.objective.regression` から `cross_entropy`（regression task で意味を持たない）を除去
+- **Scope-2 (#458)**: Re-tune Settings の `enabled` Switch を復活（null payload で送信時は backward-compat として `n_rounds=1` 同等扱い）。BLUEPRINT.md §4.2.2 の default-range 表を現行実装に整合
+- **Scope-3 (#460, D6=Option C)**: NumberInput を integer parameter で強制 integer 入力。範囲外入力に inline 警告（実装は frontend のみ、bounds map は導入しない — Wave 3 で UiSchema 直行）
+- **Scope-4 (#461 expanded)**: UiSchema を LizyML v0.15 SSOT 直結化。`LGBMProvider().parameter_bounds(task)` / `.objective_choices(task)` / `.metric_choices(task)` を `lizyml_ui_schema.build_ui_schema()` から読み、Studio の hardcoded master を撤去。Range Min/Max を `min_allowed` / `max_allowed` でクランプ。`BoundaryDimStatus.clamped_to_bound` バッジを Tune 実行結果 UI に表示。`validate_config` を `parse_space()` 経由に rewire し v0.13 の typed errors を活用
+- **Scope-5 (auc removal)**: `option_sets.model_metric.multiclass` から `auc` を除去（LizyML Phase 3 と sync）。Studio 側の対応 fixture / e2e snapshot を update
+- **Q1-Q3 確定**:
+  - Q1: `option_sets.objective` master = LizyML `objective_choices(task)` の **full canonical（regression 9 / binary 3 / multiclass 2）**を採用。target 分布制約のある objective（gamma / poisson / tweedie / mape）には UI 上で warning ヘルプテキストを併記
+  - Q2: `option_sets.metric` の表示で `metric_choices(task)["feval"]` 由来の項目に **"Custom (slow)" バッジ**を表示（学習速度の trade-off をユーザに可視化）
+  - Q3: `option_sets.model_metric` を **撤廃**し `option_sets.metric` に一本化（LightGBM 生名は metric の native section で吸収）。`config_compat.py` `allowed_metric` も `option_sets.metric` 参照に切替
+
+#### Invariants
+
+- **INV-tune-1**: `option_sets.objective[task]` の値は `LGBMProvider().objective_choices(task)` と完全一致する（drift CI で固定）
+- **INV-tune-2**: `option_sets.metric[task]` の値は `LGBMProvider().metric_choices(task)["native"] + ["feval"]` と完全一致する
+- **INV-tune-3**: `LGBMConfig.params["objective"]` / `["metric"]` のバリデーションは backend `parse_space()` / Pydantic で一意に行い、frontend は表示のみ。drift CI で同期を保証
+- **INV-tune-4**: Re-tune の保存形式 `tuning.re_tune` は `null`（無効）/ `{ n_rounds: int >= 1, ... }`（有効）の 2 形態のみ許容。既存の `{ n_rounds: 1, ... }` 保存は引き続き読み込める（D2 確定）
+- **INV-tune-5**: SearchSpace の Range Min/Max は `parameter_bounds(task)[name]` の `min_allowed` / `max_allowed` でクランプされ、超過入力は LizyML `parse_space()` で `LizyMLError(BOUNDS_VIOLATION)` を raise する
+- **INV-tune-6**: `option_sets.model_metric` は撤廃され、参照する code path（`config_compat.py` 含む）はすべて `option_sets.metric` を参照する
+
+#### Impact
+
+**Public API:**
+- HTTP endpoints の入出力 schema 変更なし（既存 `tuning.re_tune` payload は受信時 normalize なしで accept）
+- `GET /api/workspace/{id}/ui-schema` の戻り値で `option_sets.model_metric` フィールドが消滅（既存 frontend は `option_sets.metric` のみ参照するよう移行）
+
+**Backend (`src/lizystudio/backends/`):**
+- `lizyml_ui_schema.py`: `build_ui_schema()` が `LGBMProvider()` を引数に受け、`option_sets.objective` / `option_sets.metric` を SSOT から組み立て。`option_sets.model_metric` は削除
+- `lizyml/config_mixin.py`: `get_default_config()` の Fit seed default を `1120` に
+- `lizyml/config_compat.py`: `allowed_metric` の参照先を `option_sets.metric` に変更
+- `lizyml_constants.py`: ハードコード `_OBJECTIVE_BY_TASK` / `_METRIC_BY_TASK` を撤去（SSOT 一本化）
+
+**Frontend (`frontend/src/`):**
+- `components/workspace/SearchSpaceRow.tsx`: inner_valid picker UI 追加、Range Min/Max クランプ、BoundaryDimStatus バッジ表示
+- `components/retune/RetuneSettingsSection.tsx`: enabled Switch 復活、null payload 送信
+- `components/workspace/TuneTab.tsx`: `option_sets.metric` から feval 由来項目に "Custom (slow)" バッジ
+- `components/workspace/TuneEvaluationSection.tsx`: defaults auto-populate（task 切替時）
+- `components/workspace/NumberInput.tsx`: integer parameter で `inputMode="numeric"` + step=1 強制 + inline 警告
+
+**BLUEPRINT.md §4.2.2:**
+- default-range 表を SSOT 連動後の値に更新
+- Re-tune Settings の Switch 仕様を明文化
+- objective / metric の出典を「LizyML EstimatorProvider API」と明記
+
+**Behavior change for users:**
+- Re-tune Settings に Switch が復活し、disabled 時は `tuning.re_tune = null` で保存される
+- `option_sets.objective.regression` から `cross_entropy` が消える（誤って表示されていた選択肢を削除）
+- objective / metric の選択肢が LizyML SSOT から読まれるため、LizyML release ごとに UI の選択肢が自動更新される
+- multiclass で `auc` を選択していた既存 Job は Re-fit 時に `parse_space()` で fail（LightGBM 4.x が拒否するため、現状でも実質的に学習できていない）
+- `cross_entropy` を regression objective に指定していた hand-edited config は `LizyMLError(CONFIG_INVALID)` で拒否される
+
+**LizyML pin:**
+- `pyproject.toml` の `lizyml[plots,tuning,calibration,explain]>=0.12.0,<0.13.0` → `>=0.15.0,<0.16.0`（Wave 1.2 で別 PR）
+
+**Testing:**
+- `tests/contract/test_lizyml_objective_metric_drift.py`（新規）: Studio `option_sets` と LizyML SSOT の同期を CI で固定
+- `tests/contract/test_ui_schema_matches_pydantic.py`（既存）: `cross_entropy` 除去・`auc` 除去を反映
+- `frontend/src/__tests__`: NumberInput integer 強制・SearchSpaceRow inner_valid・RetuneSettingsSection Switch の unit test
+- e2e: workspace-fit / workspace-tune / workspace-retune 系の snapshot 更新
+
+#### Compatibility
+
+- **保存形式**: `tuning.re_tune = { n_rounds: 1, ... }` 形式の既存 Job は読み込み互換（D2 確定 — シム不要、後方互換テストで固定）
+- **dep bump**: LizyML v0.15.0 は behaviour change あり（`LGBMConfig.params["objective"]` が同 task 互換値で実効化）。Studio の e2e snapshot で objective を非デフォルトに固定しているテストは挙動変化の可能性 — Wave 1.2 dep bump PR で smoke test を必須化
+- **既存ユーザの選択肢消失**: `cross_entropy` を regression objective に hand-edit していたユーザは少数。Wave 2.2 で migration note を README / CHANGELOG に追加
+- **multiclass `auc` 利用者**: 現状で実際には学習できていない（LightGBM 4.x が拒否）。明示的エラーに変わるだけで実害なし
+
+#### Acceptance criteria
+
+- [x] `pyproject.toml` の lizyml pin が `>=0.15.0,<0.16.0`（Wave 1.2 — #464）
+- [x] `lizyml_ui_schema.py` が `LGBMProvider()` の `objective_choices` / `metric_choices` / `parameter_bounds` を SSOT として読む（Wave 3.1a #473 で objective / bounds、Wave 3.1b で metric）
+- [x] `option_sets.model_metric` フィールド削除 + 参照 code path の `option_sets.metric` 移行（Wave 3.1b）。eval-metrics registry は `option_sets.eval_metric`（新規, flat）に分離
+- [x] `option_sets.objective.regression` の `cross_entropy` 除去（Wave 2.2 #468 / 3.1a #473 — provider 由来で自動）
+- [x] `option_sets.metric.multiclass` の `auc` 除去（Wave 3.1b — provider 由来で自動。`auc_mu` のみ）
+- [x] `RetuneSettingsSection` の Switch 復活 + null payload 後方互換テスト（Wave 2.1 #467）
+- [x] `SearchSpaceRow` inner_valid picker + Range Min/Max クランプ + BoundaryDimStatus バッジ（inner_valid: Wave 2.3 #470 / クランプ: Wave 3.1a #473 / `clamped_to_bound` バッジ: Wave 3.1b）
+- [x] NumberInput integer 強制 + inline 警告（Wave 2.4 #472）
+- [x] feval 由来 metric 項目に "Custom (slow)" バッジ（Wave 3.1b — SearchSpaceRow metric チップ + ModelParamsSection ChipGroup）
+- [x] BLUEPRINT.md §4.2.2 の default-range 表 / objective・metric テーブルを SSOT 連動後の値に更新（Wave 2.2 / 3.1a / 3.1b でまとめて）
+- [x] objective / metric drift CI 新設（`tests/contract/test_lizyml_objective_drift.py` を Wave 3.1b で metric drift / `option_sets` 構造検証まで拡張）
+- [x] `tests/contract/test_ui_schema_matches_pydantic.py` を新規 schema に整合（`build_ui_schema()` 引数削除に追従）
+- [ ] `pnpm test:e2e --grep workspace-fit|workspace-tune|workspace-retune` 全 green（Wave 3.1b PR の CI で確認）
+
+#### Alternatives considered
+
+- **(a) #458 / #459 / #460 / #461 を別 Proposal で 4 件起票**: 拒否。BLUEPRINT.md と `lizyml_ui_schema.py` を 4 PR が連続編集して conflict / churn が増える。同一テーマ（Tune workflow + LizyML SSOT）の subset を artificially 分割する弊害が大きい
+- **(b) #460 を D6=Option A（hardcoded bounds map）で実装**: 拒否（既に却下済）。bounds map は #461 の UiSchema 直行で代替され、throwaway code になる
+- **(c) Q1=conservative subset**: 拒否（user 確定）。LightGBM が許す全 objective を見せたいユーザに不足。target 分布制約は warning ヘルプテキストで対処すれば足りる
+- **(d) Q3=model_metric を保持**: 拒否（user 確定）。SSOT の二重化で同期コストが増える。aliases 整理（softmax→multiclass / l1→regression_l1）は撤廃で不要に
+- **(e) Wave 1.1 を draft Decision で commit**: 拒否（プラン §5 案）。Q1-Q3 が同セッションで解決済のため、即承認で進める方が後段の implementation PR が動きやすい
+
+→ 採用は **(f) 1 Proposal に 5 scope 統合・5 Wave に分割実装**（Wave 2.1 / 2.2 / 2.3 / 2.4 / 3.1 = 5 PR、+ Wave 1.2 dep bump = 計 6 PR）。
+
+#### Decision
+
+- 2026-05-11 **Approved** — Wave 2.1（#458 Re-tune Switch）→ 2.2（#459 backend canonical defaults）→ 2.3（#459 frontend inner_valid + auto-populate）→ 2.4（#460 NumberInput usability）→ 3.1（#461 UiSchema SSOT 統合 + auc 除去 + drift CI）の 5 PR 直列実装。Wave 1.2 dep bump（lizyml v0.15）は本 Proposal 採用と並行で先行 PR 化。Q1-Q3 は本セッションで確定（Q1=full canonical / Q2=feval badge / Q3=model_metric 撤廃）
+- 2026-05-11 **Wave 1.2 / 2.1 / 2.2 / 2.3 / 2.4 着地** — #464（lizyml pin）/ #467（Re-tune Switch）/ #468（canonical defaults + Fit seed=1120）/ #470（inner_valid picker + Tune Evaluation auto-populate）/ #472（NumberInput integer guard）
+- 2026-05-11 **Wave 3.1a 着地** — #473（`option_sets.objective` + `parameter_bounds` を `LGBMProvider` SSOT に配線、Range Min/Max クランプ、objective drift CI）。当初同梱予定だった `validate_config` の `parse_space()` 化は e2e regression（`validate_config` が保存ゲートも兼ねるため過渡状態の空 Choice / `low>high` を弾いてしまう）で取り下げ、Issue #474 に deferred
+- 2026-05-11 **Wave 3.1b 着地（#461 残り）** — `option_sets.model_metric` 撤廃 →`option_sets.metric` を `LGBMProvider.metric_choices(task)` 由来の `{native, feval}` ネスト構造に統合（Q3）。eval-metrics registry の post-hoc 評価メトリクスは新フィールド `option_sets.eval_metric`（flat）に分離（Tune Evaluation セクション用）。`parameter_hints.metric.kind` / `special_search_space_fields.metric` を `model_metric`→`metric` にリネーム。`config_compat.py::task_params_compat_errors` の `allowed_metric` を `option_sets.metric` の `native ∪ feval` 参照に切替。frontend は `metric-options.ts` ヘルパで `option_sets` の narrowing を一元化。feval 由来 metric に "Custom (slow)" バッジ（Q2 — SearchSpaceRow metric チップ + ModelParamsSection ChipGroup）。`BoundaryDimStatus.clamped_to_bound`（lizyml v0.15）を `serialize_boundary_report` で wire に露出し Re-tune の Boundary Expansion パネルに「bounded」バッジ。残るは **#474（deferred parse_space validation）** と **#457（Residuals plot kind selector）** — いずれも P-0104 本体からは独立
+
+
+
+### P-0105: Residuals plot に kind selector を追加（3-panel layout → Importance パターン mirror、Issue #457）
+
+- **Date:** 2026-05-11 起票・即承認（Issue #457 で詳細仕様確定済 + ユーザ go-ahead）
+- **Related:** Issue #457、`src/lizystudio/backends/lizyml/evaluation_mixin.py`、`src/lizystudio/api/jobs.py`、`frontend/src/hooks/useJobResultData.ts`、`frontend/src/api/queryKeys.ts`、`frontend/src/components/workspace/PlotSection.tsx`、`frontend/src/components/shared/JobResultsBody.tsx`、BLUEPRINT.md §4.3、`docs/plot-matrix.md`、lizyml `Model.residuals_plot(*, kind="all")`（lizyml 0.9.0+ で kind dispatch 出荷済）
+
+#### Motivation
+
+regression Fit 結果の Residuals plot は現在「1 figure に 3 panel（Actual vs Predicted / Residual Distribution / QQ）」を横並びで描画する。Workspace 右パネルが狭い（laptop / Inspector docked）ときに 3 panel が潰れて読めなくなる。Importance タブは既に `SegmentGroup`（`split / gain / shap`）で 1 panel ずつ切替えられる UX を持っており、Residuals も同じパターンに揃える。lizyml 側は `residuals_plot(kind="scatter"|"histogram"|"qq"|"all")` を既にサポート済（`_VALID_KINDS = ("scatter","histogram","qq","all")`）、Studio 側の配線のみが残っている。
+
+#### Purpose
+
+- backend dispatch（`evaluation_mixin.plot()`）が `plot_type == "residuals"` のとき `kind` を `Model.residuals_plot(kind=...)` に転送する（`importance` と同じ枠で）。
+- API（`GET /api/jobs/{id}/plot/{plot_type}`）が `residuals` でも `?kind=` を受け付ける。`{"scatter","histogram","qq","all"}` 以外は `INVALID_PARAM`（400）。
+- frontend hook（`useJobResultData.ts`）に `residualsKind` state（default `"all"`）+ `setResidualsKind` を追加、residuals タブが active のとき `fetchJobPlot(jobId, "residuals", {kind})` で取得。`queryKeys.jobPlotResiduals(jobId, kind)` を追加し generic plotData query から split（importance と同じ手法）。
+- frontend UI（`PlotSection.tsx`）に residuals 用 `SegmentGroup`（`Scatter / Histogram / QQ / All`）を importance kind selector と同じ slot に追加。
+- `pnpm generate:api` で `schema.d.ts` 再生成（手書きしない）。
+
+#### Invariants
+
+- **INV-resid-1**: `kind` 未指定の `GET /api/jobs/{id}/plot/residuals` は従来通り `"all"`（3-panel）図を返す — 既存クライアントのバイト列を変えない（後方互換）。
+- **INV-resid-2**: `PlotSection` の residuals kind selector が描画する選択肢は backend `Model.residuals_plot` の `_VALID_KINDS` と一致する（`RESIDUAL_KIND_LABELS` のキー集合で固定）。
+- **INV-resid-3**: `evaluation_mixin.plot()` の `kind` 転送は `plot_type ∈ {"importance","residuals"}` に限る（`shap-summary` は `kind="shap"` 固定の別経路、他は転送しない）。
+
+#### Impact
+
+**Public API:**
+- `GET /api/jobs/{job_id}/plot/{plot_type}` が `residuals` でも `?kind=` を受理（後方互換 — 省略時 `"all"`）。invalid kind は `400 INVALID_PARAM`。docstring 更新。`schema.d.ts` 再生成。
+
+**Backend:**
+- `evaluation_mixin.py`: `plot()` の `kind` 転送条件に `residuals` を追加。`_RESIDUALS_KINDS` module-level 定数（`_PLOT_DISPATCH` style）を新設し、`available_plots` の `shap-summary` probe と同様の方針で使う。
+- `api/jobs.py`: residuals 用 `kind` バリデーション（`_RESIDUALS_KINDS` に対する membership check）。
+
+**Frontend:**
+- `useJobResultData.ts`: `residualsKind` state（default `"all"`）+ `setResidualsKind` + `residualsPlot` query（`enabled = selectedPlot === "residuals" && plots.includes("residuals")`）。generic `plotData` query の `enabled` 条件から `residuals` を除外。
+- `queryKeys.ts`: `jobPlotResiduals(jobId, kind)`。
+- `PlotSection.tsx`: `residualsKinds` / `selectedResidualsKind` / `onResidualsKindChange` / `residualsPlot` props 追加。`selectedPlot === "residuals"` のとき `SegmentGroup`（`RESIDUAL_KIND_LABELS = {scatter:"Scatter", histogram:"Histogram", qq:"QQ", all:"All"}`）を importance kind selector と同じ位置に。fullscreen dialog title は `kind !== "all"` のとき `Residuals — <Kind>`。
+- `JobResultsBody.tsx`: hook の新 state を `PlotSection` に配線。
+
+**Behavior change for users:**
+- Residuals タブに `Scatter / Histogram / QQ / All` の SegmentGroup が出る。default は `All` で従来の 3-panel と完全一致。
+
+**Compatibility:**
+- 後方互換（kind 省略 = `"all"` = 従来図）。保存形式・他 API 変更なし。
+
+**Testing:**
+- backend unit（`tests/test_backends_lizyml.py`）: `plot("residuals", kind=...)` 4 種 + invalid kind が typed error。
+- API contract（`tests/test_jobs_api.py` 相当）: `?kind=scatter` → 200、`?kind=bogus` → 400、kind 省略 → 200。
+- frontend Vitest（`PlotSection.test.tsx`）: residuals タブ active で selector 描画 / クリックで `onResidualsKindChange`。`useJobResultData.test.ts`: `residualsKind` の state 遷移。
+- e2e（軽量）: `workspace-fit.spec.ts` の regression path に `all → scatter` 切替の smoke を 1 件追加。
+
+#### Acceptance criteria
+
+- [ ] Residuals タブが `Scatter / Histogram / QQ / All` の SegmentGroup を表示、default `All`。
+- [ ] 各 kind が対応する lizyml 図を描画、`kind=all` は従来の 3-panel と一致。
+- [ ] `GET /api/jobs/{id}/plot/residuals?kind=bogus` → `400 INVALID_PARAM`。
+- [ ] `GET /api/jobs/{id}/plot/residuals`（kind 省略）→ 従来の `"all"` 図。
+- [ ] `uv run pytest` / `pnpm test` / `pnpm test:e2e --grep workspace-fit` / `pnpm check` / `pnpm build` 全 green。
+- [ ] BLUEPRINT.md の Residuals plot 記述 + `docs/plot-matrix.md` を更新。
+
+#### Alternatives considered
+
+- **(a) default を 3-panel から単一 panel に変更**: 拒否。現行ビューに依存しているユーザを無言で壊す（Issue #457 Out of scope に明記）。
+- **(b) Residuals を Importance と同様にバックエンドで kind 別キャッシュ**: 不要。`residuals_plot` は安価で、frontend query cache（`jobPlotResiduals(jobId, kind)` キー）で十分。
+- **(c) per-fold residuals breakdown / 新 kind 追加**: 拒否（Issue #457 Out of scope — lizyml がサポートする 4 kind のみ）。
+
+#### Decision
+
+- 2026-05-11 **Approved** — Issue #457 の詳細仕様（target shape 1-5）+ UI spec をそのまま採用。実装は単一 PR（Proposal commit → 実装 commit）。`shap-summary` を top-level タブに昇格する件（#373）とは独立。
+
+### P-0106: metric 不適合判定を `BackendCore` capability の裏へ移す（Change Gate、Issue #403）
+
+- **Date:** 2026-05-12 起票・即承認（Issue #403 で詳細仕様確定済 + ユーザ go-ahead）
+- **Related:** Issue #403（v0.4.1 pre-release code review HIGH-2 follow-up）、`src/lizystudio/backends/base.py::BackendCore`、`src/lizystudio/backends/types.py::IncompatibleMetric`、`src/lizystudio/backends/lizyml/config_mixin.py::ConfigMixin.get_incompatible_metrics`、`src/lizystudio/services/workspace.py::_workspace_metric_compatibility_errors`、`tests/test_backends_lizyml.py::TestGetIncompatibleMetrics`、`tests/contract/test_validate_metric_compatibility.py`、`tests/contract/test_fit_tune_severity_filter.py`、BLUEPRINT.md §3（backend abstraction）、`docs/coupling-analysis.md`、PR #399（validator 導入 = PR-C2 / Issue #394）/ PR #400（severity gating = PR-D1）
+
+#### Motivation
+
+`Service.validate_config` が呼ぶ `_workspace_metric_compatibility_errors`（PR #399 で導入）は lizyml 固有の regression metric 名（`mape` / `rmsle` / `r2`）の前提条件チェックと、lizyml 0.11.0 の sMAPE / WAPE を指す `suggested_fix` prose を **Service 層に直書き**していた。さらに「`task=regression` のときだけチェックする」という gate も Service 層にあり、これも lizyml の metric 語彙への暗黙の coupling。BLUEPRINT §3 の「Service 層は backend-agnostic、per-backend ロジックは `BackendAdapter` に委譲」に反するドリフトで、2nd backend（sklearn Pipeline / XGBoost native 等）が別 metric 名を使うと Service 層ガードはその backend の不適合 metric を silent に見逃す。
+
+#### Purpose
+
+- `BackendCore` Protocol に `get_incompatible_metrics(task: str, target_series: pd.Series, metric_names: set[str]) -> list[IncompatibleMetric]` を追加。Protocol 本体は `return []`（実装しない backend = 不適合 metric ゼロ）を既定とする。
+- 共通型 `IncompatibleMetric`（`@dataclass(frozen=True)`、フィールド `metric` / `message` / `suggested_fix`）を `backends/types.py` に新設。
+- lizyml adapter（`ConfigMixin`）が `get_incompatible_metrics` を実装し、watchlist（`_REGRESSION_METRIC_WATCHLIST = {"mape","rmsle","r2"}`）・各前提条件・`task=regression` gate・non-numeric target gate・sMAPE/WAPE suggestion 文言の所有を adapter 側に持つ。
+- `_workspace_metric_compatibility_errors` を thin envelope（≤ 60 行）に縮小: dataframe / target / `evaluation.metrics` の存在チェック + metric 名パース → `ws.backend.get_incompatible_metrics(...)` 呼び出し → 戻り値を既存の `{path:"evaluation.metrics", message, severity:"warning", suggested_fix}` envelope に map。
+
+#### Invariants
+
+- **INV-metric-1**: `validate_config` が返す metric-compat 警告の envelope（`path` / `message` / `severity="warning"` / `suggested_fix`）は本変更前後で byte-identical（frontend 変更ゼロ・既存 contract test 無改修 pass）。
+- **INV-metric-2**: `task != "regression"` のとき lizyml adapter は不適合 metric を一切返さない（constant 0/1 の binary target が misleading な R² 警告を出さない — PR-D1 / #394 HIGH-1 で確立した挙動を adapter 側で維持）。
+- **INV-metric-3**: metric watchlist と precondition ロジックは backend が所有する（Service 層は metric 名を一切知らない）。
+
+#### Impact
+
+**共通型 / Protocol（← Change Gate 対象）:**
+- `backends/types.py`: `IncompatibleMetric` 追加。
+- `backends/base.py`: `BackendCore.get_incompatible_metrics` 追加（Config セクション、`validate_config` の直後）。Protocol 本体に `return []` のデフォルト。`BackendAdapter` alias は `BackendCore` を継承しているので自動的に新メソッドを含む。
+
+**Backend（lizyml adapter）:**
+- `backends/lizyml/config_mixin.py`: `import pandas as pd` 追加。module-level `_REGRESSION_METRIC_WATCHLIST` 定数。`ConfigMixin.get_incompatible_metrics` 実装（旧 Service 層ロジックの完全移植 — mape→zero、rmsle→negative、r2→constant variance / <2 non-null、`task != "regression"` / non-numeric target は `[]`）。
+
+**Service:**
+- `services/workspace.py`: `_workspace_metric_compatibility_errors` を thin envelope に縮小（109 行 → 約 55 行）。`pd.api.types.is_numeric_dtype` チェックは adapter 側へ移動（`pd` は `WorkspaceState.dataframe` の型注釈で引き続き使用）。`validate_config` の呼び出し箇所（`normalized.extend(_workspace_metric_compatibility_errors(ws, config))`）は不変。
+- これにより Issue #452 の sub-PR 1（`_workspace_metric_compatibility_errors` を 3 helper に分割）は obsolete（thin envelope なので分割不要）。
+
+**Behavior change for users:**
+- なし（INV-metric-1）。
+
+**Compatibility:**
+- 後方互換。API レスポンス不変、保存形式変更なし、frontend 変更なし。新メソッドは Protocol デフォルト `[]` を持つので、構造的に satisfy するだけの将来の backend にも非破壊（呼び出し時に `AttributeError` を避けたい場合は、その backend が `BackendCore` を base class として継承すればデフォルトが効く）。
+
+**Testing:**
+- `tests/test_backends_lizyml.py::TestGetIncompatibleMetrics`（新規 14 ケース）: mape/rmsle/r2 の発火・非発火、複数同時、単一観測（std NaN）、未登録 metric 無視、non-regression task / 空 task は空、non-numeric target は空、空 metric set、all-NaN target、inf 含み target。
+- `tests/contract/test_validate_metric_compatibility.py`（既存 15 ケース）・`tests/contract/test_fit_tune_severity_filter.py`: 無改修 pass を確認（INV-metric-1）。
+- `uv run pytest tests/ --ignore=tests/e2e --ignore=tests/integration --ignore=tests/bench -k "not slow"` 全 pass / `uv run ruff check .` / `uv run ruff format --check .` / `uv run mypy src/lizystudio/` 全 green。
+
+#### Acceptance criteria
+
+- [x] `BackendCore` に `get_incompatible_metrics` 追加、Protocol 本体デフォルト `return []`、`IncompatibleMetric` TypedDict（frozen dataclass）定義。
+- [x] lizyml adapter が現ロジックを完全移植して実装。watchlist と sMAPE/WAPE 文言の所有が adapter 側に移る。
+- [x] `_workspace_metric_compatibility_errors` は thin envelope（≤ 60 行）。#452 sub-PR 1 obsolete。
+- [x] `tests/contract/test_validate_metric_compatibility.py` 全ケース無改修 pass。`tests/contract/test_fit_tune_severity_filter.py` 無 regression。
+- [x] 新規 adapter ユニットテストで lizyml の不適合 metric リストを直接検証。
+- [x] `uv run pytest` / `uv run ruff check .` / `uv run ruff format --check .` / `uv run mypy src/lizystudio/` 全 green。
+- [x] BLUEPRINT.md §3 の adapter capability 一覧に `get_incompatible_metrics` を追記。HISTORY.md Decision row 記入。
+
+#### Alternatives considered
+
+- **(a) 現状維持（drift 放置）**: 拒否。2nd backend 導入時に silent miss のリスク。Issue #403 / `docs/coupling-analysis.md` が明示的に flagging 済。
+- **(b) `backends/lizyml_metrics.py` にモジュール関数として置くだけ**: 拒否。Protocol を経由しないので「backend が自分の metric 語彙を所有する」abstraction にならず、Service 層が `lizyml_metrics` を import する coupling が残る。
+- **(c) `_workspace_split_errors`（行数チェック）も同じパターンに移す**: scope 外。n_rows は universal precondition で Service 層に居てよい（Issue #403 も out-of-scope と明記）。
+
+#### Decision
+
+- 2026-05-12 **Approved** — Issue #403 の提案どおり `BackendCore.get_incompatible_metrics` を追加。実装は単一 PR（commit 順: Proposal → `feat(backend)` Protocol+型 → `refactor(services)` thin envelope → `test(backend)` adapter watchlist）。`task` 引数を adapter に渡す設計（Service 層から `task=regression` gate を排除）まで含めて承認 — これにより abstraction が「どの task に適用されるか」も backend 所有になる。
+
+---
+
+### P-0107: `PICKLE_INCOMPATIBLE` envelope に structured recovery hint を追加（v3-26 / R-4.2）
+
+- **Date:** 2026-05-13 起票・即承認（PLAN.md v3-26c DoD で要件確定済）
+- **Related:** `PLAN.md` §v3-26、`docs/v0.4-business-readiness-plan.md` §5.2、`src/lizystudio/backends/lizyml/pickle_compat.py::PickleIncompatibleError`、`src/lizystudio/backends/exceptions.py::CheckpointIncompatibleError`、`src/lizystudio/api/errors.py::PickleIncompatibleError`、`src/lizystudio/api/retune.py::_require_tune_job_with_checkpoint`、`tests/test_lizyml_checkpoint.py`、`tests/test_retune_api.py`、`tests/bench/test_bench_pickle_compat.py`、`scripts/pickle_compat_matrix.sh`、`.github/workflows/nightly.yml`、P-0100 (severity envelope の前例)
+
+#### Motivation
+
+`PICKLE_INCOMPATIBLE` 400 envelope は v0.4 まで `{code, message: "Checkpoint incompatible: <reason>"}` の 2 fields のみだった。Re-tune / Resume 時に lizyml minor バンプによる pickle 互換切れが起きると、`message` の自由文を frontend toast にそのまま流す以外に user に「何をすべきか」を伝える手段がない。R-3 の typed error 整備（`recovery_hint` / `is_user_error` 必須化）は v0.5 以降 deferred だが、`PICKLE_INCOMPATIBLE` だけは v3-26 Exit Criteria（過去 N=3 minor で fit→現行で load の round-trip）の DoD に「recovery_hint と suggested_fix を含む」と明記されているため、本 Proposal はその 1 envelope だけを先行で structured 化する。
+
+#### Purpose
+
+- backend 例外 `PickleIncompatibleError` / `CheckpointIncompatibleError` に optional kwargs `kind: str` / `recovery_hint: str | None` / `suggested_fix: str | None` を追加。raise site が分類済の情報を持っている（schema mismatch vs lizyml version mismatch vs corrupted meta）ので、API 層は string parse することなく forward する。
+- API envelope `api/errors.py::PickleIncompatibleError` が同 kwargs を受け取り `details` payload に `{kind, recovery_hint, suggested_fix}` を載せる。
+- `kind` の値は `"schema_mismatch"` / `"lizyml_version_mismatch"` / `"corrupt_meta"` / `"unknown"`（fallback）の closed set。
+- Nightly CI に `pickle-compat` job を新設（過去 3 minor の lizyml で fit→現行で load round-trip）。silent load は v0.5 R-4.2 invariant の regression として fail させる。
+
+#### Invariants
+
+- **INV-pickle-1**: 異なる lizyml major.minor で save された checkpoint を load しようとすると必ず `PickleIncompatibleError` が raise される（silent load 禁止）。
+- **INV-pickle-2**: `PickleIncompatibleError.kind` は schema/version/corrupt のいずれかを classify し、`recovery_hint` / `suggested_fix` は **non-empty 文字列**で同梱される（"unknown" fallback は backend raise site では使われない）。
+- **INV-pickle-3**: HTTP 400 `PICKLE_INCOMPATIBLE` envelope は `details.kind` を必ず含む。`recovery_hint` / `suggested_fix` は backend が classify できたケースで必ず含まれる（unknown kind では含まれない）。
+- **INV-pickle-4**: 既存 client（`error.code` / `error.message` のみ消費）は本変更後も無修正で動く（additive change、details 内の新 fields は ignore 可能）。
+
+#### Impact
+
+**Backend exceptions (additive, backward-compat):**
+- `backends/lizyml/pickle_compat.py::PickleIncompatibleError.__init__`: 既存 `message: str` に加えて keyword-only `kind` / `recovery_hint` / `suggested_fix` を accept。`verify_pickle_compatibility` の 2 raise sites がそれぞれ `schema_mismatch` / `lizyml_version_mismatch` を返す。
+- `backends/exceptions.py::CheckpointIncompatibleError`: 同 kwargs を accept。backend-agnostic envelope なので 2nd backend も同じ classification 語彙を使う。
+- `backends/lizyml/checkpoint_mixin.py::verify_checkpoint_compatibility`: JSON decode 失敗を `kind="corrupt_meta"` で classify、`PickleIncompatibleError` を catch して `kind`/`recovery_hint`/`suggested_fix` を forward。
+
+**API layer (additive):**
+- `api/errors.py::PickleIncompatibleError.__init__`: keyword-only `kind` / `recovery_hint` / `suggested_fix` を accept、`details` payload に `{kind, recovery_hint?, suggested_fix?}` を load。`kind` は必ず含まれる、他の 2 は non-None のときのみ含む（client は presence で判定する）。
+- `api/retune.py::_require_tune_job_with_checkpoint`: `CheckpointIncompatibleError` catch 時に backend が提供した 3 fields を forward。
+
+**Tests:**
+- `tests/test_lizyml_checkpoint.py`: schema mismatch / version mismatch の各 raise が新 attrs を carry する unit test 2 ケース。
+- `tests/test_retune_api.py`: HTTP 400 envelope の details に `kind="lizyml_version_mismatch"` + non-empty `recovery_hint`/`suggested_fix`、saved version 文字列が `suggested_fix` に含まれることを assert。
+- `tests/bench/test_bench_pickle_compat.py`（新規、`@slow + @pickle_compat`）: schema mismatch + N-3..N-1 minor の parametrize で全 drift クラスを cover、`adapter.load_checkpoint` が verify hook を通って raise することを E2E 確認。
+
+**Infrastructure:**
+- `scripts/pickle_compat_matrix.sh`: ephemeral venv で `lizyml==0.12.0/0.13.0/0.14.0` ごとに sidecar を save → 現行 runtime で `verify_pickle_compatibility` が `kind=lizyml_version_mismatch` か `schema_mismatch` で reject することを確認。silent load は exit 1。
+- `.github/workflows/nightly.yml::pickle-compat`: 上記スクリプト実行 + synthetic-drift unit gate（pickle_compat marker selection）。
+- `pyproject.toml`: `pickle_compat` marker を追加。
+
+**Compatibility:**
+- 後方互換。新 fields は `details` payload の追加で、既存 client（`error.code` / `error.message` のみ消費）に影響なし。`kind=unknown` fallback で legacy raise sites も無変更で OK。
+
+#### Acceptance criteria
+
+- [x] `PickleIncompatibleError` (backend & api) と `CheckpointIncompatibleError` が optional `kind`/`recovery_hint`/`suggested_fix` を accept。
+- [x] `verify_pickle_compatibility` が schema/version 各 raise で classification を埋める。
+- [x] `verify_checkpoint_compatibility` が corrupted meta を `kind="corrupt_meta"` で classify。
+- [x] API 400 envelope の `details` に `kind` が必ず含まれ、classified ケースでは `recovery_hint`/`suggested_fix` が non-empty。
+- [x] `tests/test_lizyml_checkpoint.py` + `tests/test_retune_api.py` で envelope shape を契約化。
+- [x] `tests/bench/test_bench_pickle_compat.py` が synthetic drift（schema + N-1/N-2/N-3 minor）を全 cover。
+- [x] `scripts/pickle_compat_matrix.sh` が ephemeral venv マトリクスで silent load を exit 1 にする。
+- [x] Nightly CI `pickle-compat` job が両方を実行。
+- [x] `uv run pytest` / `uv run ruff check .` / `uv run ruff format --check .` / `uv run mypy src/lizystudio/` 全 green。
+
+#### Alternatives considered
+
+- **(a) フル R-3.1.1 (`StudioError` 全部に `recovery_hint`/`is_user_error` 必須化)**: 拒否。v3-26 の scope を超え、全 errors.py の改訂が必要。v0.5 R-3 として deferred のまま。
+- **(b) string parse で API 層が message から classify**: 拒否。fragile（lizyml が message を書き換えると壊れる）かつ DRY 違反。classification 情報は raise site が既に持っている。
+- **(c) past minor も silently load を許可（policy 変更）**: 拒否。pickle の class identity を minor 境界で安定させる責任は lizyml 側にあるべきで、Studio が "best effort" load を試みると corrupt state が deeper code path で爆発する class の bug を呼ぶ。silent load を gating する強い stance は v0.5 R-4.2 の Exit Criteria と一致。
+
+#### Decision
+
+- 2026-05-13 **Approved** — `PICKLE_INCOMPATIBLE` envelope のみを先行で structured 化、R-3 typed error 体系全体は v0.5 以降に持ち越し。Nightly matrix は `PAST_VERSIONS` env 経由で minors を bump 可能（lizyml が 1.0 になったら matrix を `0.13.0 0.14.0 0.15.0` から `0.x 0.y 1.0` 系へ更新するメモを script header に記載）。
+
+---
+
+### P-0108: 構造的に壊れた search space を `POST /tune` run-gate で 422 する（Issue #474, Change Gate）
+
+- **Date:** 2026-05-13 起票・即承認（Issue #474 で詳細仕様確定済 + アプローチ C 推奨済）
+- **Related:** Issue #474（P-0104 Wave 3.1a deferred）、P-0104 Scope-4 (HISTORY)、PR #473（Wave 3.1a — `parse_space` を `validate_config` に組み込もうとして失敗した記録）、`src/lizystudio/backends/base.py::BackendCore.validate_search_space`、`src/lizystudio/backends/lizyml/config_mixin.py::ConfigMixin.validate_search_space`、`src/lizystudio/services/workspace.py::validate_search_space_for_tune`、`src/lizystudio/api/workspace.py::workspace_tune`、`tests/test_backends_lizyml.py::TestValidateSearchSpace`、`tests/test_workspace_api.py`、`frontend/tests/e2e/workspace-tune.spec.ts:459`、P-0100（severity envelope の前例）、P-0089（save gate immutability）
+
+#### Motivation
+
+`tuning.optuna.space` に structurally-broken な entry（inverted Range = `low >= high`、log distribution + `low <= 0`）が混入すると、`validate_config` を通過して Tune ジョブが起動し、Optuna のループで N 試行繰り返した後に「All tuning trials failed」という deep error が出る。ユーザは「自分の指定のどこがダメだったか」を直接知る術が無い。Issue #474（P-0104 Wave 3.1a deferred、Scope-4）が要求する **「Fix validation errors first」バナーで早期に surface する** は v0.5.0 では未着手のまま develop に残った。
+
+PR #473（Wave 3.1a）でこれを `validate_config` に組み込もうとしたが、`validate_config` は `PUT /config`（save gate）と `POST /fit`/`POST /tune`（run gate）の **両方** から呼ばれるため、save gate に厳格化を被せた結果 `workspace-tune.spec.ts:459` を破壊した（empty-choice categorical の transient 状態と inverted Range の編集中状態が両方とも `saved: false` を返してフォーム revert された）。この経緯から **save gate は permissive のまま、run-gate のみで結束的に reject する** という分離が要件として確定している。
+
+#### Purpose
+
+- `BackendCore` Protocol に `validate_search_space(space: dict[str, Any]) -> list[dict[str, Any]]` を追加。Protocol 本体は `return []`（実装しない backend = 不適合 space ゼロ）を既定とする。
+- lizyml adapter は `parse_space(space)` を per-entry で呼び、`LizyMLError(CONFIG_INVALID)` を `{path: "tuning.optuna.space.<param>", message, severity: "error", suggested_fix}` envelope に map。
+- **categorical `choices: []` は backend 側で完全に filter out** する（frontend の `empty-choice-banner` が UX owner、PR #473 post-mortem で確立した不変条件）。
+- Service 層に `validate_search_space_for_tune(ws, config)` を新設（type narrowing + adapter dispatch のみの thin envelope）。
+- API `POST /api/workspace/tune` で `validate_config` の直後、`create_and_claim_active` の直前に上記 helper を呼び、空でない結果を `ValidationError` に投げる。
+
+#### Invariants
+
+- **INV-search-1 (save gate permissive)**: `PUT /api/workspace/config` は inverted-range / log+low<=0 / empty-choices いずれの WIP も `saved: true` で persist する（Issue #474 + PR #473 post-mortem で確立した制約）。
+- **INV-search-2 (run gate strict)**: `POST /api/workspace/tune` は inverted-range / log+low<=0 の space を 422 `VALIDATION_ERROR` で reject し、`start_tune_async` を絶対に呼ばない。
+- **INV-search-3 (empty-choices is frontend territory)**: `POST /api/workspace/tune` は categorical `choices: []` を **run-gate では追加で flag しない**。既存の経路（schema layer の reject、frontend の empty-choice-banner）に委ねる。
+- **INV-search-4 (envelope shape)**: 各 error は `{path: "tuning.optuna.space.<param>", message, severity: "error", suggested_fix}` の 4 キーを必ず含む（P-0100 envelope と byte-identical）。
+- **INV-search-5 (per-entry isolation)**: 単一 broken row が他の row の drift を mask しない（multiple-violation のとき全 row が returned）。
+
+#### Impact
+
+**共通型 / Protocol (← Change Gate 対象):**
+- `backends/base.py::BackendCore.validate_search_space`: 新メソッド追加。Protocol 本体に `return []` のデフォルト。`BackendAdapter` alias は `BackendCore` を継承しているので自動的に新メソッドを含む。
+
+**Backend (lizyml adapter):**
+- `backends/lizyml/config_mixin.py::ConfigMixin.validate_search_space`: 実装。`lizyml.tuning.parse_space` を per-entry で呼び、`LizyMLError` の `code.value == "CONFIG_INVALID"` のみを user-facing envelope に変換。empty-choices categorical は事前 filter で除外。
+- `backends/lizyml/config_mixin.py::_suggested_fix_for_space_error`: module-level helper。log/low/high の値を読んで「Swap Min and Max」「raise Min above zero」など具体的な remediation 文言を作る。
+
+**Service:**
+- `services/workspace.py::validate_search_space_for_tune`: 新規 thin envelope。`tuning.optuna.space` の type narrowing と adapter dispatch のみ。`validate_config` は **意図的に無改変** (save gate permissive 保持)。
+
+**API:**
+- `api/workspace.py::workspace_tune`: `validate_config` の直後に `validate_search_space_for_tune(ws, ws.config)` を呼び、空でない結果を既存の `ValidationError` envelope に flow。
+
+**Tests:**
+- `tests/test_backends_lizyml.py::TestValidateSearchSpace` (新規 9 ケース): 空 space / non-dict / valid / inverted range / log+low=0 / log+low<0 / empty-choices drop / multiple-violation / non-dict entry。
+- `tests/test_workspace_api.py` (新規 4 ケース): POST /tune inverted-range 422 + start_tune_async 未呼び出し、log+low=0 422、empty-choices accept-or-other-validator (run-gate は flag しない)、PUT /config inverted-range save 200.
+
+**Behavior change for users:**
+- 反転 Range と log+low<=0 の space で Tune を起動しようとすると **422 になり「Fix validation errors first」バナー** に具体的な suggested_fix が出る（旧: Optuna ループの後で「All tuning trials failed」）。
+- 編集中の状態（部分入力）で PUT /config しても従来どおり保存される（INV-search-1）。
+- categorical empty-choices の挙動は不変（frontend の empty-choice-banner が disable する）。
+
+**Compatibility:**
+- 後方互換。新 Protocol method は本体に default `return []` を持つので 2nd backend（既存 + 将来）に非破壊。lizyml の挙動拡張は run-gate のみ。
+- HTTP envelope shape は P-0100 と同じ（既存 frontend 表示 path で render される）。
+
+#### Acceptance criteria
+
+- [x] `BackendCore.validate_search_space` Protocol method 追加、デフォルト `return []`、`BackendAdapter` alias へ伝播。
+- [x] lizyml adapter が inverted-range / log+low<=0 を classify、empty-choices categorical は filter out。
+- [x] Service `validate_search_space_for_tune` が thin envelope として実装。
+- [x] `POST /tune` が validate_config 後 + create_and_claim_active 前で gate。422 envelope。`start_tune_async` 未呼び出し（テストで明示）。
+- [x] `PUT /config` が引き続き inverted-range / log+low<=0 / empty-choices を `saved: true` で persist（INV-search-1）。
+- [x] `tests/test_backends_lizyml.py::TestValidateSearchSpace` の 9 ケース + `tests/test_workspace_api.py` の 4 ケース pass。
+- [x] `frontend/tests/e2e/workspace-tune.spec.ts:459`（Choice mode seeds + gates Tune when emptied）regression 無し（local backend pytest level で empty-choices invariant 確認、CI で e2e 走行）。
+- [x] `uv run pytest` / `uv run ruff check .` / `uv run ruff format --check .` / `uv run mypy src/lizystudio/` 全 green。
+- [ ] BLUEPRINT.md §3.3.2 の adapter capability 一覧に `validate_search_space` を追記（次の reconcile タイミング、本 PR では HISTORY 起票 + 実装で十分）。
+
+#### Alternatives considered
+
+- **(a, rejected): `parse_space` を `validate_config` 内で unconditionally 呼ぶ** — PR #473 で試行 → save gate を破壊（empty-choices と transient inverted-range で `saved: false` 連発、frontend が revert）。
+- **(b, considered)**: `search_space_invalid` を `severity: "warning"` で `validate_config` から出し、frontend で Tune button を disable する。
+    - Pros: 既存 validate envelope を再利用、frontend で gating 完結
+    - Cons: 「警告だが run-gate でもブロック」という挙動分裂、severity の semantics が崩れる、PR #473 の empty-choices 問題が再発（transient 状態でも warning が出続ける）
+- **(c, ADOPTED — Issue #474 推奨)**: `validate_config` は無改変、`POST /tune` 直前で run-gate 専用 helper を呼ぶ。
+    - Pros: save / run の責務が明確に分離、empty-choices は frontend 所有のまま、既存 envelope を再利用、e2e regression なし
+    - Cons: validate helper が 2 つになる（`validate_config` + `validate_search_space_for_tune`）が、責務が分かれているので drift しにくい
+
+#### Decision
+
+- 2026-05-13 **Approved** — Issue #474 の Approach C（run-gate only）で実装。実装は単一 PR（commit 順: Proposal + 全実装一括 + test）。`task` / `target` 等の文脈情報は本 method には渡さない（純粋な structural check）。将来 2nd backend が同じ Protocol を実装するとき、その backend の search-space DSL に固有な検証はその adapter 内に閉じる（lizyml の `parse_space` への coupling は backend 内に留まる）。

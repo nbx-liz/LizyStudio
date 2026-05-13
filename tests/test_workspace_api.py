@@ -453,6 +453,154 @@ def test_tune_starts_job_when_data_and_config_present(
 
 
 # ---------------------------------------------------------------------------
+# Issue #474 / P-0108: POST /tune run-gate for structurally-broken search space
+#
+# ``parse_space()`` in lizyml rejects three classes of structurally-broken
+# entries with ``LizyMLError(CONFIG_INVALID)``: inverted Range (low >= high),
+# log + low <= 0, and empty-choices categorical. The first two surface here
+# as a 400 *before* the job launches (run-gate, approach C in the issue).
+#
+# The empty-choices categorical case is intentionally NOT a 400: the
+# frontend's ``empty-choice-banner`` already owns that UX (the Tune button
+# is disabled, and a transient empty state is legitimate while the user is
+# wiring up Choice rows). ``PUT /config`` must keep saving in that state so
+# the frontend doesn't revert the user's deselection.
+# ---------------------------------------------------------------------------
+
+
+def _config_with_space(client: TestClient, space: dict[str, Any]) -> dict[str, Any]:
+    config = _load_valid_config(client)
+    config["tuning"] = {
+        "optuna": {
+            "params": {"n_trials": 3, "timeout": None},
+            "space": space,
+        }
+    }
+    return config
+
+
+def test_tune_rejects_inverted_range_search_space(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """POST /tune must 422 a search space whose Range has low >= high."""
+    _load_data_and_config(client, tmp_path)
+    bad_config = _config_with_space(
+        client, {"learning_rate": {"type": "float", "low": 0.5, "high": 0.01}}
+    )
+
+    with patch("lizystudio.api.workspace.start_tune_async") as _mock_start:
+        res = client.post("/api/workspace/tune", json={"config": bad_config})
+
+    assert res.status_code == 422, res.text
+    body = res.json()
+    assert body["error"]["code"] == "VALIDATION_ERROR"
+    errors = body["error"]["details"]["errors"]
+    paths = {err["path"] for err in errors}
+    assert "tuning.optuna.space.learning_rate" in paths
+    msg = next(
+        err["message"]
+        for err in errors
+        if err["path"] == "tuning.optuna.space.learning_rate"
+    )
+    assert "low" in msg.lower() and "high" in msg.lower()
+    # Run-gate semantics: the job must NOT have been launched.
+    _mock_start.assert_not_called()
+
+
+def test_tune_rejects_log_with_nonpositive_low(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """POST /tune must 422 a search space using log distribution with low <= 0."""
+    _load_data_and_config(client, tmp_path)
+    bad_config = _config_with_space(
+        client,
+        {"learning_rate": {"type": "float", "low": 0.0, "high": 0.3, "log": True}},
+    )
+
+    with patch("lizystudio.api.workspace.start_tune_async") as _mock_start:
+        res = client.post("/api/workspace/tune", json={"config": bad_config})
+
+    assert res.status_code == 422, res.text
+    body = res.json()
+    assert body["error"]["code"] == "VALIDATION_ERROR"
+    errors = body["error"]["details"]["errors"]
+    paths = {err["path"] for err in errors}
+    assert "tuning.optuna.space.learning_rate" in paths
+    msg = next(
+        err["message"]
+        for err in errors
+        if err["path"] == "tuning.optuna.space.learning_rate"
+    )
+    assert "log" in msg.lower()
+    _mock_start.assert_not_called()
+
+
+def test_tune_ignores_empty_categorical_choices_at_run_gate(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """INV-E: empty-choices categorical must NOT block POST /tune at the
+    new run-gate. The frontend's ``empty-choice-banner`` is the canonical
+    owner of that UX; the backend's job is only to reject the two
+    structurally-broken cases (inverted Range, log + low<=0).
+
+    Note that the underlying lizyml ``parse_space()`` *does* reject empty
+    choices, so this test pins the explicit filter in the Studio gate.
+    """
+    _load_data_and_config(client, tmp_path)
+    config = _config_with_space(
+        client, {"objective": {"type": "categorical", "choices": []}}
+    )
+
+    with patch(
+        "lizystudio.api.workspace.start_tune_async", return_value="job_run_gate"
+    ) as _mock_start:
+        res = client.post("/api/workspace/tune", json={"config": config})
+
+    # Either the job runs (gate passed) or some OTHER pre-existing
+    # validator (Pydantic schema, metric-compat) rejects it. The
+    # invariant we are pinning is that the *new* search-space gate does
+    # NOT contribute an error. We accept both 200 (start_tune_async
+    # called) and 422 (rejected by an existing validator that already
+    # tolerated empty choices in v0.5.0) — but if it is 422, the errors
+    # list must not contain an empty-choices complaint at the
+    # search-space path, and start_tune_async must not have been called.
+    assert res.status_code in (200, 422), res.text
+    if res.status_code == 200:
+        assert res.json()["job_id"] == "job_run_gate"
+        _mock_start.assert_called_once()
+    else:
+        body = res.json()
+        errors = body["error"]["details"]["errors"]
+        for err in errors:
+            assert (
+                "objective" not in err["path"]
+                or "choices" not in err["message"].lower()
+            ), f"run-gate must not flag empty-choices categorical: {err}"
+
+
+def test_put_config_persists_inverted_range_for_wip_editing(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """INV-C (save gate permissive): the user is allowed to ``PUT /config``
+    with a transiently-inverted Range while editing (NumberInput fires
+    onChange per keystroke). The save gate must NOT borrow the new
+    run-gate's structural check — see PR #473 (Wave 3.1a) post-mortem
+    where that change broke ``workspace-tune.spec.ts:459``.
+    """
+    _load_data_and_config(client, tmp_path)
+    bad_config = _config_with_space(
+        client, {"learning_rate": {"type": "float", "low": 0.5, "high": 0.01}}
+    )
+
+    res = client.put("/api/workspace/config", json=bad_config)
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["saved"] is True, (
+        f"PUT /config must persist WIP with inverted Range; got {body!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # POST /workspace/config/upload — valid YAML file
 # ---------------------------------------------------------------------------
 

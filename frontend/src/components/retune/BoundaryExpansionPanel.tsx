@@ -74,7 +74,18 @@ export function BoundaryExpansionPanel({
                 className="font-mono text-xs max-w-[140px] truncate"
                 title={dim.name}
               >
-                {dim.name}
+                <span className="inline-flex items-center gap-1">
+                  <span className="truncate">{dim.name}</span>
+                  {dim.clamped_to_bound && (
+                    <Badge
+                      variant="outline"
+                      className="shrink-0 border-warning-border text-[8px] uppercase tracking-wide text-warning-fg"
+                      title="Expansion clipped by the LizyML parameter_bounds limit"
+                    >
+                      bounded
+                    </Badge>
+                  )}
+                </span>
               </TableCell>
               <TableCell className="text-xs tabular-nums">
                 {dim.best_value !== null

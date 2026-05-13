@@ -106,6 +106,13 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v6
+      # #456 L3 / failure mode M4: fail fast if a committed visual golden
+      # lives under a Playwright project no CI workflow exercises (the
+      # chromium-mobile orphan cleaned in #455 was found by accident). Pure
+      # git/shell — runs in seconds, no extra runner.
+      - name: Check for orphan visual goldens
+        working-directory: .
+        run: bash scripts/check_orphan_goldens.sh
       - uses: actions/setup-node@v6
         with:
           node-version: "20"

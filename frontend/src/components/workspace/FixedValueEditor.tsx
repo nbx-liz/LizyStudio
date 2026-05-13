@@ -50,6 +50,7 @@ export function FixedValueEditor({
         value={Number.isNaN(numericValue) ? undefined : numericValue}
         onChange={(v) => onChange(v)}
         step={effectiveStep}
+        paramType={paramType === "integer" ? "integer" : "number"}
       />
     );
   }

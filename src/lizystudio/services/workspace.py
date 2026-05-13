@@ -203,6 +203,39 @@ def validate_config(ws: WorkspaceState, config: dict[str, Any]) -> list[dict[str
     return normalized
 
 
+def validate_search_space_for_tune(
+    ws: WorkspaceState, config: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Run-gate check for ``tuning.optuna.space`` (P-0108, Issue #474).
+
+    Called from ``POST /api/workspace/tune`` (and retune) AFTER
+    ``validate_config`` so structurally-broken search spaces are
+    rejected with a clear 422 *before* the tune job launches.
+
+    Deliberately NOT folded into ``validate_config``: that function is
+    shared by the save gate (``PUT /config``), which must remain
+    permissive so users can ``PUT`` work-in-progress configs (inverted
+    Range mid-keystroke, log+low=0 while raising Min, etc.) without
+    losing their edits. See Issue #474 + PR #473 post-mortem.
+
+    Returns the same ``{path, message, severity, suggested_fix}``
+    envelope as ``validate_config`` so the same frontend renderer can
+    surface either source.
+    """
+    if not isinstance(config, dict):
+        return []
+    tuning = config.get("tuning")
+    if not isinstance(tuning, dict):
+        return []
+    optuna = tuning.get("optuna")
+    if not isinstance(optuna, dict):
+        return []
+    space = optuna.get("space")
+    if not isinstance(space, dict) or not space:
+        return []
+    return ws.backend.validate_search_space(space)
+
+
 def _workspace_split_errors(
     ws: WorkspaceState, config: dict[str, Any]
 ) -> list[dict[str, Any]]:
@@ -260,43 +293,25 @@ def _metric_entry_name(metric: Any) -> str | None:
 def _workspace_metric_compatibility_errors(
     ws: WorkspaceState, config: dict[str, Any]
 ) -> list[dict[str, Any]]:
-    """Issue #394: warn before Fit when a configured regression metric
+    """Issue #394 / #403 (P-0106): warn before Fit when a configured metric
     is incompatible with the loaded dataset's target column.
 
-    Each entry returns ``severity="warning"`` (not ``"error"``) so the
-    banner advises but does not gate Fit — the underlying lizyml fit
-    path may either skip the metric or surface a clearer mid-fold
-    error, but no data is destroyed by attempting it. The
-    ``suggested_fix`` names the metric to remove and, where applicable,
-    points at upstream lizyml 0.11.0's sMAPE / WAPE as zero-tolerant
-    alternatives.
+    A thin envelope: it extracts the generic inputs from *config* and the
+    loaded dataframe (task, target column, the parsed set of metric names),
+    delegates the "which of these metrics has a target precondition" decision
+    to the backend (``ws.backend.get_incompatible_metrics`` — the watchlist
+    and ``suggested_fix`` prose are owned there, not here, so a second backend
+    declares its own vocabulary), and wraps each returned advisory in the
+    ``severity="warning"`` envelope. ``warning`` (not ``error``) so the banner
+    advises but does not gate Fit — the underlying fit path may skip the metric
+    or surface a clearer mid-fold error, but no data is destroyed by trying.
 
-    Currently detected (regression task only):
-
-    * ``mape``  — undefined when ``y_true`` contains zeros
-                  (lizyml/metrics/regression.py raises mid-fit)
-    * ``rmsle`` — undefined when ``y_true`` contains negative values
-    * ``r2``    — degenerate (NaN / +∞) when the target is constant
-                  (variance == 0)
-
-    Short-circuits to an empty list when no data is loaded, when the
-    target column is missing or non-numeric, or when ``evaluation`` is
-    not a dict. Defensive on every layer because ``validate_config``
-    runs against arbitrary user input that the schema layer may also
-    have rejected.
+    Short-circuits to an empty list when no data is loaded, when the target
+    column is missing, or when ``evaluation.metrics`` is empty / unparsable.
+    Defensive on every layer because ``validate_config`` runs against
+    arbitrary user input that the schema layer may also have rejected.
     """
-    if ws.dataframe is None:
-        return []
-    if not isinstance(config, dict):
-        return []
-    # PR-D1 / Issue #394 follow-up (code-review HIGH-1): the watchlist
-    # (mape / rmsle / r2) is regression-specific. A binary or multiclass
-    # config with a numeric target whose distribution happens to satisfy
-    # one of the triggers (e.g. constant 0/1 target) would otherwise
-    # surface a misleading R² warning. ``task`` lives at the top level
-    # of LizyMLConfig (see backends/lizyml/config_mixin.py:44); restrict
-    # to ``task=regression``.
-    if config.get("task") != "regression":
+    if ws.dataframe is None or not isinstance(config, dict):
         return []
     data = config.get("data")
     if not isinstance(data, dict):
@@ -308,62 +323,27 @@ def _workspace_metric_compatibility_errors(
     metrics = evaluation.get("metrics") if isinstance(evaluation, dict) else None
     if not isinstance(metrics, list) or not metrics:
         return []
-    target_series = ws.dataframe[target]
-    if not pd.api.types.is_numeric_dtype(target_series):
+    metric_names = {
+        name for entry in metrics if (name := _metric_entry_name(entry)) is not None
+    }
+    if not metric_names:
         return []
 
-    metric_names: set[str] = set()
-    for entry in metrics:
-        name = _metric_entry_name(entry)
-        if name is not None:
-            metric_names.add(name)
-
-    errors: list[dict[str, Any]] = []
-    if "mape" in metric_names and bool((target_series == 0).any()):
-        errors.append(
-            {
-                "path": "evaluation.metrics",
-                "message": (
-                    f"MAPE is undefined when target column '{target}' contains zeros."
-                ),
-                "severity": "warning",
-                "suggested_fix": (
-                    "Remove 'mape' from evaluation.metrics — or replace it "
-                    "with 'smape' / 'wape' which tolerate zero targets "
-                    "(lizyml >= 0.11.0)."
-                ),
-            }
-        )
-    if "rmsle" in metric_names and bool((target_series < 0).any()):
-        errors.append(
-            {
-                "path": "evaluation.metrics",
-                "message": (
-                    f"RMSLE is undefined when target column '{target}' "
-                    f"contains negative values."
-                ),
-                "severity": "warning",
-                "suggested_fix": "Remove 'rmsle' from evaluation.metrics.",
-            }
-        )
-    if "r2" in metric_names:
-        # Constant target → variance == 0. Use std() to skip NaNs; pandas
-        # returns NaN when there is < 2 non-null observations, which we
-        # also treat as "cannot compute R²".
-        std = target_series.std(skipna=True)
-        if pd.isna(std) or float(std) == 0.0:
-            errors.append(
-                {
-                    "path": "evaluation.metrics",
-                    "message": (
-                        f"R² is undefined when target column '{target}' is "
-                        f"constant (variance == 0)."
-                    ),
-                    "severity": "warning",
-                    "suggested_fix": "Remove 'r2' from evaluation.metrics.",
-                }
-            )
-    return errors
+    task = config.get("task")
+    incompatible = ws.backend.get_incompatible_metrics(
+        task if isinstance(task, str) else "",
+        ws.dataframe[target],
+        metric_names,
+    )
+    return [
+        {
+            "path": "evaluation.metrics",
+            "message": entry.message,
+            "severity": "warning",
+            "suggested_fix": entry.suggested_fix,
+        }
+        for entry in incompatible
+    ]
 
 
 def load_config_from_file(

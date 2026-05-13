@@ -7,6 +7,181 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-13
+
+The **Tune workflow polish + v0.5 Exit Criteria closure** release.
+Completes the v0.5 reliability theme by landing the last open phase
+(`PLAN.md` v3-26 / R-4.2 Pickle compat nightly CI, `HISTORY.md`
+P-0107), overhauls the Tune setup UX end-to-end against the LizyML
+v0.15 SSOT (P-0104 Wave 1-3), introduces a run-gate check for
+structurally-broken search spaces (P-0108 / Issue #474), and moves
+metric-compat watchlist ownership from the Service layer into a new
+`BackendCore.get_incompatible_metrics` capability (P-0106) as a
+forward step toward a second ML backend.
+
+Bundles:
+
+1. **Tune workflow overhaul (P-0104)** — canonical Range / Choice
+   defaults + `Fit seed=1120` alignment; integer guard + inline
+   warning on NumberInput; `inner_valid` picker with auto-populated
+   Evaluation defaults; Re-tune Settings `enabled` switch; UiSchema
+   `objective` / `parameter_bounds` / `metric` all wired through to
+   the LizyML v0.15 SSOT (`model_metric` removed).
+2. **Residuals plot kind selector (P-0105)** — 3-panel layout
+   mirroring the Importance plot pattern (Issue #457).
+3. **Pickle compat nightly + structured `PICKLE_INCOMPATIBLE` envelope
+   (P-0107 / v3-26 / R-4.2)** — past-N=3-minor lizyml matrix gates
+   silent cross-version load in the Nightly workflow; the 400
+   envelope now carries `kind` (`schema_mismatch` /
+   `lizyml_version_mismatch` / `corrupt_meta`), `recovery_hint`, and
+   `suggested_fix` so the frontend can render actionable guidance.
+4. **Search-space run-gate validation (P-0108 / Issue #474)** —
+   inverted Range and `log + low<=0` search-space entries are now
+   rejected at `POST /tune` with a 422 + concrete `suggested_fix`,
+   *before* the tune job launches. `PUT /config` stays permissive so
+   in-flight edits persist (PR #473 post-mortem).
+5. **Backend capability split (P-0106 / Issue #403)** — metric-compat
+   watchlist (MAPE / RMSLE / R² preconditions + the sMAPE/WAPE
+   alternative suggestion) moves from `Service.validate_config` into
+   `BackendCore.get_incompatible_metrics`. Service layer becomes
+   metric-agnostic; a future second backend declares its own
+   vocabulary.
+6. **Backend refactor closing chapter (#451 / #452 / #456)** —
+   `services/jobs.py` (1062 → 522 lines) split into 4 focused
+   modules + a thin orchestrator façade (`JobMetadataStore`,
+   `ActiveJobSlot`, `JobControlFlags`, `JobLineage`); helper splits
+   on `workspace_reset`, `_run_job_core`, `run_job_in_subprocess`;
+   stray-artefact + orphan-golden CI gates.
+
+### Added
+
+- **`BackendCore.validate_search_space(space)` Protocol method
+  (P-0108)** — structural validation of `tuning.optuna.space`
+  entries. The lizyml adapter implements it via `parse_space()` and
+  filters out empty-choices categoricals (frontend owns that UX).
+  Default `return []` keeps minimal backends working unchanged.
+- **`BackendCore.get_incompatible_metrics(task, target, names)`
+  Protocol method (P-0106)** — backend-owned advisory for
+  configured metrics whose target preconditions the loaded dataset
+  violates. lizyml implements MAPE / RMSLE / R² preconditions plus
+  the sMAPE / WAPE replacement suggestion.
+- **`PICKLE_INCOMPATIBLE` envelope `details.kind` +
+  `recovery_hint` + `suggested_fix` (P-0107)** — new additive
+  fields on the existing 400 response. `kind` is one of
+  `"schema_mismatch"` / `"lizyml_version_mismatch"` /
+  `"corrupt_meta"` / `"unknown"`. Backwards-compatible: legacy
+  clients consuming only `code` + `message` are unaffected.
+- **Nightly `pickle-compat` job + `scripts/pickle_compat_matrix.sh`
+  (v3-26)** — installs past-N=3-minor lizyml releases into
+  ephemeral venvs, saves a sidecar with each, then verifies the
+  runtime rejects every one with the structured envelope. Silent
+  load is `exit 1`.
+- **Residuals plot kind selector (P-0105)** — `available_residuals_kinds`
+  drives a 3-panel layout for Predicted vs. Actual / Residuals vs.
+  Predicted / Residuals histogram (Issue #457).
+- **Tune Evaluation auto-populate** — Evaluation `metrics` are
+  pre-filled from the model defaults when the Tune tab opens, with
+  an `inner_valid` picker so the user can select which fold drives
+  the Optuna objective.
+- **Re-tune Settings `enabled` Switch** — Re-tune dialogue exposes an
+  explicit enable toggle that sends `null` for unchanged fields,
+  removing the UX ambiguity where a blank input could mean either
+  "keep the default" or "clear the value".
+- **NumberInput integer guard + inline warning** — decimal input on
+  fields that the schema declares integer is caught client-side
+  with an inline message, before the request reaches the backend
+  (P-0104 Wave 2.4 / Issue #460).
+- **Stray-artefact pre-commit hook + orphan-visual-golden CI gate
+  (#456 L1-L4)** — `.tmp` / build droppings cannot accidentally land
+  on develop; an obsolete Playwright golden cannot survive a
+  test deletion.
+
+### Changed
+
+- **Tune defaults aligned to v0.15 SSOT (P-0104 Wave 2.2 / Wave 3.1a /
+  Wave 3.1b)** — canonical `Range` / `Choice` defaults pulled from
+  the LizyML UiSchema, `Fit seed = 1120` for parity with the
+  default `search_space_catalog` seed. `objective` /
+  `parameter_bounds` / `metric` are now read from the LizyML
+  registry instead of duplicated Studio constants;
+  `model_metric` field removed.
+- **`services/jobs.py` (1062 → 522 lines, #451)** — split into
+  `_job_metadata.py` (344L) / `_job_active_slot.py` (201L) /
+  `_job_control_flags.py` (214L) / `_job_lineage.py` (200L) +
+  thin orchestrator. Public Protocol unchanged; all call sites
+  and tests remain unmodified.
+- **`services/workspace.py::_workspace_metric_compatibility_errors`
+  collapsed to a thin envelope (P-0106)** — type narrowing +
+  adapter dispatch only. Backwards-compatible (INV-metric-1: the
+  emitted envelope is byte-identical to v0.5.0).
+- **`subprocess_runner.run_job_in_subprocess` / `workspace_reset` /
+  `_run_job_core` split into helpers (#452)** — pure refactors;
+  no behaviour change; each helper carries focused
+  responsibilities (~40-60 lines instead of one ~130L function).
+- **`lizyml` dependency: `>=0.15.0, <0.16.0`** (bumped from
+  `>=0.12.0, <0.13.0`, #464) — required by the P-0104 Wave 3.1a /
+  3.1b SSOT migration.
+
+### Fixed
+
+- **Silent load of cross-minor pickle artefacts is now impossible
+  (P-0107)** — Re-tune / Resume on a checkpoint saved by an older
+  lizyml minor surfaces immediately as `PICKLE_INCOMPATIBLE` with
+  the `lizyml_version_mismatch` classification and a one-line
+  suggested fix (refit, or pin the saved version), instead of
+  failing deep inside the load path.
+- **Structurally-broken tuning search spaces fail fast (P-0108)** —
+  inverted Range (`low >= high`) and `log + low<=0` no longer
+  manifest as "All tuning trials failed" after N Optuna trials;
+  `POST /tune` rejects them with a 422 and a concrete
+  `suggested_fix` ("Swap Min and Max..." / "Raise Min above
+  zero..."). `PUT /config` stays permissive so in-progress edits
+  are not lost.
+- **INV-5 queue-full eviction + INV-1 multi-paused reconcile
+  coverage (#449 / #450)** — regression tests pin the established
+  invariants from v0.5.0 against a future refactor that might
+  weaken them silently.
+
+### Internal
+
+- **Test coverage additions** — INV-5 queue-full eviction + INV-1
+  multi-paused reconcile (#449 / #450), inference Results panel +
+  Download CSV + multi-task (#443 / #444 / #448), Jobs page Export
+  Format toggle + Pause / Resume + Re-fit UI (#442 / #445 / #446).
+- **`BLUEPRINT.md` / `architecture-as-implemented.md` /
+  `docs/v0.4-business-readiness-plan.md` / `docs/ROADMAP.md`** all
+  reconciled to v0.5.0 + v0.6.0 state.
+- **`tests/bench/test_bench_pickle_compat.py`** new
+  (`@slow + @pickle_compat`) — synthetic drift coverage for the
+  schema + version + corrupt-meta classes.
+
+### Compatibility
+
+- **REST API**: zero endpoint removals; zero schema removals;
+  `PICKLE_INCOMPATIBLE` adds optional `details` fields (additive).
+- **`BackendAdapter` Protocol**: two new methods
+  (`validate_search_space`, `get_incompatible_metrics`) with
+  default `return []` bodies. Existing implementations satisfy
+  automatically.
+- **On-disk format**: `meta.json` `format_version=1` unchanged.
+- **Frontend**: no breaking UI changes. Tune tab UX evolves
+  significantly (defaults, Re-tune Switch, inner_valid picker,
+  Residuals kind selector) but the wire format is
+  backwards-compatible.
+- **Dependencies**: `lizyml >=0.15.0, <0.16.0` (was `>=0.12.0,
+  <0.13.0`). Users with a pinned `lizyml==0.14.x` will need to
+  upgrade.
+
+### Migration notes
+
+- Users with checkpoints saved under lizyml `0.14.x` (or older) will
+  see `PICKLE_INCOMPATIBLE` on Re-tune / Resume after upgrading.
+  The new `suggested_fix` field points at the two recovery paths:
+  re-run the tune on the current runtime, or pin
+  `lizyml==<saved_version>` in `pyproject.toml` to reload the
+  artefact. This was always the implicit policy; v0.6 just makes
+  it discoverable.
+
 ## [0.5.0] - 2026-05-07
 
 The **v0.5 reliability** release. Closes 4 of 5 v0.5 Exit Criteria

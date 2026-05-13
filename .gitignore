@@ -27,6 +27,10 @@ src/lizystudio/static/
 .DS_Store
 Thumbs.db
 
+# Working artefacts — spike outputs, debug dumps, audit scratch, one-off scripts
+# (convention: put all such files under tmp/ — see CONTRIBUTING.md § Working artefacts)
+tmp/
+
 # Data
 *.csv
 !tests/fixtures/**/*.csv

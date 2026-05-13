@@ -841,6 +841,39 @@ def test_retune_rejects_incompatible_pickle_version(
     assert res.json()["error"]["code"] == "PICKLE_INCOMPATIBLE"
 
 
+def test_retune_pickle_incompatible_envelope_carries_recovery_hint(
+    client: TestClient, sample_data_ref: DataRef
+) -> None:
+    """P-0107 (v3-26c): the PICKLE_INCOMPATIBLE 400 envelope must carry
+    ``kind`` + ``recovery_hint`` + ``suggested_fix`` in ``details`` so
+    the frontend can render user-actionable guidance instead of a raw
+    "Checkpoint incompatible: ..." string. This is the checkpoint-load
+    equivalent of P-0100's ``severity`` + ``suggested_fix`` envelope.
+    """
+    parent_id = _make_completed_tune_job(client, sample_data_ref)
+    app = client.app  # type: ignore[union-attr]
+    job_store: JobStore = app.state.job_store
+
+    meta = job_store.jobs_dir / parent_id / "model_meta.json"
+    meta.write_text(
+        '{"pickle_schema": 1, "lizyml_version": "0.7.0", '
+        '"lightgbm_version": "4.5.0", "optuna_version": "4.0.0", '
+        '"saved_at": "2026-04-14T00:00:00+00:00"}',
+        encoding="utf-8",
+    )
+
+    res = client.post(f"/api/jobs/{parent_id}/retune", json={"n_trials": 3})
+    assert res.status_code == 400
+    body = res.json()["error"]
+    assert body["code"] == "PICKLE_INCOMPATIBLE"
+    details = body["details"]
+    assert details["kind"] == "lizyml_version_mismatch"
+    assert isinstance(details.get("recovery_hint"), str) and details["recovery_hint"]
+    assert isinstance(details.get("suggested_fix"), str) and details["suggested_fix"]
+    # The saved version must appear so the user can pin it.
+    assert "0.7.0" in details["suggested_fix"]
+
+
 def test_retune_rejects_corrupted_meta_json(
     client: TestClient, sample_data_ref: DataRef
 ) -> None:

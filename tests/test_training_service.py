@@ -689,6 +689,35 @@ class TestExtractReTune:
     def test_non_dict_re_tune_yields_none(self) -> None:
         assert _extract_re_tune({"tuning": {"re_tune": "bad"}}) is None
 
+    def test_explicit_null_re_tune_yields_none(self) -> None:
+        # P-0104 Wave 2.1: the Re-tune Settings Switch writes
+        # ``tuning.re_tune = null`` to the wire payload when OFF. The
+        # extractor MUST treat this as a non-multi-round request so the
+        # legacy single-round path (no re_tune kwargs) is taken.
+        assert _extract_re_tune({"tuning": {"re_tune": None}}) is None
+
+    def test_legacy_n_rounds_1_payload_still_accepted(self) -> None:
+        # P-0104 Decision D2: legacy persisted jobs may carry
+        # ``{n_rounds: 1, expand_boundary: True, boundary_threshold: 0.05}``
+        # from the pre-Wave-2.1 UI (which used n_rounds=1 as the off-state
+        # proxy). The backend MUST keep accepting the populated payload
+        # without normalisation; the front-end auto-migrates the display
+        # state but the wire shape is permitted unchanged.
+        legacy = {
+            "tuning": {
+                "re_tune": {
+                    "n_rounds": 1,
+                    "expand_boundary": True,
+                    "boundary_threshold": 0.05,
+                }
+            }
+        }
+        assert _extract_re_tune(legacy) == {
+            "n_rounds": 1,
+            "expand_boundary": True,
+            "boundary_threshold": 0.05,
+        }
+
     def test_explicit_null_tuning_yields_none(self) -> None:
         # Some persisted configs explicitly set tuning to null.
         assert _extract_re_tune({"tuning": None}) is None

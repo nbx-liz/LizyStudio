@@ -47,6 +47,17 @@ const KIND_LABELS: Record<string, string> = {
   shap: "SHAP",
 };
 
+// Issue #457 / P-0105: residuals plot kinds. Order is the SegmentGroup
+// display order; ``all`` last (the legacy 3-panel default). Mirrors
+// lizyml ``plot_residuals._VALID_KINDS`` / backend ``_RESIDUALS_KINDS``.
+const RESIDUAL_KINDS: string[] = ["scatter", "histogram", "qq", "all"];
+const RESIDUAL_KIND_LABELS: Record<string, string> = {
+  scatter: "Scatter",
+  histogram: "Histogram",
+  qq: "QQ",
+  all: "All",
+};
+
 interface PlotSectionProps {
   plots: string[];
   selectedPlot: string;
@@ -70,6 +81,12 @@ interface PlotSectionProps {
   importanceData?: ImportanceResponse;
   /** Importance plot data (kind-independent, always default/split). */
   importancePlot?: PlotResponse;
+  /** Issue #457 / P-0105: residuals plot data for the selected kind. */
+  residualsPlot?: PlotResponse;
+  /** Currently selected residuals kind (``"all"`` = legacy 3-panel). */
+  selectedResidualsKind?: string;
+  /** Callback for residuals kind change. */
+  onResidualsKindChange?: (kind: string) => void;
   /**
    * PR-B2 / P-0097: top-N projection for the importance table. `null`
    * means "show all" (no top_n forwarded).
@@ -94,6 +111,9 @@ export function PlotSection({
   onImportanceKindChange,
   importanceData,
   importancePlot,
+  residualsPlot,
+  selectedResidualsKind,
+  onResidualsKindChange,
   importanceTopN,
   onImportanceTopNChange,
 }: PlotSectionProps) {
@@ -109,11 +129,14 @@ export function PlotSection({
   // Resolve which data to display
   const isLearningCurve = selectedPlot === "learning-curve";
   const isImportance = selectedPlot === "importance";
+  const isResiduals = selectedPlot === "residuals";
   const activePlotData = isLearningCurve
     ? learningCurve
     : isImportance
       ? importancePlot
-      : plotData;
+      : isResiduals
+        ? residualsPlot
+        : plotData;
   const chartHeight = isLearningCurve ? 500 : 350;
 
   // Importance: show kind selector when multiple kinds available
@@ -122,6 +145,11 @@ export function PlotSection({
     importanceKinds != null &&
     importanceKinds.length > 1 &&
     onImportanceKindChange != null;
+
+  // Residuals: show the kind selector whenever the residuals tab is
+  // active and a change handler is wired (Issue #457).
+  const showResidualsKind = isResiduals && onResidualsKindChange != null;
+  const residualsKindValue = selectedResidualsKind ?? "all";
 
   // Show LC filter when: on learning curve tab + more than 1 metric available
   const showLcFilter =
@@ -175,6 +203,18 @@ export function PlotSection({
             value={selectedImportanceKind}
             onChange={onImportanceKindChange}
             labels={KIND_LABELS}
+          />
+        </div>
+      )}
+
+      {/* Residuals kind selector (Issue #457) */}
+      {showResidualsKind && (
+        <div className="mb-3">
+          <SegmentGroup
+            options={RESIDUAL_KINDS}
+            value={residualsKindValue}
+            onChange={onResidualsKindChange}
+            labels={RESIDUAL_KIND_LABELS}
           />
         </div>
       )}
@@ -264,7 +304,9 @@ export function PlotSection({
         <DialogContent className="max-h-[90vh] max-w-[90vw]">
           <DialogHeader>
             <DialogTitle>
-              {PLOT_LABELS[selectedPlot] ?? selectedPlot}
+              {isResiduals && residualsKindValue !== "all"
+                ? `Residuals — ${RESIDUAL_KIND_LABELS[residualsKindValue] ?? residualsKindValue}`
+                : (PLOT_LABELS[selectedPlot] ?? selectedPlot)}
             </DialogTitle>
           </DialogHeader>
           {activePlotData && (

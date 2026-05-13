@@ -189,13 +189,38 @@ class PicklePreflightFailedError(StudioError):
 
 
 class PickleIncompatibleError(StudioError):
-    """Stored checkpoint cannot be deserialized by the current runtime (H-0062)."""
+    """Stored checkpoint cannot be deserialized by the current runtime (H-0062).
 
-    def __init__(self, reason: str) -> None:
+    P-0107 (v3-26c): the JSON ``details`` payload carries a structured
+    classification (``kind``) plus user-facing ``recovery_hint`` and
+    ``suggested_fix`` strings so the frontend can render an actionable
+    error toast / banner instead of just the raw ``message``.
+
+    Backward compatibility: when the optional fields are not provided
+    (legacy raise sites, future call sites that lack classification),
+    ``details`` still contains ``kind="unknown"`` and the hint/fix slots
+    are absent — older clients that only consume ``code`` + ``message``
+    are unaffected.
+    """
+
+    def __init__(
+        self,
+        reason: str,
+        *,
+        kind: str = "unknown",
+        recovery_hint: str | None = None,
+        suggested_fix: str | None = None,
+    ) -> None:
+        details: dict[str, Any] = {"kind": kind}
+        if recovery_hint:
+            details["recovery_hint"] = recovery_hint
+        if suggested_fix:
+            details["suggested_fix"] = suggested_fix
         super().__init__(
             "PICKLE_INCOMPATIBLE",
             f"Checkpoint incompatible: {reason}",
             400,
+            details=details,
         )
 
 

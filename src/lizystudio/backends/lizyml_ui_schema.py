@@ -1,12 +1,20 @@
 """UI schema for the LizyML backend (H-0026).
 
 Ported from LizyML-Widget's adapter_contract.py.
-Contains only static data structures — no ML logic.
+Contains only static data structures — no ML logic, except for the
+``option_sets.objective`` / ``option_sets.metric`` / ``parameter_bounds``
+blocks which are sourced from LizyML's ``LGBMProvider`` (P-0104 Wave
+3.1a / 3.1b) so the Studio UI always reflects the canonical objective
+list / model-metric choices / hyper-parameter bounds shipped with the
+installed LizyML version. The ``option_sets.eval_metric`` block is the
+eval-metrics registry list (LizyML post-hoc reporting metrics, distinct
+from the LightGBM ``metric`` param) used by the Tune Evaluation section.
 """
 
 from __future__ import annotations
 
-from typing import Any
+import threading
+from typing import TYPE_CHECKING, Any, Literal
 
 from lizystudio.backends.lizyml_constants import _build_additional_params
 from lizystudio.backends.lizyml_metrics import (
@@ -16,12 +24,91 @@ from lizystudio.backends.lizyml_metrics import (
     get_metric_directions,
 )
 
+if TYPE_CHECKING:
+    from lizyml.estimators.lgbm.provider import LGBMProvider
+
+# --- LizyML EstimatorProvider (SSOT for objective / parameter bounds) ---
+
+_Task = Literal["regression", "binary", "multiclass"]
+
+_provider_cache: LGBMProvider | None = None
+_provider_lock: threading.Lock = threading.Lock()
+
+# Tasks the LizyML LGBM provider recognises, in canonical UI order.
+_TASKS: tuple[_Task, ...] = ("regression", "binary", "multiclass")
+
+
+def _get_lgbm_provider() -> LGBMProvider:
+    """Return a process-wide cached ``LGBMProvider`` instance.
+
+    ``build_ui_schema`` is invoked per ``GET /ui-schema`` request; the
+    provider is stateless and cheap to keep alive, so a singleton avoids
+    re-instantiating it on every call.
+    """
+    global _provider_cache  # noqa: PLW0603
+    if _provider_cache is not None:
+        return _provider_cache
+    with _provider_lock:
+        if _provider_cache is not None:
+            return _provider_cache
+        from lizyml.estimators.lgbm.provider import LGBMProvider
+
+        _provider_cache = LGBMProvider()
+        return _provider_cache
+
+
+def _build_objective_option_sets() -> dict[str, list[str]]:
+    """``{task: [objective, ...]}`` straight from LizyML canonical list."""
+    provider = _get_lgbm_provider()
+    return {task: list(provider.objective_choices(task)) for task in _TASKS}
+
+
+def _build_metric_option_sets() -> dict[str, dict[str, list[str]]]:
+    """``{task: {"native": [...], "feval": [...]}}`` from the provider.
+
+    ``native`` are LightGBM's built-in ``metric`` names; ``feval`` are
+    LizyML's custom feval implementations (slower — they re-evaluate the
+    model in Python on every boosting round). The UI shows both as
+    model-metric (``model.params.metric``) options and badges the feval
+    ones as "Custom (slow)" so the speed trade-off is visible (P-0104 Q2).
+    """
+    provider = _get_lgbm_provider()
+    out: dict[str, dict[str, list[str]]] = {}
+    for task in _TASKS:
+        choices = provider.metric_choices(task)
+        out[task] = {
+            "native": list(choices["native"]),
+            "feval": list(choices["feval"]),
+        }
+    return out
+
+
+def _build_eval_metric_option_sets() -> dict[str, list[str]]:
+    """``{task: [metric, ...]}`` from LizyML's eval-metrics registry.
+
+    These are the post-hoc reporting metrics LizyML computes after a fit
+    / tune (``auc_pr``, ``logloss``, ...), *not* the LightGBM ``metric``
+    param. Used by the Tune Evaluation section (Optimization Metric /
+    Additional Metrics).
+    """
+    return {task: list(ms) for task, ms in get_eval_metrics_by_task().items()}
+
+
+def _build_parameter_bounds() -> dict[str, dict[str, dict[str, float | int]]]:
+    """``{task: {param: {"min": ..., "max": ...}}}`` from the provider.
+
+    Keys use LizyML's canonical parameter names (e.g. ``early_stopping_rounds``);
+    the frontend maps the dotted ``search_space_catalog`` key
+    (``early_stopping.rounds``) onto the underscored bound key.
+    """
+    provider = _get_lgbm_provider()
+    return {task: dict(provider.parameter_bounds(task)) for task in _TASKS}
+
+
 # --- UI schema builder ---
 
 
-def build_ui_schema(
-    all_metrics_by_task: dict[str, list[str]],
-) -> dict[str, Any]:
+def build_ui_schema() -> dict[str, Any]:
     """Build the full UI schema for the LizyML backend contract."""
     metric_directions = get_metric_directions()
     return {
@@ -31,69 +118,25 @@ def build_ui_schema(
             {"key": "calibration", "title": "Calibration"},
             {"key": "evaluation", "title": "Evaluation"},
         ],
+        # P-0104 Wave 3.1b / Issue #461 (Q3): ``option_sets.model_metric``
+        # was removed and folded into ``option_sets.metric``. ``metric`` is
+        # now the nested ``{task: {native, feval}}`` shape sourced straight
+        # from ``LGBMProvider.metric_choices(task)`` — the LightGBM
+        # ``model.params.metric`` options. The eval-metrics registry list
+        # (post-hoc reporting metrics) moved to ``option_sets.eval_metric``.
         "option_sets": {
-            "objective": {
-                "regression": [
-                    "huber",
-                    "mse",
-                    "mae",
-                    "quantile",
-                    "mape",
-                    "cross_entropy",
-                ],
-                "binary": [
-                    "binary",
-                    "cross_entropy",
-                    "cross_entropy_lambda",
-                ],
-                "multiclass": [
-                    "multiclass",
-                    "softmax",
-                    "multiclassova",
-                ],
-            },
-            "metric": dict(all_metrics_by_task),
-            "model_metric": {
-                "regression": [
-                    "l1",
-                    "l2",
-                    "rmse",
-                    "quantile",
-                    "mape",
-                    "huber",
-                    "fair",
-                    "poisson",
-                    "gamma",
-                    "gamma_deviance",
-                    "tweedie",
-                    "r2",
-                    "rmsle",
-                ],
-                "binary": [
-                    "auc",
-                    "binary_logloss",
-                    "binary_error",
-                    "average_precision",
-                    "cross_entropy",
-                    "cross_entropy_lambda",
-                    "kullback_leibler",
-                    "f1",
-                    "accuracy",
-                    "brier",
-                    "ece",
-                    "precision_at_k",
-                ],
-                "multiclass": [
-                    "multi_logloss",
-                    "multi_error",
-                    "auc_mu",
-                    "f1",
-                    "accuracy",
-                    "brier",
-                ],
-            },
+            "objective": _build_objective_option_sets(),
+            "metric": _build_metric_option_sets(),
+            "eval_metric": _build_eval_metric_option_sets(),
         },
         "metric_direction": metric_directions,
+        # P-0104 Wave 3.1a / Issue #461: hyper-parameter bounds straight
+        # from LizyML's ``LGBMProvider.parameter_bounds(task)``. The
+        # frontend clamps SearchSpace Range Min/Max inputs to these.
+        # Keys are LizyML's canonical names (``early_stopping_rounds``);
+        # the dotted ``search_space_catalog`` key (``early_stopping.rounds``)
+        # is mapped onto it client-side.
+        "parameter_bounds": _build_parameter_bounds(),
         "n_trials_presets": [10, 50, 100, 200, 500],
         "parameter_hints": [
             {
@@ -109,7 +152,7 @@ def build_ui_schema(
             {
                 "key": "metric",
                 "label": "Metric",
-                "kind": "model_metric",
+                "kind": "metric",
                 "default": {
                     "regression": ["huber", "mae", "mape"],
                     "binary": ["auc", "binary_logloss"],
@@ -217,7 +260,8 @@ def build_ui_schema(
                 "modes": ["fixed", "range"],
                 "group": "smart_params",
                 "default": 1.0,
-                "default_range": {"low": 0.5, "high": 1.0, "log": False},
+                "default_mode": "range",
+                "default_range": {"low": 0.4, "high": 1.0, "log": False},
             },
             {
                 "key": "num_leaves",
@@ -234,6 +278,7 @@ def build_ui_schema(
                 "modes": ["fixed", "range"],
                 "group": "smart_params",
                 "default": 0.01,
+                "default_mode": "range",
                 "default_range": {"low": 0.01, "high": 0.2, "log": False},
             },
             {
@@ -243,6 +288,7 @@ def build_ui_schema(
                 "modes": ["fixed", "range"],
                 "group": "smart_params",
                 "default": 0.01,
+                "default_mode": "range",
                 "default_range": {"low": 0.01, "high": 0.2, "log": False},
             },
             {
@@ -302,7 +348,7 @@ def build_ui_schema(
                 "group": "model_params",
                 "default": 1500,
                 "default_mode": "range",
-                "default_range": {"low": 600, "high": 2500, "log": False},
+                "default_range": {"low": 500, "high": 2000, "log": False},
             },
             {
                 "key": "learning_rate",
@@ -312,7 +358,7 @@ def build_ui_schema(
                 "group": "model_params",
                 "default": 0.001,
                 "default_mode": "range",
-                "default_range": {"low": 0.0001, "high": 0.1, "log": True},
+                "default_range": {"low": 0.0001, "high": 0.01, "log": True},
             },
             {
                 "key": "max_depth",
@@ -322,7 +368,7 @@ def build_ui_schema(
                 "group": "model_params",
                 "default": 5,
                 "default_mode": "range",
-                "default_range": {"low": 3, "high": 12, "log": False},
+                "default_range": {"low": 3, "high": 9, "log": False},
             },
             {
                 "key": "max_bin",
@@ -332,7 +378,7 @@ def build_ui_schema(
                 "group": "model_params",
                 "default": 511,
                 "default_mode": "choice",
-                "default_choices": [15, 63, 127, 255, 511, 1023],
+                "default_choices": [15, 63, 127, 255, 511],
             },
             {
                 "key": "feature_fraction",
@@ -362,17 +408,15 @@ def build_ui_schema(
                 "group": "model_params",
                 "default": 10,
                 "default_mode": "range",
-                "default_range": {"low": 0, "high": 20, "log": False},
+                "default_range": {"low": 1, "high": 10, "log": False},
             },
             {
                 "key": "lambda_l1",
                 "title": "Lambda L1",
                 "paramType": "number",
-                "modes": ["fixed", "range"],
+                "modes": ["fixed"],
                 "group": "model_params",
                 "default": 0.0,
-                "default_mode": "range",
-                "default_range": {"low": 1e-8, "high": 1.0, "log": True},
             },
             {
                 "key": "lambda_l2",
@@ -382,7 +426,7 @@ def build_ui_schema(
                 "group": "model_params",
                 "default": 0.000001,
                 "default_mode": "range",
-                "default_range": {"low": 1e-8, "high": 1.0, "log": True},
+                "default_range": {"low": 1e-6, "high": 1e-2, "log": True},
             },
             {
                 "key": "verbose",
@@ -417,7 +461,7 @@ def build_ui_schema(
                 "group": "training",
                 "default": 150,
                 "default_mode": "range",
-                "default_range": {"low": 40, "high": 240, "log": False},
+                "default_range": {"low": 50, "high": 200, "log": False},
             },
             {
                 "key": "validation_ratio",
@@ -570,7 +614,7 @@ def build_ui_schema(
         "additional_params": _build_additional_params(),
         "special_search_space_fields": {
             "objective": "objective",
-            "metric": "model_metric",
+            "metric": "metric",
             "inner_valid": "inner_valid_picker",
         },
     }

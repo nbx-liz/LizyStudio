@@ -703,3 +703,94 @@ class TestTerminalReplay:
         ):
             b = ProgressBroadcaster()
         assert b._terminal_ttl_s == pytest.approx(12.5)
+
+
+class TestQueueFullEviction:
+    """Issue #449 — INV-5 defense: the terminal-eviction-on-queue-full
+    path in ``ProgressBroadcaster._enqueue`` (a queued terminal message is
+    NEVER dropped to make room for another message).
+
+    ``_enqueue`` is synchronous (it runs on the event-loop thread via
+    ``call_soon_threadsafe``), so the tests call it directly against a
+    hand-built ``asyncio.Queue`` with a tiny ``maxsize`` — no running
+    loop required. ``asyncio.Queue.put_nowait`` / ``get_nowait`` work
+    purely on the internal deque.
+    """
+
+    @staticmethod
+    def _drain(q: asyncio.Queue[dict[str, Any]]) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        while not q.empty():
+            out.append(q.get_nowait())
+        return out
+
+    def test_terminal_evicts_oldest_nonterminal_when_queue_full(self) -> None:
+        metrics = MagicMock()
+        b = ProgressBroadcaster(metrics=metrics)
+        q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=2)
+        b._enqueue(q, {"type": "progress", "step": 1}, False)
+        b._enqueue(q, {"type": "progress", "step": 2}, False)
+        assert q.full()
+
+        # A terminal arriving on a full-of-non-terminals queue evicts the
+        # head non-terminal and takes its slot.
+        b._enqueue(q, {"type": "completed", "result": "ok"}, True)
+
+        drained = self._drain(q)
+        assert {"type": "completed", "result": "ok"} in drained
+        # Exactly one non-terminal survives — the newer one (step 2).
+        nonterminals = [m for m in drained if m["type"] == "progress"]
+        assert nonterminals == [{"type": "progress", "step": 2}]
+        # The drop was recorded so production back-pressure is observable.
+        metrics.progress_dropped_total.inc.assert_called_once()
+
+    def test_terminal_preserved_when_eviction_loop_passes_through_it(self) -> None:
+        """Queue head is a terminal followed by a non-terminal; the new
+        terminal must keep the existing terminal and evict the non-terminal.
+        """
+        b = ProgressBroadcaster(metrics=MagicMock())
+        q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=2)
+        b._enqueue(q, {"type": "completed", "id": 1}, True)
+        b._enqueue(q, {"type": "progress", "id": 2}, False)
+        assert q.full()
+
+        b._enqueue(q, {"type": "error", "id": 3}, True)
+
+        drained = self._drain(q)
+        # FIFO order preserved: old terminal first, new terminal second.
+        assert [m["type"] for m in drained] == ["completed", "error"]
+        # The non-terminal is gone.
+        assert all(m["type"] != "progress" for m in drained)
+
+    def test_new_terminal_dropped_when_queue_full_of_terminals(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        b = ProgressBroadcaster(metrics=MagicMock())
+        q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=2)
+        b._enqueue(q, {"type": "completed", "id": 1}, True)
+        b._enqueue(q, {"type": "completed", "id": 2}, True)
+        assert q.full()
+
+        with caplog.at_level("WARNING"):
+            b._enqueue(q, {"type": "error", "id": 3}, True)
+
+        # The two existing terminals are preserved; the new one is dropped.
+        drained = self._drain(q)
+        assert {m["id"] for m in drained} == {1, 2}
+        assert any(
+            "queue full of terminals" in r.getMessage() for r in caplog.records
+        ), caplog.text
+
+    def test_nonterminal_dropped_silently_when_queue_full(self) -> None:
+        metrics = MagicMock()
+        b = ProgressBroadcaster(metrics=metrics)
+        q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=1)
+        b._enqueue(q, {"type": "progress", "id": 1}, False)
+        assert q.full()
+
+        # Non-terminal on a full queue: dropped silently, metric bumped.
+        b._enqueue(q, {"type": "progress", "id": 2}, False)
+
+        assert q.qsize() == 1
+        assert q.get_nowait()["id"] == 1
+        metrics.progress_dropped_total.inc.assert_called_once()

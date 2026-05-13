@@ -25,6 +25,14 @@ function buildEntry(name: string, k?: number): MetricEntry {
   return name;
 }
 
+// P-0104 Wave 2.3 / Issue #459 — auto-populate defaults for fresh
+// configs. Binary is the only task with a confirmed canonical set;
+// regression / multiclass defaults are deferred to a follow-up issue
+// per #459's scope statement.
+const TASK_DEFAULT_METRICS: Record<string, string[]> = {
+  binary: ["auc", "auc_pr", "brier", "logloss"],
+};
+
 export function TuneEvaluationSection({
   config,
   onChange,
@@ -87,6 +95,46 @@ export function TuneEvaluationSection({
       },
     });
   }, [autoDirection]);
+
+  // P-0104 Wave 2.3 / Issue #459 — auto-populate the canonical default
+  // metric set for fresh configs. Fires at most once per workspace; if
+  // the user later clears the list explicitly we honor that and do not
+  // re-seed (only an absent ``tuning.evaluation.metrics`` is treated as
+  // "fresh"). Regression and multiclass are deferred until their
+  // canonical defaults are confirmed in a follow-up.
+  const defaultsSeededRef = useRef(false);
+  useEffect(() => {
+    if (defaultsSeededRef.current) return;
+    if (!task) return;
+    if (metricOptions.length === 0) return;
+    // tuning.evaluation.metrics already set (even to []) -> user-owned,
+    // don't re-seed.
+    const currentCfg = configRef.current;
+    const tuning = (currentCfg.tuning as Record<string, unknown>) ?? {};
+    const ev = (tuning.evaluation as Record<string, unknown>) ?? {};
+    if (Array.isArray(ev.metrics)) {
+      defaultsSeededRef.current = true;
+      return;
+    }
+    const defaults = TASK_DEFAULT_METRICS[task];
+    if (!defaults) {
+      defaultsSeededRef.current = true;
+      return;
+    }
+    const available = defaults.filter((m) => metricOptions.includes(m));
+    if (available.length === 0) {
+      defaultsSeededRef.current = true;
+      return;
+    }
+    const newMetrics: MetricEntry[] = available.map((m) => buildEntry(m));
+    onChangeRef.current(
+      updateTuningField(currentCfg, "evaluation", {
+        ...ev,
+        metrics: newMetrics,
+      }),
+    );
+    defaultsSeededRef.current = true;
+  }, [task, metricOptions]);
 
   // Get precision_at_k k-value from current tune evaluation metrics
   const tuneKValue = useMemo(() => {

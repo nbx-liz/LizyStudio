@@ -72,7 +72,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["auc", "f1", "accuracy"] },
+              eval_metric: { binary: ["auc", "f1", "accuracy"] },
             },
           } as unknown as UiSchema
         }
@@ -87,7 +87,7 @@ describe("TuneTab", () => {
         config={tuneConfig}
         onChange={vi.fn()}
         task="binary"
-        uiSchema={{ option_sets: { metric: {} } } as unknown as UiSchema}
+        uiSchema={{ option_sets: { eval_metric: {} } } as unknown as UiSchema}
       />,
     );
     expect(screen.queryByText("Optimization Metric")).not.toBeInTheDocument();
@@ -112,7 +112,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["auc", "f1", "accuracy"] },
+              eval_metric: { binary: ["auc", "f1", "accuracy"] },
             },
           } as unknown as UiSchema
         }
@@ -140,7 +140,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["auc", "f1"] },
+              eval_metric: { binary: ["auc", "f1"] },
             },
             metric_direction: {
               binary: { auc: "maximize", f1: "maximize" },
@@ -189,7 +189,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["auc", "f1", "accuracy"] },
+              eval_metric: { binary: ["auc", "f1", "accuracy"] },
             },
           } as unknown as UiSchema
         }
@@ -222,7 +222,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["auc", "f1"] },
+              eval_metric: { binary: ["auc", "f1"] },
             },
             metric_direction: { binary: { auc: "maximize", f1: "maximize" } },
           } as unknown as UiSchema
@@ -250,7 +250,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["auc", "f1"] },
+              eval_metric: { binary: ["auc", "f1"] },
             },
             metric_direction: { binary: { auc: "maximize", f1: "maximize" } },
           } as unknown as UiSchema
@@ -288,7 +288,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["auc", "f1"] },
+              eval_metric: { binary: ["auc", "f1"] },
             },
             metric_direction: { binary: { auc: "maximize", f1: "maximize" } },
           } as unknown as UiSchema
@@ -317,7 +317,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["auc", "f1"] },
+              eval_metric: { binary: ["auc", "f1"] },
             },
             // metric_direction has no entry for "binary"
             metric_direction: {},
@@ -357,7 +357,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["precision_at_k", "auc"] },
+              eval_metric: { binary: ["precision_at_k", "auc"] },
             },
           } as unknown as UiSchema
         }
@@ -386,7 +386,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["precision_at_k", "auc"] },
+              eval_metric: { binary: ["precision_at_k", "auc"] },
             },
           } as unknown as UiSchema
         }
@@ -424,7 +424,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["auc", "f1", "accuracy"] },
+              eval_metric: { binary: ["auc", "f1", "accuracy"] },
             },
           } as unknown as UiSchema
         }
@@ -608,7 +608,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { ranking: ["precision_at_k", "auc"] },
+              eval_metric: { ranking: ["precision_at_k", "auc"] },
             },
             metric_direction: {
               ranking: { precision_at_k: "maximize", auc: "maximize" },
@@ -666,7 +666,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { ranking: ["precision_at_k", "auc"] },
+              eval_metric: { ranking: ["precision_at_k", "auc"] },
             },
           } as unknown as import("@/api/types").UiSchema
         }
@@ -717,7 +717,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["unknown_metric", "auc"] },
+              eval_metric: { binary: ["unknown_metric", "auc"] },
             },
             metric_direction: { binary: { auc: "maximize" } },
           } as unknown as import("@/api/types").UiSchema
@@ -780,7 +780,7 @@ describe("TuneTab", () => {
         uiSchema={
           {
             option_sets: {
-              metric: { binary: ["auc", "f1", "accuracy"] },
+              eval_metric: { binary: ["auc", "f1", "accuracy"] },
             },
             metric_direction: {
               binary: { auc: "maximize", f1: "maximize", accuracy: "maximize" },
@@ -818,5 +818,186 @@ describe("TuneTab", () => {
       .slice(1)
       .map((e) => (typeof e === "string" ? e : ""));
     expect(additionalNames).not.toContain("f1");
+  });
+
+  // P-0104 Wave 2.3 / Issue #459 — Tune Evaluation defaults & inner_valid
+  // auto-reset
+
+  describe("P-0104 Wave 2.3", () => {
+    it("auto-populates tuning.evaluation.metrics with canonical defaults on fresh binary config", () => {
+      const onChange = vi.fn();
+      const config = {
+        model: { name: "lgbm", params: {} },
+        tuning: { optuna: { params: { n_trials: 50 }, space: {} } },
+      };
+      render(
+        <TuneTab
+          config={config}
+          onChange={onChange}
+          task="binary"
+          uiSchema={
+            {
+              option_sets: {
+                eval_metric: {
+                  binary: ["auc", "auc_pr", "brier", "logloss", "f1"],
+                },
+              },
+            } as unknown as UiSchema
+          }
+        />,
+      );
+      // The seeding effect fires synchronously inside useEffect on mount.
+      const seedingCalls = onChange.mock.calls.filter((c) => {
+        const t = (c[0] as Record<string, unknown>).tuning as
+          | Record<string, unknown>
+          | undefined;
+        const ev = t?.evaluation as { metrics?: unknown[] } | undefined;
+        return Array.isArray(ev?.metrics);
+      });
+      expect(seedingCalls.length).toBeGreaterThan(0);
+      const seeded = seedingCalls[0][0] as Record<string, unknown>;
+      const ev = (seeded.tuning as Record<string, unknown>).evaluation as {
+        metrics: string[];
+      };
+      expect(ev.metrics).toEqual(["auc", "auc_pr", "brier", "logloss"]);
+    });
+
+    it("does not seed defaults when tuning.evaluation.metrics is already set (even to [])", () => {
+      const onChange = vi.fn();
+      const config = {
+        model: { name: "lgbm", params: {} },
+        tuning: {
+          evaluation: { metrics: [] },
+          optuna: { params: { n_trials: 50 }, space: {} },
+        },
+      };
+      render(
+        <TuneTab
+          config={config}
+          onChange={onChange}
+          task="binary"
+          uiSchema={
+            {
+              option_sets: {
+                eval_metric: { binary: ["auc", "auc_pr", "brier", "logloss"] },
+              },
+            } as unknown as UiSchema
+          }
+        />,
+      );
+      const seedingCalls = onChange.mock.calls.filter((c) => {
+        const t = (c[0] as Record<string, unknown>).tuning as
+          | Record<string, unknown>
+          | undefined;
+        const ev = t?.evaluation as { metrics?: unknown[] } | undefined;
+        return Array.isArray(ev?.metrics) && (ev?.metrics?.length ?? 0) > 0;
+      });
+      expect(seedingCalls).toHaveLength(0);
+    });
+
+    it("does not seed defaults for non-binary task (regression / multiclass deferred)", () => {
+      const onChange = vi.fn();
+      const config = {
+        model: { name: "lgbm", params: {} },
+        tuning: { optuna: { params: { n_trials: 50 }, space: {} } },
+      };
+      render(
+        <TuneTab
+          config={config}
+          onChange={onChange}
+          task="regression"
+          uiSchema={
+            {
+              option_sets: {
+                eval_metric: { regression: ["rmse", "mae", "mape"] },
+              },
+            } as unknown as UiSchema
+          }
+        />,
+      );
+      const seedingCalls = onChange.mock.calls.filter((c) => {
+        const t = (c[0] as Record<string, unknown>).tuning as
+          | Record<string, unknown>
+          | undefined;
+        const ev = t?.evaluation as { metrics?: unknown[] } | undefined;
+        return Array.isArray(ev?.metrics);
+      });
+      expect(seedingCalls).toHaveLength(0);
+    });
+
+    it("auto-resets inner_valid when persisted value is not allowed under the current CV strategy", () => {
+      const onChange = vi.fn();
+      // group_holdout is only allowed under group_* / blocked_group_kfold;
+      // under plain kfold it must collapse back to "holdout".
+      const config = {
+        model: {
+          name: "lgbm",
+          params: { inner_valid: "group_holdout" },
+        },
+        split: { method: "kfold" },
+        tuning: { optuna: { params: { n_trials: 50 }, space: {} } },
+      };
+      render(
+        <TuneTab
+          config={config}
+          onChange={onChange}
+          task="binary"
+          uiSchema={
+            {
+              inner_valid_options: ["holdout", "group_holdout", "time_holdout"],
+              option_sets: { eval_metric: { binary: ["auc"] } },
+            } as unknown as UiSchema
+          }
+        />,
+      );
+      const innerValidCalls = onChange.mock.calls.filter((c) => {
+        const m = (c[0] as Record<string, unknown>).model as
+          | Record<string, unknown>
+          | undefined;
+        const p = m?.params as Record<string, unknown> | undefined;
+        return p && "inner_valid" in p;
+      });
+      expect(innerValidCalls.length).toBeGreaterThan(0);
+      const last = innerValidCalls[innerValidCalls.length - 1][0] as {
+        model: { params: { inner_valid: string } };
+      };
+      expect(last.model.params.inner_valid).toBe("holdout");
+    });
+
+    it("preserves inner_valid when value is allowed under current CV strategy", () => {
+      const onChange = vi.fn();
+      const config = {
+        model: { name: "lgbm", params: { inner_valid: "holdout" } },
+        split: { method: "kfold" },
+        tuning: { optuna: { params: { n_trials: 50 }, space: {} } },
+      };
+      render(
+        <TuneTab
+          config={config}
+          onChange={onChange}
+          task="binary"
+          uiSchema={
+            {
+              inner_valid_options: ["holdout", "group_holdout", "time_holdout"],
+              option_sets: { eval_metric: { binary: ["auc"] } },
+            } as unknown as UiSchema
+          }
+        />,
+      );
+      // The seed-defaults effect may produce onChange calls for the
+      // ``tuning.evaluation`` section; the inner_valid invariant we
+      // assert is that no call SETS inner_valid to a value other than
+      // the persisted "holdout".
+      const mutatedInnerValid = onChange.mock.calls
+        .map((c) => {
+          const m = (c[0] as Record<string, unknown>).model as
+            | Record<string, unknown>
+            | undefined;
+          const p = m?.params as Record<string, unknown> | undefined;
+          return p?.inner_valid;
+        })
+        .filter((v) => v !== undefined && v !== "holdout");
+      expect(mutatedInnerValid).toHaveLength(0);
+    });
   });
 });

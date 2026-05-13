@@ -16,6 +16,7 @@ from lizystudio.backends.registry import get_adapter
 from lizystudio.backends.types import (
     BackendInfo,
     ConfigSchema,
+    IncompatibleMetric,
     PlotData,
     PredictionSummary,
 )
@@ -1168,6 +1169,27 @@ def test_get_default_config_multiclass() -> None:
     assert config["split"]["method"] == "stratified_kfold"
 
 
+def test_get_default_config_training_seed_overrides_library_default() -> None:
+    """get_default_config() injects training.seed=1120 across all tasks.
+
+    P-0104 Wave 2.2 / Issue #459: the library default ``TrainingConfig.seed=42``
+    is overridden at the Studio default-config layer so fresh Fit-tab configs
+    match the Tune-tab catalog seed default already at 1120. This keeps the
+    Fit / Tune split reproducible without manual override.
+    """
+    adapter = LizyMLAdapter()
+    for task, target in (
+        ("binary", "label"),
+        ("regression", "price"),
+        ("multiclass", "class"),
+    ):
+        config = adapter.get_default_config(task=task, target=target)
+        assert config["training"]["seed"] == 1120, (
+            f"task={task} default seed must be 1120 (Wave 2.2), got "
+            f"{config['training']['seed']}"
+        )
+
+
 # --- validate_config success path ---
 
 
@@ -1602,6 +1624,45 @@ def test_plot_non_learning_curve_ignores_metrics_kwarg() -> None:
     mock_model.plot_oof_distribution.assert_called_once_with()
 
 
+# --- plot("residuals", kind=...) (Issue #457 / P-0105) ---
+
+
+def test_plot_residuals_forwards_kind() -> None:
+    """plot('residuals', kind=...) forwards the kind to residuals_plot()."""
+    adapter = LizyMLAdapter()
+    for kind in ("scatter", "histogram", "qq", "all"):
+        mock_model = MagicMock()
+        mock_fig = MagicMock()
+        mock_fig.to_json.return_value = '{"data": []}'
+        mock_model.residuals_plot.return_value = mock_fig
+
+        result = adapter.plot(mock_model, "residuals", kind=kind)
+
+        mock_model.residuals_plot.assert_called_once_with(kind=kind)
+        assert isinstance(result, PlotData)
+
+
+def test_plot_residuals_without_kind_calls_no_kwargs() -> None:
+    """plot('residuals') without kind passes no kwargs (lizyml defaults to 'all')."""
+    adapter = LizyMLAdapter()
+    mock_model = MagicMock()
+    mock_fig = MagicMock()
+    mock_fig.to_json.return_value = '{"data": []}'
+    mock_model.residuals_plot.return_value = mock_fig
+
+    adapter.plot(mock_model, "residuals")
+
+    mock_model.residuals_plot.assert_called_once_with()
+
+
+def test_residuals_kinds_constant_matches_lizyml() -> None:
+    """RESIDUALS_KINDS mirrors lizyml ``plot_residuals._VALID_KINDS``."""
+    from lizyml.plots.residuals import _VALID_KINDS
+
+    assert LizyMLAdapter.RESIDUALS_KINDS == ("scatter", "histogram", "qq", "all")
+    assert tuple(LizyMLAdapter.RESIDUALS_KINDS) == tuple(_VALID_KINDS)
+
+
 # --- export_model ---
 
 
@@ -1787,8 +1848,8 @@ def test_tune_serializes_real_lizyml_tuning_result() -> None:
 def test_tuning_summary_backward_compat_old_json_shape() -> None:
     """TuningSummary(**old_dict) accepts legacy JSON without rounds/boundary_report.
 
-    Guards against JobStore._load_job failing to rehydrate jobs that were
-    persisted before H-0061 landed.
+    Guards against JobMetadataStore.load_job failing to rehydrate jobs that
+    were persisted before H-0061 landed.
     """
     from lizystudio.backends.types import TuningSummary
 
@@ -1838,3 +1899,246 @@ def test_tune_real_tuning_result_empty_rounds_yields_none() -> None:
     assert summary.rounds is None
     assert summary.boundary_report is None
     assert summary.best_params == {"lr": 0.01}
+
+
+class TestGetIncompatibleMetrics:
+    """LizyMLAdapter.get_incompatible_metrics — the regression-metric watchlist
+    (mape / rmsle / r2 + the sMAPE/WAPE suggestion text) that P-0106 (#403)
+    moved off the Service layer and behind the BackendCore Protocol.
+    """
+
+    @pytest.fixture
+    def adapter(self) -> LizyMLAdapter:
+        return LizyMLAdapter()
+
+    def test_mape_with_zero_target(self, adapter: LizyMLAdapter) -> None:
+        out = adapter.get_incompatible_metrics(
+            "regression", pd.Series([0.0, 1.0, 2.0], name="y"), {"mape", "mae"}
+        )
+        assert all(isinstance(m, IncompatibleMetric) for m in out)
+        assert [m.metric for m in out] == ["mape"]
+        assert "zero" in out[0].message.lower()
+        assert "'y'" in out[0].message
+        assert "smape" in out[0].suggested_fix.lower()
+        assert "wape" in out[0].suggested_fix.lower()
+
+    def test_mape_clean_when_no_zero(self, adapter: LizyMLAdapter) -> None:
+        assert (
+            adapter.get_incompatible_metrics(
+                "regression", pd.Series([1.0, 2.0, 3.0], name="y"), {"mape"}
+            )
+            == []
+        )
+
+    def test_rmsle_with_negative_target(self, adapter: LizyMLAdapter) -> None:
+        out = adapter.get_incompatible_metrics(
+            "regression", pd.Series([-1.0, 1.0, 2.0], name="y"), {"rmsle"}
+        )
+        assert [m.metric for m in out] == ["rmsle"]
+        assert "negative" in out[0].message.lower()
+
+    def test_rmsle_clean_when_nonnegative(self, adapter: LizyMLAdapter) -> None:
+        # exact zero is allowed for RMSLE (log1p(0) == 0), only negatives fail
+        assert (
+            adapter.get_incompatible_metrics(
+                "regression", pd.Series([0.0, 1.0, 2.0], name="y"), {"rmsle"}
+            )
+            == []
+        )
+
+    def test_r2_with_constant_target(self, adapter: LizyMLAdapter) -> None:
+        out = adapter.get_incompatible_metrics(
+            "regression", pd.Series([5.0, 5.0, 5.0], name="y"), {"r2"}
+        )
+        assert [m.metric for m in out] == ["r2"]
+        assert "constant" in out[0].message.lower()
+
+    def test_r2_clean_when_target_varies(self, adapter: LizyMLAdapter) -> None:
+        assert (
+            adapter.get_incompatible_metrics(
+                "regression", pd.Series([1.0, 2.0, 3.0], name="y"), {"r2"}
+            )
+            == []
+        )
+
+    def test_r2_single_observation_flagged(self, adapter: LizyMLAdapter) -> None:
+        # std() of <2 non-null observations is NaN → "cannot compute R²"
+        out = adapter.get_incompatible_metrics(
+            "regression", pd.Series([5.0], name="y"), {"r2"}
+        )
+        assert [m.metric for m in out] == ["r2"]
+
+    def test_multiple_issues_one_entry_each(self, adapter: LizyMLAdapter) -> None:
+        # all-zero target: mape (zeros) + r2 (constant) fire; rmsle needs negatives
+        out = adapter.get_incompatible_metrics(
+            "regression",
+            pd.Series([0.0, 0.0, 0.0], name="y"),
+            {"mape", "rmsle", "r2"},
+        )
+        assert sorted(m.metric for m in out) == ["mape", "r2"]
+
+    def test_unwatched_metrics_ignored(self, adapter: LizyMLAdapter) -> None:
+        assert (
+            adapter.get_incompatible_metrics(
+                "regression", pd.Series([0.0, 1.0], name="y"), {"mae", "rmse", "auc"}
+            )
+            == []
+        )
+
+    def test_non_regression_task_returns_empty(self, adapter: LizyMLAdapter) -> None:
+        # a constant 0/1 binary target must NOT surface a misleading R² warning
+        assert (
+            adapter.get_incompatible_metrics(
+                "binary", pd.Series([0, 0, 0], name="label"), {"r2", "mape"}
+            )
+            == []
+        )
+        assert (
+            adapter.get_incompatible_metrics(
+                "multiclass", pd.Series([1.0], name="y"), {"r2"}
+            )
+            == []
+        )
+        # absent task ("") is treated as non-regression
+        assert (
+            adapter.get_incompatible_metrics("", pd.Series([0.0], name="y"), {"r2"})
+            == []
+        )
+
+    def test_non_numeric_target_returns_empty(self, adapter: LizyMLAdapter) -> None:
+        assert (
+            adapter.get_incompatible_metrics(
+                "regression",
+                pd.Series(["a", "b", "c"], name="y"),
+                {"mape", "rmsle", "r2"},
+            )
+            == []
+        )
+
+    def test_empty_metric_set_returns_empty(self, adapter: LizyMLAdapter) -> None:
+        assert (
+            adapter.get_incompatible_metrics(
+                "regression", pd.Series([0.0, 1.0], name="y"), set()
+            )
+            == []
+        )
+
+    def test_all_nan_target_flags_only_r2(self, adapter: LizyMLAdapter) -> None:
+        # NaN comparisons are False, so mape/rmsle stay quiet; std() is NaN → r2
+        out = adapter.get_incompatible_metrics(
+            "regression",
+            pd.Series([float("nan")] * 5, name="y"),
+            {"mape", "rmsle", "r2"},
+        )
+        assert [m.metric for m in out] == ["r2"]
+
+    @pytest.mark.filterwarnings("ignore:invalid value encountered:RuntimeWarning")
+    def test_inf_in_target_does_not_crash(self, adapter: LizyMLAdapter) -> None:
+        # +inf is not 0 and not < 0; -inf qualifies as negative → rmsle.
+        # std with non-finite values is NaN → r2. mape stays quiet (no exact 0).
+        out = adapter.get_incompatible_metrics(
+            "regression",
+            pd.Series([float("inf"), float("-inf"), 1.0, 2.0, 3.0], name="y"),
+            {"mape", "rmsle", "r2"},
+        )
+        assert sorted(m.metric for m in out) == ["r2", "rmsle"]
+
+
+class TestValidateSearchSpace:
+    """LizyMLAdapter.validate_search_space — P-0108 / Issue #474.
+
+    The run-gate must reject the two structurally-broken cases lizyml's
+    ``parse_space()`` cannot evaluate even in principle (inverted Range,
+    log + low<=0) while leaving the empty-choices categorical case to
+    the frontend's ``empty-choice-banner``.
+    """
+
+    @pytest.fixture
+    def adapter(self) -> LizyMLAdapter:
+        return LizyMLAdapter()
+
+    def test_empty_space_returns_empty(self, adapter: LizyMLAdapter) -> None:
+        assert adapter.validate_search_space({}) == []
+
+    def test_non_dict_space_returns_empty(self, adapter: LizyMLAdapter) -> None:
+        # Defensive: malformed configs can arrive here mid-edit.
+        assert adapter.validate_search_space([1, 2, 3]) == []  # type: ignore[arg-type]
+        assert adapter.validate_search_space(None) == []  # type: ignore[arg-type]
+
+    def test_valid_space_returns_empty(self, adapter: LizyMLAdapter) -> None:
+        out = adapter.validate_search_space(
+            {
+                "lr": {"type": "float", "low": 0.01, "high": 0.3, "log": True},
+                "num_leaves": {"type": "int", "low": 16, "high": 256},
+                "subsample": {"type": "categorical", "choices": [0.6, 1.0]},
+            }
+        )
+        assert out == []
+
+    def test_inverted_range_is_flagged(self, adapter: LizyMLAdapter) -> None:
+        out = adapter.validate_search_space(
+            {"lr": {"type": "float", "low": 0.5, "high": 0.01}}
+        )
+        assert len(out) == 1
+        err = out[0]
+        assert err["path"] == "tuning.optuna.space.lr"
+        assert err["severity"] == "error"
+        assert "low" in err["message"].lower() and "high" in err["message"].lower()
+        assert "lr" in err["suggested_fix"]
+        # Suggested fix mentions the actual offending values so the user
+        # can paste them directly into the form.
+        assert "0.5" in err["suggested_fix"]
+
+    def test_log_with_zero_low_is_flagged(self, adapter: LizyMLAdapter) -> None:
+        out = adapter.validate_search_space(
+            {"lr": {"type": "float", "low": 0.0, "high": 0.3, "log": True}}
+        )
+        assert len(out) == 1
+        err = out[0]
+        assert err["path"] == "tuning.optuna.space.lr"
+        assert "log" in err["message"].lower()
+        assert "log" in err["suggested_fix"].lower()
+
+    def test_log_with_negative_low_is_flagged(self, adapter: LizyMLAdapter) -> None:
+        out = adapter.validate_search_space(
+            {"lr": {"type": "float", "low": -1.0, "high": 0.3, "log": True}}
+        )
+        assert len(out) == 1
+        assert out[0]["path"] == "tuning.optuna.space.lr"
+
+    def test_empty_categorical_choices_is_silently_dropped(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        # INV-E (P-0108): the frontend's empty-choice-banner owns the UX
+        # for this case; the run-gate must not return an entry for it.
+        out = adapter.validate_search_space(
+            {"objective": {"type": "categorical", "choices": []}}
+        )
+        assert out == []
+
+    def test_multiple_broken_entries_are_each_flagged(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        # A single broken row must not mask the rest of the space.
+        out = adapter.validate_search_space(
+            {
+                "lr": {"type": "float", "low": 0.5, "high": 0.01},
+                "max_depth": {"type": "int", "low": 0.0, "high": 1.0, "log": True},
+                "fine": {"type": "float", "low": 0.01, "high": 0.3},
+            }
+        )
+        paths = {err["path"] for err in out}
+        assert paths == {
+            "tuning.optuna.space.lr",
+            "tuning.optuna.space.max_depth",
+        }
+
+    def test_non_dict_entry_is_skipped(self, adapter: LizyMLAdapter) -> None:
+        # Defensive: tolerates a partially-typed config without crashing.
+        out = adapter.validate_search_space(
+            {
+                "lr": "not_a_dict",  # type: ignore[dict-item]
+                "ok": {"type": "float", "low": 0.01, "high": 0.3},
+            }
+        )
+        assert out == []

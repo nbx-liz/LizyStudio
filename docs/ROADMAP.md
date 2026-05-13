@@ -6,7 +6,7 @@
 - このファイルは **横串インデックス** であり、詳細はリンク先で確認すること。
 - 着手する際は HISTORY に Proposal を起票（変更ゲート対象の場合）→ PLAN にフェーズ追加 → 実装、の順で進める。
 
-最終更新: 2026-05-06（v0.5 R-1 進行中：v3-17 / v3-18 / v3-19 すべて完了 (PR #412 / #413 / #414 / #415)、v3-21 subsumed by #366、v3-20 設計レビュー Approved (`docs/v3-20-tune-resume-design.md`) → 7 sub-phase で実装開始）
+最終更新: 2026-05-13（**v0.5.0 release 済 (2026-05-07)** + **`issue-cleanup-plan-2026-05-10.md` Wave 1〜6 完了** + **v3-26 (R-4.2 Pickle compat nightly + P-0107 envelope) 着地** — `PLAN.md` v0.5 phase 全消化。Wave 6 の残りは **#452 の `lifecycle_mixin.tune` 分割（2nd-adapter 議論後に gated）** と **#495（#456 L5 weekly stale-doc cron, deferred tier-3）** のみ。直近の Tier 1 next は **#474 (P-0104 deferred search-space 早期 validate)**。次の節目候補は **v0.6**: 第 2 backend (#403 残・#452-b 解禁トリガ)、Tailwind v4、P-0087 Phase 3、typed error 体系 (R-3.1〜R-3.3) など）
 
 ---
 
@@ -34,7 +34,7 @@
 | ドキュメント | 役割 | 最終更新 | 関係 |
 |---|---|---|---|
 | `docs/architecture.md` | 入門レベルの architecture overview。BLUEPRINT §3 へのゲートウェイ | 2026-04-10 | 内容は BLUEPRINT 派生 |
-| `docs/architecture-as-implemented.md` | 実装の現状 snapshot（BLUEPRINT は意図、こちらは現実） | 2026-04-17 | BLUEPRINT との対比で読む |
+| `docs/architecture-as-implemented.md` | 実装の現状 snapshot（BLUEPRINT は意図、こちらは現実） | 2026-05-12 | BLUEPRINT との対比で読む |
 | `docs/api.md` | REST API リファレンス。BLUEPRINT §5 へのゲートウェイ | 2026-04-10 | 内容は BLUEPRINT 派生 |
 | `docs/adapter-guide.md` | BackendAdapter Protocol 実装手順 | 2026-04-10 | BLUEPRINT §6 (Adapter 設計) と対 |
 
@@ -46,7 +46,9 @@
 
 | ドキュメント | 役割 | ステータス | 進捗追跡 |
 |---|---|---|---|
-| `docs/gui-e2e-plan.md` | GUI E2E Phase A/B/C/D 計画 | 🟡 進行中（Phase D 残り B-1/B-2/B-4/B-5/B-6/B-8 + Phase C generator） | 本 ROADMAP §4 |
+| `docs/gui-e2e-plan.md` | GUI E2E Phase A/B/C/D 計画 | 🟢 Phase A〜D ほぼ完了（B-1〜B-8 + Phase C generator + 22 field 着地、残課題は §4.2「カバー困難」表） | 本 ROADMAP §4 |
+| `docs/issue-cleanup-plan-2026-05-10.md` | Open Issue を 6 Wave で消化する計画（Tune workflow 中心） | 🟢 Wave 1〜6 完了。残りは #452-b（2nd-adapter gated）+ #495（deferred tier-3）のみ — それらが片付いたら Tier 5 へ | 本ドキュメント自体 |
+| `docs/v3-20-tune-resume-design.md` | v3-20 (R-1.4 Tune resume) 設計レビュー資料 | 🟢 shipped（v0.5.0 で v3-20a〜g 着地）— Tier 5 相当 | — |
 
 ### Tier 5: アーカイブ（完了済み・参照のみ）
 
@@ -57,6 +59,9 @@
 | `docs/coupling-analysis.md` | A-1..A-10 / B-1..B-10 / C-1..C-12 の疎結合化計画 | 2026-04-22 |
 | `docs/c6-openapi-fetch-plan.md` | C-6（openapi-fetch 導入）の実装計画 | 2026-04-22 |
 | `docs/ui-config-sync-audit-2026-04.md` | Issue #249 起点の Workspace form config-sync 監査 | 2026-04-23 |
+| `docs/v0.4-business-readiness-plan.md` | v0.4「業務利用可能」化の Phase 別計画（R-1〜R-5） — R-1/R-2/R-4.1 は v0.5.0 で着地、R-3.1〜3.3 のみ v0.6+ deferred | 2026-05-07 |
+| `docs/v3-20-tune-resume-design.md` | v3-20 (R-1.4 Tune resume) 設計レビュー資料 — v3-20a〜g で実装完了 | 2026-05-07 |
+| `docs/pre-v05-handoff-2026-05-05.md` | v0.5 着手前 MUST/SHOULD/OPTIONAL 13 件の作業内訳 — 全件消化済 | 2026-05-07 |
 
 ### Project Chrome（外部向け）
 
@@ -89,7 +94,7 @@
 | `H-00XX` | HISTORY.md の旧 Proposal 番号（H-0017..H-0085） | `H-0085` | 採番終了。引き続き参照 ID として有効 |
 | `P-00XX` | HISTORY.md の現行 Proposal 番号（P-0086 から） | `P-0092` | **進行中の正規 ID**。新規 Proposal は `P-0093` 以降 |
 | Coupling `A-N` / `B-N` / `C-N` | `docs/coupling-analysis.md` のリファクタ系列 | `B-7`, `C-9` | **完了** (2026-04-22)。歴史参照のみ |
-| GUI E2E `Phase A.1〜A.7`, `B-1..B-8`, `C`, `D-1..D-5` | `docs/gui-e2e-plan.md` の E2E 計画 | `B-4`, `D-3` | **進行中**。本文書 §3 で実装状況を追跡 |
+| GUI E2E `Phase A.1〜A.7`, `B-1..B-8`, `C`, `D-1..D-5` | `docs/gui-e2e-plan.md` の E2E 計画 | `B-4`, `D-3` | **概ね完了**（B-1〜B-8 + Phase C generator + 22 field 着地）。本文書 §4 で実装状況を追跡 |
 | `G-1..G-8`, `H-1..H-4` | 2026-04-30 develop ブランチの code-review 監査で付けた gap/highlight ID | `G-3`, `H-2` | **完了** (PR #300, #303, #306..#310)。歴史参照のみ |
 | `INV-N` | 個別 Proposal 内の invariant ID | `INV-A1` | Proposal 内ローカル ID |
 
@@ -103,6 +108,16 @@
 
 | 完了日 | ID | タイトル | 主要 PR |
 |---|---|---|---|
+| 2026-05-13 | Wave 6.4 (#451) | `services/jobs.py` (1062→522 行) を 4 module に分割 — `JobMetadataStore` / `ActiveJobSlot` / `JobControlFlags` / `JobLineage` + thin orchestrator façade。backend 最後の god-class 解消（"C-level closing chapter"） | #499 / #500 / #501 / #502 / #503 |
+| 2026-05-13 | Wave 6.5 (#453) + 6.3-a (#452) | BLUEPRINT / arch-as-implemented / v0.4-business-readiness / ROADMAP を v0.5.0 state に reconcile (#497) + `subprocess_runner.run_job_in_subprocess` を helper 分割 (#498) | #497 / #498 |
+| 2026-05-12 | Wave 6.1-6.3 (#403/#456/#452) | metric-compat を `BackendCore` capability の裏へ (P-0106) + stray-file gate + orphan-golden gate + `workspace_reset` / `_run_job_core` の helper 分割 | #490 / #491 / #492 / #493 / #494 |
+| 2026-05-12 | P-0104〜P-0106 | Tune workflow 全面整備（Re-tune UX + canonical defaults + validation guardrails + LizyML v0.15 SSOT 連動）+ Residuals kind selector + metric-compat capability | 多数（Wave 1〜5）。HISTORY §P-0104〜§P-0106 |
+| 2026-05-12 | LizyML v0.15.0 連動 | `LGBMProvider.objective_choices/metric_choices/parameter_bounds` を UiSchema 経由で SSOT 化、Studio hardcoded master 削除（D3/D7） | (Wave 3.1b) |
+| 2026-05-07 | **v0.5.0 release** | Reliability release — Tune 24h+ resumability + server restart recovery + WS reconnect + browser reload restoration + format_version CI gate + CVE patch round | #416〜#438（多数）, release merge |
+| 2026-05-07 | P-0099 (v3-17〜v3-22) | Job state machine invariants INV-1〜INV-7 + `paused` state + pause/unpause API + `WsPaused` + server restart reconciliation | #408（proposal）, #412〜#426 |
+| 2026-05-07 | P-0102 (v3-24) | ブラウザリロード後の workspace state 自動復元（`current_job_id` hydrate + beforeunload dirty guard） | #429 / #430 / #435 |
+| 2026-05-07 | P-0103 (v3-25) | 古い format_version の workspace を read-only で保護（`LegacyFormatProtectionError` + `format-version-matrix` CI gate） | #432 / #434 / #436 / #438 |
+| 2026-05-07 | R-2.1 (v3-23) | WebSocket 再接続戦略（5min ceiling + indefinite retry + ±15% jitter） | #427 |
 | 2026-05-05 | **v0.4.1 release** | Validate clarity patch — severity envelope + auto-disable uncomputable metrics + lizyml 0.11.0 (sMAPE/WAPE) | #397 / #398 / #399 / #400 / #401 / #402 (release merge) |
 | 2026-05-05 | PR-D1 (#400) | fit/tune raise sites filter on `severity="error"`; warning-only configs no longer 422 | #400 |
 | 2026-05-05 | PR-C2 (#399) | `_workspace_metric_compatibility_errors` auto-disables `mape`/`rmsle`/`r2` via severity=warning + suggested_fix | #399 |
@@ -134,13 +149,17 @@
 
 ## 3. アクティブ：仕様変更を伴う Proposal
 
-### 3.-1 v0.5 R-1 invariants Proposal（P-0099, P-0100, P-0101 — すべて Decision 確定済）
+> **状態サマリ**: 直近のアクティブ Proposal はすべて Decision 確定 + 着地済（P-0099 / P-0102 / P-0103 = v0.5.0、P-0104 / P-0105 / P-0106 = Tune workflow & metric-compat）。新規 Proposal は **P-0107 以降**を採番。
 
-- **状態**: ✅ Approved／確定済（P-0099 = 2026-05-06 Approved、P-0100 / P-0101 = 2026-05-05 確定 with #406）
-- **P-0099**: Job state machine invariants + `paused` state（R-1 全体の Change Gate）— **Approved 2026-05-06**, v3-17 着手可
-- **P-0100**: severity envelope formalization (PR-B4) — Pydantic Literal 化、`_blocking_errors` セマンティクス（PR-D1 #400 で確立、#406 で記録）
-- **P-0101**: metric-compat watchlist — `_workspace_metric_compatibility_errors` の検出ルール（PR-C2 #399 / PR-D1 #400 で確立、#406 で記録）
-- **次回採番**: P-0102 以降
+### 3.-1 v0.5 R-1 / R-2 / R-4 Proposal 群（P-0099, P-0102, P-0103 — すべて着地済）
+
+- **P-0099**: Job state machine invariants（INV-1〜INV-7）+ `paused` state（R-1 全体の Change Gate）— Approved 2026-05-06、**v3-17〜v3-22 で実装完了 (v0.5.0)**。BLUEPRINT §3.4 / §5.3 / §5.5 / §6.1 に反映済（#453）
+- **P-0102**: ブラウザリロード後の workspace state 自動復元（v3-24 / R-2.2）— Approved 2026-05-07、**v3-24 で実装完了 (v0.5.0)**
+- **P-0103**: 古い format_version の workspace を read-only で保護（`LegacyFormatProtectionError` + `format-version-matrix` CI gate、v3-25 / R-4.1）— Approved 2026-05-07、**v3-25 で実装完了 (v0.5.0)**
+- **P-0100 / P-0101**（v0.4.1 で確立、#406 で Decision 記録）: severity envelope formalization / metric-compat watchlist。`_blocking_errors` セマンティクス + auto-disable ルール
+- **P-0104**: Tune workflow 全面整備（Re-tune UX + canonical defaults + validation guardrails + LizyML v0.15 SSOT 連動）— Decision 確定、ほぼ着地（残: #474 deferred parse_space validation）
+- **P-0105**: Residuals plot に kind selector（#457）— 着地済
+- **P-0106**: metric 不適合判定を `BackendCore` capability の裏へ（Change Gate、#403）— 着地済（`BackendCore.get_incompatible_metrics`）。完全な 2nd-backend 移行は §3.3 後
 
 ### 3.0 P-0094 (済)：pytest-benchmark performance baseline（Issue #27 (a)）
 
@@ -157,7 +176,7 @@
 - **動機**: 現在 `lizystudio/backends/lizyml_ui_schema.py` で hand-coded。lizyml 側の Pydantic model から生成すれば drift が原理的に消える
 - **ブロッカー**: lizyml 側に構造化フィールドメタデータの export を頼む必要あり（リポジトリ間調整）
 - **優先度**: 中（P-0087 Phase 1+2 で contract test が drift を検出可能なので、緊急ではないが残課題）
-- **着手手順**: HISTORY に P-0095 として Proposal 起票（P-0094 は本 PR で消化）→ lizyml 側調整 → PLAN.md に `v3-17` 以降として登録 → 実装
+- **着手手順**: HISTORY に P-0107 以降として Proposal 起票 → lizyml 側に構造化フィールドメタデータ export を依頼（リポジトリ間調整）→ PLAN.md に `v3-27` 以降として登録 → 実装
 
 ### 3.3 ML Backend 抽象の 2nd 実装による検証
 
@@ -168,9 +187,9 @@
 
 ---
 
-## 4. アクティブ：GUI E2E カバレッジ強化（gui-e2e-plan.md Phase D）
+## 4. GUI E2E カバレッジ強化（gui-e2e-plan.md Phase D — 概ね完了）
 
-`docs/gui-e2e-plan.md` の段階実装プラン。**Phase A の Config field × E2E カバレッジは現状約 55%（22/40）**。Phase C generator + wave 1〜8 で大幅進捗、残りは UI 露出無し / 隠しフィールド / 複合 UI のため §4.2 末尾「カバー困難」表に分類。
+`docs/gui-e2e-plan.md` の段階実装プラン。**Phase A の Config field × E2E カバレッジは約 55%（22/40+）** — Phase B-1〜B-8 + Phase C generator + wave 1〜8 が着地済。残りは UI 露出無し / 隠しフィールド / 複合 UI で §4.2 末尾「カバー困難」表に分類（B-3b funnel state 問題 / GLOBALLY_HIDDEN フィールド / KeyValueEditor 動的 dict 等）。新規追加が必要なのは v3-22c（Playwright server-restart spec）と #444 deferred（Inference Results の Prediction Distribution / Score アサーション）程度。
 
 ### 4.1 Phase B 残：個別 spec の追加
 
@@ -246,18 +265,14 @@
 
 ## 5. アクティブ：Open Issues
 
-v0.4.1 リリース後の Open Issue は 5 件。
+Wave 6 完了後の Open Issue は **4 件**（#451 / #453 は 2026-05-13 close 済、#27 / #28 / #125 は 2026-05-04 close 済、#360 / #384 / #403 / #404 / #405 も close 済）。
 
 | Issue | タイトル | priority | 推奨アクション |
 |---|---|---|---|
-| **#360** | feat(tune): long-run resumability (24h+, all termination paths) | tier-4 / high | **v0.5 core (R-1.4, 3 週間)**。✅ 上流解消（lizyml 0.12.0 / 2026-05-06 で `storage` 引数 shipped）— v3-17→v3-19 完了後に着手 |
-| **#384** | [Testing] #28 follow-up — Server Restart Recovery (blocked on #360) | tier-3 / medium | **R-1.5b (v0.5)** — #360 解消後 |
-| **#403** | refactor(backend): move metric-compat watchlist behind BackendAdapter abstraction (HIGH-2) | tier-3 / medium | **v0.6 defer 推奨** — 第 2 backend が見えてから |
-| **#404** | test: add edge-case coverage for `_workspace_metric_compatibility_errors` | tier-2 / medium | **S-1 (Day 3 着手)** — 7 cases (NaN/inf/dtype/dedup/malformed) |
-| **#405** | test(frontend): integration coverage for validate-debounce → warning banner | tier-3 / medium | **O-1 (並行可)** — frontend 単独 |
-| **#27** | [Testing] Add load and concurrency tests | medium / tier-4 | (a) `pytest-benchmark` baseline は P-0094 で完了。(b) 並行 fit stress harness は実機要件あり |
-| **#28** | [Testing] Add offline/resume resilience tests | medium / tier-4 | `current_job_id` ライフサイクル契約決定が前提。post-completion deep-link は #143 でカバー済み、during-run reload が gap |
-| **#125** | chore(frontend): migrate Tailwind CSS v3 → v4 | medium / tier-4 | Owner status: `Button` で spike → 専用 sprint。即着手は推奨しない |
+| **#452** | refactor(backend): reduce 5 over-50-line functions | tier-3 / low | **Wave 6.3** — 完了: `_workspace_metric_compatibility_errors`（P-0106 で obsolete）/ `workspace_reset`（#492）/ `_run_job_core`（#493）/ `run_job_in_subprocess`（#498）。残り 1 件: `backends/lizyml/lifecycle_mixin.py::tune`（167 行）— 「2nd-adapter 議論（§3.3）後」に gated |
+| **#474** | validation: surface inverted-range / log+low≤0 search-space errors early (deferred from P-0104 Wave 3.1a) | tier-3 / medium | backend `validate_config` で `parse_space()` に通して `search_space_invalid` を早期 surface |
+| **#488** | Migrate frontend to Vite 8 (Rolldown) — e2e `/api/ws` proxy regression blocks the bump | priority-low / area-frontend | vite は v6 据え置き、dependabot.yml で semver-major ignore（PR #489）。Vite 8 dev server が e2e proxy を壊す（`project_vite8_migration_held`） |
+| **#495** | chore(ops): weekly stale-doc audit cron (#456 L5, deferred follow-up) | tier-3 / low | `scripts/audit_stale_docs.py` + `.github/workflows/audit-stale-docs.yml`（cron weekly）+ tracking issue 自動更新 |
 
 ---
 
@@ -265,74 +280,63 @@ v0.4.1 リリース後の Open Issue は 5 件。
 
 | 対象 | 最終更新 | リスク | 対応 |
 |---|---|---|---|
-| `BLUEPRINT.md` | 🟡 2026-05-01 (P-0094 まで反映) | 中 | P-0095..P-0098 と v0.4.1 severity envelope（PR-B4 / PR-C2 / PR-D1）が未反映。**M-4 (Day 2) で §5 (API) に severity / suggested_fix を追記** |
-| `HISTORY.md` Decision 記録 | 🟡 2026-05-04 P-0098 まで | 中 | v0.4.1 で導入された severity envelope / metric-compat watchlist が Decision 未記録。**M-3 (Day 2) で P-0100 / P-0101 を起票** |
-| `PLAN.md` v3-N | 🟡 2026-05-01 v3-15 まで | 中 | v0.4.0 / v0.4.1 phase が未確定、v0.5 R-1〜R-2 phase が未追加。**M-5 (Day 4) で v3-16 以降を追加** |
+| `BLUEPRINT.md` | ✅ 2026-05-12 reconciled (Issue #453) | — | P-0099（`paused` state + INV-1〜7 + pause/unpause API + `WsPaused` + startup reconcile）/ P-0102（reload restoration）/ P-0103（`LegacyFormatProtectionError` + format-version matrix）/ P-0104〜P-0106 を §3.4 / §5.3 / §5.5 / §6.1 に反映。`tune(storage, study_name)` を §3.3.2 に追記 |
+| `HISTORY.md` Decision 記録 | ✅ 2026-05-12 P-0106 まで | — | v0.5.0 の P-0099〜P-0103、Tune workflow の P-0104〜P-0106 まで Decision 記録済 |
+| `PLAN.md` v3-N | ✅ 2026-05-13 v3-26 完了 | — | v3-16〜v3-26 全て着地（v3-26: P-0107 envelope + nightly pickle-compat matrix） |
 | `docs/architecture.md` / `api.md` / `adapter-guide.md` | ✅ 2026-05-01 reconciled | — | 棚卸し完了。`tests/contract/test_adapter_guide_method_names.py` で adapter-guide.md ↔ Protocol の drift を gating |
-| `docs/architecture-as-implemented.md` | 🟡 2026-04-17 | 中 | severity filter / `_blocking_errors` の hop 図が未更新。**S-4 (Day 3) で更新** |
-| `docs/v0.4-business-readiness-plan.md` | 🟡 2026-04 | 低 | R-3.4 (Validate API) は v0.4.0 / v0.4.1 で完了。**S-3 (Day 1 午後) でレビュー → header に shipped 記載** |
-| `MEMORY.md` 古いノート | ✅ 直近セッションで更新 | — | `project_v041_shipped` / `project_pre_v05_work_plan` 反映済み |
+| `docs/architecture-as-implemented.md` | ✅ 2026-05-13 reconciled (Issue #453 / S-4 / #451) | — | `paused` state + INV-1〜7 を state diagram に反映、§5 を #451 後の `JobStore` → `_job_metadata`/`_job_active_slot`/`_job_control_flags`/`_job_lineage` 4-module 構成に更新 |
+| `docs/v0.4-business-readiness-plan.md` | ✅ 2026-05-13 (R-4.2 done) | — | R-1 / R-2 / R-4.1 / R-4.2 全て着地（R-4.2 は P-0107 envelope + nightly matrix）。残るは R-3.1〜R-3.3 (v0.6+ deferred) のみ。Tier 5 相当（ファイル移動はしない） |
+| `docs/issue-cleanup-plan-2026-05-10.md` | 🟡 2026-05-13 | 低 | Wave 1〜6 完了。残るは #452-b（2nd-adapter gated）+ #495（deferred tier-3）のみ。それらが片付いたら header に `Status: ✅ shipped` を付けて Tier 5 へ |
+| `MEMORY.md` 古いノート | 🟡 要更新 | 低 | `project_2026_05_12_wave6_progress` まで反映済だが v0.5.0 release / v3-20〜v3-25 着地 + #451 JobStore 分割 + #453 reconcile が memory 未記録（次セッションで反映） |
 | `analysis/` 削除済み | 2026-04 期間 | `python-analyst` ↔ `lizystudio-analyst` パイプライン成果物の置き場が無い | 🟡 意図的削除か要確認、別 issue 検討 |
 
 ---
 
 ## 7. 推奨 Next Action（ROI 順 / 1 PR 単位）
 
-> v0.4.1 リリース完了 (2026-05-05)。詳細な v0.5 着手前の作業内訳は `docs/pre-v05-handoff-2026-05-05.md` 参照（MUST 6 + SHOULD 4 + OPTIONAL 3 = 13 件、計 4-7 日）。
+> v0.5.0 リリース完了 (2026-05-07)。`issue-cleanup-plan-2026-05-10.md` Wave 1〜6 完了 (2026-05-13)。残るバックログは少数。
 
-### Tier 1：v0.5 着手前必須（MUST、すべて完了）
+### Tier 1：直近の着手候補（ROI 順）
 
-1. ✅ **M-1**: LizyML 側 Optuna persistent storage — lizyml 0.12.0 (2026-05-06) で shipped (H-0072)。LizyStudio 側 `pyproject.toml` を `>=0.12.0,<0.13.0` に bump 済（本 ROADMAP 更新と同 PR）
-2. ✅ **M-2**: HISTORY.md P-0099 起票 — 2026-05-06 起票 + Approved（PR #408 + 本 PR）
-3. ✅ **M-3**: HISTORY.md P-0100 / P-0101 確定 — PR #406 で記録済
-4. ✅ **M-4**: BLUEPRINT.md §5 (API) に severity / suggested_fix を反映 — PR #406
-5. ✅ **M-5**: PLAN.md v3-17〜v3-26 (R-1 〜 R-4) phase 追加 — PR #408 + 本 PR で v3-20 entry criteria 確定
-6. ✅ **M-6**: handoff docs cleanup — `pre-v05-handoff-2026-05-05.md` は ROADMAP §0 に内容統合済、参照不要
+1. **#495** — #456 L5: weekly stale-doc audit cron（`scripts/audit_stale_docs.py` + `.github/workflows/audit-stale-docs.yml` cron weekly、tracking issue 自動更新。tier-3/low、deferred）
+2. **#452-b `lifecycle_mixin.tune` 分割** — 🔒 2nd-adapter 議論（§3.3）後に解禁。それまで着手しない
 
-### Tier 2：高 ROI 準備（SHOULD、1-2 日）
+> ~~v3-26 (R-4.2 Pickle compat nightly CI)~~ ✅ 完了 (PR #506 / P-0107 envelope + `scripts/pickle_compat_matrix.sh` + `.github/workflows/nightly.yml::pickle-compat` job) — v0.5 Exit Criteria の format/pickle 互換が完全に gating された。残る Exit #5 = 業務利用 KPI のみ要 verify
+>
+> ~~#474 (P-0104 deferred — search-space 早期 validate)~~ ✅ 着地 (PR #507 / P-0108) — `BackendCore.validate_search_space` 追加 + `POST /tune` run-gate で 422、`PUT /config` は引き続き permissive。
 
-7. **S-1**: #404 異常系テスト 7 cases 追加（`tests/contract/test_validate_metric_compatibility.py` + `frontend/src/api/types.test.ts`）
-8. **S-2**: 本 ROADMAP の post-v0.4.1 reconciliation — 進行中（本コミット）
-9. **S-3**: `docs/v0.4-business-readiness-plan.md` レビュー + shipped 状態確定
-10. **S-4**: `docs/architecture-as-implemented.md` 更新（severity filter / `_blocking_errors` hop 図）
+### Tier 2：v0.6 候補（要長期計画）
 
-### Tier 3：v0.5 と並行可（OPTIONAL、3-5 日）
+- **第 2 ML backend 実装** — `BackendAdapter` 抽象の妥当性検証（候補: scikit-learn `Pipeline` / xgboost Native API / 他、未決 — §3.3）。これが見えてから #403 の `get_incompatible_metrics` 完全移行 + #452-b `lifecycle_mixin.tune` 分割が解禁される
+- **R-3.1〜R-3.3** — typed error 体系（`StudioError` に `code` / `recovery_hint` / `is_user_error` 必須化）— `docs/v0.4-business-readiness-plan.md` §4。本計画で残る唯一の未着手スコープ
+- **P-0087 Phase 3** — `cv_strategy_fields` を LizyML Pydantic から自動派生（LizyML 構造化 export 待ち）
+- **Tailwind v4 移行**（旧 #125、close 済）— `Button` で spike → 専用 sprint。即着手は推奨しない
+- **#488 Vite 8 (Rolldown) 移行** — e2e `/api/ws` proxy regression で hold（`project_vite8_migration_held`）
+- **load / stress / offline tests**（旧 #27 (b) / #28、close 済）— 並行 fit stress harness は実機要件あり。offline / during-run reload は P-0102 (v3-24) でカバー済
 
-11. **O-1**: #405 integration test (validate-debounce → warning banner) — frontend 単独
-12. **O-2**: #403 BackendAdapter metric-compat refactor — 第 2 backend が見えるまで defer 推奨
-13. **O-3**: P-0087 Phase 3 (`cv_strategy_fields` 自動派生) — LizyML 構造化 export 待ち、defer 推奨
+### v0.5 phase 進捗（`PLAN.md` v3-17〜v3-26）
 
-### Tier 4：v0.5 core（着手可、8-12 週間）
+| Phase | 内容 | 状態 |
+|---|---|---|
+| v3-17 | R-1.1 Slot release 6 経路 invariant (INV-1/INV-5) | ✅ 完了 (PR #412 + #413) |
+| v3-18 | R-1.2 Cancel + completion interleaving (INV-5 write-side, rescoped) | ✅ 完了 (PR #414) |
+| v3-19 | R-1.3 INV-2 fsync durability + INV-6 crash recovery (rescoped) | ✅ 完了 (PR #415) |
+| v3-20 | R-1.4 Tune resume (INV-3/INV-4 / #360) — 7 sub-phase | ✅ 完了 (PR #416〜#424) |
+| ~~v3-21~~ | ~~R-1.5 #359 job-num drift~~ | ❌ subsumed by PR #366、欠番 |
+| v3-22 | R-1.5b Server Restart Recovery (INV-7 / #384) | ✅ 完了 (PR #425 + #426)。v3-22c (Playwright server-restart spec) は 🟡 残（DoD は v3-22a/b で満了、#384 close 済） |
+| v3-23 | R-2.1 WS 再接続 (5min ceiling + indefinite retry + jitter) | ✅ 完了 (PR #427) |
+| v3-24 | R-2.2 ブラウザリロード復元 (P-0102) | ✅ 完了 (PR #429 + #430 + #435) |
+| v3-25 | R-4.1 format_version migration matrix CI gate (P-0103) | ✅ 完了 (PR #432 + #434 + #436 + #438) |
+| v3-26 | R-4.2 Pickle compatibility nightly CI | ✅ 完了 (feat/v3-26-pickle-compat-nightly / P-0107) |
 
-直列 R-1 → 並行 R-2 / R-4 の順で進める。各 phase の DoD は `PLAN.md` v3-17〜v3-26 を参照。
-
-| Phase | 内容 | 期間 | 並行可否 |
-|---|---|---|---|
-| ~~v3-17~~ | R-1.1 Slot release 6 経路 invariant test (INV-1/INV-5) | 1 週 | ✅ 完了 (PR #412 + #413) |
-| ~~v3-18~~ | R-1.2 Cancel + completion interleaving defense-in-depth (INV-5 write-side) | 0.5 週 (rescoped) | ✅ 完了 (PR #414) |
-| ~~v3-19~~ | R-1.3 INV-2 fsync durability + INV-6 crash recovery test coverage | 0.5 週 (rescoped — watchdog 不要と audit) | ✅ 完了 (PR #415) |
-| v3-20 | R-1.4 Tune resume (INV-3/INV-4 / #360) — `docs/v3-20-tune-resume-design.md` Approved | 3 週 (7 sub-phase: prep + a〜g) — 進行中 | — |
-| ~~v3-21~~ | ~~R-1.5 #359 job-num drift~~ | — | ❌ subsumed by PR #366 (closed 2026-05-03), 欠番 |
-| v3-22 | R-1.5b Server Restart Recovery (INV-7 / #384) | 1 週 | v3-20 後 |
-| v3-23 | R-2.1 WS 再接続 | 1 週 | v3-22 後 |
-| v3-24 | R-2.2 ブラウザリロード復元 | 1 週 | v3-23 後 |
-| v3-25 | R-4.1 format_version migration matrix | 1 週 | v3-20 完了後並行可 |
-| v3-26 | R-4.2 Pickle compatibility | 1 週 | v3-25 と並行可 |
-
-直近の next: **v3-20 (R-1.4)** — `docs/v3-20-tune-resume-design.md` (Approved 2026-05-06) に従い 7 sub-phase で実装開始。**v3-20-prep** (本 PR) で設計資料を develop に landing → **v3-20a** で format_version 1→2 migration + `Job.status` に `"paused"` 追加。
-
-### Tier 5：要長期計画（v0.6 以降）
-
-- **#27 (b)** 並行 fit stress harness — 実機マシン要件あり
-- **#125** Tailwind v4 — Button で spike → 専用 sprint
-- ML Backend 2nd 実装による Adapter 抽象検証 — 候補 backend 選定が未決
+直近の next: 上記 Tier 1 の **#474 (search-space 早期 validate)**。v0.6 候補は上記 Tier 2 を参照。
 
 ---
 
 ## 8. 運用メモ
 
-- 新規 Proposal を起票するときは **P-0099 から採番**（P-0098 = `load_dataframe` chunked CSV、2026-05-04 で消化済）。`H-XXXX` 採番は終了。
-- v0.5 R-1 着手時は P-0099 (invariants + `paused` state)、v0.4.1 機能の Decision 記録は P-0100 / P-0101 を予約済み。
+- 新規 Proposal を起票するときは **P-0109 から採番**（P-0107 = `PICKLE_INCOMPATIBLE` structured envelope / v3-26、P-0108 = search-space run-gate / #474、いずれも 2026-05-13 着地）。`H-XXXX` 採番は終了。
+- 新規 PLAN フェーズは **v3-27 以降**を採番（v3-26 = R-4.2 Pickle compat、2026-05-13 着地で v0.5 phase 完全消化）。
 - E2E 単独追加（仕様変更なし）は HISTORY 起票不要、本 ROADMAP の §3 を更新するだけで OK。
 - 本 ROADMAP はステータス変更時に都度更新。タスク完了時は §1 へ移動、新規着手時は §2/§3/§4 へ追加する。
 - 古い ID（B-N coupling、A.M Phase A など）は履歴参照のためそのまま残す。検索性のため改名はしない。

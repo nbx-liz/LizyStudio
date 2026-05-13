@@ -94,8 +94,22 @@ pnpm test:e2e                       # Playwright
 
 ## Pre-commit hooks
 
-Pre-commit hooks run Ruff and Biome automatically on every commit.
-If a hook fails, fix the issue and commit again — do **not** bypass with `--no-verify`.
+Pre-commit hooks run on every commit:
+
+- **ruff / ruff-format** — Python lint + format (auto-fix)
+- **biome check** — TypeScript lint + format (`frontend/src/**`)
+- **block-stray-artifacts** ([`scripts/check_stray.sh`](scripts/check_stray.sh)) —
+  fails the commit if the staged set contains scratch/build artefacts
+  (root-level `*.png` / `*.csv` / `*.parquet`, `coverage.json` / `.coverage`,
+  `dist/*.whl` / `dist/*.tar.gz`, `*.tsbuildinfo`). These belong under `tmp/`
+  (see [Working artefacts](#working-artefacts)). Allowed exceptions:
+  `docs/images/*.png`, `tests/fixtures/**`, `frontend/src/__fixtures__/**`,
+  `frontend/tests/e2e/__screenshots__/**`, `data/**`.
+
+If a hook fails, fix the issue and commit again — do **not** bypass with
+`--no-verify`. The one legitimate `--no-verify` case is intentionally adding a
+file `block-stray-artifacts` flags (e.g. a new doc image outside `docs/images/`);
+explain why in the commit body.
 
 ## Quality gates (CI)
 
@@ -107,6 +121,12 @@ Every PR must pass these checks before merge:
 | Format | `ruff format --check .` | `pnpm check` (Biome) |
 | Types | `mypy src/lizystudio/` | TypeScript strict via `pnpm build` |
 | Tests | `pytest` (80%+ coverage) | `vitest run --coverage` |
+| E2E | — | `playwright test --project=chromium` (functional only on PRs) |
+| Orphan goldens | — | [`scripts/check_orphan_goldens.sh`](scripts/check_orphan_goldens.sh) — every committed `frontend/tests/e2e/__screenshots__/<project>/` must be run by some workflow's `--project=<project>` |
+
+If you add a new Playwright project, also reference it from a workflow (or
+keep its goldens out of git); if you retire one, delete its goldens in the
+same PR — regenerate later via `pnpm test:e2e:update` if it returns.
 
 ## Test fixtures
 
@@ -159,6 +179,28 @@ frontend/src/
 ├── pages/        # Page-level components
 └── lib/          # Shared utilities
 ```
+
+## Working artefacts
+
+Spike outputs, debug screenshots, ad-hoc dumps, and one-off audit scripts go
+under **`tmp/`** — never the repo root and never a tracked directory. `tmp/`
+is gitignored, so anything you drop there cannot accidentally end up in a
+commit.
+
+- Visual / Playwright spikes: write screenshots to `tmp/screenshots/`
+- Throwaway scripts and CSV/JSON dumps: `tmp/`
+- Local coverage / profiling output: `tmp/` (the canonical `pytest --cov` run
+  in CI writes its own; you do not need a tracked copy)
+
+This keeps `ls` on the repo root meaningful and stops generations of build
+artefacts (`dist/*.dev401`, `dist/*.dev439`, …) from co-residing. A
+`block-stray-artifacts` pre-commit hook (see [Pre-commit hooks](#pre-commit-hooks))
+is the tripwire if you `git add` something that bypasses `.gitignore`; the
+`tmp/` convention is the habit that keeps the tripwire from ever firing.
+
+> Need the file in the repo? It is probably a fixture (`tests/fixtures/**`,
+> `frontend/src/__fixtures__/**`) or a doc image (`docs/images/*.png`) — those
+> locations are explicitly un-ignored. Everything else is scratch.
 
 ## Documentation language
 

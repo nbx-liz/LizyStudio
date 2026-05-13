@@ -27,7 +27,11 @@ interface SearchSpaceTableProps {
   stepMap?: Record<string, number>;
   task?: string | null;
   objectiveOptions?: string[];
+  /** Flat model-metric option list (``native`` followed by ``feval``). */
   metricOptions?: string[];
+  /** Subset of ``metricOptions`` that are LizyML custom feval metrics
+   * (badged "Custom (slow)" — P-0104 Wave 3.1b / Q2). */
+  fevalMetrics?: string[];
   additionalParams?: string[];
   /** Per-parameter option sets for generic choice mode (keyed by param name). */
   paramOptionSets?: Record<string, string[]>;
@@ -35,10 +39,20 @@ interface SearchSpaceTableProps {
   onModelParamChange?: (key: string, value: unknown) => void;
   /** Conditional visibility rules: {paramKey: {depKey: requiredValue}} */
   conditionalVisibility?: Record<string, Record<string, unknown>>;
-  /** Special field rendering hints: {paramKey: "objective"|"model_metric"|...} */
+  /** Special field rendering hints: {paramKey: "objective"|"metric"|"inner_valid_picker"} */
   specialSearchSpaceFields?: Record<string, string>;
   /** Column names for feature_weights editor. */
   columns?: string[];
+  /** Outer CV strategy from ``config.split.method`` — forwarded to the
+   * ``inner_valid_picker`` row in SearchSpaceRow. */
+  cvStrategy?: string;
+  /** Full inner_valid options from ``uiSchema.inner_valid_options``;
+   * filtered per ``cvStrategy`` inside SearchSpaceRow. */
+  innerValidOptions?: string[];
+  /** P-0104 Wave 3.1a / Issue #461: ``{paramName: {min, max}}`` for the
+   * current task, resolved from ``uiSchema.parameter_bounds[task]``.
+   * Forwarded per-row to clamp the Range Min/Max NumberInputs. */
+  parameterBounds?: Record<string, { min?: number; max?: number }>;
 }
 
 export function SearchSpaceTable({
@@ -50,12 +64,16 @@ export function SearchSpaceTable({
   task,
   objectiveOptions,
   metricOptions,
+  fevalMetrics,
   additionalParams,
   paramOptionSets,
   onModelParamChange,
   conditionalVisibility,
   specialSearchSpaceFields,
   columns,
+  cvStrategy,
+  innerValidOptions,
+  parameterBounds,
 }: SearchSpaceTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   // Initialize addedParams from space keys that exist in additionalParams
@@ -283,6 +301,15 @@ export function SearchSpaceTable({
                 task={task}
                 objectiveOptions={objectiveOptions}
                 metricOptions={metricOptions}
+                fevalMetrics={fevalMetrics}
+                cvStrategy={cvStrategy}
+                innerValidOptions={innerValidOptions}
+                bounds={
+                  // Catalog uses the dotted key ``early_stopping.rounds``;
+                  // LizyML's parameter_bounds uses ``early_stopping_rounds``.
+                  parameterBounds?.[param.key] ??
+                  parameterBounds?.[param.key.replace(/\./g, "_")]
+                }
                 onModelParamChange={onModelParamChange}
                 specialSearchSpaceFields={specialSearchSpaceFields}
                 columns={columns}

@@ -30,6 +30,12 @@ import { renderField } from "./field-renderers";
 import { KeyValueEditor } from "./KeyValueEditor";
 import { MetricsChips } from "./MetricsChips";
 import { ModelParamsSection } from "./ModelParamsSection";
+import {
+  evalMetricMap,
+  metricChoicesFor,
+  metricOptionsFor,
+  objectiveOptionsFor,
+} from "./metric-options";
 import { NumberInput } from "./NumberInput";
 
 interface ConfigFormProps {
@@ -228,29 +234,35 @@ export function ConfigForm({
     }
   }, [task, calibration, enqueueAutoReset, config.config_version, config.task]);
 
-  // Resolve options for objective/model_metric kinds from option_sets
+  // Resolve options for objective/metric kinds from option_sets
   const getOptionsForHint = useCallback(
     (hint: import("@/api/types").ParameterHint): string[] => {
       if (!task) return [];
       if (hint.kind === "objective") {
-        return uiSchema?.option_sets?.objective?.[task] ?? [];
+        return objectiveOptionsFor(uiSchema, task);
       }
-      if (hint.kind === "model_metric") {
-        return uiSchema?.option_sets?.model_metric?.[task] ?? [];
+      if (hint.kind === "metric") {
+        return metricOptionsFor(uiSchema, task);
       }
       return [];
     },
     [task, uiSchema],
   );
 
+  // Feval subset of the model-metric options — badged "Custom (slow)".
+  const fevalMetrics = useMemo(
+    () => metricChoicesFor(uiSchema, task).feval,
+    [task, uiSchema],
+  );
+
   // Resolve the current value for a parameter hint
   const getValueForHint = useCallback(
     (hint: import("@/api/types").ParameterHint): unknown => {
-      // objective and metric live at model.params.objective and model.metric respectively
+      // objective and metric live at model.params.objective and model.params.metric
       if (hint.kind === "objective") {
         return modelParams.objective;
       }
-      if (hint.kind === "model_metric") {
+      if (hint.kind === "metric") {
         return modelParams.metric;
       }
       // numeric/boolean params live under model.params
@@ -267,7 +279,7 @@ export function ConfigForm({
     (hint: import("@/api/types").ParameterHint, value: unknown) => {
       if (hint.kind === "objective") {
         handleFieldChange(["model", "params", "objective"], value);
-      } else if (hint.kind === "model_metric") {
+      } else if (hint.kind === "metric") {
         handleFieldChange(["model", "params", "metric"], value);
       } else {
         handleFieldChange(["model", "params", hint.key], value);
@@ -297,13 +309,13 @@ export function ConfigForm({
     [uiSchema, modelConfig, modelParams, config],
   );
 
-  // Auto-select defaults for objective and model_metric when empty OR
-  // when the current value belongs to a different task (H-0062 Bugfix
-  // 2026-04-14 (3)). The original guard only fired for empty values,
-  // so switching task=multiclass -> task=binary left
-  // objective=multiclass / metric=[auc_mu, multi_logloss] stale and
-  // the subsequent Tune failed with "All tuning trials failed" because
-  // LGBM rejects a multiclass objective on a binary target.
+  // Auto-select defaults for objective and metric when empty OR when the
+  // current value belongs to a different task (H-0062 Bugfix 2026-04-14
+  // (3)). The original guard only fired for empty values, so switching
+  // task=multiclass -> task=binary left objective=multiclass /
+  // metric=[auc_mu, multi_logloss] stale and the subsequent Tune failed
+  // with "All tuning trials failed" because LGBM rejects a multiclass
+  // objective on a binary target.
   useEffect(() => {
     if (!task || !uiSchema?.option_sets) return;
     // Issue #107 regression guard: skip auto-select while the config is
@@ -325,7 +337,7 @@ export function ConfigForm({
 
     // Objective: single-select. Reset when empty OR when current value
     // is not in the list of objectives valid for the current task.
-    const objOpts = uiSchema.option_sets.objective?.[task] ?? [];
+    const objOpts = objectiveOptionsFor(uiSchema, task);
     if (objOpts.length > 0) {
       const currentObj = modelParams.objective;
       const objInvalid =
@@ -338,7 +350,7 @@ export function ConfigForm({
 
     // Metric: multi-select, use parameter_hints default for task.
     // Reset when empty OR when no current entry is valid for the task.
-    const metricOpts = uiSchema.option_sets.model_metric?.[task] ?? [];
+    const metricOpts = metricOptionsFor(uiSchema, task);
     if (metricOpts.length > 0) {
       const cur = modelParams.metric;
       const empty =
@@ -517,6 +529,7 @@ export function ConfigForm({
                         getValueForHint={getValueForHint}
                         handleHintChange={handleHintChange}
                         getOptionsForHint={getOptionsForHint}
+                        fevalMetrics={fevalMetrics}
                         shouldShowField={shouldShowField}
                         precisionAtKValue={
                           (modelParams._precision_at_k_k as number) ?? 10
@@ -638,7 +651,7 @@ export function ConfigForm({
                   // saved=false (silently reverting the task switch).
                   task={(config.task as string) || task}
                   selectedMetrics={selectedMetrics}
-                  metricsByTask={uiSchema?.option_sets?.metric}
+                  metricsByTask={evalMetricMap(uiSchema)}
                   onChange={(metrics) => {
                     handleFieldChange(["evaluation", "metrics"], metrics);
                   }}

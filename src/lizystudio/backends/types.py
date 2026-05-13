@@ -28,6 +28,23 @@ class ConfigSchema:
     json_schema: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class IncompatibleMetric:
+    """Advisory entry for a configured metric whose preconditions the
+    loaded target column violates (e.g. MAPE on a target containing zeros).
+
+    Returned by :meth:`BackendCore.get_incompatible_metrics`. The
+    ``suggested_fix`` string may reference backend-specific replacements
+    (e.g. lizyml's sMAPE / WAPE for MAPE). The Service layer wraps each
+    entry in its ``severity="warning"`` validation envelope; it does not
+    block Fit.
+    """
+
+    metric: str
+    message: str
+    suggested_fix: str
+
+
 @dataclass
 class FitSummary:
     """Training result summary."""
@@ -58,7 +75,8 @@ class TuningSummary:
     rounds: list[dict[str, Any]] | None = None
     # Final-round BoundaryReport. Keys:
     #   dims: list of per-dim status (name, best_value, low, high,
-    #         position_pct, edge, expanded, new_low, new_high),
+    #         position_pct, edge, expanded, new_low, new_high,
+    #         clamped_to_bound),
     #   expanded_names: list[str].
     boundary_report: dict[str, Any] | None = None
 

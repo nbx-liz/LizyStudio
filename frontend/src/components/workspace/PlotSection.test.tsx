@@ -221,6 +221,75 @@ describe("PlotSection", () => {
     expect(onKindChange).toHaveBeenCalledWith("gain");
   });
 
+  describe("residuals kind selector (Issue #457)", () => {
+    const residualsProps = {
+      ...defaultProps,
+      plots: ["learning-curve", "residuals", "importance"],
+      selectedPlot: "residuals",
+    };
+
+    it("renders the kind selector when the residuals tab is active", () => {
+      render(
+        <PlotSection
+          {...residualsProps}
+          selectedResidualsKind="all"
+          onResidualsKindChange={vi.fn()}
+          residualsPlot={{ plotly_json: "{}" }}
+        />,
+      );
+      expect(
+        screen.getByRole("radio", { name: "Scatter" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("radio", { name: "Histogram" }),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: "QQ" })).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: "All" })).toBeInTheDocument();
+    });
+
+    it("does not render the kind selector on a non-residuals tab", () => {
+      render(
+        <PlotSection
+          {...residualsProps}
+          selectedPlot="learning-curve"
+          selectedResidualsKind="all"
+          onResidualsKindChange={vi.fn()}
+        />,
+      );
+      expect(
+        screen.queryByRole("radio", { name: "Scatter" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("calls onResidualsKindChange when a kind is clicked", () => {
+      const onChange = vi.fn();
+      render(
+        <PlotSection
+          {...residualsProps}
+          selectedResidualsKind="all"
+          onResidualsKindChange={onChange}
+          residualsPlot={{ plotly_json: "{}" }}
+        />,
+      );
+      fireEvent.click(screen.getByRole("radio", { name: "Scatter" }));
+      expect(onChange).toHaveBeenCalledWith("scatter");
+    });
+
+    it("renders residualsPlot data when the residuals tab is active", () => {
+      render(
+        <PlotSection
+          {...residualsProps}
+          selectedResidualsKind="scatter"
+          onResidualsKindChange={vi.fn()}
+          residualsPlot={{ plotly_json: '{"residuals":"scatter"}' }}
+        />,
+      );
+      expect(screen.getByTestId("plotly-chart")).toHaveTextContent(
+        '{"residuals":"scatter"}',
+      );
+    });
+  });
+
   describe("importance top-N toggle (PR-B2 / P-0097)", () => {
     it("renders the toggle when on importance tab and a callback is provided", () => {
       render(

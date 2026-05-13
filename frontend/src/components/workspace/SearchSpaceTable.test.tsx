@@ -528,7 +528,7 @@ describe("SearchSpaceTable", () => {
       },
     ];
 
-    it("renders model_metric badge buttons for metric special field", () => {
+    it("renders metric badge buttons for metric special field", () => {
       const onModelParamChange = vi.fn();
       render(
         <SearchSpaceTable
@@ -539,10 +539,10 @@ describe("SearchSpaceTable", () => {
           task="binary"
           metricOptions={["auc", "f1", "accuracy"]}
           onModelParamChange={onModelParamChange}
-          specialSearchSpaceFields={{ metric: "model_metric" }}
+          specialSearchSpaceFields={{ metric: "metric" }}
         />,
       );
-      // model_metric renders badge buttons for each option
+      // metric renders badge buttons for each option
       expect(screen.getByText("auc")).toBeInTheDocument();
       expect(screen.getByText("f1")).toBeInTheDocument();
       expect(screen.getByText("accuracy")).toBeInTheDocument();
@@ -559,7 +559,7 @@ describe("SearchSpaceTable", () => {
           task="binary"
           metricOptions={["auc", "f1"]}
           onModelParamChange={onModelParamChange}
-          specialSearchSpaceFields={{ metric: "model_metric" }}
+          specialSearchSpaceFields={{ metric: "metric" }}
         />,
       );
       // Click "f1" to add it
@@ -578,12 +578,113 @@ describe("SearchSpaceTable", () => {
           task="binary"
           metricOptions={["auc", "f1"]}
           onModelParamChange={onModelParamChange}
-          specialSearchSpaceFields={{ metric: "model_metric" }}
+          specialSearchSpaceFields={{ metric: "metric" }}
         />,
       );
       // Click "f1" to remove it (it's currently selected)
       fireEvent.click(screen.getByText("f1"));
       expect(onModelParamChange).toHaveBeenCalledWith("metric", ["auc"]);
+    });
+
+    // P-0104 Wave 2.3 / Issue #459 — inner_valid_picker special field
+    const innerValidCatalog: SearchSpaceCatalogEntry[] = [
+      {
+        key: "inner_valid",
+        title: "Inner Validation",
+        paramType: "string",
+        modes: ["fixed"],
+        group: "training",
+        default: "holdout",
+      },
+    ];
+
+    it("renders inner_valid_picker filtered to [holdout] under kfold strategy", () => {
+      const onModelParamChange = vi.fn();
+      render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{ inner_valid: "holdout" }}
+          onChange={vi.fn()}
+          catalog={innerValidCatalog}
+          task="binary"
+          onModelParamChange={onModelParamChange}
+          specialSearchSpaceFields={{ inner_valid: "inner_valid_picker" }}
+          cvStrategy="kfold"
+          innerValidOptions={["holdout", "group_holdout", "time_holdout"]}
+        />,
+      );
+      const radios = screen.getAllByRole("radio");
+      const radioNames = radios.map((r) => r.textContent?.trim());
+      expect(radioNames).toContain("holdout");
+      expect(radioNames).not.toContain("group_holdout");
+      expect(radioNames).not.toContain("time_holdout");
+    });
+
+    it("renders inner_valid_picker with time_holdout under time_series strategy", () => {
+      const onModelParamChange = vi.fn();
+      render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{ inner_valid: "time_holdout" }}
+          onChange={vi.fn()}
+          catalog={innerValidCatalog}
+          task="binary"
+          onModelParamChange={onModelParamChange}
+          specialSearchSpaceFields={{ inner_valid: "inner_valid_picker" }}
+          cvStrategy="time_series"
+          innerValidOptions={["holdout", "group_holdout", "time_holdout"]}
+        />,
+      );
+      const radios = screen.getAllByRole("radio");
+      const radioNames = radios.map((r) => r.textContent?.trim());
+      expect(radioNames).toContain("holdout");
+      expect(radioNames).toContain("time_holdout");
+      expect(radioNames).not.toContain("group_holdout");
+    });
+
+    it("renders inner_valid_picker with group_holdout under group_kfold strategy", () => {
+      const onModelParamChange = vi.fn();
+      render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{ inner_valid: "group_holdout" }}
+          onChange={vi.fn()}
+          catalog={innerValidCatalog}
+          task="binary"
+          onModelParamChange={onModelParamChange}
+          specialSearchSpaceFields={{ inner_valid: "inner_valid_picker" }}
+          cvStrategy="group_kfold"
+          innerValidOptions={["holdout", "group_holdout", "time_holdout"]}
+        />,
+      );
+      const radios = screen.getAllByRole("radio");
+      const radioNames = radios.map((r) => r.textContent?.trim());
+      expect(radioNames).toContain("holdout");
+      expect(radioNames).toContain("group_holdout");
+      expect(radioNames).not.toContain("time_holdout");
+    });
+
+    it("calls onModelParamChange when inner_valid segment is clicked", () => {
+      const onModelParamChange = vi.fn();
+      render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{ inner_valid: "holdout" }}
+          onChange={vi.fn()}
+          catalog={innerValidCatalog}
+          task="binary"
+          onModelParamChange={onModelParamChange}
+          specialSearchSpaceFields={{ inner_valid: "inner_valid_picker" }}
+          cvStrategy="time_series"
+          innerValidOptions={["holdout", "group_holdout", "time_holdout"]}
+        />,
+      );
+      const timeHoldout = screen.getByRole("radio", { name: /time_holdout/i });
+      fireEvent.click(timeHoldout);
+      expect(onModelParamChange).toHaveBeenCalledWith(
+        "inner_valid",
+        "time_holdout",
+      );
     });
   });
 
@@ -610,7 +711,7 @@ describe("SearchSpaceTable", () => {
           task="binary"
           metricOptions={["auc", "precision_at_k"]}
           onModelParamChange={onModelParamChange}
-          specialSearchSpaceFields={{ metric: "model_metric" }}
+          specialSearchSpaceFields={{ metric: "metric" }}
         />,
       );
       // The k-value row shows "precision_at_k: k" label
@@ -628,7 +729,7 @@ describe("SearchSpaceTable", () => {
           task="binary"
           metricOptions={["auc", "precision_at_k"]}
           onModelParamChange={onModelParamChange}
-          specialSearchSpaceFields={{ metric: "model_metric" }}
+          specialSearchSpaceFields={{ metric: "metric" }}
         />,
       );
       expect(screen.queryByText("precision_at_k: k")).not.toBeInTheDocument();
@@ -645,7 +746,7 @@ describe("SearchSpaceTable", () => {
           task="binary"
           metricOptions={["precision_at_k"]}
           onModelParamChange={onModelParamChange}
-          specialSearchSpaceFields={{ metric: "model_metric" }}
+          specialSearchSpaceFields={{ metric: "metric" }}
         />,
       );
       // The k-value row has a NumberInput with increment button
@@ -1227,7 +1328,7 @@ describe("SearchSpaceTable", () => {
           task="binary"
           metricOptions={["auc", "precision_at_k"]}
           onModelParamChange={onModelParamChange}
-          specialSearchSpaceFields={{ metric: "model_metric" }}
+          specialSearchSpaceFields={{ metric: "metric" }}
         />,
       );
       expect(screen.getByText("precision_at_k: k")).toBeInTheDocument();
@@ -1246,7 +1347,7 @@ describe("SearchSpaceTable", () => {
           task="binary"
           metricOptions={["auc", "precision_at_k"]}
           onModelParamChange={onModelParamChange}
-          specialSearchSpaceFields={{ metric: "model_metric" }}
+          specialSearchSpaceFields={{ metric: "metric" }}
         />,
       );
       expect(screen.queryByText("precision_at_k: k")).not.toBeInTheDocument();
@@ -1311,6 +1412,86 @@ describe("SearchSpaceTable", () => {
 
       const spaceArg = onChange.mock.calls[0][0];
       expect(spaceArg.learning_rate.step).toBe(0.001);
+    });
+  });
+
+  // P-0104 Wave 3.1a / Issue #461 — parameterBounds forwarded per-row,
+  // resolving the dotted catalog key (``early_stopping.rounds``) onto the
+  // underscored LizyML bound key (``early_stopping_rounds``).
+  describe("parameterBounds", () => {
+    it("clamps a Range Max to the resolved bound on blur (direct key)", () => {
+      const onChange = vi.fn();
+      const intCatalog: SearchSpaceCatalogEntry[] = [
+        {
+          key: "n_estimators",
+          title: "N Estimators",
+          paramType: "integer",
+          modes: ["fixed", "range"],
+          group: "model_params",
+        },
+      ];
+      render(
+        <SearchSpaceTable
+          space={{
+            n_estimators: { type: "int", low: 50, high: 500, log: false },
+          }}
+          modelParams={{}}
+          onChange={onChange}
+          catalog={intCatalog}
+          parameterBounds={{ n_estimators: { min: 10, max: 10000 } }}
+        />,
+      );
+      const row = screen.getByText("n_estimators").closest('[role="button"]');
+      if (row) fireEvent.click(row);
+      const maxInput = screen.getByRole("textbox", {
+        name: /n_estimators max/i,
+      });
+      fireEvent.change(maxInput, { target: { value: "999999" } });
+      onChange.mockClear();
+      fireEvent.blur(maxInput);
+      const spaceArg = onChange.mock.calls.at(-1)?.[0];
+      expect(spaceArg.n_estimators.high).toBe(10000);
+    });
+
+    it("resolves the dotted catalog key onto the underscored bound key", () => {
+      const onChange = vi.fn();
+      const esCatalog: SearchSpaceCatalogEntry[] = [
+        {
+          key: "early_stopping.rounds",
+          title: "Early Stopping Rounds",
+          paramType: "integer",
+          modes: ["fixed", "range"],
+          group: "training",
+        },
+      ];
+      render(
+        <SearchSpaceTable
+          space={{
+            "early_stopping.rounds": {
+              type: "int",
+              low: 50,
+              high: 200,
+              log: false,
+            },
+          }}
+          modelParams={{}}
+          onChange={onChange}
+          catalog={esCatalog}
+          parameterBounds={{ early_stopping_rounds: { min: 1, max: 5000 } }}
+        />,
+      );
+      const row = screen
+        .getByText("early_stopping.rounds")
+        .closest('[role="button"]');
+      if (row) fireEvent.click(row);
+      const maxInput = screen.getByRole("textbox", {
+        name: /early_stopping\.rounds max/i,
+      });
+      fireEvent.change(maxInput, { target: { value: "99999" } });
+      onChange.mockClear();
+      fireEvent.blur(maxInput);
+      const spaceArg = onChange.mock.calls.at(-1)?.[0];
+      expect(spaceArg["early_stopping.rounds"].high).toBe(5000);
     });
   });
 });

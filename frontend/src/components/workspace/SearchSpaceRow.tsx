@@ -8,6 +8,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ChoiceInput } from "./ChoiceInput";
+import { filterInnerValidOptions, recommendedInnerValid } from "./cv-state";
 import { FeatureWeightsEditor } from "./FeatureWeightsEditor";
 import { FixedValueEditor } from "./FixedValueEditor";
 import { NumberInput } from "./NumberInput";
@@ -33,6 +34,10 @@ export function SearchSpaceRow({
   task,
   objectiveOptions,
   metricOptions,
+  fevalMetrics,
+  cvStrategy,
+  innerValidOptions,
+  bounds,
   onModelParamChange,
   specialSearchSpaceFields,
   columns,
@@ -127,18 +132,24 @@ export function SearchSpaceRow({
               onChange={(v) => onModelParamChange(param.key, v)}
             />
           ) : onModelParamChange &&
-            specialSearchSpaceFields?.[param.key] === "model_metric" ? (
+            specialSearchSpaceFields?.[param.key] === "metric" ? (
             <div className="flex flex-wrap gap-1">
               {(metricOptions ?? []).map((opt) => {
                 const currentValue = modelParams[param.key];
                 const selected = Array.isArray(currentValue)
                   ? currentValue.includes(opt)
                   : false;
+                const isCustomFeval = (fevalMetrics ?? []).includes(opt);
                 return (
                   <button
                     key={opt}
                     type="button"
-                    className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                    title={
+                      isCustomFeval
+                        ? "Custom feval metric — re-evaluated in Python each round (slower)"
+                        : undefined
+                    }
+                    className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors ${
                       selected
                         ? "bg-primary text-primary-foreground border-transparent"
                         : "bg-transparent text-muted-foreground border-muted-foreground/30 hover:bg-muted"
@@ -154,10 +165,46 @@ export function SearchSpaceRow({
                     }}
                   >
                     {opt}
+                    {isCustomFeval && (
+                      <span className="rounded-sm bg-warning px-1 text-[8px] uppercase tracking-wide text-warning-fg">
+                        Custom (slow)
+                      </span>
+                    )}
                   </button>
                 );
               })}
             </div>
+          ) : onModelParamChange &&
+            specialSearchSpaceFields?.[param.key] === "inner_valid_picker" ? (
+            // P-0104 Wave 2.3 / Issue #459: inner_valid renders as a
+            // SegmentGroup whose options depend on the outer CV strategy
+            // (kfold -> [holdout]; group_* -> [holdout, group_holdout];
+            // time_series_* -> [holdout, time_holdout]). The displayed
+            // value falls back to ``recommendedInnerValid(strategy)`` when
+            // the persisted value is not in the filtered list, so a CV
+            // strategy switch from kfold -> time_series automatically
+            // promotes "holdout" to "time_holdout" in the UI even before
+            // the TuneTab auto-reset effect persists the change.
+            (() => {
+              const filtered = filterInnerValidOptions(
+                innerValidOptions ?? [],
+                cvStrategy ?? "",
+              );
+              const persisted = modelParams[param.key];
+              const persistedStr =
+                typeof persisted === "string" ? persisted : undefined;
+              const display =
+                persistedStr && filtered.includes(persistedStr)
+                  ? persistedStr
+                  : recommendedInnerValid(cvStrategy ?? "");
+              return (
+                <SegmentGroup
+                  options={filtered}
+                  value={display}
+                  onChange={(v) => onModelParamChange(param.key, v)}
+                />
+              );
+            })()
           ) : onModelParamChange && param.paramType === "object" ? (
             <FeatureWeightsEditor
               weights={
@@ -197,6 +244,10 @@ export function SearchSpaceRow({
               value={entry.low}
               onChange={(v) => onUpdateEntry(param.key, { low: v ?? 0 })}
               step={isInteger ? 1 : (stepMap?.[param.key] ?? 0.001)}
+              paramType={isInteger ? "integer" : "number"}
+              min={bounds?.min}
+              max={bounds?.max}
+              ariaLabel={`${param.key} min`}
             />
           </div>
           <div className="flex items-center gap-2">
@@ -205,6 +256,10 @@ export function SearchSpaceRow({
               value={entry.high}
               onChange={(v) => onUpdateEntry(param.key, { high: v ?? 0 })}
               step={isInteger ? 1 : (stepMap?.[param.key] ?? 0.001)}
+              paramType={isInteger ? "integer" : "number"}
+              min={bounds?.min}
+              max={bounds?.max}
+              ariaLabel={`${param.key} max`}
             />
           </div>
           <div className="flex items-center gap-2">
@@ -235,6 +290,8 @@ export function SearchSpaceRow({
                 onChange={(v) => onUpdateEntry(param.key, { step: v })}
                 min={1}
                 step={1}
+                paramType="integer"
+                ariaLabel={`${param.key} step`}
               />
             </div>
           )}
@@ -253,7 +310,7 @@ export function SearchSpaceRow({
       )}
 
       {/* precision_at_k k-value row — Fixed and Choice modes */}
-      {specialSearchSpaceFields?.[param.key] === "model_metric" &&
+      {specialSearchSpaceFields?.[param.key] === "metric" &&
         onModelParamChange &&
         (() => {
           // Fixed: check modelParams; Choice: check space choices

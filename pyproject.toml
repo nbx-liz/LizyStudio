@@ -26,7 +26,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "lizyml[plots,tuning,calibration,explain]>=0.12.0,<0.13.0",
+    "lizyml[plots,tuning,calibration,explain]>=0.15.0,<0.16.0",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
     "python-multipart>=0.0.18",
@@ -147,4 +147,5 @@ markers = [
     "flaky: Known-flaky tests — CI reruns via pytest-rerunfailures; local runs do not retry",
     "quarantine: Isolated tests — excluded from default runs, executed in a non-blocking CI job",
     "bench: Performance benchmarks (skipped by default; run with --benchmark-only via the nightly workflow)",
+    "pickle_compat: Cross-version pickle compatibility tests (skipped by default; run by the nightly pickle-compat job, v3-26)",
 ]

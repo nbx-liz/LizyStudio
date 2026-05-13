@@ -438,8 +438,7 @@ describe("fetchUiSchema", () => {
           option_sets: {
             objective: {},
             metric: {},
-            model_metric: {},
-            metric_direction: {},
+            eval_metric: {},
           },
           parameter_hints: [],
           search_space_catalog: [],

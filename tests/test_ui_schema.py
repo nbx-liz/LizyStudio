@@ -15,6 +15,9 @@ UI_SCHEMA_KEYS = {
     "sections",
     "option_sets",
     "metric_direction",
+    # P-0104 Wave 3.1a / Issue #461: hyper-parameter bounds from
+    # LizyML LGBMProvider.parameter_bounds(task).
+    "parameter_bounds",
     "parameter_hints",
     "search_space_catalog",
     "step_map",
@@ -68,15 +71,29 @@ class TestLizyMLAdapterUiSchema:
         option_sets = schema["option_sets"]
         assert "objective" in option_sets
         assert "metric" in option_sets
-        assert "model_metric" in option_sets
+        # P-0104 Wave 3.1b (Q3): model_metric folded into metric.
+        assert "model_metric" not in option_sets
+        assert "eval_metric" in option_sets
 
-    def test_option_sets_metric_has_all_tasks(self) -> None:
+    def test_option_sets_metric_has_all_tasks_with_native_feval(self) -> None:
         schema = LizyMLAdapter().get_ui_schema()
         metric = schema["option_sets"]["metric"]
         for task in ("binary", "regression", "multiclass"):
             assert task in metric
-            assert isinstance(metric[task], list)
-            assert len(metric[task]) > 0
+            assert set(metric[task].keys()) == {"native", "feval"}
+            assert isinstance(metric[task]["native"], list)
+            assert len(metric[task]["native"]) > 0
+            assert isinstance(metric[task]["feval"], list)
+
+    def test_option_sets_eval_metric_has_all_tasks(self) -> None:
+        schema = LizyMLAdapter().get_ui_schema()
+        eval_metric = schema["option_sets"]["eval_metric"]
+        for task in ("binary", "regression", "multiclass"):
+            assert task in eval_metric
+            assert isinstance(eval_metric[task], list)
+            assert len(eval_metric[task]) > 0
+            for m in eval_metric[task]:
+                assert isinstance(m, str)
 
     def test_option_sets_objective_has_all_tasks(self) -> None:
         schema = LizyMLAdapter().get_ui_schema()
@@ -174,16 +191,15 @@ class TestLizyMLAdapterUiSchema:
         r2 = get_metric_directions()
         assert r1 is r2  # same object reference (cached)
 
-    def test_model_metric_options_structure(self) -> None:
-        """model_metric should have task-keyed lists of metric strings."""
+    def test_metric_option_set_native_feval_are_string_lists(self) -> None:
+        """option_sets.metric[task] is the nested {native, feval} shape."""
         schema = LizyMLAdapter().get_ui_schema()
-        model_metric = schema["option_sets"]["model_metric"]
+        metric = schema["option_sets"]["metric"]
         for task in ("binary", "regression", "multiclass"):
-            assert task in model_metric
-            assert isinstance(model_metric[task], list)
-            assert len(model_metric[task]) > 0
-            for m in model_metric[task]:
-                assert isinstance(m, str)
+            for section in ("native", "feval"):
+                assert isinstance(metric[task][section], list)
+                for m in metric[task][section]:
+                    assert isinstance(m, str)
 
     def test_conditional_visibility_num_leaves(self) -> None:
         """conditional_visibility should have num_leaves/num_leaves_ratio entries."""
@@ -397,32 +413,34 @@ class TestLizyMLAdapterUiSchema:
         assert catalog["auto_num_leaves"]["default"] is True
 
     def test_eval_metrics_match_lizyml_registry(self) -> None:
-        """option_sets.metric must match the live LizyML _TASK_METRICS registry."""
+        """option_sets.eval_metric must match the live LizyML _TASK_METRICS registry."""
         from lizyml.metrics.registry import _TASK_METRICS
 
         schema = LizyMLAdapter().get_ui_schema()
         for task in ("binary", "regression", "multiclass"):
             expected = sorted(_TASK_METRICS[task])
-            actual = sorted(schema["option_sets"]["metric"][task])
+            actual = sorted(schema["option_sets"]["eval_metric"][task])
             assert actual == expected, (
-                f"metric mismatch for {task}: expected={expected}, actual={actual}"
+                f"eval_metric mismatch for {task}: expected={expected}, actual={actual}"
             )
 
-    def test_model_metric_includes_feval_metrics(self) -> None:
-        """model_metric for binary should include feval metrics from v0.6.0+."""
+    def test_metric_binary_includes_feval_metrics(self) -> None:
+        """option_sets.metric.binary.feval should include the custom feval metrics."""
         schema = LizyMLAdapter().get_ui_schema()
-        binary_mm = schema["option_sets"]["model_metric"]["binary"]
-        # These became available as training metrics via metric bridge
+        binary_feval = schema["option_sets"]["metric"]["binary"]["feval"]
         for m in ("f1", "accuracy", "brier", "ece", "precision_at_k"):
-            assert m in binary_mm, f"binary model_metric missing feval metric: {m}"
+            assert m in binary_feval, f"binary metric feval missing: {m}"
 
-    def test_model_metric_multiclass_uses_lizyml_names(self) -> None:
-        """model_metric for multiclass should use LightGBM native metric names."""
+    def test_metric_multiclass_native_uses_lizyml_names(self) -> None:
+        """option_sets.metric.multiclass.native uses LightGBM native metric names."""
         schema = LizyMLAdapter().get_ui_schema()
-        mc_mm = schema["option_sets"]["model_metric"]["multiclass"]
-        assert "multi_logloss" in mc_mm
-        assert "multi_error" in mc_mm
-        assert "auc_mu" in mc_mm
+        mc_native = schema["option_sets"]["metric"]["multiclass"]["native"]
+        assert "multi_logloss" in mc_native
+        assert "multi_error" in mc_native
+        assert "auc_mu" in mc_native
+        # multiclass `auc` is rejected by LightGBM 4.x — must not be offered
+        # as a model metric (P-0104 Scope-5).
+        assert "auc" not in mc_native
 
     # --- Phase 1: Expanded parameter coverage (Widget parity) ---
 
@@ -536,26 +554,20 @@ class TestLizyMLAdapterUiSchema:
         for key in ("min_child_weight", "min_gain_to_split", "scale_pos_weight"):
             assert key in additional, f"additional_params missing: {key}"
 
-    def test_model_metric_regression_includes_lgbm_native(self) -> None:
-        """model_metric regression should include LightGBM native metrics."""
+    def test_metric_regression_native_uses_canonical_names(self) -> None:
+        """option_sets.metric.regression.native uses LizyML canonical names."""
         schema = LizyMLAdapter().get_ui_schema()
-        reg_mm = schema["option_sets"]["model_metric"]["regression"]
-        for m in ("l1", "l2", "rmse", "huber", "mape", "quantile"):
-            assert m in reg_mm, f"regression model_metric missing LGB native: {m}"
+        reg_native = schema["option_sets"]["metric"]["regression"]["native"]
+        # Canonical names: l1 -> mae, l2 -> rmse (LizyML v0.15 SSOT).
+        for m in ("mae", "rmse", "huber", "mape", "quantile"):
+            assert m in reg_native, f"regression metric native missing: {m}"
 
-    def test_model_metric_binary_includes_lgbm_native(self) -> None:
-        """model_metric binary should include LightGBM native metrics."""
+    def test_metric_binary_native_includes_lgbm_native(self) -> None:
+        """option_sets.metric.binary.native includes LightGBM native metrics."""
         schema = LizyMLAdapter().get_ui_schema()
-        binary_mm = schema["option_sets"]["model_metric"]["binary"]
+        binary_native = schema["option_sets"]["metric"]["binary"]["native"]
         for m in ("binary_logloss", "binary_error", "average_precision", "auc"):
-            assert m in binary_mm, f"binary model_metric missing LGB native: {m}"
-
-    def test_model_metric_multiclass_includes_lgbm_native(self) -> None:
-        """model_metric multiclass should include LightGBM native metrics."""
-        schema = LizyMLAdapter().get_ui_schema()
-        mc_mm = schema["option_sets"]["model_metric"]["multiclass"]
-        for m in ("multi_logloss", "multi_error", "auc_mu"):
-            assert m in mc_mm, f"multiclass model_metric missing LGB native: {m}"
+            assert m in binary_native, f"binary metric native missing: {m}"
 
     def test_capabilities_cv_strategy_fields(self) -> None:
         """capabilities must include cv_strategy_fields mapping."""
@@ -670,15 +682,20 @@ class TestLizyMLAdapterUiSchema:
         assert "special_search_space_fields" in schema
         ssf = schema["special_search_space_fields"]
         assert ssf["objective"] == "objective"
-        assert ssf["metric"] == "model_metric"
+        # P-0104 Wave 3.1b: renamed model_metric -> metric (Q3).
+        assert ssf["metric"] == "metric"
 
     def test_search_space_catalog_learning_rate_default_mode_range(self) -> None:
-        """learning_rate must have default_mode='range' and default_range (H-0053)."""
+        """learning_rate must have default_mode='range' and default_range.
+
+        P-0104 Wave 2.2 / Issue #459 binary canonical spec narrows the
+        previous high=0.1 to high=0.01 (log-uniform).
+        """
         schema = LizyMLAdapter().get_ui_schema()
         catalog = {e["key"]: e for e in schema["search_space_catalog"]}
         lr = catalog["learning_rate"]
         assert lr["default_mode"] == "range"
-        assert lr["default_range"] == {"low": 0.0001, "high": 0.1, "log": True}
+        assert lr["default_range"] == {"low": 0.0001, "high": 0.01, "log": True}
 
     def test_search_space_catalog_num_leaves_no_default_range(self) -> None:
         """num_leaves must NOT have default_mode/default_range (Widget conformance).
@@ -692,23 +709,36 @@ class TestLizyMLAdapterUiSchema:
         assert "default_range" not in nl
 
     def test_search_space_catalog_n_estimators_default_mode_range(self) -> None:
-        """n_estimators must have default_mode='range' and default_range (H-0053)."""
+        """n_estimators must have default_mode='range' and default_range.
+
+        P-0104 Wave 2.2 / Issue #459 binary canonical spec narrows the
+        previous {600, 2500} range to {500, 2000}.
+        """
         schema = LizyMLAdapter().get_ui_schema()
         catalog = {e["key"]: e for e in schema["search_space_catalog"]}
         ne = catalog["n_estimators"]
         assert ne["default_mode"] == "range"
-        assert ne["default_range"] == {"low": 600, "high": 2500, "log": False}
+        assert ne["default_range"] == {"low": 500, "high": 2000, "log": False}
 
     def test_search_space_catalog_max_depth_default_mode_range(self) -> None:
-        """max_depth must have default_mode='range' and default_range (H-0053)."""
+        """max_depth must have default_mode='range' and default_range.
+
+        P-0104 Wave 2.2 / Issue #459 binary canonical spec narrows the
+        previous high=12 to high=9.
+        """
         schema = LizyMLAdapter().get_ui_schema()
         catalog = {e["key"]: e for e in schema["search_space_catalog"]}
         md = catalog["max_depth"]
         assert md["default_mode"] == "range"
-        assert md["default_range"] == {"low": 3, "high": 12, "log": False}
+        assert md["default_range"] == {"low": 3, "high": 9, "log": False}
 
     def test_search_space_catalog_max_bin_uses_choice_mode(self) -> None:
-        """max_bin uses default_mode=choice with default_choices."""
+        """max_bin uses default_mode=choice with default_choices.
+
+        P-0104 Wave 2.2 / Issue #459 drops 1023 from the binary spec
+        because high-bin training rarely converges under the new
+        narrower learning-rate range.
+        """
         schema = LizyMLAdapter().get_ui_schema()
         catalog = {e["key"]: e for e in schema["search_space_catalog"]}
         assert catalog["max_bin"]["default_mode"] == "choice"
@@ -718,7 +748,6 @@ class TestLizyMLAdapterUiSchema:
             127,
             255,
             511,
-            1023,
         ]
         assert "default_range" not in catalog["max_bin"]
 
@@ -731,6 +760,74 @@ class TestLizyMLAdapterUiSchema:
                 assert dr["low"] < dr["high"], (
                     f"default_range low >= high for '{entry['key']}': {dr}"
                 )
+
+    # P-0104 Wave 2.2 / Issue #459 binary canonical spec ----------------
+
+    def test_search_space_catalog_num_leaves_ratio_canonical(self) -> None:
+        """num_leaves_ratio default_range low must be 0.4 per #459 spec."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        row = catalog["num_leaves_ratio"]
+        assert row["default_mode"] == "range"
+        assert row["default_range"] == {"low": 0.4, "high": 1.0, "log": False}
+
+    def test_search_space_catalog_bagging_freq_canonical(self) -> None:
+        """bagging_freq default_range must be {1, 10} per #459 spec.
+
+        Previous {0, 20} allowed disabling bagging entirely (low=0); the
+        new spec keeps bagging always on with a tighter cap.
+        """
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        row = catalog["bagging_freq"]
+        assert row["default_mode"] == "range"
+        assert row["default_range"] == {"low": 1, "high": 10, "log": False}
+
+    def test_search_space_catalog_lambda_l1_fixed_only(self) -> None:
+        """lambda_l1 is Fixed-only at default 0 per #459 spec.
+
+        Previously offered Range mode with {1e-8, 1.0, log=True}; the new
+        spec keeps L1 disabled by default so the model relies on L2 alone.
+        """
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        row = catalog["lambda_l1"]
+        assert row["modes"] == ["fixed"]
+        assert row["default"] == 0.0
+        assert "default_mode" not in row
+        assert "default_range" not in row
+
+    def test_search_space_catalog_lambda_l2_canonical(self) -> None:
+        """lambda_l2 default_range must be {1e-6, 1e-2} log per #459 spec."""
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        row = catalog["lambda_l2"]
+        assert row["default_mode"] == "range"
+        assert row["default_range"] == {"low": 1e-6, "high": 1e-2, "log": True}
+
+    def test_search_space_catalog_early_stopping_rounds_canonical(self) -> None:
+        """early_stopping.rounds default_range must be {50, 200} per #459 spec.
+
+        Previous {40, 240} was wider on both ends; the new spec narrows
+        toward typical early-stopping cadence for the new n_estimators
+        range (500-2000).
+        """
+        schema = LizyMLAdapter().get_ui_schema()
+        catalog = {e["key"]: e for e in schema["search_space_catalog"]}
+        row = catalog["early_stopping.rounds"]
+        assert row["default_mode"] == "range"
+        assert row["default_range"] == {"low": 50, "high": 200, "log": False}
+
+    def test_option_sets_objective_regression_no_cross_entropy(self) -> None:
+        """option_sets.objective.regression must NOT contain cross_entropy.
+
+        P-0104 Wave 2.2 / Issue #459: cross_entropy is a binary-task
+        objective only; its presence in the regression list was a long
+        standing UX bug exposing an invalid choice.
+        """
+        schema = LizyMLAdapter().get_ui_schema()
+        regression_objectives = schema["option_sets"]["objective"]["regression"]
+        assert "cross_entropy" not in regression_objectives
 
     def test_step_map_includes_expanded_params(self) -> None:
         """step_map should include entries for newly added params."""
@@ -749,9 +846,10 @@ class TestLizyMLAdapterUiSchema:
         """Eval metrics must place preferred metric first (Widget conformance).
 
         binary: auc first, regression: rmse first, multiclass: auc first.
+        Applies to option_sets.eval_metric (the post-hoc reporting list).
         """
         schema = LizyMLAdapter().get_ui_schema()
-        metrics = schema["option_sets"]["metric"]
+        metrics = schema["option_sets"]["eval_metric"]
         assert metrics["binary"][0] == "auc", f"binary first: {metrics['binary'][0]}"
         assert metrics["regression"][0] == "rmse", (
             f"regression first: {metrics['regression'][0]}"
