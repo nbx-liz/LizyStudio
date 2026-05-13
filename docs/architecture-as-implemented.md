@@ -250,12 +250,13 @@ stateDiagram-v2
 
 サーバ再起動時は `JobStore.reconcile_at_startup()`（`server.py:lifespan` から呼ぶ）が on-disk `meta.json` をスキャンし、`running` / `pending` の orphan を `failed` 化、`paused` を `_active_job_id` に再 attach（多重 paused は newest 残し他 failed）、terminal は rewrite せず、idempotent（v3-22a / R-1.5b）。
 
-### In-memory primitives (`services/jobs.py:JobStore`)
-- `_active_job_id: str | None` + `_active_lock: threading.Lock`
-- `_cancel_requested: set[str]` + `_cancel_lock`（IPC は `<job_dir>/CANCEL` flag — subprocess child 用）
-- `_pause_requested: set[str]` + `_pause_lock`（IPC は `<job_dir>/PAUSE` flag）(P-0099 v3-20c)
-- `_parent_locks: dict[parent_id, child_id]` + `_parent_lock_mutex` （Re-tune/Resume の at-most-one 保証）
-- `set_status(job_id, new_status)` が `LEGAL_TRANSITIONS` を runtime assert（INV-3）
+### `JobStore` の構成（#451 decomposition）
+`services/jobs.py:JobStore`（1062→522 行）は 4 つの focused collaborator を束ねる orchestrator façade。公開 Protocol は不変（api/services の caller は変わらない）。
+- `_job_metadata.py:JobMetadataStore` — `jobs_dir` 所有、path 解決 + `create`/`get`/`list`/`update`/`get_log` + `meta.json`/`fit_result.json`/`tune_result.json` の versioned-JSON round-trip（C-9 / H-0081）。`Job` dataclass と §3.4.4 layout 定数もここ。
+- `_job_active_slot.py:ActiveJobSlot` — `_active_job_id: str | None` + `threading.Lock`、`active_jobs` gauge（A-9）、INV-1 の claim/release/stale-reclaim。
+- `_job_control_flags.py:JobControlFlags` — `_cancel_requested` / `_pause_requested` set + 各 lock、IPC は `<job_dir>/CANCEL` / `<job_dir>/PAUSE` flag（subprocess child 用、P-0099 v3-20c）。
+- `_job_lineage.py:JobLineage` — `_parent_locks: dict[parent_id, child_id]` + `_parent_lock_mutex`（Re-tune/Resume の at-most-one 保証、H-0062）、parent→child 系譜クエリ。
+- `JobStore` 自身が持つのは: H-0084 model cache、metrics 転送（`record_job_terminal`）、`set_status`（INV-3 `LEGAL_TRANSITIONS` runtime assert）、`delete`（cascade BFS + dir 削除 + cache eviction）、`reconcile_at_startup`（orphan fail + paused-survivor 再 attach）。
 
 ### Disk layout per job (`{jobs_dir}/{job_id}/`)
 - `meta.json` — `format_version` (現行 2), status, config, data_ref, parent_job_id, error。`storage/versions.py:write_versioned_json` で atomic write（INV-2）。旧 version 上書きは `LIZYSTUDIO_ALLOW_LEGACY_WRITE=1` が無いと `LegacyFormatProtectionError`（P-0103 v3-25c）
