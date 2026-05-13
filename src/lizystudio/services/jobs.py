@@ -47,7 +47,7 @@ _logger = logging.getLogger(__name__)
 
 
 class JobStore:
-    """Disk-backed job store.
+    """Disk-backed job store — the orchestrator over four focused collaborators.
 
     Layout per BLUEPRINT §3.4.4::
 
@@ -55,6 +55,27 @@ class JobStore:
         {jobs_dir}/{job_id}/fit_result.json
         {jobs_dir}/{job_id}/tune_result.json
         {jobs_dir}/{job_id}/model/
+
+    #451 decomposition — ``JobStore`` keeps the public Protocol shape so
+    api/services callers do not change, but the mechanism lives in:
+
+    - :class:`~lizystudio.services._job_metadata.JobMetadataStore` —
+      path resolution + ``create`` / ``get`` / ``list`` / ``update`` /
+      ``get_log`` + the versioned-JSON round-trip (C-9 / H-0081);
+    - :class:`~lizystudio.services._job_active_slot.ActiveJobSlot` —
+      the at-most-one-running concurrency control (INV-1) + the
+      ``active_jobs`` gauge;
+    - :class:`~lizystudio.services._job_control_flags.JobControlFlags` —
+      cooperative-cancel + pause request flags (in-mem set + on-disk IPC);
+    - :class:`~lizystudio.services._job_lineage.JobLineage` —
+      Re-tune/Resume parent/child graph + per-parent retune lock (H-0062).
+
+    ``JobStore`` itself owns: the H-0084 model cache, the metrics
+    registry forwarding (``record_job_terminal``), and the cross-concern
+    orchestration that genuinely spans collaborators — ``delete`` (cascade
+    BFS + dir removal + cache eviction), ``reconcile_at_startup`` (orphan
+    fail + paused-survivor re-attach), ``set_status`` (the INV-3 state-
+    machine guard around a meta write).
     """
 
     def __init__(
@@ -62,22 +83,17 @@ class JobStore:
         jobs_dir: Path,
         metrics: MetricsRegistry | None = None,
     ) -> None:
-        # #451: JobStore is an orchestrator over focused collaborators —
-        # ``JobMetadataStore`` (disk CRUD: path resolution, create/get/
-        # list/update, meta.json round-trips), ``ActiveJobSlot`` (the
-        # at-most-one-running concurrency control), ``JobControlFlags``
-        # (cooperative-cancel + pause request flags), ``JobLineage``
-        # (Re-tune/Resume parent/child graph + per-parent retune lock).
-        # ``self.jobs_dir`` is kept (aliasing the metadata store's) for
-        # call sites that read it directly.
+        # The collaborators (see the class docstring). ``self.jobs_dir`` is
+        # kept (aliasing the metadata store's) for call sites that read it.
         self._meta = JobMetadataStore(jobs_dir)
         self.jobs_dir = self._meta.jobs_dir
         self._slot = ActiveJobSlot(self._meta, metrics)
         self._flags = JobControlFlags(self._meta)
         self._lineage = JobLineage(self._meta)
-        # A-9: the metrics registry is also threaded through here for the
-        # terminal-transition counters (``record_job_terminal``). The
-        # active-slot gauge lives inside ``ActiveJobSlot``.
+        # A-9: metrics registry threaded through here for the terminal-
+        # transition counters (``record_job_terminal``). The active-slot
+        # gauge lives inside ``ActiveJobSlot``; ``None`` in the subprocess
+        # child where Prometheus output is never scraped.
         self._metrics = metrics
         # H-0084 (Issue #235): model cache lives on the JobStore so two
         # app instances sharing a process keep their caches isolated.
@@ -120,13 +136,13 @@ class JobStore:
     # --- Path resolution (A-10) — delegated to JobMetadataStore (#451) ---
 
     def job_dir(self, job_id: str) -> Path:
-        """Resolve the job directory (traversal-guarded). See
-        :meth:`JobMetadataStore.job_dir`."""
+        """Resolve the job directory (traversal-guarded).
+
+        See :meth:`JobMetadataStore.job_dir`."""
         return self._meta.job_dir(job_id)
 
     def path_for(self, job_id: str, kind: ArtifactKind) -> Path:
-        """Resolve a named job artifact path. See
-        :meth:`JobMetadataStore.path_for`."""
+        """Resolve a named job artifact path. See :meth:`JobMetadataStore.path_for`."""
         return self._meta.path_for(job_id, kind)
 
     # --- CRUD — delegated to JobMetadataStore (#451) ---
@@ -140,12 +156,8 @@ class JobStore:
         job_type: Literal["fit", "tune"],
         parent_job_id: str | None = None,
     ) -> Job:
-        """Create a new pending job and persist its metadata.
-
-        When *parent_job_id* is provided the new job is recorded as a
-        child in the lineage graph (H-0062). See
-        :meth:`JobMetadataStore.create`.
-        """
+        """Create a new pending job (records lineage when *parent_job_id*
+        is given, H-0062). See :meth:`JobMetadataStore.create`."""
         return self._meta.create(
             backend_name=backend_name,
             config=config,
@@ -155,8 +167,7 @@ class JobStore:
         )
 
     def get(self, job_id: str) -> Job | None:
-        """Load a job by ID. Returns ``None`` if not found. See
-        :meth:`JobMetadataStore.get`."""
+        """Load a job by ID, or ``None``. See :meth:`JobMetadataStore.get`."""
         return self._meta.get(job_id)
 
     def list(
@@ -165,24 +176,27 @@ class JobStore:
         status: str | None = None,
         sort: str = "created_at",
     ) -> builtins.list[Job]:
-        """List all jobs, optionally filtered/sorted. See
-        :meth:`JobMetadataStore.list`."""
+        """List jobs (filtered/sorted). See :meth:`JobMetadataStore.list`."""
         return self._meta.list(status=status, sort=sort)
 
     def update(self, job: Job) -> None:
-        """Persist updated job state to disk (meta + result sidecars).
-        See :meth:`JobMetadataStore.update`."""
+        """Persist job state (meta + result sidecars). See
+        :meth:`JobMetadataStore.update`."""
         self._meta.update(job)
 
     def delete(self, job_id: str, *, cascade: bool = False) -> builtins.list[str]:
         """Delete a job directory. Returns the list of removed job IDs.
+
+        Cross-concern orchestration: walks the lineage subtree
+        (``JobLineage``), removes the directories (``JobMetadataStore``
+        layout) and evicts cached models (``ModelCache``).
 
         When *cascade* is True (H-0062), the entire descendant subtree is
         removed recursively.  When False only the requested job is
         removed (existing children become orphaned).  An empty list is
         returned when the job does not exist.
         """
-        if not self.job_dir(job_id).exists():
+        if not self._meta.job_dir(job_id).exists():
             return []
 
         removed: builtins.list[str] = []
@@ -194,12 +208,12 @@ class JobStore:
             while queue:
                 current = queue.pop()
                 removed.append(current)
-                queue.extend(self.get_child_job_ids(current))
+                queue.extend(self._lineage.get_child_job_ids(current))
         else:
             removed.append(job_id)
 
         for jid in removed:
-            target = self.job_dir(jid)
+            target = self._meta.job_dir(jid)
             if target.exists():
                 # ignore_errors: a concurrent request_cancel (#152) can
                 # briefly stage a tempfile inside the victim tree, and
@@ -208,9 +222,8 @@ class JobStore:
                 # deleted anyway; swallow the transient error instead
                 # of propagating it out of delete().
                 shutil.rmtree(target, ignore_errors=True)
-            # Drop any cached deserialised model for this job via the
-            # JobStore-owned cache (H-0084).
-            self.clear_model_cache_for(str(self.path_for(jid, "model")))
+            # Drop any cached deserialised model for this job (H-0084).
+            self.model_cache.clear_for(str(self._meta.path_for(jid, "model")))
         return removed
 
     # --- H-0062 lineage + per-parent retune lock — delegated to JobLineage (#451) ---
@@ -321,7 +334,7 @@ class JobStore:
                 ("paused", "failed"),
             }
         )
-        job = self.get(job_id)
+        job = self._meta.get(job_id)
         assert job is not None, f"set_status: job {job_id!r} does not exist"
         current = job.status
         assert (current, new_status) in legal_transitions, (
@@ -332,7 +345,7 @@ class JobStore:
         # widening here is verified by the legal_transitions membership
         # check above, which only contains valid Job.status literals.
         job.status = new_status  # type: ignore[assignment]
-        self.update(job)
+        self._meta.update(job)
 
     # --- Startup reconciliation (P-0099 v3-22a, R-1.5b) ---
 
@@ -363,7 +376,7 @@ class JobStore:
         """
         paused_candidates: list[Job] = []
         running_orphans: list[Job] = []
-        for job in self.list():
+        for job in self._meta.list():
             if job.status in ("running", "pending"):
                 running_orphans.append(job)
             elif job.status == "paused":
@@ -380,7 +393,7 @@ class JobStore:
             job.status = "failed"
             job.error = "Server restarted before this job could complete"
             job.completed_at = now
-            self.update(job)
+            self._meta.update(job)
 
         if len(paused_candidates) > 1:
             paused_candidates.sort(key=lambda j: j.created_at, reverse=True)
@@ -398,7 +411,7 @@ class JobStore:
                     "is preserved (INV-1: at most one paused job)"
                 )
                 job.completed_at = now
-                self.update(job)
+                self._meta.update(job)
             paused_candidates = [winner]
 
         if paused_candidates:
@@ -457,11 +470,9 @@ class JobStore:
         return self._slot.active_job_id
 
     def get_log(self, job_id: str) -> str:
-        """Read execution log for a job. Returns empty string if not found."""
-        log_path = self.path_for(job_id, "log")
-        if not log_path.exists():
-            return ""
-        return log_path.read_text(encoding="utf-8")
+        """Read the execution log for a job; ``""`` when none. See
+        :meth:`JobMetadataStore.get_log`."""
+        return self._meta.get_log(job_id)
 
 
 def get_job_store(request: Request) -> JobStore:

@@ -335,3 +335,10 @@ class JobMetadataStore:
             error=meta.get("error"),
             parent_job_id=meta.get("parent_job_id"),
         )
+
+    def get_log(self, job_id: str) -> str:
+        """Read the execution log for a job; ``""`` when none has been written."""
+        log_path = self.path_for(job_id, "log")
+        if not log_path.exists():
+            return ""
+        return log_path.read_text(encoding="utf-8")
