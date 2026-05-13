@@ -6,7 +6,7 @@
 - このファイルは **横串インデックス** であり、詳細はリンク先で確認すること。
 - 着手する際は HISTORY に Proposal を起票（変更ゲート対象の場合）→ PLAN にフェーズ追加 → 実装、の順で進める。
 
-最終更新: 2026-05-12（**v0.5.0 release 済 (2026-05-07)** — R-1 (v3-17〜v3-22) / R-2 (v3-23〜v3-24) / R-4.1 (v3-25) すべて着地、HISTORY P-0099 / P-0102 / P-0103。`issue-cleanup-plan-2026-05-10.md` の Wave 1〜6 もほぼ完了（Wave 6 残は #451 JobStore 分割 / #453 docs reconcile / #452 gated 2 件 / #495）。残る v0.5 phase は **v3-26 (R-4.2 Pickle compat nightly)** のみ。次の節目候補は **v0.6**: 第 2 backend (#403)、Tailwind v4 (#125)、P-0087 Phase 3、typed error 体系 (R-3.1〜R-3.3) など）
+最終更新: 2026-05-13（**v0.5.0 release 済 (2026-05-07)** + **`issue-cleanup-plan-2026-05-10.md` Wave 1〜6 完了** — Wave 6.4 #451 JobStore 分割 (PR #499〜#503: `services/jobs.py` 1062→522 行 + 4 module 化) / Wave 6.5 #453 docs reconcile (PR #497) 着地。Wave 6 の残りは **#452 の `lifecycle_mixin.tune` 分割（2nd-adapter 議論後に gated）** と **#495（#456 L5 weekly stale-doc cron, deferred tier-3）** のみ。残る v0.5 phase は **v3-26 (R-4.2 Pickle compat nightly)**。次の節目候補は **v0.6**: 第 2 backend (#403 残・#452-b 解禁トリガ)、Tailwind v4、P-0087 Phase 3、typed error 体系 (R-3.1〜R-3.3) など）
 
 ---
 
@@ -47,7 +47,7 @@
 | ドキュメント | 役割 | ステータス | 進捗追跡 |
 |---|---|---|---|
 | `docs/gui-e2e-plan.md` | GUI E2E Phase A/B/C/D 計画 | 🟢 Phase A〜D ほぼ完了（B-1〜B-8 + Phase C generator + 22 field 着地、残課題は §4.2「カバー困難」表） | 本 ROADMAP §4 |
-| `docs/issue-cleanup-plan-2026-05-10.md` | Open Issue を 6 Wave で消化する計画（Tune workflow 中心） | 🟢 Wave 1〜6 ほぼ完了（残: #451 JobStore 分割 / #453 docs reconcile / #452 gated 2 件 / #495 — §5・§7 参照） | 本ドキュメント自体 |
+| `docs/issue-cleanup-plan-2026-05-10.md` | Open Issue を 6 Wave で消化する計画（Tune workflow 中心） | 🟢 Wave 1〜6 完了。残りは #452-b（2nd-adapter gated）+ #495（deferred tier-3）のみ — それらが片付いたら Tier 5 へ | 本ドキュメント自体 |
 | `docs/v3-20-tune-resume-design.md` | v3-20 (R-1.4 Tune resume) 設計レビュー資料 | 🟢 shipped（v0.5.0 で v3-20a〜g 着地）— Tier 5 相当 | — |
 
 ### Tier 5: アーカイブ（完了済み・参照のみ）
@@ -108,7 +108,9 @@
 
 | 完了日 | ID | タイトル | 主要 PR |
 |---|---|---|---|
-| 2026-05-12 | Wave 6 (#403/#456) | metric-compat を `BackendCore` capability の裏へ (P-0106) + stray-file gate + orphan-golden gate + `workspace_reset` / `_run_job_core` の helper 分割 (#452 partial) | #490 / #491 / #492 / #493 / #494 |
+| 2026-05-13 | Wave 6.4 (#451) | `services/jobs.py` (1062→522 行) を 4 module に分割 — `JobMetadataStore` / `ActiveJobSlot` / `JobControlFlags` / `JobLineage` + thin orchestrator façade。backend 最後の god-class 解消（"C-level closing chapter"） | #499 / #500 / #501 / #502 / #503 |
+| 2026-05-13 | Wave 6.5 (#453) + 6.3-a (#452) | BLUEPRINT / arch-as-implemented / v0.4-business-readiness / ROADMAP を v0.5.0 state に reconcile (#497) + `subprocess_runner.run_job_in_subprocess` を helper 分割 (#498) | #497 / #498 |
+| 2026-05-12 | Wave 6.1-6.3 (#403/#456/#452) | metric-compat を `BackendCore` capability の裏へ (P-0106) + stray-file gate + orphan-golden gate + `workspace_reset` / `_run_job_core` の helper 分割 | #490 / #491 / #492 / #493 / #494 |
 | 2026-05-12 | P-0104〜P-0106 | Tune workflow 全面整備（Re-tune UX + canonical defaults + validation guardrails + LizyML v0.15 SSOT 連動）+ Residuals kind selector + metric-compat capability | 多数（Wave 1〜5）。HISTORY §P-0104〜§P-0106 |
 | 2026-05-12 | LizyML v0.15.0 連動 | `LGBMProvider.objective_choices/metric_choices/parameter_bounds` を UiSchema 経由で SSOT 化、Studio hardcoded master 削除（D3/D7） | (Wave 3.1b) |
 | 2026-05-07 | **v0.5.0 release** | Reliability release — Tune 24h+ resumability + server restart recovery + WS reconnect + browser reload restoration + format_version CI gate + CVE patch round | #416〜#438（多数）, release merge |
@@ -263,13 +265,11 @@
 
 ## 5. アクティブ：Open Issues
 
-v0.5.0 リリース + Wave 6 進行後の Open Issue は **6 件**（#27 / #28 / #125 は 2026-05-04 close 済、#360 / #384 / #403 / #404 / #405 も close 済）。
+Wave 6 完了後の Open Issue は **4 件**（#451 / #453 は 2026-05-13 close 済、#27 / #28 / #125 は 2026-05-04 close 済、#360 / #384 / #403 / #404 / #405 も close 済）。
 
 | Issue | タイトル | priority | 推奨アクション |
 |---|---|---|---|
-| **#451** | refactor(backend): split JobStore (`services/jobs.py` 1062 行) into focused modules | tier-4 / medium | **Wave 6.4** — v0.5 R-1 着地済で解禁。5 sub-PR（`_job_*.py`: `JobMetadataStore` / `ActiveJobSlot` / `JobControlFlags` / `JobLineage` + thin orchestrator）、§7 Tier 1 候補 2 |
-| **#452** | refactor(backend): reduce 5 over-50-line functions | tier-3 / low | **Wave 6.3** — `_workspace_metric_compatibility_errors`（P-0106 で obsolete）/ `workspace_reset`（#492）/ `_run_job_core`（#493）は完了。残り: `run_job_in_subprocess`（181 行、v3-22 着地済で解禁）/ `lifecycle_mixin.tune`（167 行、2nd-adapter 議論後 — まだ blocked） |
-| **#453** | docs: reconcile BLUEPRINT / architecture-as-implemented / v0.4-business-readiness with v0.5.0 state | tier-2 / medium | **Wave 6.5** — 本 ROADMAP 更新と同 PR で消化 |
+| **#452** | refactor(backend): reduce 5 over-50-line functions | tier-3 / low | **Wave 6.3** — 完了: `_workspace_metric_compatibility_errors`（P-0106 で obsolete）/ `workspace_reset`（#492）/ `_run_job_core`（#493）/ `run_job_in_subprocess`（#498）。残り 1 件: `backends/lizyml/lifecycle_mixin.py::tune`（167 行）— 「2nd-adapter 議論（§3.3）後」に gated |
 | **#474** | validation: surface inverted-range / log+low≤0 search-space errors early (deferred from P-0104 Wave 3.1a) | tier-3 / medium | backend `validate_config` で `parse_space()` に通して `search_space_invalid` を早期 surface |
 | **#488** | Migrate frontend to Vite 8 (Rolldown) — e2e `/api/ws` proxy regression blocks the bump | priority-low / area-frontend | vite は v6 据え置き、dependabot.yml で semver-major ignore（PR #489）。Vite 8 dev server が e2e proxy を壊す（`project_vite8_migration_held`） |
 | **#495** | chore(ops): weekly stale-doc audit cron (#456 L5, deferred follow-up) | tier-3 / low | `scripts/audit_stale_docs.py` + `.github/workflows/audit-stale-docs.yml`（cron weekly）+ tracking issue 自動更新 |
@@ -284,25 +284,24 @@ v0.5.0 リリース + Wave 6 進行後の Open Issue は **6 件**（#27 / #28 /
 | `HISTORY.md` Decision 記録 | ✅ 2026-05-12 P-0106 まで | — | v0.5.0 の P-0099〜P-0103、Tune workflow の P-0104〜P-0106 まで Decision 記録済 |
 | `PLAN.md` v3-N | ✅ 2026-05-12 v3-26 まで | — | v3-16〜v3-26 追加済（v3-26 のみ 🟡 未着手 — R-4.2 Pickle compat nightly） |
 | `docs/architecture.md` / `api.md` / `adapter-guide.md` | ✅ 2026-05-01 reconciled | — | 棚卸し完了。`tests/contract/test_adapter_guide_method_names.py` で adapter-guide.md ↔ Protocol の drift を gating |
-| `docs/architecture-as-implemented.md` | ✅ 2026-05-12 reconciled (Issue #453 / S-4) | — | `paused` state + INV-1〜7 を state diagram に反映、severity envelope hop 図（§5.4）は v0.4.1 で確立済、pause/unpause API + reconcile + format_version 保護を追記 |
+| `docs/architecture-as-implemented.md` | ✅ 2026-05-13 reconciled (Issue #453 / S-4 / #451) | — | `paused` state + INV-1〜7 を state diagram に反映、§5 を #451 後の `JobStore` → `_job_metadata`/`_job_active_slot`/`_job_control_flags`/`_job_lineage` 4-module 構成に更新 |
 | `docs/v0.4-business-readiness-plan.md` | ✅ 2026-05-12 (S-3 — `Status: ✅ shipped 2026-05-07`) | — | R-1 / R-2 / R-4.1 は v0.5.0 着地。残るは R-4.2 (v3-26) と R-3.1〜R-3.3 (v0.6+ deferred) のみ。Tier 5 相当（ファイル移動はしない） |
-| `docs/issue-cleanup-plan-2026-05-10.md` | 🟡 2026-05-12 | 低 | Wave 1〜6 がほぼ完了。Wave 6 残: #451 (JobStore 分割) / #453 (本 reconcile) / #452 gated 2 件 / #495 (#456 L5)。すべて着地後に Tier 5 へ |
-| `MEMORY.md` 古いノート | 🟡 要更新 | 低 | `project_2026_05_12_wave6_progress` まで反映済だが v0.5.0 release / v3-20〜v3-25 着地が memory 未記録（次セッションで反映） |
+| `docs/issue-cleanup-plan-2026-05-10.md` | 🟡 2026-05-13 | 低 | Wave 1〜6 完了。残るは #452-b（2nd-adapter gated）+ #495（deferred tier-3）のみ。それらが片付いたら header に `Status: ✅ shipped` を付けて Tier 5 へ |
+| `MEMORY.md` 古いノート | 🟡 要更新 | 低 | `project_2026_05_12_wave6_progress` まで反映済だが v0.5.0 release / v3-20〜v3-25 着地 + #451 JobStore 分割 + #453 reconcile が memory 未記録（次セッションで反映） |
 | `analysis/` 削除済み | 2026-04 期間 | `python-analyst` ↔ `lizystudio-analyst` パイプライン成果物の置き場が無い | 🟡 意図的削除か要確認、別 issue 検討 |
 
 ---
 
 ## 7. 推奨 Next Action（ROI 順 / 1 PR 単位）
 
-> v0.5.0 リリース完了 (2026-05-07)。`issue-cleanup-plan-2026-05-10.md` Wave 1〜6 もほぼ完了。残るバックログは少数。
+> v0.5.0 リリース完了 (2026-05-07)。`issue-cleanup-plan-2026-05-10.md` Wave 1〜6 完了 (2026-05-13)。残るバックログは少数。
 
 ### Tier 1：直近の着手候補（ROI 順）
 
 1. **v3-26 (R-4.2 Pickle compat nightly CI)** — `PLAN.md` v3-26 の唯一の未着手 v0.5 phase。`.github/workflows/nightly.yml` に過去 N=3 minor の lizyml で fit→現行で load round-trip job、`PICKLE_INCOMPATIBLE` エラーに recovery_hint。これで v0.5 Exit Criteria の format/pickle 互換が完全に gating される（残る Exit #5 = 業務利用 KPI は要 verify）
-2. **#451 JobStore 分割 (Wave 6.4)** — `services/jobs.py` 1062 行を `_job_*.py` 5 module（`JobMetadataStore` / `ActiveJobSlot` / `JobControlFlags` / `JobLineage` + thin orchestrator）に分割。v0.5 R-1 着地済で解禁。5 sub-PR、各 < 400 行、公開 Protocol 不変
-3. **#452 gated 2 件 (Wave 6.3)** — `subprocess_runner.run_job_in_subprocess`(181 行) は v3-22 着地済で解禁。`lifecycle_mixin.tune`(167 行) は 2nd-adapter 議論（§3.3）後（まだ blocked）
-4. **#474** — P-0104 Wave 3.1a deferred: inverted-range / log+low≤0 の search-space エラーを backend `validate_config` で早期 surface
-5. **#495** — #456 L5: weekly stale-doc audit cron（tier-3/low、deferred）
+2. **#474** — P-0104 Wave 3.1a deferred: inverted-range / log+low≤0 の search-space エラーを backend `validate_config` で早期 surface（中規模・独立）
+3. **#495** — #456 L5: weekly stale-doc audit cron（`scripts/audit_stale_docs.py` + `.github/workflows/audit-stale-docs.yml` cron weekly、tracking issue 自動更新。tier-3/low、deferred）
+4. **#452-b `lifecycle_mixin.tune` 分割** — 🔒 2nd-adapter 議論（§3.3）後に解禁。それまで着手しない
 
 ### Tier 2：v0.6 候補（要長期計画）
 
@@ -328,7 +327,7 @@ v0.5.0 リリース + Wave 6 進行後の Open Issue は **6 件**（#27 / #28 /
 | v3-25 | R-4.1 format_version migration matrix CI gate (P-0103) | ✅ 完了 (PR #432 + #434 + #436 + #438) |
 | v3-26 | R-4.2 Pickle compatibility nightly CI | 🟡 **未着手 — 上記 Tier 1 候補 1** |
 
-直近の next: 上記 Tier 1 の **v3-26** または **#451 JobStore 分割**。v0.6 候補は上記 Tier 2 を参照。
+直近の next: 上記 Tier 1 の **v3-26 (Pickle compat nightly)** または **#474 (search-space 早期 validate)**。v0.6 候補は上記 Tier 2 を参照。
 
 ---
 
