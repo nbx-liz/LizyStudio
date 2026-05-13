@@ -148,6 +148,65 @@ class ConfigMixin:
                 )
         return out
 
+    def validate_search_space(self, space: dict[str, Any]) -> list[dict[str, Any]]:
+        """Structural validation of ``tuning.optuna.space`` for lizyml.
+
+        Implements :meth:`BackendCore.validate_search_space` (P-0108,
+        Issue #474). The two structurally-broken cases that
+        ``parse_space()`` rejects are exposed here at the run-gate so
+        the user sees "Fix validation errors first" with a concrete
+        suggested_fix instead of "All tuning trials failed" deep in the
+        Optuna loop.
+
+        Out of scope (mirrored from the Protocol docstring): empty
+        categorical ``choices``. The frontend's ``empty-choice-banner``
+        already owns that UX, so we tolerate / drop the
+        empty-categorical entries before calling ``parse_space()``
+        (which itself rejects them with a CONFIG_INVALID error). This
+        keeps ``PUT /config`` permissive for in-progress edits — the
+        save gate (P-0089) is permissive; only the run-gate is strict.
+
+        The function evaluates each entry independently so a single
+        broken row does not mask drift in the rest of the space.
+        """
+        from lizyml.core.exceptions import LizyMLError
+        from lizyml.tuning import parse_space
+
+        if not isinstance(space, dict) or not space:
+            return []
+
+        out: list[dict[str, Any]] = []
+        for name, raw in space.items():
+            if not isinstance(raw, dict):
+                continue
+            # Filter out the frontend-owned empty-choices state. lizyml's
+            # parse_space() would reject this, but the Studio gate must
+            # not — see the docstring + PR #473 post-mortem.
+            if (
+                raw.get("type") == "categorical"
+                and isinstance(raw.get("choices"), list)
+                and len(raw["choices"]) == 0
+            ):
+                continue
+            try:
+                parse_space({name: raw})
+            except LizyMLError as exc:
+                # Only structural CONFIG_INVALID rejections belong on the
+                # run-gate envelope. Anything else propagates so the API
+                # layer wraps it as 500 (a lizyml-internal bug must not
+                # be misreported as a user input error).
+                if getattr(exc.code, "value", None) != "CONFIG_INVALID":
+                    raise
+                out.append(
+                    {
+                        "path": f"tuning.optuna.space.{name}",
+                        "message": exc.user_message,
+                        "severity": "error",
+                        "suggested_fix": _suggested_fix_for_space_error(name, raw),
+                    }
+                )
+        return out
+
     @staticmethod
     def _strip_internal_keys(config: dict[str, Any]) -> dict[str, Any]:
         """Thin shim around :func:`strip_internal_keys` kept for backward
@@ -170,3 +229,40 @@ class ConfigMixin:
             msg = f"Expected a mapping, got {type(data).__name__}"
             raise ValueError(msg)
         return data
+
+
+def _suggested_fix_for_space_error(name: str, raw: dict[str, Any]) -> str:
+    """Concrete remediation text for the two structural errors we surface.
+
+    Lives at module scope so the prose stays out of ``ConfigMixin`` and
+    a second backend (or a future helper) can reuse the strings.
+    """
+    log = bool(raw.get("log"))
+    low = raw.get("low")
+    high = raw.get("high")
+    if (
+        log
+        and isinstance(low, int | float)
+        and not isinstance(low, bool)
+        and float(low) <= 0
+    ):
+        return (
+            f"Either disable log distribution on '{name}', or raise Min above "
+            f"zero (Min={low}). Log distributions require a strictly positive "
+            f"lower bound."
+        )
+    if (
+        isinstance(low, int | float)
+        and isinstance(high, int | float)
+        and not isinstance(low, bool)
+        and not isinstance(high, bool)
+        and float(low) >= float(high)
+    ):
+        return (
+            f"Swap Min and Max for '{name}' (current Min={low}, Max={high}). "
+            f"The lower bound must be strictly less than the upper bound."
+        )
+    return (
+        f"Review the '{name}' search space entry — Min must be < Max, and "
+        f"log distributions require Min > 0."
+    )

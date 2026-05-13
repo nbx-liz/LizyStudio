@@ -3855,3 +3855,86 @@ regression Fit 結果の Residuals plot は現在「1 figure に 3 panel（Actua
 #### Decision
 
 - 2026-05-12 **Approved** — Issue #403 の提案どおり `BackendCore.get_incompatible_metrics` を追加。実装は単一 PR（commit 順: Proposal → `feat(backend)` Protocol+型 → `refactor(services)` thin envelope → `test(backend)` adapter watchlist）。`task` 引数を adapter に渡す設計（Service 層から `task=regression` gate を排除）まで含めて承認 — これにより abstraction が「どの task に適用されるか」も backend 所有になる。
+
+---
+
+### P-0108: 構造的に壊れた search space を `POST /tune` run-gate で 422 する（Issue #474, Change Gate）
+
+- **Date:** 2026-05-13 起票・即承認（Issue #474 で詳細仕様確定済 + アプローチ C 推奨済）
+- **Related:** Issue #474（P-0104 Wave 3.1a deferred）、P-0104 Scope-4 (HISTORY)、PR #473（Wave 3.1a — `parse_space` を `validate_config` に組み込もうとして失敗した記録）、`src/lizystudio/backends/base.py::BackendCore.validate_search_space`、`src/lizystudio/backends/lizyml/config_mixin.py::ConfigMixin.validate_search_space`、`src/lizystudio/services/workspace.py::validate_search_space_for_tune`、`src/lizystudio/api/workspace.py::workspace_tune`、`tests/test_backends_lizyml.py::TestValidateSearchSpace`、`tests/test_workspace_api.py`、`frontend/tests/e2e/workspace-tune.spec.ts:459`、P-0100（severity envelope の前例）、P-0089（save gate immutability）
+
+#### Motivation
+
+`tuning.optuna.space` に structurally-broken な entry（inverted Range = `low >= high`、log distribution + `low <= 0`）が混入すると、`validate_config` を通過して Tune ジョブが起動し、Optuna のループで N 試行繰り返した後に「All tuning trials failed」という deep error が出る。ユーザは「自分の指定のどこがダメだったか」を直接知る術が無い。Issue #474（P-0104 Wave 3.1a deferred、Scope-4）が要求する **「Fix validation errors first」バナーで早期に surface する** は v0.5.0 では未着手のまま develop に残った。
+
+PR #473（Wave 3.1a）でこれを `validate_config` に組み込もうとしたが、`validate_config` は `PUT /config`（save gate）と `POST /fit`/`POST /tune`（run gate）の **両方** から呼ばれるため、save gate に厳格化を被せた結果 `workspace-tune.spec.ts:459` を破壊した（empty-choice categorical の transient 状態と inverted Range の編集中状態が両方とも `saved: false` を返してフォーム revert された）。この経緯から **save gate は permissive のまま、run-gate のみで結束的に reject する** という分離が要件として確定している。
+
+#### Purpose
+
+- `BackendCore` Protocol に `validate_search_space(space: dict[str, Any]) -> list[dict[str, Any]]` を追加。Protocol 本体は `return []`（実装しない backend = 不適合 space ゼロ）を既定とする。
+- lizyml adapter は `parse_space(space)` を per-entry で呼び、`LizyMLError(CONFIG_INVALID)` を `{path: "tuning.optuna.space.<param>", message, severity: "error", suggested_fix}` envelope に map。
+- **categorical `choices: []` は backend 側で完全に filter out** する（frontend の `empty-choice-banner` が UX owner、PR #473 post-mortem で確立した不変条件）。
+- Service 層に `validate_search_space_for_tune(ws, config)` を新設（type narrowing + adapter dispatch のみの thin envelope）。
+- API `POST /api/workspace/tune` で `validate_config` の直後、`create_and_claim_active` の直前に上記 helper を呼び、空でない結果を `ValidationError` に投げる。
+
+#### Invariants
+
+- **INV-search-1 (save gate permissive)**: `PUT /api/workspace/config` は inverted-range / log+low<=0 / empty-choices いずれの WIP も `saved: true` で persist する（Issue #474 + PR #473 post-mortem で確立した制約）。
+- **INV-search-2 (run gate strict)**: `POST /api/workspace/tune` は inverted-range / log+low<=0 の space を 422 `VALIDATION_ERROR` で reject し、`start_tune_async` を絶対に呼ばない。
+- **INV-search-3 (empty-choices is frontend territory)**: `POST /api/workspace/tune` は categorical `choices: []` を **run-gate では追加で flag しない**。既存の経路（schema layer の reject、frontend の empty-choice-banner）に委ねる。
+- **INV-search-4 (envelope shape)**: 各 error は `{path: "tuning.optuna.space.<param>", message, severity: "error", suggested_fix}` の 4 キーを必ず含む（P-0100 envelope と byte-identical）。
+- **INV-search-5 (per-entry isolation)**: 単一 broken row が他の row の drift を mask しない（multiple-violation のとき全 row が returned）。
+
+#### Impact
+
+**共通型 / Protocol (← Change Gate 対象):**
+- `backends/base.py::BackendCore.validate_search_space`: 新メソッド追加。Protocol 本体に `return []` のデフォルト。`BackendAdapter` alias は `BackendCore` を継承しているので自動的に新メソッドを含む。
+
+**Backend (lizyml adapter):**
+- `backends/lizyml/config_mixin.py::ConfigMixin.validate_search_space`: 実装。`lizyml.tuning.parse_space` を per-entry で呼び、`LizyMLError` の `code.value == "CONFIG_INVALID"` のみを user-facing envelope に変換。empty-choices categorical は事前 filter で除外。
+- `backends/lizyml/config_mixin.py::_suggested_fix_for_space_error`: module-level helper。log/low/high の値を読んで「Swap Min and Max」「raise Min above zero」など具体的な remediation 文言を作る。
+
+**Service:**
+- `services/workspace.py::validate_search_space_for_tune`: 新規 thin envelope。`tuning.optuna.space` の type narrowing と adapter dispatch のみ。`validate_config` は **意図的に無改変** (save gate permissive 保持)。
+
+**API:**
+- `api/workspace.py::workspace_tune`: `validate_config` の直後に `validate_search_space_for_tune(ws, ws.config)` を呼び、空でない結果を既存の `ValidationError` envelope に flow。
+
+**Tests:**
+- `tests/test_backends_lizyml.py::TestValidateSearchSpace` (新規 9 ケース): 空 space / non-dict / valid / inverted range / log+low=0 / log+low<0 / empty-choices drop / multiple-violation / non-dict entry。
+- `tests/test_workspace_api.py` (新規 4 ケース): POST /tune inverted-range 422 + start_tune_async 未呼び出し、log+low=0 422、empty-choices accept-or-other-validator (run-gate は flag しない)、PUT /config inverted-range save 200.
+
+**Behavior change for users:**
+- 反転 Range と log+low<=0 の space で Tune を起動しようとすると **422 になり「Fix validation errors first」バナー** に具体的な suggested_fix が出る（旧: Optuna ループの後で「All tuning trials failed」）。
+- 編集中の状態（部分入力）で PUT /config しても従来どおり保存される（INV-search-1）。
+- categorical empty-choices の挙動は不変（frontend の empty-choice-banner が disable する）。
+
+**Compatibility:**
+- 後方互換。新 Protocol method は本体に default `return []` を持つので 2nd backend（既存 + 将来）に非破壊。lizyml の挙動拡張は run-gate のみ。
+- HTTP envelope shape は P-0100 と同じ（既存 frontend 表示 path で render される）。
+
+#### Acceptance criteria
+
+- [x] `BackendCore.validate_search_space` Protocol method 追加、デフォルト `return []`、`BackendAdapter` alias へ伝播。
+- [x] lizyml adapter が inverted-range / log+low<=0 を classify、empty-choices categorical は filter out。
+- [x] Service `validate_search_space_for_tune` が thin envelope として実装。
+- [x] `POST /tune` が validate_config 後 + create_and_claim_active 前で gate。422 envelope。`start_tune_async` 未呼び出し（テストで明示）。
+- [x] `PUT /config` が引き続き inverted-range / log+low<=0 / empty-choices を `saved: true` で persist（INV-search-1）。
+- [x] `tests/test_backends_lizyml.py::TestValidateSearchSpace` の 9 ケース + `tests/test_workspace_api.py` の 4 ケース pass。
+- [x] `frontend/tests/e2e/workspace-tune.spec.ts:459`（Choice mode seeds + gates Tune when emptied）regression 無し（local backend pytest level で empty-choices invariant 確認、CI で e2e 走行）。
+- [x] `uv run pytest` / `uv run ruff check .` / `uv run ruff format --check .` / `uv run mypy src/lizystudio/` 全 green。
+- [ ] BLUEPRINT.md §3.3.2 の adapter capability 一覧に `validate_search_space` を追記（次の reconcile タイミング、本 PR では HISTORY 起票 + 実装で十分）。
+
+#### Alternatives considered
+
+- **(a, rejected): `parse_space` を `validate_config` 内で unconditionally 呼ぶ** — PR #473 で試行 → save gate を破壊（empty-choices と transient inverted-range で `saved: false` 連発、frontend が revert）。
+- **(b, considered)**: `search_space_invalid` を `severity: "warning"` で `validate_config` から出し、frontend で Tune button を disable する。
+    - Pros: 既存 validate envelope を再利用、frontend で gating 完結
+    - Cons: 「警告だが run-gate でもブロック」という挙動分裂、severity の semantics が崩れる、PR #473 の empty-choices 問題が再発（transient 状態でも warning が出続ける）
+- **(c, ADOPTED — Issue #474 推奨)**: `validate_config` は無改変、`POST /tune` 直前で run-gate 専用 helper を呼ぶ。
+    - Pros: save / run の責務が明確に分離、empty-choices は frontend 所有のまま、既存 envelope を再利用、e2e regression なし
+    - Cons: validate helper が 2 つになる（`validate_config` + `validate_search_space_for_tune`）が、責務が分かれているので drift しにくい
+
+#### Decision
+
+- 2026-05-13 **Approved** — Issue #474 の Approach C（run-gate only）で実装。実装は単一 PR（commit 順: Proposal + 全実装一括 + test）。`task` / `target` 等の文脈情報は本 method には渡さない（純粋な structural check）。将来 2nd backend が同じ Protocol を実装するとき、その backend の search-space DSL に固有な検証はその adapter 内に閉じる（lizyml の `parse_space` への coupling は backend 内に留まる）。

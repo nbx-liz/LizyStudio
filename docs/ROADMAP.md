@@ -298,10 +298,11 @@ Wave 6 完了後の Open Issue は **4 件**（#451 / #453 は 2026-05-13 close 
 
 ### Tier 1：直近の着手候補（ROI 順）
 
-1. **v3-26 (R-4.2 Pickle compat nightly CI)** — `PLAN.md` v3-26 の唯一の未着手 v0.5 phase。`.github/workflows/nightly.yml` に過去 N=3 minor の lizyml で fit→現行で load round-trip job、`PICKLE_INCOMPATIBLE` エラーに recovery_hint。これで v0.5 Exit Criteria の format/pickle 互換が完全に gating される（残る Exit #5 = 業務利用 KPI は要 verify）
-2. **#474** — P-0104 Wave 3.1a deferred: inverted-range / log+low≤0 の search-space エラーを backend `validate_config` で早期 surface（中規模・独立）
-3. **#495** — #456 L5: weekly stale-doc audit cron（`scripts/audit_stale_docs.py` + `.github/workflows/audit-stale-docs.yml` cron weekly、tracking issue 自動更新。tier-3/low、deferred）
-4. **#452-b `lifecycle_mixin.tune` 分割** — 🔒 2nd-adapter 議論（§3.3）後に解禁。それまで着手しない
+1. **v3-26 (R-4.2 Pickle compat nightly CI)** — 着手中（PR #506、`feat/v3-26-pickle-compat-nightly`）。残るは Tier 2。
+2. **#495** — #456 L5: weekly stale-doc audit cron（`scripts/audit_stale_docs.py` + `.github/workflows/audit-stale-docs.yml` cron weekly、tracking issue 自動更新。tier-3/low、deferred）
+3. **#452-b `lifecycle_mixin.tune` 分割** — 🔒 2nd-adapter 議論（§3.3）後に解禁。それまで着手しない
+
+> ~~#474 (P-0104 deferred — search-space 早期 validate)~~ ✅ 着手中 (`feat/474-search-space-run-gate-validation` / P-0108) — `BackendCore.validate_search_space` 追加 + `POST /tune` run-gate で 422、`PUT /config` は引き続き permissive。
 
 ### Tier 2：v0.6 候補（要長期計画）
 
@@ -333,7 +334,7 @@ Wave 6 完了後の Open Issue は **4 件**（#451 / #453 は 2026-05-13 close 
 
 ## 8. 運用メモ
 
-- 新規 Proposal を起票するときは **P-0107 から採番**（P-0106 = metric-compat を `BackendCore` capability の裏へ、2026-05-12 で消化済）。`H-XXXX` 採番は終了。
+- 新規 Proposal を起票するときは **P-0109 から採番**（P-0108 = search-space run-gate / Issue #474、2026-05-13 で着手）。`H-XXXX` 採番は終了。
 - 新規 PLAN フェーズは **v3-27 以降**を採番（v3-26 = R-4.2 Pickle compat、まだ 🟡 未着手）。
 - E2E 単独追加（仕様変更なし）は HISTORY 起票不要、本 ROADMAP の §3 を更新するだけで OK。
 - 本 ROADMAP はステータス変更時に都度更新。タスク完了時は §1 へ移動、新規着手時は §2/§3/§4 へ追加する。
