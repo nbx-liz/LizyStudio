@@ -255,8 +255,22 @@ class ParentHasActiveChildrenError(StudioError):
 # --- FastAPI exception handlers ---
 
 
-async def studio_error_handler(_request: Request, exc: StudioError) -> JSONResponse:
-    """Convert StudioError to the standard JSON envelope."""
+async def studio_error_handler(request: Request, exc: StudioError) -> JSONResponse:
+    """Convert StudioError to the standard JSON envelope.
+
+    Also emits a WARNING-level log line (Issue #513) so 4xx domain
+    errors are visible to operators after the fact. ``details`` is
+    deliberately excluded from the WARNING channel because it can
+    carry user-supplied input (paths, validation snippets); the
+    envelope shape itself is unchanged.
+    """
+    _backend_logger.warning(
+        "StudioError %s (%d) at %s %s",
+        exc.code,
+        exc.status_code,
+        request.method,
+        request.url.path,
+    )
     return JSONResponse(
         status_code=exc.status_code,
         content={
