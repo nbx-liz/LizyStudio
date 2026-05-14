@@ -4009,3 +4009,134 @@ PR #473（Wave 3.1a）でこれを `validate_config` に組み込もうとした
 #### Decision
 
 - 2026-05-13 **Approved** — Issue #474 の Approach C（run-gate only）で実装。実装は単一 PR（commit 順: Proposal + 全実装一括 + test）。`task` / `target` 等の文脈情報は本 method には渡さない（純粋な structural check）。将来 2nd backend が同じ Protocol を実装するとき、その backend の search-space DSL に固有な検証はその adapter 内に閉じる（lizyml の `parse_space` への coupling は backend 内に留まる）。
+
+### P-0109: Tune 派生デフォルトの backend SSOT 化（Change Gate）
+
+- **Date:** 2026-05-14 起票（awaiting alignment）
+- **Related:** [Bug 2026-04-14 Fix 3](HISTORY.md)（TuneEvaluationSection の defensive direction sync を導入した経緯）、P-0092（ConfigForm cross-hook write funnel）、P-0104 Wave 2.3 / Issue #459（TASK_DEFAULT_METRICS の frontend seed）、P-0108 (`BackendCore.validate_search_space` の Protocol 拡張パターン)、P-0106 (`BackendCore.get_incompatible_metrics` の capability 化 pattern)、`frontend/src/components/workspace/TuneTab.tsx` の auto-populate useEffect、`frontend/src/components/workspace/TuneEvaluationSection.tsx` の defensive sync + metrics seed、`frontend/src/hooks/useConfigWriteFunnel.ts::coalesceByReason`、`frontend/src/hooks/useModelPanelData.ts::handleConfigChange`、`src/lizystudio/api/workspace.py::workspace_tune` の `tuning: {}` inject 経路、`src/lizystudio/services/training.py::_prepare_tune_config` の direction 再解決、`src/lizystudio/backends/lizyml_ui_schema.py::search_space_catalog`
+
+#### Motivation
+
+Tune タブを初めて開いた瞬間、`search_space_catalog` に `default_mode: "range"` で定義された 13 パラメータが **すべて Fixed モードで表示される** バグが報告された（2026-05-14 動作確認）。再現と原因調査の結果、症状の下に **4 つの構造的アンチパターン** が積み重なっていることが分かった:
+
+1. **派生 state の三重定義** — `tuning.optuna.space`（= `(task, catalog)` の純粋関数）、`tuning.optuna.params.direction`（= `(task, optimization_metric, metric_direction)` の純粋関数）、`tuning.evaluation.metrics`（= `(task, eval_metric_options)` の純粋関数）は全て derived state にも関わらず、入力データ (catalog / metric_direction) を所有する backend ではなく frontend の 3 useEffect で独立に再計算される。SSOT 違反。
+2. **Lazy materialization が複数地点に散在** — frontend のタブマウント時 (3 effect)、backend `/workspace/tune` の `tuning is None` 経路で `space: {}` inject ([workspace.py:692-700](src/lizystudio/api/workspace.py#L692-L700))、backend `_prepare_tune_config` での direction 強制再解決 ([Bug 2026-04-14 Fix 2](HISTORY.md))。同じ derived state を 3 ヶ所で別の論理で materialize しているため、整合性が偶発的にしか保たれない。
+3. **不変条件が明文化されていない** — 「target/task が確定した瞬間、`tuning.optuna.space` は catalog の range/choice エントリで埋まっているべし」という invariant がどこにも declared されていない。CLAUDE.md `rules/common/invariants-first.md` の対象（派生 state + 同時実行）であるにも関わらず、invariant 抜きで実装が積み重なった。
+4. **`kind: "replace"` の意味論的濫用** — WriteFunnel の `replace` は「ユーザー編集による全置換」用の API。derived な auto-populate を `replace` で送ると stale closure を全置換する形になり、`coalesceByReason` の last-write-wins セマンティクスで容易に蒸発する。同 frame で 4 件 enqueue → 1 件に潰れ → search space が失われる。
+
+具体的な race のトレース（debug log 採取済）:
+
+```
+T=4113ms  HCC entry newHasSpace=false  ← effect② direction (init)
+T=4114ms  HCC entry newHasSpace=false  ← effect③ metrics seed
+T=4114ms  TuneTab auto-init: defaultSpace keys=[13 items]
+T=4115ms  HCC entry newHasSpace=true   ← effect① space
+T=4116ms  HCC entry newHasSpace=false  ← effect② re-fire (autoDirection changed by ③)
+T=4116ms  re-render: searchSpaceKeys=0 (space lost in coalesce)
+```
+
+`spaceInitialized.current = true` が立った後は二度と回復しないため、ユーザは UI 上で永久に Fixed 行を見続けることになる。
+
+既存の単体テスト ([TuneTab.test.tsx:448 "auto-initializes search space from catalog entries with default_mode=range"](frontend/src/components/workspace/TuneTab.test.tsx#L448)) は **PASS する**。`vi.fn()` を直接 `onChange` に渡すため WriteFunnel を経由せず、race の構造が再現されない（test gap）。
+
+#### Purpose
+
+- 派生 state の materialization を **backend 一意** に移し、frontend からは **derive ロジック自体を削除**する。「Tune タブを開いた瞬間に何が見えるべきか」は backend が `PUT /workspace/config` のレスポンスとして決定する。
+- `BackendCore` Protocol に `get_tuning_defaults(task: str) -> TuningDefaults` を追加。`TuningDefaults` は共通型として `space` / `evaluation_metrics` / `direction` を含む。
+- `service.set_config` で task 遷移（None→T or T1→T2）を検出し、adapter の defaults と payload 側のユーザー編集を **merge_preserving_user_edits** で合成して永続化。
+- 既存 frontend の 3 useEffect（TuneTab の search space init、TuneEvalSection の defensive direction sync、TuneEvalSection の metrics seed）を **物理削除**。`spaceInitialized` / `defaultsSeededRef` / `prevTuningRef` / `TASK_DEFAULT_METRICS` も削除。
+- 既存 backend のレガシー injection 経路（`workspace_tune` の `space: {}` inject、`_prepare_tune_config` の direction auto-resolve）を **削除**。INV により redundant。
+
+#### Invariants
+
+- **INV-T1 (derived state SSOT)**: `task != null` な workspace では、`tuning.optuna.space` の各 catalog エントリ部分は **`backend.get_tuning_defaults(task).space` とユーザー編集差分の合成結果と常に一致する**。frontend は backend が返した値を表示するだけ。
+- **INV-T2 (materialize on task transition)**: `PUT /api/workspace/config` で `task` が None→T もしくは T1→T2 に遷移する payload を受け取った場合、200 レスポンスの `config.tuning` は INV-T1 を満たす完全形で返る。ユーザーが既に編集した `n_trials` / `timeout` / `space[key]` は保存され、上書きされない（merge_preserving_user_edits）。
+- **INV-T3 (direction 写像の単一性)**: `tuning.optuna.params.direction` は `evaluation.metrics[0]` と `metric_direction[task]` から一意に決まる（写像 `f(task, m) -> "maximize" | "minimize"`）。backend `_prepare_tune_config` も UI 表示も同じ写像を使う。frontend に独立した実装は存在しない。
+- **INV-T4 (frontend は描画のみ)**: TuneTab / TuneEvalSection は `tuning` を **読むだけ** であり、`tuning.*` のいかなる初期化 / seed / defensive sync useEffect も持たない。ユーザー操作（メトリック chip クリック等）に応じた書き込みは引き続き存在するが、それは「ユーザー編集」であり derived state ではない。
+- **INV-T5 (adapter ownership)**: 各 backend adapter は自身の derived defaults を `get_tuning_defaults` で宣言する。将来 2nd adapter が来ても frontend に adapter-specific 分岐は発生しない。
+
+#### Impact
+
+**共通型 / Protocol（← Change Gate 対象）:**
+- `backends/base.py`:
+  - 新 dataclass `TuningDefaults(space: dict[str, SpaceEntry], evaluation_metrics: list[MetricEntry], direction: Literal["maximize", "minimize"] | None)`。`SpaceEntry` / `MetricEntry` は既存の共通型を再利用。
+  - `BackendCore.get_tuning_defaults(self, task: str) -> TuningDefaults`: 新 Protocol method。本体に safe default（空 defaults）を提供して 2nd backend の前方互換を保つ。
+
+**Backend (lizyml adapter):**
+- `backends/lizyml/config_mixin.py::ConfigMixin.get_tuning_defaults`: 実装。`lizyml_ui_schema.search_space_catalog` を読んで range/choice エントリから `SpaceEntry` を構築。`TASK_DEFAULT_METRICS`（現在 frontend 定数）を adapter 側に移管。`direction` は metric_direction との合成で決定。
+
+**Service:**
+- `services/workspace.py`:
+  - `_materialize_tuning_defaults(payload, adapter, prev_task)` ヘルパー新設。task 遷移検出 + merge_preserving_user_edits。
+  - `set_config` で payload の task が変化したら `_materialize_tuning_defaults` を通す。**save gate の permissive 性は維持**（INV-search-1 と整合: 編集中の inverted-range などは保存される。derived defaults の materialize は task transition だけが trigger）。
+- `services/training.py::_prepare_tune_config`: direction 強制再解決ロジックは **削除可能**（INV-T3 が contract 化されたため redundant）。**ただし** post-config-edit の defense-in-depth として残す選択肢もあり、Decision で判断（draft 案: 削除 → 必要なら e2e で検出して fallback 再導入）。
+
+**API:**
+- `api/workspace.py::workspace_tune`: `if ws.config.get("tuning") is None: ... space: {}` inject 経路を **削除**（INV-T1 が保証）。`validate_search_space_for_tune` は引き続き run-gate validator として呼ばれる（P-0108 と整合）。
+- `api/workspace.py::workspace_config_update`（PUT /config）: service 層の `_materialize_tuning_defaults` を経由した結果がレスポンスに乗る。API ハンドラ自体は薄い shim のまま。
+
+**Frontend (削除中心):**
+- `components/workspace/TuneTab.tsx`:
+  - `spaceInitialized` / `prevTuningRef` / 2 つの auto-populate useEffect を削除（~50 行）
+  - `searchSpace` は引き続き `tuning.optuna.space` から読むのみ
+- `components/workspace/TuneEvaluationSection.tsx`:
+  - defensive direction sync useEffect を削除（~20 行）
+  - metrics seed useEffect を削除（~30 行）
+  - `defaultsSeededRef` / `TASK_DEFAULT_METRICS` / `buildEntry` の seed パスを削除
+- 期待 LoC 削減: 約 100 行
+
+**Tests:**
+- `tests/test_backends_lizyml.py::TestGetTuningDefaults` (新規): adapter が catalog から正しい defaults を構築するか（binary / multiclass / regression それぞれ）、direction が metric_direction と一致するか、未対応 task で空 defaults を返すか。
+- `tests/test_workspace_api.py` (新規): PUT /config で task 遷移時に response が INV-T1 を満たすか、ユーザー編集の n_trials/timeout/space[key] が preserve されるか、`tuning: null` で送られた payload で task 遷移を伴う場合に backend が materialize するか。
+- `tests/test_workspace_service.py` (新規): `_materialize_tuning_defaults` の merge semantics（key-level の preserve）、prev_task == new_task の no-op、None→T 初回 materialize 動作。
+- 既存 frontend test 整理: TuneTab.test.tsx の auto-populate 系テスト群（line 448 + line 521 + line 554 + line 827）は obsolete として削除し、代わりに「backend から populated tuning が来た config を render するだけ」のテストに置換。
+
+**Behavior change for users:**
+- Tune タブを開いた瞬間に **search space が catalog defaults で Range/Choice モード表示**される（旧: 全 Fixed の状態が表示され続けていた）。
+- backend が direction を `tuning.optuna.params.direction` に書き込むので、Tune タブの direction badge は常に正しい値を表示（旧: 一瞬 stale な値を表示することがあった）。
+- ユーザーが既に編集した tune config は **何も触られない**（INV-T2、merge semantics）。
+
+**Compatibility:**
+- `tuning: null` の workspace（v0.6 以前で作成済 + 未編集）は次の `PUT /config` で task 遷移を経由した際に materialize される。**自動マイグレーションは不要**（既存実行経路で問題が起きない）。
+- format_version は変更しない。
+- 2nd backend は `BackendCore.get_tuning_defaults` のデフォルト実装で `TuningDefaults(space={}, evaluation_metrics=[], direction=None)` を返す → 旧挙動と同じ（empty tuning が permitted）。
+- HTTP envelope shape 不変。frontend type は openapi-typescript で `TuningDefaults` を自動取得。
+
+**Documentation:**
+- BLUEPRINT.md §3.3.2 (adapter capability matrix) に `get_tuning_defaults` を追記。
+- BLUEPRINT.md §6 / §7 の Tune workflow 図に「materialize は service 層で task transition 時に起こる」を追記。
+- docs/architecture-as-implemented.md に「frontend は tuning derived state を計算しない」を追記。
+
+#### Acceptance criteria
+
+- [ ] `BackendCore.get_tuning_defaults(task) -> TuningDefaults` を Protocol に追加、safe default で `BackendAdapter` 経由の 2nd backend 互換を確認。
+- [ ] `LizyMLAdapter` が binary / multiclass / regression それぞれで catalog 由来の `TuningDefaults` を返す（unit test）。
+- [ ] `service.set_config` が task 遷移を検出し `_materialize_tuning_defaults` を呼ぶ。merge_preserving_user_edits が ユーザー編集分（n_trials / timeout / 個別 space[key]）を破壊しない（unit test）。
+- [ ] `PUT /api/workspace/config` が task 遷移を伴う payload に対して INV-T1/T2 を満たすレスポンスを返す（integration test）。
+- [ ] `POST /api/workspace/tune` の `if tuning is None` inject 経路を削除しても既存 e2e (`workspace-tune.spec.ts`) が green。
+- [ ] frontend の 3 useEffect を物理削除し、`tuning.optuna.space` が catalog defaults で表示されることを e2e で確認（新規 spec or 既存に assertion 追加）。
+- [ ] WriteFunnel の `kind: "replace"` を derived state に使う経路がコード上から消える（grep ベースで verify）。
+- [ ] `uv run pytest` / `pnpm test` / `pnpm test:e2e` / `uv run mypy src/lizystudio/` / `uv run ruff check .` / `pnpm check` 全て green。
+- [ ] BLUEPRINT.md §3.3.2 reconcile が同 PR の末尾コミットで完了。
+
+#### Alternatives considered
+
+- **(a, rejected): frontend 内で 3 effect を 1 つに統合（Approach L）** — race は構造的に消えるが、(1) 派生 state の重複定義は残る、(2) 2nd backend に対し frontend の `TASK_DEFAULT_METRICS` がポータブルでない、(3) `kind: "replace"` の濫用も残る。**短期 bugfix としては成立するが、本質的なアーキテクチャ問題を温存**するため不採用。
+- **(b, rejected): WriteFunnel に `kind: "merge"` を追加して deep-merge coalescing にする** — race は解消するが、(1) WriteFunnel API の semantics が複雑化、(2) 派生 state の重複定義は残る、(3) backend SSOT 原則に到達しない。
+- **(c, rejected): patch + 個別 reason 化（Approach A）** — race は解消するが、(b) と同様に派生 state の SSOT 問題は残る。さらに `WriteReason` enum が agent-specific な意図に侵食される。
+- **(d, ADOPTED): backend SSOT** — 派生 state の住所を入力データ (catalog) のある backend に移し、frontend からは導出ロジックを物理削除。race を「導出 effect が存在しない」という構造で eliminate。INV を明示。将来 2nd backend にも contract で対応。
+
+#### Decision
+
+- 2026-05-14 **Proposed (awaiting alignment)** — 単一 PR ではなく **複数 PR 連鎖** で進める。理由: Protocol 変更 + adapter 実装 + service 層 + frontend 削除 + e2e 確認の各レイヤで blast radius が大きく、レビュー単位を分けたほうが review quality が保てる。
+  - PR-1: Proposal-only (本 PR、`[docs-only]`)
+  - PR-2: 共通型 `TuningDefaults` + `BackendCore.get_tuning_defaults` Protocol 追加（safe default）
+  - PR-3: `LizyMLAdapter.get_tuning_defaults` 実装 + unit tests
+  - PR-4: `service.set_config` の task 遷移検出 + `_materialize_tuning_defaults` + integration tests
+  - PR-5: frontend の 3 useEffect 削除 + e2e 確認 + test 整理
+  - PR-6: BLUEPRINT.md / architecture-as-implemented.md reconcile + Decision 更新（"Approved & shipped"）
+- Open questions（PR-2 までに resolve すべき）:
+  - **Q1**: `_prepare_tune_config` の direction 強制再解決は削除するか defense-in-depth として残すか? → 推奨: 削除（INV-T3 を contract 化し violators は test で検出）。
+  - **Q2**: `tuning` を `TuningConfig | None` から非 null 化するか? → 本 Proposal の scope 外。invariant 化 (task != null ⇒ tuning != null) で十分。Pydantic シグネチャの厳格化は v0.7 以降の follow-up。
+  - **Q3**: materialize trigger を「task 遷移」だけにするか「target 遷移」も含めるか? → target が変わると task も自動再判定されるので task 遷移検出のみで十分（task 単独で変わるケースは API 直叩きのみ、frontend からは発生しない）。
+  - **Q4**: ユーザーが catalog 外の param を space に追加していた場合の merge 挙動? → preserve（key-level merge）。catalog 由来の param はユーザーが Fixed mode に変えていなければ materialize で `space[key]` を上書きしない（merge_preserving_user_edits の semantics）。具体実装は PR-4 で詰める。
