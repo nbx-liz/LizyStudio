@@ -4200,7 +4200,7 @@ T=4116ms  re-render: searchSpaceKeys=0 (space lost in coalesce)
 
 #### Decision
 
-- 2026-05-14 **Proposed (Option B, awaiting alignment)** — 単一 PR ではなく **複数 PR 連鎖** で進める。理由: Protocol 拡張 + Pydantic schema rename + storage migration (`format_version` bump) + adapter 実装 + service 層 + API 拡張 + frontend refactor + e2e 確認の各レイヤで blast radius が大きく、レビュー単位を分けたほうが review quality が保てる。
+- 2026-05-14 **Approved (Option B)** — Q1〜Q4 解決済。PR-2 以降の実装に着手可。単一 PR ではなく **複数 PR 連鎖** で進める。理由: Protocol 拡張 + Pydantic schema rename + storage migration (`format_version` bump) + adapter 実装 + service 層 + API 拡張 + frontend refactor + e2e 確認の各レイヤで blast radius が大きく、レビュー単位を分けたほうが review quality が保てる。
   - **PR-1**: Proposal-only (本 PR、`[docs-only]`)
   - **PR-2**: 共通型 `TuningDefaults` / `TuningOverrides` / `TuningConfig` (Pydantic models) + `BackendCore.get_tuning_defaults` / `compute_effective_tuning` Protocol 追加（safe default）
   - **PR-3**: `LizyMLAdapter.get_tuning_defaults` + `compute_effective_tuning` 実装 + 重複 `maximize_metrics` hardcoded set 削除 + INV-T3 assertion 追加 + unit tests
