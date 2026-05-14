@@ -6,7 +6,7 @@
 - このファイルは **横串インデックス** であり、詳細はリンク先で確認すること。
 - 着手する際は HISTORY に Proposal を起票（変更ゲート対象の場合）→ PLAN にフェーズ追加 → 実装、の順で進める。
 
-最終更新: 2026-05-13（**v0.5.0 release 済 (2026-05-07)** + **`issue-cleanup-plan-2026-05-10.md` Wave 1〜6 完了** + **v3-26 (R-4.2 Pickle compat nightly + P-0107 envelope) 着地** — `PLAN.md` v0.5 phase 全消化。Wave 6 の残りは **#452 の `lifecycle_mixin.tune` 分割（2nd-adapter 議論後に gated）** と **#495（#456 L5 weekly stale-doc cron, deferred tier-3）** のみ。直近の Tier 1 next は **#474 (P-0104 deferred search-space 早期 validate)**。次の節目候補は **v0.6**: 第 2 backend (#403 残・#452-b 解禁トリガ)、Tailwind v4、P-0087 Phase 3、typed error 体系 (R-3.1〜R-3.3) など）
+最終更新: 2026-05-13（**v0.6.0 release 済 (2026-05-13, PyPI lizystudio==0.6.0)** + **`issue-cleanup-plan-2026-05-10.md` Wave 1〜6 完了** — `PLAN.md` v0.5 phase 全消化。直近の Tier 1 next は **#513 (StudioError observability、v0.6.0 検証中に発見した 5 行 PR)** / **#495** / 🔒 **#452-b**。次の節目候補は **v0.7+**: 第 2 backend (#403 残・#452-b 解禁トリガ)、Tailwind v4、P-0087 Phase 3、typed error 体系 (R-3.1〜R-3.3) など）
 
 ---
 
@@ -273,6 +273,7 @@ Wave 6 完了後の Open Issue は **4 件**（#451 / #453 は 2026-05-13 close 
 | **#474** | validation: surface inverted-range / log+low≤0 search-space errors early (deferred from P-0104 Wave 3.1a) | tier-3 / medium | backend `validate_config` で `parse_space()` に通して `search_space_invalid` を早期 surface |
 | **#488** | Migrate frontend to Vite 8 (Rolldown) — e2e `/api/ws` proxy regression blocks the bump | priority-low / area-frontend | vite は v6 据え置き、dependabot.yml で semver-major ignore（PR #489）。Vite 8 dev server が e2e proxy を壊す（`project_vite8_migration_held`） |
 | **#495** | chore(ops): weekly stale-doc audit cron (#456 L5, deferred follow-up) | tier-3 / low | `scripts/audit_stale_docs.py` + `.github/workflows/audit-stale-docs.yml`（cron weekly）+ tracking issue 自動更新 |
+| **#513** | observability(api): log every StudioError in `studio_error_handler` (R-3.1 precursor) | enhancement / small | `api/errors.py::studio_error_handler` に WARNING-level log を 1 行追加（`code` / `status_code` / method / path、PII なし）。R-3.1 typed-error 体系（v0.6+ deferred）への precursor。**v0.6.0 検証中に発見した観測性ギャップ**: 4xx 系 StudioError は uvicorn access log のみで `code` が grep できないため、ユーザ報告のエラーが事後追跡不能 |
 
 ---
 
@@ -298,8 +299,9 @@ Wave 6 完了後の Open Issue は **4 件**（#451 / #453 は 2026-05-13 close 
 
 ### Tier 1：直近の着手候補（ROI 順）
 
-1. **#495** — #456 L5: weekly stale-doc audit cron（`scripts/audit_stale_docs.py` + `.github/workflows/audit-stale-docs.yml` cron weekly、tracking issue 自動更新。tier-3/low、deferred）
-2. **#452-b `lifecycle_mixin.tune` 分割** — 🔒 2nd-adapter 議論（§3.3）後に解禁。それまで着手しない
+1. **#513** — `studio_error_handler` に WARNING log を 1 行追加（5 行・観測性インパクト大、R-3.1 precursor）。v0.6.0 検証中に発見した 4xx StudioError が server log に痕跡を残さない問題のクイック対応
+2. **#495** — #456 L5: weekly stale-doc audit cron（`scripts/audit_stale_docs.py` + `.github/workflows/audit-stale-docs.yml` cron weekly、tracking issue 自動更新。tier-3/low、deferred）
+3. **#452-b `lifecycle_mixin.tune` 分割** — 🔒 2nd-adapter 議論（§3.3）後に解禁。それまで着手しない
 
 > ~~v3-26 (R-4.2 Pickle compat nightly CI)~~ ✅ 完了 (PR #506 / P-0107 envelope + `scripts/pickle_compat_matrix.sh` + `.github/workflows/nightly.yml::pickle-compat` job) — v0.5 Exit Criteria の format/pickle 互換が完全に gating された。残る Exit #5 = 業務利用 KPI のみ要 verify
 >
@@ -329,7 +331,7 @@ Wave 6 完了後の Open Issue は **4 件**（#451 / #453 は 2026-05-13 close 
 | v3-25 | R-4.1 format_version migration matrix CI gate (P-0103) | ✅ 完了 (PR #432 + #434 + #436 + #438) |
 | v3-26 | R-4.2 Pickle compatibility nightly CI | ✅ 完了 (feat/v3-26-pickle-compat-nightly / P-0107) |
 
-直近の next: 上記 Tier 1 の **#474 (search-space 早期 validate)**。v0.6 候補は上記 Tier 2 を参照。
+直近の next: 上記 Tier 1 の **#513 (StudioError observability)**。v0.6 候補は上記 Tier 2 を参照。
 
 ---
 
