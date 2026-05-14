@@ -4010,19 +4010,20 @@ PR #473（Wave 3.1a）でこれを `validate_config` に組み込もうとした
 
 - 2026-05-13 **Approved** — Issue #474 の Approach C（run-gate only）で実装。実装は単一 PR（commit 順: Proposal + 全実装一括 + test）。`task` / `target` 等の文脈情報は本 method には渡さない（純粋な structural check）。将来 2nd backend が同じ Protocol を実装するとき、その backend の search-space DSL に固有な検証はその adapter 内に閉じる（lizyml の `parse_space` への coupling は backend 内に留まる）。
 
-### P-0109: Tune 派生デフォルトの backend SSOT 化（Change Gate）
+### P-0109: Tune 派生デフォルトの backend SSOT 化 + intent/effective 分離（Change Gate, `format_version` bump）
 
-- **Date:** 2026-05-14 起票（awaiting alignment）
+- **Date:** 2026-05-14 起票（awaiting alignment）— 同日中に Option B（intent/effective 分離）へスコープ拡大して revise
 - **Related:** [Bug 2026-04-14 Fix 3](HISTORY.md)（TuneEvaluationSection の defensive direction sync を導入した経緯）、P-0092（ConfigForm cross-hook write funnel）、P-0104 Wave 2.3 / Issue #459（TASK_DEFAULT_METRICS の frontend seed）、P-0108 (`BackendCore.validate_search_space` の Protocol 拡張パターン)、P-0106 (`BackendCore.get_incompatible_metrics` の capability 化 pattern)、`frontend/src/components/workspace/TuneTab.tsx` の auto-populate useEffect、`frontend/src/components/workspace/TuneEvaluationSection.tsx` の defensive sync + metrics seed、`frontend/src/hooks/useConfigWriteFunnel.ts::coalesceByReason`、`frontend/src/hooks/useModelPanelData.ts::handleConfigChange`、`src/lizystudio/api/workspace.py::workspace_tune` の `tuning: {}` inject 経路、`src/lizystudio/services/training.py::_prepare_tune_config` の direction 再解決、`src/lizystudio/backends/lizyml_ui_schema.py::search_space_catalog`
 
 #### Motivation
 
-Tune タブを初めて開いた瞬間、`search_space_catalog` に `default_mode: "range"` で定義された 13 パラメータが **すべて Fixed モードで表示される** バグが報告された（2026-05-14 動作確認）。再現と原因調査の結果、症状の下に **4 つの構造的アンチパターン** が積み重なっていることが分かった:
+Tune タブを初めて開いた瞬間、`search_space_catalog` に `default_mode: "range"` で定義された 13 パラメータが **すべて Fixed モードで表示される** バグが報告された（2026-05-14 動作確認）。再現と原因調査の結果、症状の下に **5 つの構造的アンチパターン** が積み重なっていることが分かった:
 
 1. **派生 state の三重定義** — `tuning.optuna.space`（= `(task, catalog)` の純粋関数）、`tuning.optuna.params.direction`（= `(task, optimization_metric, metric_direction)` の純粋関数）、`tuning.evaluation.metrics`（= `(task, eval_metric_options)` の純粋関数）は全て derived state にも関わらず、入力データ (catalog / metric_direction) を所有する backend ではなく frontend の 3 useEffect で独立に再計算される。SSOT 違反。
 2. **Lazy materialization が複数地点に散在** — frontend のタブマウント時 (3 effect)、backend `/workspace/tune` の `tuning is None` 経路で `space: {}` inject ([workspace.py:692-700](src/lizystudio/api/workspace.py#L692-L700))、backend `_prepare_tune_config` での direction 強制再解決 ([Bug 2026-04-14 Fix 2](HISTORY.md))。同じ derived state を 3 ヶ所で別の論理で materialize しているため、整合性が偶発的にしか保たれない。
 3. **不変条件が明文化されていない** — 「target/task が確定した瞬間、`tuning.optuna.space` は catalog の range/choice エントリで埋まっているべし」という invariant がどこにも declared されていない。CLAUDE.md `rules/common/invariants-first.md` の対象（派生 state + 同時実行）であるにも関わらず、invariant 抜きで実装が積み重なった。
 4. **`kind: "replace"` の意味論的濫用** — WriteFunnel の `replace` は「ユーザー編集による全置換」用の API。derived な auto-populate を `replace` で送ると stale closure を全置換する形になり、`coalesceByReason` の last-write-wins セマンティクスで容易に蒸発する。同 frame で 4 件 enqueue → 1 件に潰れ → search space が失われる。
+5. **「ユーザー意図 (intent)」と「実効状態 (effective state)」の persisted 上での conflation** — `tuning.optuna.space[learning_rate] = {low: 0.01, high: 0.3}` が persist されていたとき、それが (a) ユーザーが明示的に設定したのか / (b) catalog default の auto-populate なのか / (c) 過去 catalog の stale な残骸なのか **構造的に区別不可能**。Q4（merge_preserving_user_edits）と Q2（`tuning: TuningConfig | None` の nullability の overload）が解けない真の理由はこれ。catalog が将来進化した際に「ユーザーが設定した値だけ残してそれ以外は最新 catalog を採用」を実装できない。
 
 具体的な race のトレース（debug log 採取済）:
 
@@ -4041,102 +4042,180 @@ T=4116ms  re-render: searchSpaceKeys=0 (space lost in coalesce)
 
 #### Purpose
 
-- 派生 state の materialization を **backend 一意** に移し、frontend からは **derive ロジック自体を削除**する。「Tune タブを開いた瞬間に何が見えるべきか」は backend が `PUT /workspace/config` のレスポンスとして決定する。
-- `BackendCore` Protocol に `get_tuning_defaults(task: str) -> TuningDefaults` を追加。`TuningDefaults` は共通型として `space` / `evaluation_metrics` / `direction` を含む。
-- `service.set_config` で task 遷移（None→T or T1→T2）を検出し、adapter の defaults と payload 側のユーザー編集を **merge_preserving_user_edits** で合成して永続化。
-- 既存 frontend の 3 useEffect（TuneTab の search space init、TuneEvalSection の defensive direction sync、TuneEvalSection の metrics seed）を **物理削除**。`spaceInitialized` / `defaultsSeededRef` / `prevTuningRef` / `TASK_DEFAULT_METRICS` も削除。
-- 既存 backend のレガシー injection 経路（`workspace_tune` の `space: {}` inject、`_prepare_tune_config` の direction auto-resolve）を **削除**。INV により redundant。
+本 Proposal は **「persist するのはユーザー意図 (intent) のみ。実効状態 (effective tuning config) は派生」** という再設計を行う。これにより:
+
+- Tune タブの初期表示バグ（race による空 space）が **構造的に消える**（race の材料となる派生 state を persist しないため）
+- Q2 の `tuning: TuningConfig | None` の nullability overload が **型レベルで解消**（intent は常に空集合スタートで non-null）
+- Q4 の merge_preserving_user_edits の曖昧性が **解消**（intent そのものが「user edits」の定義）
+- catalog 進化が **既存 workspace に自動伝播**（intent に書かれていない field は常に最新 catalog 値）
+- job 再現性が **強化**（job 起動時に effective を snapshot として凍結）
+
+具体的に:
+
+- **データモデル分離**:
+  - `TuningOverrides`: ユーザーの明示的設定。sparse。workspace config に永続化。
+  - `TuningConfig` (effective): catalog defaults + overrides を merge した実効値。GET 時に毎回 compute、persist しない。
+- **Protocol 拡張**:
+  - `BackendCore.get_tuning_defaults(task: str) -> TuningDefaults` — catalog 由来の defaults を提供
+  - `BackendCore.compute_effective_tuning(task, overrides) -> TuningConfig` — pure な merge 関数。各 adapter が自身の semantics で実装
+- **API 契約**:
+  - `GET /workspace/config` レスポンスは `tuning_overrides`（intent 生）+ `tuning_effective`（compute 結果）の両方を返す
+  - `PUT /workspace/config` のリクエスト body は `tuning_overrides` のみを受け取る（`tuning_effective` は read-only）
+- **Job ライフサイクル**:
+  - tune job 起動時に **effective を snapshot として `job.config.tuning` に凍結**。catalog が将来変わっても job は古い値を保持。
+- **frontend の縮退**:
+  - 3 useEffect 物理削除（TuneTab auto-populate、TuneEvalSection direction sync、TuneEvalSection metrics seed）
+  - `TASK_DEFAULT_METRICS` 定数を adapter 側へ移管
+  - display は `tuning_effective`、edit は `tuning_overrides`
+- **`format_version` を 2 → 3 に bump**（data shape 変更）。既存 v2 config を v3 へ migrate するロジックを `storage/migrations.py` に追加。
+- **既存 backend のレガシー injection 経路を削除**:
+  - `workspace_tune` の `if tuning is None: ... space: {}` inject 削除
+  - `_prepare_tune_config` の direction 強制再解決 → assertion 化 (INV-T3 違反を fail-fast で検出)
+  - 重複した `maximize_metrics` hardcoded set ([training.py:165](src/lizystudio/services/training.py#L165)) 削除 → `metric_direction` 経由に一本化
 
 #### Invariants
 
-- **INV-T1 (derived state SSOT)**: `task != null` な workspace では、`tuning.optuna.space` の各 catalog エントリ部分は **`backend.get_tuning_defaults(task).space` とユーザー編集差分の合成結果と常に一致する**。frontend は backend が返した値を表示するだけ。
-- **INV-T2 (materialize on task transition)**: `PUT /api/workspace/config` で `task` が None→T もしくは T1→T2 に遷移する payload を受け取った場合、200 レスポンスの `config.tuning` は INV-T1 を満たす完全形で返る。ユーザーが既に編集した `n_trials` / `timeout` / `space[key]` は保存され、上書きされない（merge_preserving_user_edits）。
-- **INV-T3 (direction 写像の単一性)**: `tuning.optuna.params.direction` は `evaluation.metrics[0]` と `metric_direction[task]` から一意に決まる（写像 `f(task, m) -> "maximize" | "minimize"`）。backend `_prepare_tune_config` も UI 表示も同じ写像を使う。frontend に独立した実装は存在しない。
-- **INV-T4 (frontend は描画のみ)**: TuneTab / TuneEvalSection は `tuning` を **読むだけ** であり、`tuning.*` のいかなる初期化 / seed / defensive sync useEffect も持たない。ユーザー操作（メトリック chip クリック等）に応じた書き込みは引き続き存在するが、それは「ユーザー編集」であり derived state ではない。
-- **INV-T5 (adapter ownership)**: 各 backend adapter は自身の derived defaults を `get_tuning_defaults` で宣言する。将来 2nd adapter が来ても frontend に adapter-specific 分岐は発生しない。
+- **INV-T1 (intent / effective の分離)**: workspace config に永続化されるのは `tuning_overrides: TuningOverrides`（sparse、ユーザー intent のみ）。`tuning_effective: TuningConfig` は GET 応答時または tune 実行時に `compute_effective_tuning(task, overrides)` で都度 compute される派生値であり、workspace 上には永続化されない。
+- **INV-T2 (intent は task 非依存で保持)**: task が None → T、T1 → T2、T → None と遷移しても `tuning_overrides` の中身は **そのまま** 保持される（ユーザー意図は task が変わっても変わらない）。effective は GET / 実行のたびに新 task の catalog で再 compute される。
+- **INV-T3 (direction 写像の単一性)**: `effective.direction` は `(task, effective.evaluation_metrics[0], adapter.get_metric_directions())` から一意に決まる。backend / UI 両方が同じ adapter API 経由でこの値を読む。`training.py::_prepare_tune_config` の hardcoded `maximize_metrics` set および force-resolve ロジックは削除。同 path には `assert effective.direction == expected, ...` を残し、INV 違反を fail-fast で surface する。
+- **INV-T4 (frontend は描画のみ)**: TuneTab / TuneEvalSection は `tuning_effective` を読むだけ。`tuning.*` のいかなる初期化 / seed / defensive sync useEffect も持たない。ユーザー操作（メトリック chip クリック、Range Min/Max 編集等）は `tuning_overrides` への書き込みとして表現される。
+- **INV-T5 (adapter ownership)**: 各 backend adapter は自身の `get_tuning_defaults(task)` と `compute_effective_tuning(task, overrides)` を実装する。frontend には adapter-specific 分岐は **一切** 存在しない。
+- **INV-T6 (job snapshot immutability)**: tune job 起動時に `effective_tuning` が `job.config.tuning` として凍結保存される。catalog が後日進化しても、過去 job の `tuning` 値は **不変**。再現性確保。
+- **INV-T7 (format_version forward compatibility)**: v2 で作成された既存 workspace の `tuning: TuningConfig | None` フィールドは、v3 migration により安全側 (`tuning_overrides` に **全部移送**) で v3 へ変換される。stale な catalog 値が overrides として残ることになるが、ユーザーは何も失わない。catalog defaults との一致を判定して drop する optimistic migration は **しない**（誤判定の害が大きい）。
 
 #### Impact
 
 **共通型 / Protocol（← Change Gate 対象）:**
 - `backends/base.py`:
-  - 新 dataclass `TuningDefaults(space: dict[str, SpaceEntry], evaluation_metrics: list[MetricEntry], direction: Literal["maximize", "minimize"] | None)`。`SpaceEntry` / `MetricEntry` は既存の共通型を再利用。
-  - `BackendCore.get_tuning_defaults(self, task: str) -> TuningDefaults`: 新 Protocol method。本体に safe default（空 defaults）を提供して 2nd backend の前方互換を保つ。
+  - 新 dataclass `TuningDefaults(space: dict[str, SpaceEntry], evaluation_metrics: list[MetricEntry], direction: Literal["maximize", "minimize"] | None)` — adapter が宣言する catalog 由来のデフォルト
+  - 新 Pydantic model `TuningOverrides(n_trials: int | None, timeout: int | None, direction: Literal["maximize","minimize"] | None, space: dict[str, SpaceEntry] = {}, evaluation_metrics: list[MetricEntry] | None)` — workspace に persist される sparse intent
+  - 新 Pydantic model `TuningConfig(n_trials: int, timeout: int | None, direction: Literal["maximize","minimize"], space: dict[str, SpaceEntry], evaluation_metrics: list[MetricEntry], user_set_paths: list[str])` — 派生 effective state。`user_set_paths` は UI が "modified" badge を出すための provenance
+  - `BackendCore.get_tuning_defaults(self, task: str) -> TuningDefaults`: 新 Protocol method。safe default は空 defaults を返す
+  - `BackendCore.compute_effective_tuning(self, task: str, overrides: TuningOverrides) -> TuningConfig`: 新 Protocol method。pure 関数で merge を行う。safe default は `task` が "" のとき空 effective を返す
+
+**Pydantic schema 変更（← Change Gate 対象、`format_version` bump trigger）:**
+- `WorkspaceConfig.tuning: TuningConfig | None` を **削除**
+- `WorkspaceConfig.tuning_overrides: TuningOverrides = Field(default_factory=TuningOverrides)` を **追加**（常に存在、sparse）
+- `Job.config.tuning: TuningConfig` は **残す**（job 起動時の effective snapshot、INV-T6）。job config は workspace config と独立なため、こちらは non-null `TuningConfig`
+
+**Storage migration（← `format_version` 2 → 3）:**
+- `storage/versions.py::STUDIO_FORMAT_VERSION` を 2 → 3 に bump
+- `storage/migrations.py::MIGRATIONS[2]` 追加: v2 → v3 で `tuning: {optuna: {params, space}, evaluation: {metrics}}` を `tuning_overrides: {n_trials, timeout, direction, space, evaluation_metrics}` へ変換。**INV-T7 に従い、catalog defaults との一致判定 drop は行わず、既存 entry は全て overrides として保存**（safe-side migration）
+- `tests/test_format_version_matrix.py` に v2 → v3 のテストケース追加。`docs/format-version-matrix.md` 更新
 
 **Backend (lizyml adapter):**
-- `backends/lizyml/config_mixin.py::ConfigMixin.get_tuning_defaults`: 実装。`lizyml_ui_schema.search_space_catalog` を読んで range/choice エントリから `SpaceEntry` を構築。`TASK_DEFAULT_METRICS`（現在 frontend 定数）を adapter 側に移管。`direction` は metric_direction との合成で決定。
+- `backends/lizyml/config_mixin.py::ConfigMixin.get_tuning_defaults`: 実装。`lizyml_ui_schema.search_space_catalog` を読んで range/choice エントリから `SpaceEntry` を構築。`TASK_DEFAULT_METRICS`（現在 frontend 定数）を adapter 側に移管。`direction` は `get_metric_directions()` × `evaluation_metrics[0]` で算出
+- `backends/lizyml/config_mixin.py::ConfigMixin.compute_effective_tuning`: 実装。
+  - `n_trials`: `overrides.n_trials ?? 50`
+  - `timeout`: `overrides.timeout`（None も valid な user 意図、なので直接代入）
+  - `space`: `{**defaults.space, **overrides.space}` で per-key user 優先 merge
+  - `evaluation_metrics`: `overrides.evaluation_metrics ?? defaults.evaluation_metrics`
+  - `direction`: `overrides.direction ?? compute_from_metric(effective_metrics[0])`
+  - `user_set_paths`: overrides が non-None である path のリスト（"params.n_trials" / "space.learning_rate" 等）
 
 **Service:**
 - `services/workspace.py`:
-  - `_materialize_tuning_defaults(payload, adapter, prev_task)` ヘルパー新設。task 遷移検出 + merge_preserving_user_edits。
-  - `set_config` で payload の task が変化したら `_materialize_tuning_defaults` を通す。**save gate の permissive 性は維持**（INV-search-1 と整合: 編集中の inverted-range などは保存される。derived defaults の materialize は task transition だけが trigger）。
-- `services/training.py::_prepare_tune_config`: direction 強制再解決ロジックは **削除可能**（INV-T3 が contract 化されたため redundant）。**ただし** post-config-edit の defense-in-depth として残す選択肢もあり、Decision で判断（draft 案: 削除 → 必要なら e2e で検出して fallback 再導入）。
+  - `set_config(payload)` は **payload.tuning_overrides をそのまま persist**。task 遷移検出ロジックは **不要**（intent は task に依存しないため、何もしない）
+  - 新 helper `_compute_tuning_effective(ws, adapter)` — GET レスポンス組立時に呼ぶ
+- `services/training.py::_prepare_tune_config`:
+  - direction 強制再解決ロジック → **削除**。代わりに INV-T3 の assertion を残す
+  - 重複 hardcoded `maximize_metrics = {...}` set ([training.py:165-172](src/lizystudio/services/training.py#L165-L172)) **削除** → `adapter.get_tuning_defaults(task).direction` 経由に一本化
+  - tune job 起動時に `effective = adapter.compute_effective_tuning(task, ws.tuning_overrides)` を呼び、`job.config.tuning = effective` として **snapshot 凍結**（INV-T6）
 
 **API:**
-- `api/workspace.py::workspace_tune`: `if ws.config.get("tuning") is None: ... space: {}` inject 経路を **削除**（INV-T1 が保証）。`validate_search_space_for_tune` は引き続き run-gate validator として呼ばれる（P-0108 と整合）。
-- `api/workspace.py::workspace_config_update`（PUT /config）: service 層の `_materialize_tuning_defaults` を経由した結果がレスポンスに乗る。API ハンドラ自体は薄い shim のまま。
+- `api/workspace.py::workspace_tune`: `if ws.config.get("tuning") is None: ... space: {}` inject 経路を **削除**（intent 概念で不要）。`validate_search_space_for_tune` は effective.space を対象に引き続き呼ばれる（P-0108 と整合）
+- `api/workspace.py::workspace_config_update`（PUT /config）: request body は `tuning_overrides` のみを受け取る。response は `{config: ..., tuning_effective: TuningConfig, errors, saved}` の形に拡張
+- `api/workspace.py::workspace_config_get`（GET /config）: response shape を拡張: `{config: WorkspaceConfig (tuning_overrides 含む), tuning_effective: TuningConfig}` を返す
+- `api/models.py` に上記の response model を追加。openapi-typescript で frontend に伝播
 
-**Frontend (削除中心):**
+**Frontend:**
 - `components/workspace/TuneTab.tsx`:
-  - `spaceInitialized` / `prevTuningRef` / 2 つの auto-populate useEffect を削除（~50 行）
-  - `searchSpace` は引き続き `tuning.optuna.space` から読むのみ
+  - 3 auto-populate useEffect (`spaceInitialized` / `prevTuningRef` / `defaultsSeededRef` 関連) を **物理削除** (~80 行)
+  - props を `effective: TuningConfig` + `overrides: TuningOverrides` + `onOverridesChange(overrides)` に変更
+  - `searchSpace` を `effective.space` から読む。`tuning_effective.user_set_paths` を参照して各 row の "modified" badge を render
 - `components/workspace/TuneEvaluationSection.tsx`:
-  - defensive direction sync useEffect を削除（~20 行）
-  - metrics seed useEffect を削除（~30 行）
-  - `defaultsSeededRef` / `TASK_DEFAULT_METRICS` / `buildEntry` の seed パスを削除
-- 期待 LoC 削減: 約 100 行
+  - defensive direction sync useEffect 削除 (~20 行)
+  - metrics seed useEffect 削除 (~30 行)
+  - `TASK_DEFAULT_METRICS` 定数を削除（adapter へ移管済）
+  - `optimizationMetric` 等は `effective.evaluation_metrics[0]` から読む
+- `hooks/useModelPanelData.ts`:
+  - `handleConfigChange` は引き続き存在するが、tuning 関連の edit は `handleOverridesChange(overrides)` へ分岐
+  - WriteFunnel への enqueue は `kind: "replace"` のまま使うが、対象 path が `tuning_overrides` に限定されるため race の根本原因 (catalog 由来 derived state) が enqueue されなくなる
+- `api/types.ts` / `api/workspace.ts`: openapi-typescript の自動生成で `TuningOverrides` / `TuningConfig` / GET 拡張 response の型が反映。手書きの型変換は不要
+- 期待 LoC 削減: 約 130 行（80 + 20 + 30）
 
 **Tests:**
-- `tests/test_backends_lizyml.py::TestGetTuningDefaults` (新規): adapter が catalog から正しい defaults を構築するか（binary / multiclass / regression それぞれ）、direction が metric_direction と一致するか、未対応 task で空 defaults を返すか。
-- `tests/test_workspace_api.py` (新規): PUT /config で task 遷移時に response が INV-T1 を満たすか、ユーザー編集の n_trials/timeout/space[key] が preserve されるか、`tuning: null` で送られた payload で task 遷移を伴う場合に backend が materialize するか。
-- `tests/test_workspace_service.py` (新規): `_materialize_tuning_defaults` の merge semantics（key-level の preserve）、prev_task == new_task の no-op、None→T 初回 materialize 動作。
-- 既存 frontend test 整理: TuneTab.test.tsx の auto-populate 系テスト群（line 448 + line 521 + line 554 + line 827）は obsolete として削除し、代わりに「backend から populated tuning が来た config を render するだけ」のテストに置換。
+- `tests/test_backends_lizyml.py::TestGetTuningDefaults` (新規): adapter が catalog から正しい defaults を構築するか（binary / multiclass / regression それぞれ）、direction が `get_metric_directions()` と一致するか、未対応 task で空 defaults を返すか
+- `tests/test_backends_lizyml.py::TestComputeEffectiveTuning` (新規): pure 関数の merge 動作（per-key user 優先、None override で default fall-through、empty overrides で defaults 完全採用、catalog 外 custom key の preserve）
+- `tests/test_workspace_api.py::TestTuningOverridesIntent` (新規): PUT が overrides のみを persist すること、GET が effective を含むこと、task 変更前後で overrides が不変なこと、stale overrides が新 task の catalog と無事に merge されること
+- `tests/test_format_version_matrix.py` に v2 → v3 migration の forward テスト + 既存 v1 → v2 → v3 chain 検証
+- `tests/test_training_service.py` 更新: `_prepare_tune_config` の direction force-resolve 削除、INV-T3 assertion が想定どおり fail-fast すること
+- 既存 frontend test 整理: TuneTab.test.tsx の auto-populate 系（line 448 + 521 + 554 + 827）を **削除**。代わりに「`effective` props で render」テストに置換
+- 新規 e2e: `workspace-tune-init.spec.ts` で初回マウント時に Range mode rows が catalog defaults で描画されることを assert
 
 **Behavior change for users:**
-- Tune タブを開いた瞬間に **search space が catalog defaults で Range/Choice モード表示**される（旧: 全 Fixed の状態が表示され続けていた）。
-- backend が direction を `tuning.optuna.params.direction` に書き込むので、Tune タブの direction badge は常に正しい値を表示（旧: 一瞬 stale な値を表示することがあった）。
-- ユーザーが既に編集した tune config は **何も触られない**（INV-T2、merge semantics）。
+- Tune タブを開いた瞬間に **search space が catalog defaults で Range/Choice モード表示**される（旧: 全 Fixed の状態が表示され続けていた）
+- direction badge / Optimization Metric が常に正しい（旧: 一瞬 stale な値を表示）
+- ユーザーが Range Min/Max を編集すると、その row に **"modified" badge** が表示される（既定値と区別、INV-T4 由来）
+- 編集していない catalog row は **catalog が将来更新されたら自動で新値に追従** する（v0.7 以降の lizyml 更新で恩恵）
+- ユーザーが catalog 外の custom param を追加していた場合、その param は **task が変わっても preserve される**（intent 不変、INV-T2）
 
 **Compatibility:**
-- `tuning: null` の workspace（v0.6 以前で作成済 + 未編集）は次の `PUT /config` で task 遷移を経由した際に materialize される。**自動マイグレーションは不要**（既存実行経路で問題が起きない）。
-- format_version は変更しない。
-- 2nd backend は `BackendCore.get_tuning_defaults` のデフォルト実装で `TuningDefaults(space={}, evaluation_metrics=[], direction=None)` を返す → 旧挙動と同じ（empty tuning が permitted）。
-- HTTP envelope shape 不変。frontend type は openapi-typescript で `TuningDefaults` を自動取得。
+- `format_version` 2 → 3 bump。既存 v2 workspace は **読み込み時に v3 へ自動 migrate**（`storage/migrations.py::MIGRATIONS[2]`）。**P-0103 / `LegacyFormatProtectionError` の枠組みで読み込み可能**
+- v3 workspace を旧 v2 runtime で読むと `LegacyFormatProtectionError` で reject（既存挙動）。downgrade はサポートしない（v0.6 系で migrate 後、v0.5 系には戻せない）
+- 2nd backend は `BackendCore.get_tuning_defaults` / `compute_effective_tuning` のデフォルト実装で空 defaults / passthrough を返す → 旧挙動と同じ（empty tuning が permitted）
+- HTTP envelope shape は **拡張**（GET response に `tuning_effective` 追加）。旧 frontend client は新フィールドを無視するため non-breaking。逆方向（新 frontend × 旧 backend）は openapi-typescript drift で検出可能
 
 **Documentation:**
-- BLUEPRINT.md §3.3.2 (adapter capability matrix) に `get_tuning_defaults` を追記。
-- BLUEPRINT.md §6 / §7 の Tune workflow 図に「materialize は service 層で task transition 時に起こる」を追記。
-- docs/architecture-as-implemented.md に「frontend は tuning derived state を計算しない」を追記。
+- BLUEPRINT.md §3.3.2 (adapter capability matrix) に `get_tuning_defaults` / `compute_effective_tuning` を追記
+- BLUEPRINT.md §6 / §7 の Tune workflow 図に「intent vs effective の分離」を追記
+- docs/architecture-as-implemented.md に「Tune 派生 state は backend が compute、workspace は intent のみ persist」を追記
+- docs/format-version-matrix.md に v2 → v3 migration の説明を追加
 
 #### Acceptance criteria
 
-- [ ] `BackendCore.get_tuning_defaults(task) -> TuningDefaults` を Protocol に追加、safe default で `BackendAdapter` 経由の 2nd backend 互換を確認。
-- [ ] `LizyMLAdapter` が binary / multiclass / regression それぞれで catalog 由来の `TuningDefaults` を返す（unit test）。
-- [ ] `service.set_config` が task 遷移を検出し `_materialize_tuning_defaults` を呼ぶ。merge_preserving_user_edits が ユーザー編集分（n_trials / timeout / 個別 space[key]）を破壊しない（unit test）。
-- [ ] `PUT /api/workspace/config` が task 遷移を伴う payload に対して INV-T1/T2 を満たすレスポンスを返す（integration test）。
-- [ ] `POST /api/workspace/tune` の `if tuning is None` inject 経路を削除しても既存 e2e (`workspace-tune.spec.ts`) が green。
-- [ ] frontend の 3 useEffect を物理削除し、`tuning.optuna.space` が catalog defaults で表示されることを e2e で確認（新規 spec or 既存に assertion 追加）。
-- [ ] WriteFunnel の `kind: "replace"` を derived state に使う経路がコード上から消える（grep ベースで verify）。
-- [ ] `uv run pytest` / `pnpm test` / `pnpm test:e2e` / `uv run mypy src/lizystudio/` / `uv run ruff check .` / `pnpm check` 全て green。
-- [ ] BLUEPRINT.md §3.3.2 reconcile が同 PR の末尾コミットで完了。
+- [ ] `BackendCore.get_tuning_defaults(task)` と `compute_effective_tuning(task, overrides)` を Protocol に追加、safe default で 2nd backend 互換確認
+- [ ] `TuningOverrides` / `TuningConfig` Pydantic model を `api/models.py` に追加、`WorkspaceConfig.tuning` を `tuning_overrides` に rename
+- [ ] `LizyMLAdapter` が binary / multiclass / regression それぞれで catalog 由来の `TuningDefaults` + `compute_effective_tuning` の pure 関数挙動 を返す（unit test）
+- [ ] `service.set_config` が `tuning_overrides` をそのまま persist する（task 遷移検出ロジックは存在しない、INV-T2）
+- [ ] `services/training.py::_prepare_tune_config` から hardcoded `maximize_metrics` set と direction force-resolve が削除され、INV-T3 違反は `assert` で fail-fast する
+- [ ] `tune` job 起動時に `effective` が `job.config.tuning` として snapshot 凍結される（INV-T6 unit test）
+- [ ] `GET /api/workspace/config` response に `tuning_effective` が含まれる、`PUT` request の `tuning_overrides` のみが workspace に persist される（integration test）
+- [ ] `POST /api/workspace/tune` の `if tuning is None` inject 経路を削除しても既存 e2e (`workspace-tune.spec.ts`) が green
+- [ ] `format_version` 2 → 3 bump、`storage/migrations.py::MIGRATIONS[2]` で v2 → v3 forward migration が実装され `format-version-matrix` CI gate を pass（INV-T7）
+- [ ] 既存の v2 workspace（catalog 値が tuning に直書きされた状態）を読み込んで v3 へ migrate した後、effective が catalog defaults と一致するケース / overrides が catalog と異なるケース 両方を unit test でカバー
+- [ ] frontend の 3 useEffect を物理削除し、Tune タブ初回マウントで catalog defaults が Range/Choice モードで表示されることを e2e で確認（新規 `workspace-tune-init.spec.ts`）
+- [ ] frontend が `effective` を表示、`overrides` を編集対象として扱う。"modified" badge が user_set_paths から render される
+- [ ] WriteFunnel の `kind: "replace"` を derived state に使う経路がコード上から消える（`tuning_overrides` 書き込みは存続するが catalog defaults を含まない）— grep verify
+- [ ] `uv run pytest` / `pnpm test` / `pnpm test:e2e` / `uv run mypy src/lizystudio/` / `uv run ruff check .` / `pnpm check` 全て green
+- [ ] BLUEPRINT.md §3.3.2 / §6 / §7 reconcile + docs/format-version-matrix.md / architecture-as-implemented.md 更新が同 PR-6 で完了
 
 #### Alternatives considered
 
 - **(a, rejected): frontend 内で 3 effect を 1 つに統合（Approach L）** — race は構造的に消えるが、(1) 派生 state の重複定義は残る、(2) 2nd backend に対し frontend の `TASK_DEFAULT_METRICS` がポータブルでない、(3) `kind: "replace"` の濫用も残る。**短期 bugfix としては成立するが、本質的なアーキテクチャ問題を温存**するため不採用。
 - **(b, rejected): WriteFunnel に `kind: "merge"` を追加して deep-merge coalescing にする** — race は解消するが、(1) WriteFunnel API の semantics が複雑化、(2) 派生 state の重複定義は残る、(3) backend SSOT 原則に到達しない。
 - **(c, rejected): patch + 個別 reason 化（Approach A）** — race は解消するが、(b) と同様に派生 state の SSOT 問題は残る。さらに `WriteReason` enum が agent-specific な意図に侵食される。
-- **(d, ADOPTED): backend SSOT** — 派生 state の住所を入力データ (catalog) のある backend に移し、frontend からは導出ロジックを物理削除。race を「導出 effect が存在しない」という構造で eliminate。INV を明示。将来 2nd backend にも contract で対応。
+- **(d, rejected — Option A): backend SSOT (materialize on task transition)** — `tuning: TuningConfig | None` のまま、service 層で task 遷移時に backend 由来 defaults と user edits を merge して persist。race は消えるが、(1) Q4 の merge ambiguity（catalog 値 vs user 値の区別困難）が残る、(2) catalog 進化が既存 workspace に自動伝播しない（stale 化する）、(3) Q2 の nullability overload が残る、(4) 将来 catalog 進化のたびに「stale 値の選別」コストが必要。**初稿で採用したが Q2/Q4 を深掘りした結果、構造的に解けないと判明したため棄却**。
+- **(e, ADOPTED — Option B): intent / effective 分離 + backend SSOT** — workspace は `tuning_overrides`（sparse user intent）のみ persist。effective は backend が `compute_effective_tuning(task, overrides)` で都度 compute。job 起動時に effective を snapshot 凍結。Q2 の nullability は `tuning_overrides: TuningOverrides = default_factory(TuningOverrides)` で構造的解消、Q4 の merge ambiguity は **「overrides がそのまま user edits の定義」** で解消。catalog 進化は既存 workspace に自動伝播。`format_version` 2 → 3 bump 必要。
 
 #### Decision
 
-- 2026-05-14 **Proposed (awaiting alignment)** — 単一 PR ではなく **複数 PR 連鎖** で進める。理由: Protocol 変更 + adapter 実装 + service 層 + frontend 削除 + e2e 確認の各レイヤで blast radius が大きく、レビュー単位を分けたほうが review quality が保てる。
-  - PR-1: Proposal-only (本 PR、`[docs-only]`)
-  - PR-2: 共通型 `TuningDefaults` + `BackendCore.get_tuning_defaults` Protocol 追加（safe default）
-  - PR-3: `LizyMLAdapter.get_tuning_defaults` 実装 + unit tests
-  - PR-4: `service.set_config` の task 遷移検出 + `_materialize_tuning_defaults` + integration tests
-  - PR-5: frontend の 3 useEffect 削除 + e2e 確認 + test 整理
-  - PR-6: BLUEPRINT.md / architecture-as-implemented.md reconcile + Decision 更新（"Approved & shipped"）
-- Open questions（PR-2 までに resolve すべき）:
-  - **Q1**: `_prepare_tune_config` の direction 強制再解決は削除するか defense-in-depth として残すか? → 推奨: 削除（INV-T3 を contract 化し violators は test で検出）。
-  - **Q2**: `tuning` を `TuningConfig | None` から非 null 化するか? → 本 Proposal の scope 外。invariant 化 (task != null ⇒ tuning != null) で十分。Pydantic シグネチャの厳格化は v0.7 以降の follow-up。
-  - **Q3**: materialize trigger を「task 遷移」だけにするか「target 遷移」も含めるか? → target が変わると task も自動再判定されるので task 遷移検出のみで十分（task 単独で変わるケースは API 直叩きのみ、frontend からは発生しない）。
-  - **Q4**: ユーザーが catalog 外の param を space に追加していた場合の merge 挙動? → preserve（key-level merge）。catalog 由来の param はユーザーが Fixed mode に変えていなければ materialize で `space[key]` を上書きしない（merge_preserving_user_edits の semantics）。具体実装は PR-4 で詰める。
+- 2026-05-14 **Proposed (Option B, awaiting alignment)** — 単一 PR ではなく **複数 PR 連鎖** で進める。理由: Protocol 拡張 + Pydantic schema rename + storage migration (`format_version` bump) + adapter 実装 + service 層 + API 拡張 + frontend refactor + e2e 確認の各レイヤで blast radius が大きく、レビュー単位を分けたほうが review quality が保てる。
+  - **PR-1**: Proposal-only (本 PR、`[docs-only]`)
+  - **PR-2**: 共通型 `TuningDefaults` / `TuningOverrides` / `TuningConfig` (Pydantic models) + `BackendCore.get_tuning_defaults` / `compute_effective_tuning` Protocol 追加（safe default）
+  - **PR-3**: `LizyMLAdapter.get_tuning_defaults` + `compute_effective_tuning` 実装 + 重複 `maximize_metrics` hardcoded set 削除 + INV-T3 assertion 追加 + unit tests
+  - **PR-4**: `WorkspaceConfig.tuning` → `tuning_overrides` rename + `STUDIO_FORMAT_VERSION` 2 → 3 bump + `storage/migrations.py::MIGRATIONS[2]` 実装 + `service.set_config` リファクタ + GET/PUT API response 拡張 + `_prepare_tune_config` から direction force-resolve 削除 + tune job 起動時の effective snapshot + integration tests + format-version-matrix CI gate 更新
+  - **PR-5**: frontend の 3 useEffect 削除 + `effective` / `overrides` 二層 prop に refactor + "modified" badge UI + 既存 frontend test の整理 + 新規 e2e `workspace-tune-init.spec.ts`
+  - **PR-6**: BLUEPRINT.md §3.3.2 / §6 / §7 reconcile + docs/format-version-matrix.md / architecture-as-implemented.md 更新 + Decision を **"Approved & shipped"** に更新
+
+- Open questions resolved (2026-05-14):
+  - **Q1 (RESOLVED)**: `_prepare_tune_config` の direction 強制再解決 → **削除 + INV-T3 assertion 化**。silent な corrected write は drift を隠す（重複 hardcoded `maximize_metrics` set と `metric_direction` の registry が drift する未来を防ぐためにも）。INV-T3 違反は `assert effective.direction == expected, ...` で fail-fast し、raw YAML import / curl 直叩きで invariant 違反が来た場合にテストや CI で surface する。
+  - **Q2 (RESOLVED)**: `tuning: TuningConfig | None` の nullability → **構造的解消**。`WorkspaceConfig.tuning` を削除して `tuning_overrides: TuningOverrides = default_factory(TuningOverrides)` に置換。`tuning_overrides` は常に存在（empty が初期状態）、TuningOverrides 内部の field がそれぞれ `| None` で sparse な user intent を表現する。conflation していた null state（「未編集」「未 materialize」「未 Tune 入場」）が `tuning_overrides.foo is None` という field レベルの optional に正しく分解される。
+  - **Q3 (RESOLVED, dissolved)**: materialize trigger → **概念ごと消える**。intent (overrides) は task 非依存で persist、effective は GET/run 時に毎回 compute。「いつ materialize するか」という question 自体が成立しない（タイミング依存の状態を持たないため）。
+  - **Q4 (RESOLVED)**: user-added params outside catalog → **構造的解消**。`overrides.space[key]` がそのまま user edits の定義なので、catalog 内外を問わず preserve。catalog が変わっても `overrides` は不変。invalid な override は run-gate (P-0108 `validate_search_space_for_tune` + 将来追加の `parameter_bounds` check) で 422 として surface する。
+
+- 進行ルール:
+  - 本 Proposal の **Decision が "Approved" になるまで PR-2 以降は着手しない**（Change Gate）
+  - 各 PR は independent reviewable とする（PR-2 で Protocol だけ通せば backend / frontend は旧挙動のまま動くなど）
+  - 既存 frontend bug (Tune タブの search space 全 Fixed) は **PR-5 が merge されるまで残る**。短期 bugfix を別途求める場合は Option A の minimal patch を別 PR で先行させる選択肢もあるが、PR-2〜5 を待てば自然に消えるため不要
+  - `format_version` 2 → 3 bump により、PR-4 merge 後に develop で作られた workspace を v0.6 系の runtime で読むと `LegacyFormatProtectionError`。v0.6.x がリリース済の場合はリリースノートに明記する

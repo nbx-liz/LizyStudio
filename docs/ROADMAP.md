@@ -160,7 +160,7 @@
 - **P-0104**: Tune workflow 全面整備（Re-tune UX + canonical defaults + validation guardrails + LizyML v0.15 SSOT 連動）— Decision 確定、ほぼ着地（残: #474 deferred parse_space validation）
 - **P-0105**: Residuals plot に kind selector（#457）— 着地済
 - **P-0106**: metric 不適合判定を `BackendCore` capability の裏へ（Change Gate、#403）— 着地済（`BackendCore.get_incompatible_metrics`）。完全な 2nd-backend 移行は §3.3 後
-- **P-0109**: Tune 派生デフォルトの backend SSOT 化（Change Gate）— 起票 2026-05-14、**Proposed (awaiting alignment)**。Tune タブ初回マウントで catalog defaults が Fixed 表示になるバグの根本治療。3 frontend useEffect ↔ WriteFunnel coalesce race を「派生 state を backend に集約する」構造変更で消す。`BackendCore.get_tuning_defaults(task)` を Protocol に追加 + `service.set_config` で task 遷移時に materialize + frontend 3 effect 物理削除。複数 PR (PR-1 Proposal-only / PR-2 Protocol+共通型 / PR-3 LizyML 実装 / PR-4 service / PR-5 frontend 削除 / PR-6 BLUEPRINT reconcile)
+- **P-0109**: Tune 派生デフォルトの backend SSOT 化 + intent/effective 分離（Change Gate, `format_version` 2 → 3）— 起票 2026-05-14、**Proposed (Option B, awaiting alignment)**。Tune タブ初回マウントで catalog defaults が Fixed 表示になるバグの根本治療。「persist するのは user intent (`tuning_overrides`) のみ。effective は backend が compute、job 起動時に snapshot 凍結」という構造変更により、Q2 (nullability overload) と Q4 (merge ambiguity) を構造的解消、catalog 進化が既存 workspace に自動伝播。`BackendCore.get_tuning_defaults` + `compute_effective_tuning` を Protocol に追加、`WorkspaceConfig.tuning` を `tuning_overrides` に rename、`STUDIO_FORMAT_VERSION` 2 → 3 bump + migration、frontend 3 useEffect 物理削除。複数 PR (PR-1 Proposal-only / PR-2 Protocol+共通型 / PR-3 LizyML 実装 / PR-4 schema rename + migration + service + API / PR-5 frontend refactor / PR-6 BLUEPRINT reconcile)
 
 ### 3.0 P-0094 (済)：pytest-benchmark performance baseline（Issue #27 (a)）
 
@@ -300,7 +300,7 @@ Wave 6 完了後の Open Issue は **4 件**（#451 / #453 は 2026-05-13 close 
 
 ### Tier 1：直近の着手候補（ROI 順）
 
-1. **P-0109 implementation chain** — Tune 派生デフォルトの backend SSOT 化（Change Gate）。Proposal (PR-1) Decision 確定後に PR-2〜PR-6 を順次着手。Tune タブ初回マウントで catalog defaults が反映されないバグ ([2026-05-14 確認](HISTORY.md)) の根本治療
+1. **P-0109 implementation chain** — Tune 派生デフォルトの backend SSOT 化 + intent/effective 分離（Change Gate, `format_version` bump）。Proposal (PR-1) Decision 確定後に PR-2〜PR-6 を順次着手。Tune タブ初回マウントで catalog defaults が反映されないバグ ([2026-05-14 確認](HISTORY.md)) の根本治療。intent/effective 分離により catalog 進化の自動伝播 + job 再現性強化も同時達成
 2. **#513** — `studio_error_handler` に WARNING log を 1 行追加（5 行・観測性インパクト大、R-3.1 precursor）。v0.6.0 検証中に発見した 4xx StudioError が server log に痕跡を残さない問題のクイック対応
 3. **#495** — #456 L5: weekly stale-doc audit cron（`scripts/audit_stale_docs.py` + `.github/workflows/audit-stale-docs.yml` cron weekly、tracking issue 自動更新。tier-3/low、deferred）
 4. **#452-b `lifecycle_mixin.tune` 分割** — 🔒 2nd-adapter 議論（§3.3）後に解禁。それまで着手しない
