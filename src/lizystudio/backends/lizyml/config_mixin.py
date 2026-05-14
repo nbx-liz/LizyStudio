@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 import yaml
 
-from lizystudio.backends.types import BackendInfo, ConfigSchema, IncompatibleMetric
+from lizystudio.backends.types import (
+    BackendInfo,
+    ConfigSchema,
+    IncompatibleMetric,
+    TuningConfig,
+    TuningDefaults,
+    TuningOverrides,
+)
 
 from .config_compat import strip_internal_keys, task_params_compat_errors
 
@@ -27,6 +34,61 @@ class ConfigMixin:
         import lizyml
 
         return BackendInfo(name="lizyml", version=lizyml.__version__)
+
+    def get_tuning_defaults(self, task: str) -> TuningDefaults:
+        """P-0109 PR-2 stub — empty catalog defaults.
+
+        Real catalog-aware impl arrives in PR-3
+        (`search_space_catalog` + `TASK_DEFAULT_METRICS` + `metric_direction`
+        wired in). For now this matches the ``BackendCore`` safe default so
+        ``LizyMLAdapter`` satisfies the Protocol unchanged and downstream
+        callers see no behaviour change (the legacy on-the-fly defaults in
+        ``workspace_tune`` / ``_prepare_tune_config`` remain authoritative
+        until PR-4 swaps them out).
+        """
+        return TuningDefaults()
+
+    def compute_effective_tuning(
+        self, task: str, overrides: TuningOverrides
+    ) -> TuningConfig:
+        """P-0109 PR-2 stub — inline mirror of ``BackendCore``'s safe-default.
+
+        ``ConfigMixin`` does not inherit from ``BackendCore`` (the
+        adapter satisfies the Protocol via duck typing) so we cannot
+        ``super().compute_effective_tuning`` here. PR-3 replaces this
+        with a catalog-aware impl (search_space_catalog + metric_direction
+        + TASK_DEFAULT_METRICS); PR-4 wires the result through the
+        service layer at PUT /config response time and at tune job start.
+        """
+        defaults = self.get_tuning_defaults(task)
+        fields_set = overrides.model_fields_set
+        user_set: list[str] = [
+            name
+            for name in ("n_trials", "timeout", "direction", "evaluation_metrics")
+            if name in fields_set
+        ]
+        user_set.extend(f"space.{key}" for key in overrides.space)
+        merged_space = {**defaults.space, **overrides.space}
+        merged_metrics = (
+            overrides.evaluation_metrics
+            if overrides.evaluation_metrics is not None
+            else defaults.evaluation_metrics
+        )
+        direction: Literal["maximize", "minimize"]
+        if overrides.direction is not None:
+            direction = overrides.direction
+        elif defaults.direction is not None:
+            direction = defaults.direction
+        else:
+            direction = "minimize"
+        return TuningConfig(
+            n_trials=overrides.n_trials if overrides.n_trials is not None else 50,
+            timeout=overrides.timeout if "timeout" in fields_set else None,
+            direction=direction,
+            space=merged_space,
+            evaluation_metrics=merged_metrics,
+            user_set_paths=user_set,
+        )
 
     def get_ui_schema(self) -> dict[str, Any]:
         from lizystudio.backends.lizyml_ui_schema import build_ui_schema

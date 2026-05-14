@@ -8,7 +8,7 @@ runtime-checkable alias that inherits from all of them, so existing
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 import pandas as pd
 
@@ -19,6 +19,9 @@ from lizystudio.backends.types import (
     IncompatibleMetric,
     PlotData,
     PredictionSummary,
+    TuningConfig,
+    TuningDefaults,
+    TuningOverrides,
     TuningSummary,
 )
 
@@ -118,6 +121,108 @@ class BackendCore(Protocol):
         spaces) returns ``[]`` (the default below).
         """
         return []
+
+    def get_tuning_defaults(self, task: str) -> TuningDefaults:
+        """Return canonical Tune defaults for *task* (P-0109).
+
+        The backend reads its own catalog (e.g. lizyml's
+        ``search_space_catalog``, ``metric_direction``, canonical
+        ``TASK_DEFAULT_METRICS``) and produces a
+        :class:`~lizystudio.backends.types.TuningDefaults` describing
+        the search space, evaluation metric list, and optimisation
+        direction that the Tune tab should fall back to when the user
+        has set no overrides.
+
+        Used by the service layer in two places:
+
+        1. ``GET /workspace/config`` response assembly — together with
+           ``compute_effective_tuning(task, overrides)`` to project the
+           workspace's persisted ``TuningOverrides`` into an effective
+           ``TuningConfig`` the frontend can render directly.
+        2. ``POST /workspace/tune`` — same projection, plus the
+           resulting effective is snapshot-frozen into
+           ``job.config.tuning`` (INV-T6: a job's config remains stable
+           even as the catalog later evolves).
+
+        A minimal backend (no Optuna catalog, no per-task metric set)
+        returns ``TuningDefaults()`` — the empty defaults the trivial
+        impl below provides. The effective Tune config for such a
+        backend therefore equals the user's overrides verbatim.
+
+        INV-T3 (P-0109): ``direction`` here is the single source of
+        truth. ``services/training.py::_prepare_tune_config`` MUST NOT
+        carry a duplicated maximize-metric set; instead it asserts the
+        in-flight effective config's direction agrees with this method
+        and fails fast on drift.
+
+        INV-T5 (P-0109): each backend adapter is the SSOT for its own
+        defaults. Frontend has no adapter-specific branches.
+        """
+        return TuningDefaults()
+
+    def compute_effective_tuning(
+        self, task: str, overrides: TuningOverrides
+    ) -> TuningConfig:
+        """Merge ``TuningDefaults(task)`` with *overrides* (P-0109).
+
+        Pure function: same ``(task, overrides)`` always produces the
+        same effective ``TuningConfig``. Side-effect free, no IO. The
+        merge rule is per-field:
+
+        - ``n_trials`` / ``timeout`` / ``direction``: override wins when
+          present in ``overrides.model_fields_set``; otherwise fall back
+          to the corresponding ``TuningDefaults`` field (or a sane
+          backend-specific fallback like ``n_trials = 50`` when both
+          override and default are absent).
+        - ``space``: per-key dict merge — ``overrides.space[k]`` wins
+          outright over ``defaults.space[k]``; keys present only in
+          defaults survive; keys present only in overrides (e.g. user
+          added a catalog-outside parameter via raw YAML import) also
+          survive (INV-T2: catalog evolution never silently drops user
+          customisations).
+        - ``evaluation_metrics``: list-level — when
+          ``overrides.evaluation_metrics`` is non-None, replace the
+          list; otherwise use ``defaults.evaluation_metrics``.
+        - ``user_set_paths``: derived from
+          ``overrides.model_fields_set`` plus per-key entries for
+          ``space`` overrides, formatted as dot-paths (``"n_trials"``,
+          ``"space.learning_rate"``, etc.).
+
+        The trivial impl below covers a minimal backend with no catalog
+        and no metric registry — it constructs the effective config
+        from overrides alone with hardcoded fallbacks (``n_trials=50``
+        / ``direction="minimize"``). Real adapters override this to
+        consult their catalog and registry.
+        """
+        defaults = self.get_tuning_defaults(task)
+        fields_set = overrides.model_fields_set
+        user_set: list[str] = []
+        for name in ("n_trials", "timeout", "direction", "evaluation_metrics"):
+            if name in fields_set:
+                user_set.append(name)
+        for key in overrides.space:
+            user_set.append(f"space.{key}")
+        merged_space = {**defaults.space, **overrides.space}
+        merged_metrics = (
+            overrides.evaluation_metrics
+            if overrides.evaluation_metrics is not None
+            else defaults.evaluation_metrics
+        )
+        direction: Literal["maximize", "minimize"]
+        if overrides.direction is not None:
+            direction = overrides.direction
+        elif defaults.direction is not None:
+            direction = defaults.direction
+        else:
+            direction = "minimize"
+        return TuningConfig(
+            n_trials=overrides.n_trials if overrides.n_trials is not None else 50,
+            timeout=overrides.timeout if "timeout" in fields_set else None,
+            direction=direction,
+            space=merged_space,
+            evaluation_metrics=merged_metrics,
+            user_set_paths=user_set,
+        )
 
     def get_default_config(self, task: str, target: str) -> dict[str, Any]:
         """Return a complete valid config with all defaults."""
