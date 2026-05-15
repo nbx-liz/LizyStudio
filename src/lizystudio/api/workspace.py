@@ -39,11 +39,14 @@ from lizystudio.api.models import (
     JobStartResponse,
     PreviewResponseModel,
     SplitPreviewResponseModel,
+    TuningOverridesUpdateResponse,
+    TuningSnapshotResponse,
     ValidationResponse,
     WorkspaceFitRequest,
     WorkspaceStatusResponse,
     WorkspaceTuneRequest,
 )
+from lizystudio.backends.types import TuningOverrides
 from lizystudio.security import (
     check_dataframe_memory,
     read_upload_checked,
@@ -70,8 +73,10 @@ from lizystudio.services.workspace import (
     get_backend_name,
     get_config_schema,
     get_default_config,
+    get_tuning_snapshot,
     get_workspace,
     load_config_from_file,
+    update_tuning_overrides,
     validate_config,
     validate_search_space_for_tune,
 )
@@ -510,6 +515,48 @@ def config_patch(
         raise InvalidPatchError(str(exc)) from exc
     ws.set_config(patched)
     return {"config": patched}
+
+
+@router.get("/config/tuning-snapshot", response_model=TuningSnapshotResponse)
+def config_tuning_snapshot(
+    ws: WorkspaceState = Depends(get_workspace),
+) -> dict[str, Any]:
+    """Return the Tune-tab intent/effective split (P-0109 PR-4a).
+
+    Produces ``{tuning_effective, tuning_defaults}`` derived live from
+    the currently-persisted ``ws.config["tuning"]`` via the adapter's
+    catalog (see :func:`get_tuning_snapshot` for the projection rule).
+
+    The endpoint is read-only and storage-shape neutral: PR-4b will move
+    the workspace to persist sparse :class:`TuningOverrides` directly,
+    at which point the projection from legacy nested shape becomes a
+    pass-through. The frontend (PR-5) consumes this snapshot to render
+    Tune-tab rows without the racing seed-then-edit useEffects.
+    """
+    return get_tuning_snapshot(ws)
+
+
+@router.put("/config/tuning-overrides", response_model=TuningOverridesUpdateResponse)
+def config_tuning_overrides_update(
+    body: TuningOverrides,
+    ws: WorkspaceState = Depends(get_workspace),
+    job_store: JobStore = Depends(get_job_store),
+) -> dict[str, Any]:
+    """Apply sparse Tune overrides and return the resulting effective config.
+
+    Body is parsed as :class:`TuningOverrides` (P-0109): every field is
+    optional, ``extra="forbid"`` catches typos, and Pydantic's
+    ``model_fields_set`` lets the merge distinguish "explicit None" from
+    "unset" (INV-T1 / Q4).
+
+    The legacy ``ws.config["tuning"]`` block is rebuilt from the
+    effective result so the existing tune-job path and the PUT /config
+    GET round-trip keep working unchanged — PR-4b moves storage to the
+    sparse form. The same workspace-lock semantics as PUT /config apply:
+    a tune job that is still running blocks the write with 409 (P-0089).
+    """
+    _check_workspace_lock(job_store)
+    return update_tuning_overrides(ws, body)
 
 
 @router.post("/config/validate", response_model=ValidationResponse)
