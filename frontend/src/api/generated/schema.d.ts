@@ -258,6 +258,13 @@ export interface paths {
         /**
          * Config Get
          * @description Return the current workspace config.
+         *
+         *     PR-4b: the response includes a materialised ``tuning`` block
+         *     synthesised from ``ws.tuning_overrides`` so the legacy pre-PR-5
+         *     frontend keeps seeing ``config.tuning`` even after the storage
+         *     rename. Once PR-5 ships, the frontend reads
+         *     ``GET /config/tuning-snapshot`` directly and this compat shim
+         *     becomes load-bearing only for YAML download / CLI consumers.
          */
         get: operations["config_get_api_workspace_config_get"];
         /**

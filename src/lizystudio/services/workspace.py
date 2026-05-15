@@ -33,6 +33,14 @@ class WorkspaceState:
     data_ref: DataRef | None = None
     dataframe: pd.DataFrame | None = None
     model: Any = None
+    # P-0109 PR-4b: sparse Tune intent — the SSOT for the Tune tab.
+    # Workspace persists ONLY user-set fields here (catalog defaults are
+    # re-derived on demand by ``adapter.compute_effective_tuning``).
+    # ``None`` means "never touched"; an empty ``TuningOverrides()``
+    # instance means "explicitly cleared to catalog defaults". The two
+    # are equivalent for effective computation but the distinction
+    # survives across PUTs via Pydantic ``model_fields_set``.
+    tuning_overrides: TuningOverrides | None = None
     # Result from the latest fit/tune executed in this session
     workspace_fit_result: FitSummary | None = None
     workspace_tune_result: TuningSummary | None = None
@@ -48,6 +56,7 @@ class WorkspaceState:
         """Clear everything except the backend adapter."""
         with self._lock:
             self.config = {}
+            self.tuning_overrides = None
             self.data_ref = None
             self.dataframe = None
             self.model = None
@@ -105,6 +114,17 @@ class WorkspaceState:
         """Update the current config."""
         with self._lock:
             self.config = config
+
+    def set_tuning_overrides(self, overrides: TuningOverrides | None) -> None:
+        """Replace the persisted Tune intent (P-0109 PR-4b).
+
+        Passing ``None`` clears the intent so the next effective
+        computation falls back to pure catalog defaults. Threads writing
+        the workspace state concurrently are serialised through the same
+        lock as :meth:`set_config`.
+        """
+        with self._lock:
+            self.tuning_overrides = overrides
 
     # --- Background job thread coordination (A-4) ---
 
@@ -548,20 +568,32 @@ def materialize_overrides_into_legacy_tuning(
     return out
 
 
+def _current_overrides(ws: WorkspaceState) -> TuningOverrides:
+    """Return ``ws.tuning_overrides`` defaulted to an empty intent.
+
+    Hides the ``None`` sentinel from callers that only need to compute
+    an effective config — they treat "never touched" and "explicit
+    empty" the same way. The distinction still surfaces via
+    :attr:`TuningOverrides.model_fields_set` for callers that need it.
+    """
+    return ws.tuning_overrides if ws.tuning_overrides is not None else TuningOverrides()
+
+
+def _current_task(ws: WorkspaceState) -> str:
+    return str(ws.config.get("task", "")) if isinstance(ws.config, dict) else ""
+
+
 def get_tuning_snapshot(ws: WorkspaceState) -> dict[str, Any]:
-    """Build the response payload for ``GET /config/tuning-snapshot`` (PR-4a).
+    """Build the response payload for ``GET /config/tuning-snapshot``.
 
     Returns ``{"tuning_effective": ..., "tuning_defaults": ...}`` where
     each side is a plain dict the frontend consumes via the
-    openapi-typescript surface. The effective config is computed live
-    from the current ``ws.config["tuning"]`` (legacy shape) so the
-    response stays consistent with whatever the legacy PUT /config flow
-    last persisted — until PR-4b moves storage to the sparse form.
+    openapi-typescript surface. PR-4b makes ``ws.tuning_overrides`` the
+    sole source of Tune intent — the snapshot endpoint reads it
+    directly instead of extracting from legacy ``ws.config["tuning"]``.
     """
-    task = str(ws.config.get("task", "")) if isinstance(ws.config, dict) else ""
-    overrides = extract_overrides_from_legacy_tuning(
-        ws.config.get("tuning") if isinstance(ws.config, dict) else None
-    )
+    task = _current_task(ws)
+    overrides = _current_overrides(ws)
     effective = ws.backend.compute_effective_tuning(task, overrides)
     defaults = ws.backend.get_tuning_defaults(task)
     return {
@@ -574,26 +606,106 @@ def update_tuning_overrides(
     ws: WorkspaceState,
     overrides: TuningOverrides,
 ) -> dict[str, Any]:
-    """Apply *overrides* and materialize back into ``ws.config["tuning"]``.
+    """Persist *overrides* as the sole Tune intent (P-0109 PR-4b).
 
-    Computes the effective config via the adapter, then rebuilds the
-    legacy ``ws.config["tuning"]`` block from the result so the existing
-    tune-job code path (``_prepare_tune_config`` and lizyml's Optuna
-    wiring) keeps working unchanged. Returns the new effective config so
-    the API endpoint can echo it in the response.
+    Replaces ``ws.tuning_overrides`` outright (no merge with prior
+    intent — the body is the full sparse intent). Echoes the resulting
+    effective config so the caller can refresh its local state in a
+    single round-trip.
 
-    INV-T2 (P-0109): the merge happens once here. Any catalog-only key
-    that the user has not overridden is re-derived from the catalog —
-    so when the catalog evolves between two PUTs, the effective config
-    automatically tracks the new defaults for unchanged keys.
+    PR-4b removes the PR-4a write-back into ``ws.config["tuning"]`` —
+    the legacy nested form is no longer the storage. ``workspace_tune``
+    materializes the effective config into ``job.config["tuning"]`` at
+    job-start time (INV-T6), and ``GET /config`` synthesizes the same
+    block for legacy callers via :func:`get_legacy_config_view`.
+
+    INV-T2 (P-0109): catalog evolution automatically propagates because
+    catalog-only space keys are not stored — they're re-derived from
+    ``adapter.get_tuning_defaults`` on every effective computation.
     """
-    task = str(ws.config.get("task", "")) if isinstance(ws.config, dict) else ""
+    task = _current_task(ws)
+    ws.set_tuning_overrides(overrides)
     effective = ws.backend.compute_effective_tuning(task, overrides)
-    current_tuning = ws.config.get("tuning") if isinstance(ws.config, dict) else None
-    materialized = materialize_overrides_into_legacy_tuning(
-        effective, current_tuning=current_tuning
-    )
-    new_config = copy.deepcopy(ws.config) if isinstance(ws.config, dict) else {}
-    new_config["tuning"] = materialized
-    ws.set_config(new_config)
     return {"tuning_effective": effective.model_dump(mode="json")}
+
+
+def get_legacy_config_view(ws: WorkspaceState) -> dict[str, Any]:
+    """Project ``ws.config`` + ``ws.tuning_overrides`` into the legacy shape.
+
+    PR-4b stores ``tuning_overrides`` as a first-class workspace field;
+    legacy callers (``GET /config`` consumers, YAML download, the
+    pre-PR-5 frontend that still reads ``config.tuning``) keep seeing a
+    materialized ``config["tuning"]`` block synthesised here on demand.
+
+    A workspace with ``tuning_overrides = None`` and no current task
+    falls back to a ``config`` view without a ``tuning`` key — same as
+    the pre-PR-4a behaviour.
+    """
+    if not isinstance(ws.config, dict):
+        return {}
+    if ws.tuning_overrides is None:
+        return dict(ws.config)
+    out = dict(ws.config)
+    effective = ws.backend.compute_effective_tuning(
+        _current_task(ws), ws.tuning_overrides
+    )
+    out["tuning"] = materialize_overrides_into_legacy_tuning(
+        effective, current_tuning=ws.config.get("tuning")
+    )
+    return out
+
+
+def absorb_legacy_tuning(ws: WorkspaceState, config: dict[str, Any]) -> dict[str, Any]:
+    """Extract ``config["tuning"]`` into ``ws.tuning_overrides`` (P-0109 PR-4b).
+
+    Compat shim for legacy PUT /config payloads. The pre-PR-5 frontend
+    still sends the materialized ``tuning`` block alongside the rest of
+    the config; this helper diverts that block into the sparse intent
+    store and returns the config WITHOUT the ``tuning`` key so the
+    storage rename stays consistent. PUT /config flows that omit
+    ``tuning`` leave ``ws.tuning_overrides`` unchanged.
+
+    Returns a fresh dict (input is not mutated).
+    """
+    if not isinstance(config, dict):
+        return {}
+    if "tuning" not in config:
+        return dict(config)
+    tuning = config["tuning"]
+    overrides = extract_overrides_from_legacy_tuning(tuning)
+    # Always store the absorbed overrides — even an empty intent is a
+    # meaningful "user cleared tune state" signal. ``None`` is reserved
+    # for "never touched" (post-reset, fresh workspace).
+    ws.set_tuning_overrides(overrides)
+    stripped = {k: v for k, v in config.items() if k != "tuning"}
+    return stripped
+
+
+def materialize_tuning_for_job(ws: WorkspaceState) -> dict[str, Any]:
+    """Build the per-job config snapshot with the effective ``tuning`` block.
+
+    Implements INV-T6 (P-0109 PR-4b): the job's persisted config must
+    remain stable even as the catalog evolves. The effective Tune
+    config is computed once here — from
+    :attr:`WorkspaceState.tuning_overrides` if the user touched any
+    Tune state, or from an empty :class:`TuningOverrides` (which the
+    adapter resolves to pure catalog defaults) otherwise — and frozen
+    into the returned dict.
+
+    Unlike :func:`get_legacy_config_view`, this helper *always*
+    materializes a ``tuning`` block: every tune job needs concrete
+    Optuna params + direction + space at run time, regardless of
+    whether the user ever opened the Tune tab. The caller hands the
+    result to ``job_store.create_and_claim_active`` so ``job.config``
+    carries the snapshot for the lifetime of the job (and on disk via
+    ``meta.json``).
+    """
+    if not isinstance(ws.config, dict):
+        return {}
+    overrides = _current_overrides(ws)
+    effective = ws.backend.compute_effective_tuning(_current_task(ws), overrides)
+    out = dict(ws.config)
+    out["tuning"] = materialize_overrides_into_legacy_tuning(
+        effective, current_tuning=ws.config.get("tuning")
+    )
+    return out
