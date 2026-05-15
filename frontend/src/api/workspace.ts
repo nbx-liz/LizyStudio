@@ -235,3 +235,47 @@ export async function fetchUiSchema(): Promise<UiSchema> {
   const { data } = await apiClient.GET("/api/backends/ui-schema", {});
   return unwrap(data, "/api/backends/ui-schema") as UiSchema;
 }
+
+// P-0109 PR-6c: snapshot of the Tune-tab intent / effective / defaults
+// triple. ``user_set_paths`` on ``tuning_effective`` powers the
+// "modified" badge on SearchSpaceRow; ``tuning_overrides`` is the
+// sparse user intent that the frontend can merge into a write body
+// without re-deriving from ``user_set_paths``.
+export interface TuningSnapshot {
+  tuning_effective: {
+    n_trials: number;
+    timeout: number | null;
+    direction: "maximize" | "minimize";
+    space: Record<string, Record<string, unknown>>;
+    evaluation_metrics: unknown[];
+    user_set_paths: string[];
+  } & Record<string, unknown>;
+  tuning_defaults: {
+    space: Record<string, Record<string, unknown>>;
+    evaluation_metrics: unknown[];
+    direction: "maximize" | "minimize" | null;
+  } & Record<string, unknown>;
+  tuning_overrides: {
+    n_trials: number | null;
+    timeout: number | null;
+    direction: "maximize" | "minimize" | null;
+    space: Record<string, Record<string, unknown>>;
+    evaluation_metrics: unknown[] | null;
+  } & Record<string, unknown>;
+}
+
+export async function fetchTuningSnapshot(opts?: {
+  signal?: AbortSignal;
+}): Promise<TuningSnapshot> {
+  const { data } = await apiClient.GET(
+    "/api/workspace/config/tuning-snapshot",
+    { signal: opts?.signal },
+  );
+  // SSOT-EXEMPT (Issue #236): TuningSnapshotResponse uses ``Record<string, unknown>``
+  // for the three nested dicts; narrow it here to the per-field shapes the
+  // Tune tab consumes so call sites stay strongly typed.
+  return unwrap(
+    data,
+    "/api/workspace/config/tuning-snapshot",
+  ) as unknown as TuningSnapshot;
+}
