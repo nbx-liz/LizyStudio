@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import re
 import threading
 from dataclasses import dataclass, field
@@ -11,9 +12,16 @@ from typing import Any
 
 import pandas as pd
 from fastapi import Request
+from pydantic import ValidationError
 
 from lizystudio.backends.base import BackendAdapter
-from lizystudio.backends.types import DataRef, FitSummary, TuningSummary
+from lizystudio.backends.types import (
+    DataRef,
+    FitSummary,
+    TuningConfig,
+    TuningOverrides,
+    TuningSummary,
+)
 
 
 @dataclass
@@ -427,3 +435,165 @@ def _apply_single_op(
         if not isinstance(existing, dict):
             existing = {}
         current[key] = {**existing, **value}
+
+
+# --- Tune intent/effective split (P-0109 PR-4a) ------------------------------
+#
+# These helpers project the legacy ``config["tuning"]`` shape onto the
+# P-0109 ``TuningOverrides`` type (and back) so the Tune-tab snapshot
+# endpoint can answer ``GET /config/tuning-snapshot`` without owning the
+# storage rename — that's PR-4b's job. The helpers keep the workspace
+# in-memory storage unchanged (still ``ws.config["tuning"]`` in the
+# legacy nested shape) while the API surface starts speaking the new
+# two-layer (overrides + effective) language to the frontend.
+
+
+def extract_overrides_from_legacy_tuning(
+    tuning: Any,
+) -> TuningOverrides:
+    """Project a legacy ``config["tuning"]`` block onto :class:`TuningOverrides`.
+
+    The legacy shape is nested
+    (``{optuna: {params, space}, evaluation, model_params, training}``);
+    :class:`TuningOverrides` is flat (``n_trials``, ``timeout``,
+    ``direction``, ``space``, ``evaluation_metrics``). Only the
+    intersection maps cleanly — ``model_params`` / ``training`` are
+    LizyML-specific overrides that the Tune-tab snapshot does not
+    expose. PR-4b widens this mapping (or moves storage) once the
+    architectural rename ships.
+
+    ``None`` / missing / malformed input is tolerated: an empty
+    :class:`TuningOverrides` is returned rather than raising. This keeps
+    the snapshot endpoint robust to fresh workspaces and in-progress
+    edits.
+
+    Each scalar field is added to ``model_fields_set`` only when present
+    in the input — so a workspace that has never set ``timeout``
+    presents as "not touched" rather than as "explicit None", preserving
+    the INV-T1 distinction.
+    """
+    if not isinstance(tuning, dict):
+        return TuningOverrides()
+    data: dict[str, Any] = {}
+    optuna = tuning.get("optuna")
+    if isinstance(optuna, dict):
+        params = optuna.get("params")
+        if isinstance(params, dict):
+            for key in ("n_trials", "timeout", "direction"):
+                if key in params:
+                    data[key] = params[key]
+        space = optuna.get("space")
+        if isinstance(space, dict) and space:
+            data["space"] = {k: v for k, v in space.items() if isinstance(v, dict)}
+    evaluation = tuning.get("evaluation")
+    if isinstance(evaluation, dict):
+        metrics = evaluation.get("metrics")
+        if isinstance(metrics, list):
+            data["evaluation_metrics"] = list(metrics)
+    try:
+        return TuningOverrides.model_validate(data)
+    except ValidationError:
+        # Malformed legacy state (e.g. n_trials="50" as a string from an
+        # ancient persisted workspace) — fall back to an empty intent so
+        # the snapshot endpoint still answers and the frontend can
+        # re-establish the state via a fresh PUT.
+        return TuningOverrides()
+
+
+def materialize_overrides_into_legacy_tuning(
+    effective: TuningConfig,
+    *,
+    current_tuning: Any = None,
+) -> dict[str, Any]:
+    """Materialize a :class:`TuningConfig` back into the legacy nested shape.
+
+    Produces a fresh dict suitable for assignment to
+    ``config["tuning"]``. ``current_tuning`` (the previous legacy block,
+    if any) is mined for non-Tune-overrides keys —
+    ``optuna.params``-keys outside the four canonical ones,
+    ``model_params``, and ``training`` — so a user's
+    LizyML-only overrides survive a Tune-tab edit.
+
+    The four canonical ``optuna.params`` keys are
+    ``n_trials`` / ``timeout`` / ``direction`` plus any extras the user
+    had set (e.g. ``study_name``). Re-tune state
+    (``tuning.re_tune``) is also preserved.
+    """
+    existing: dict[str, Any] = (
+        copy.deepcopy(current_tuning) if isinstance(current_tuning, dict) else {}
+    )
+    raw_optuna = existing.get("optuna")
+    existing_optuna: dict[str, Any] = raw_optuna if isinstance(raw_optuna, dict) else {}
+    raw_params = existing_optuna.get("params")
+    existing_params: dict[str, Any] = raw_params if isinstance(raw_params, dict) else {}
+
+    materialized_params: dict[str, Any] = dict(existing_params)
+    materialized_params["n_trials"] = effective.n_trials
+    materialized_params["timeout"] = effective.timeout
+    materialized_params["direction"] = effective.direction
+
+    out: dict[str, Any] = dict(existing)
+    out["optuna"] = {
+        **existing_optuna,
+        "params": materialized_params,
+        "space": dict(effective.space),
+    }
+    if effective.evaluation_metrics:
+        out["evaluation"] = {"metrics": list(effective.evaluation_metrics)}
+    elif "evaluation" in out:
+        # Preserve a user-cleared metric list as ``[]`` so PUT semantics
+        # round-trip — the alternative would silently re-seed defaults
+        # the user just deleted.
+        out["evaluation"] = {"metrics": []}
+    return out
+
+
+def get_tuning_snapshot(ws: WorkspaceState) -> dict[str, Any]:
+    """Build the response payload for ``GET /config/tuning-snapshot`` (PR-4a).
+
+    Returns ``{"tuning_effective": ..., "tuning_defaults": ...}`` where
+    each side is a plain dict the frontend consumes via the
+    openapi-typescript surface. The effective config is computed live
+    from the current ``ws.config["tuning"]`` (legacy shape) so the
+    response stays consistent with whatever the legacy PUT /config flow
+    last persisted — until PR-4b moves storage to the sparse form.
+    """
+    task = str(ws.config.get("task", "")) if isinstance(ws.config, dict) else ""
+    overrides = extract_overrides_from_legacy_tuning(
+        ws.config.get("tuning") if isinstance(ws.config, dict) else None
+    )
+    effective = ws.backend.compute_effective_tuning(task, overrides)
+    defaults = ws.backend.get_tuning_defaults(task)
+    return {
+        "tuning_effective": effective.model_dump(mode="json"),
+        "tuning_defaults": dataclasses.asdict(defaults),
+    }
+
+
+def update_tuning_overrides(
+    ws: WorkspaceState,
+    overrides: TuningOverrides,
+) -> dict[str, Any]:
+    """Apply *overrides* and materialize back into ``ws.config["tuning"]``.
+
+    Computes the effective config via the adapter, then rebuilds the
+    legacy ``ws.config["tuning"]`` block from the result so the existing
+    tune-job code path (``_prepare_tune_config`` and lizyml's Optuna
+    wiring) keeps working unchanged. Returns the new effective config so
+    the API endpoint can echo it in the response.
+
+    INV-T2 (P-0109): the merge happens once here. Any catalog-only key
+    that the user has not overridden is re-derived from the catalog —
+    so when the catalog evolves between two PUTs, the effective config
+    automatically tracks the new defaults for unchanged keys.
+    """
+    task = str(ws.config.get("task", "")) if isinstance(ws.config, dict) else ""
+    effective = ws.backend.compute_effective_tuning(task, overrides)
+    current_tuning = ws.config.get("tuning") if isinstance(ws.config, dict) else None
+    materialized = materialize_overrides_into_legacy_tuning(
+        effective, current_tuning=current_tuning
+    )
+    new_config = copy.deepcopy(ws.config) if isinstance(ws.config, dict) else {}
+    new_config["tuning"] = materialized
+    ws.set_config(new_config)
+    return {"tuning_effective": effective.model_dump(mode="json")}

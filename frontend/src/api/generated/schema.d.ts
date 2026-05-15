@@ -290,6 +290,67 @@ export interface paths {
         patch: operations["config_patch_api_workspace_config_patch"];
         trace?: never;
     };
+    "/api/workspace/config/tuning-snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Config Tuning Snapshot
+         * @description Return the Tune-tab intent/effective split (P-0109 PR-4a).
+         *
+         *     Produces ``{tuning_effective, tuning_defaults}`` derived live from
+         *     the currently-persisted ``ws.config["tuning"]`` via the adapter's
+         *     catalog (see :func:`get_tuning_snapshot` for the projection rule).
+         *
+         *     The endpoint is read-only and storage-shape neutral: PR-4b will move
+         *     the workspace to persist sparse :class:`TuningOverrides` directly,
+         *     at which point the projection from legacy nested shape becomes a
+         *     pass-through. The frontend (PR-5) consumes this snapshot to render
+         *     Tune-tab rows without the racing seed-then-edit useEffects.
+         */
+        get: operations["config_tuning_snapshot_api_workspace_config_tuning_snapshot_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/workspace/config/tuning-overrides": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Config Tuning Overrides Update
+         * @description Apply sparse Tune overrides and return the resulting effective config.
+         *
+         *     Body is parsed as :class:`TuningOverrides` (P-0109): every field is
+         *     optional, ``extra="forbid"`` catches typos, and Pydantic's
+         *     ``model_fields_set`` lets the merge distinguish "explicit None" from
+         *     "unset" (INV-T1 / Q4).
+         *
+         *     The legacy ``ws.config["tuning"]`` block is rebuilt from the
+         *     effective result so the existing tune-job path and the PUT /config
+         *     GET round-trip keep working unchanged — PR-4b moves storage to the
+         *     sparse form. The same workspace-lock semantics as PUT /config apply:
+         *     a tune job that is still running blocks the write with 409 (P-0089).
+         */
+        put: operations["config_tuning_overrides_update_api_workspace_config_tuning_overrides_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workspace/config/validate": {
         parameters: {
             query?: never;
@@ -1876,6 +1937,89 @@ export interface components {
             [key: string]: unknown;
         };
         /**
+         * TuningOverrides
+         * @description User-set Tune customisations — sparse intent (P-0109).
+         *
+         *     Persisted in the LizyStudio workspace config as the sole record of
+         *     "what the user changed". All fields are optional so the absence of a
+         *     value means "use the catalog default" rather than "set this to
+         *     ``None``". Use :meth:`pydantic.BaseModel.model_fields_set` to
+         *     distinguish ``user explicitly set timeout=None`` (no-timeout intent)
+         *     from ``user has not touched timeout`` (the field is omitted from
+         *     ``model_fields_set``).
+         *
+         *     INV-T1 / INV-T2 (P-0109): overrides are task-agnostic. Task
+         *     transitions never mutate overrides; the *effective* config is
+         *     re-computed from new catalog + same overrides.
+         *
+         *     ``frozen=True``: an overrides instance is immutable post-construction
+         *     so callers receive defensive snapshots when reading from the
+         *     workspace state.
+         */
+        TuningOverrides: {
+            /** N Trials */
+            n_trials?: number | null;
+            /** Timeout */
+            timeout?: number | null;
+            /** Direction */
+            direction?: ("maximize" | "minimize") | null;
+            /** Space */
+            space?: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
+            };
+            /** Evaluation Metrics */
+            evaluation_metrics?: unknown[] | null;
+        };
+        /**
+         * TuningOverridesUpdateResponse
+         * @description Response for ``PUT /api/workspace/config/tuning-overrides``.
+         *
+         *     Echoes the resulting effective config so the caller can refresh its
+         *     local Tune-tab state in a single round-trip.
+         */
+        TuningOverridesUpdateResponse: {
+            /** Tuning Effective */
+            tuning_effective: {
+                [key: string]: unknown;
+            };
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * TuningSnapshotResponse
+         * @description Response for ``GET /api/workspace/config/tuning-snapshot``.
+         *
+         *     The pair the frontend Tune tab consumes to render its rows without
+         *     racing on the WriteFunnel write path (P-0109 PR-5 deletes the three
+         *     useEffects that compose the legacy seed-then-edit flow).
+         *
+         *     * ``tuning_effective`` — the catalog defaults merged with the user's
+         *       currently-persisted sparse intent. ``user_set_paths`` carries the
+         *       provenance the frontend will use for the "modified" badge in a
+         *       follow-up PR (badge rendering is deferred so PR-5 stays focused
+         *       on the useEffect deletion).
+         *     * ``tuning_defaults`` — the pure backend catalog defaults for the
+         *       current task. Useful as the "reset" reference point in the UI.
+         *
+         *     Both are returned as plain dicts so the frontend can consume them
+         *     with the existing openapi-typescript-generated types — without
+         *     importing backend-side Pydantic / dataclass shapes.
+         */
+        TuningSnapshotResponse: {
+            /** Tuning Effective */
+            tuning_effective: {
+                [key: string]: unknown;
+            };
+            /** Tuning Defaults */
+            tuning_defaults: {
+                [key: string]: unknown;
+            };
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * UiCapabilities
          * @description Backend-declared capabilities consumed by the Workspace UI.
          */
@@ -2609,6 +2753,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConfigPatchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    config_tuning_snapshot_api_workspace_config_tuning_snapshot_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TuningSnapshotResponse"];
+                };
+            };
+        };
+    };
+    config_tuning_overrides_update_api_workspace_config_tuning_overrides_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TuningOverrides"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TuningOverridesUpdateResponse"];
                 };
             };
             /** @description Validation Error */
