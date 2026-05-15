@@ -156,9 +156,20 @@ class TestPutConfigAbsorbsLegacyTuning:
 class TestGetConfigSynthesisesLegacyTuning:
     """``GET /config`` returns materialised ``tuning`` for legacy callers."""
 
-    def test_get_after_overrides_set_includes_materialised_tuning(
+    def test_get_after_overrides_set_includes_user_set_tuning(
         self, client: TestClient, tmp_path: Path
     ) -> None:
+        """Sparse-emit: the synthesised ``tuning`` only carries user-set fields.
+
+        Catalog defaults intentionally do NOT bleed into ``GET /config``
+        — they live at ``GET /config/tuning-snapshot`` for callers that
+        want the fully-materialised effective view. The pre-PR-4b
+        legacy frontend reads ``config.tuning.optuna.params.n_trials``
+        and treats missing fields as "untouched", falling back to its
+        local SegmentedControl default. Sparseness preserves that
+        semantic so the legacy frontend keeps working unchanged
+        between PR-4b and PR-5.
+        """
         _load_data_and_binary_config(client, tmp_path)
         r = client.put(
             "/api/workspace/config/tuning-overrides",
@@ -170,8 +181,11 @@ class TestGetConfigSynthesisesLegacyTuning:
         body = cfg.json()
         assert "tuning" in body
         assert body["tuning"]["optuna"]["params"]["n_trials"] == 250
-        # Catalog space defaults fill in the rest.
-        assert "learning_rate" in body["tuning"]["optuna"]["space"]
+        # ``timeout`` / ``direction`` / ``space`` not in ``model_fields_set``
+        # of the PUT body — sparse-emit omits them.
+        assert "timeout" not in body["tuning"]["optuna"]["params"]
+        assert "direction" not in body["tuning"]["optuna"]["params"]
+        assert "space" not in body["tuning"]["optuna"]
 
     def test_get_without_overrides_omits_tuning(
         self, client: TestClient, tmp_path: Path

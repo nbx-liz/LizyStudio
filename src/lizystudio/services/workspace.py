@@ -635,23 +635,49 @@ def get_legacy_config_view(ws: WorkspaceState) -> dict[str, Any]:
     PR-4b stores ``tuning_overrides`` as a first-class workspace field;
     legacy callers (``GET /config`` consumers, YAML download, the
     pre-PR-5 frontend that still reads ``config.tuning``) keep seeing a
-    materialized ``config["tuning"]`` block synthesised here on demand.
+    ``config["tuning"]`` block synthesised here on demand.
 
-    A workspace with ``tuning_overrides = None`` and no current task
-    falls back to a ``config`` view without a ``tuning`` key — same as
-    the pre-PR-4a behaviour.
+    Sparse-emit invariant: the synthesised ``tuning`` block contains
+    ONLY the fields the user explicitly set in
+    ``ws.tuning_overrides`` (tracked via Pydantic ``model_fields_set``).
+    This preserves the pre-PR-4b semantic that ``GET /config`` returns
+    "what was PUT" — the legacy frontend treats absent fields as
+    "user has not touched" and falls back to local UI defaults
+    (e.g. N Trials SegmentedControl default = 50). The fully-materialised
+    effective view (with all catalog defaults filled in) lives at
+    ``GET /config/tuning-snapshot``, which PR-5 frontend consumes.
+
+    INV-T6 (job-time freeze) is unaffected: ``materialize_tuning_for_job``
+    *always* emits the complete effective into ``job.config["tuning"]``
+    so tune jobs run with full optuna params + space regardless of
+    sparseness here.
     """
     if not isinstance(ws.config, dict):
         return {}
-    if ws.tuning_overrides is None:
+    overrides = ws.tuning_overrides
+    if overrides is None:
         return dict(ws.config)
+    fields_set = overrides.model_fields_set
     out = dict(ws.config)
-    effective = ws.backend.compute_effective_tuning(
-        _current_task(ws), ws.tuning_overrides
-    )
-    out["tuning"] = materialize_overrides_into_legacy_tuning(
-        effective, current_tuning=ws.config.get("tuning")
-    )
+    optuna_params: dict[str, Any] = {}
+    if "n_trials" in fields_set:
+        optuna_params["n_trials"] = overrides.n_trials
+    if "timeout" in fields_set:
+        optuna_params["timeout"] = overrides.timeout
+    if "direction" in fields_set:
+        optuna_params["direction"] = overrides.direction
+    optuna: dict[str, Any] = {}
+    if optuna_params:
+        optuna["params"] = optuna_params
+    if overrides.space:
+        optuna["space"] = {k: dict(v) for k, v in overrides.space.items()}
+    tuning: dict[str, Any] = {}
+    if optuna:
+        tuning["optuna"] = optuna
+    if "evaluation_metrics" in fields_set and overrides.evaluation_metrics is not None:
+        tuning["evaluation"] = {"metrics": list(overrides.evaluation_metrics)}
+    if tuning:
+        out["tuning"] = tuning
     return out
 
 

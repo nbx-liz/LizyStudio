@@ -129,12 +129,19 @@ test.describe("Workspace Apply-to-Fit (G-1, P-0092 Phase 6)", () => {
     // 4. The PUT body must carry model.params merged with best_params.
     // PUT /config sends the full snapshot, so we read the request body
     // and assert each best_param key is present.
+    //
+    // Catalog space keys include dotted entries (e.g.
+    // ``early_stopping.rounds``). Vitest's ``toHaveProperty(stringPath)``
+    // splits on ``.`` and walks the resulting path, which doesn't match
+    // a flat property whose key literally contains a dot. Wrap the key
+    // in an array to force literal interpretation.
     const putBody = JSON.parse(applyPut.request().postData() ?? "{}") as {
       model?: { params?: Record<string, unknown> };
     };
-    const writtenParams = putBody.model?.params ?? {};
+    const writtenParams: Record<string, unknown> =
+      putBody.model?.params ?? {};
     for (const key of Object.keys(bestParams)) {
-      expect(writtenParams).toHaveProperty(key);
+      expect(writtenParams).toHaveProperty([key]);
       // best_params can be numeric or categorical (e.g. lgbm boosting_type);
       // assert equality on the JSON-encoded form so number/string parity
       // matches what the funnel actually shipped.
