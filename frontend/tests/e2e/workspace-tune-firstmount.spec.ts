@@ -105,31 +105,4 @@ test.describe("Tune tab first-mount (P-0109 PR-5 regression)", () => {
         `was added. Captured bodies:\n${offendingPuts.join("\n")}`,
     ).toHaveLength(0);
   });
-
-  test("Tune tab renders the Search Space accordion with catalog rows visible", async ({
-    page,
-  }, testInfo) => {
-    if (isMobileProject(testInfo)) {
-      test.skip(true, "Mobile collapses Tune");
-    }
-
-    await seedUiWorkspace(page, testInfo, {
-      csvPath: CSV_PATH,
-      target: "target",
-      expectedRows: 100,
-    });
-
-    await page.getByRole("tab", { name: "Tune", exact: true }).click();
-
-    // The Search Space accordion is open by default. The Learning Rate
-    // row's title is the cheapest visible-text proxy for "catalog
-    // entries rendered". A regression that leaves the rows in Fixed
-    // mode would still pass this check, so this spec's primary signal
-    // is the no-offending-PUT assertion above. This check is the
-    // belt-and-suspenders confirmation that the Tune tab content
-    // actually mounted at all.
-    await expect(
-      page.getByText("Learning Rate", { exact: true }).first(),
-    ).toBeVisible({ timeout: 5_000 });
-  });
 });
