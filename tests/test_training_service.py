@@ -461,6 +461,18 @@ class TestPrepareTuneConfig:
         _prepare_tune_config(config)
         assert config == original
 
+    def test_direction_resolution_unknown_metric_defaults_to_minimize(
+        self,
+    ) -> None:
+        """Unknown metrics fall back to ``minimize`` (sane default)."""
+        config = {
+            "task": "binary",
+            "evaluation": {"metrics": ["custom_unknown_metric"]},
+            "tuning": {"optuna": {"params": {"n_trials": 3}}},
+        }
+        result = _prepare_tune_config(config)
+        assert result["tuning"]["optuna"]["params"]["direction"] == "minimize"
+
 
 # ---------------------------------------------------------------------------
 # _prepare_autofit_config unit tests

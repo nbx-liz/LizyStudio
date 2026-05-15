@@ -8,6 +8,8 @@ from typing import Any, Literal
 import pandas as pd
 import yaml
 
+from lizystudio.backends.lizyml_metrics import get_metric_directions
+from lizystudio.backends.lizyml_ui_schema import _SEARCH_SPACE_CATALOG
 from lizystudio.backends.types import (
     BackendInfo,
     ConfigSchema,
@@ -26,6 +28,54 @@ from .config_compat import strip_internal_keys, task_params_compat_errors
 _REGRESSION_METRIC_WATCHLIST = frozenset({"mape", "rmsle", "r2"})
 
 
+# P-0109 PR-3 / Issue #517 follow-up: per-task canonical default evaluation
+# metric list. Was previously a frontend-only constant
+# (``TASK_DEFAULT_METRICS`` in ``TuneEvaluationSection.tsx``); moved here so
+# the backend owns the SSOT and the frontend no longer needs adapter-specific
+# branches (INV-T5). Multiclass / regression defaults remain deferred —
+# see P-0104 Wave 2.3 (Issue #459) for the scope statement.
+_TASK_DEFAULT_METRICS: dict[str, list[str]] = {
+    "binary": ["auc", "auc_pr", "brier", "logloss"],
+}
+
+# P-0109 PR-3: tasks the lizyml catalog defaults apply to. Anything outside
+# this set (``""`` / unknown) yields an empty :class:`TuningDefaults` —
+# the adapter cannot propose canonical Tune defaults without a task.
+_KNOWN_TASKS: frozenset[str] = frozenset({"binary", "multiclass", "regression"})
+
+
+def _catalog_default_space() -> dict[str, dict[str, Any]]:
+    """Project the lizyml UI catalog into Optuna SpaceEntry dicts (P-0109 PR-3).
+
+    Only entries declaring ``default_mode = "range"`` or
+    ``default_mode = "choice"`` contribute — ``"fixed"`` entries have no
+    canonical search space, they are just fixed values. The resulting
+    dict matches the shape ``lizyml.tuning.parse_space()`` accepts.
+
+    Returns a fresh dict on each call so callers may safely keep the
+    result inside an otherwise-frozen ``TuningDefaults`` snapshot.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for entry in _SEARCH_SPACE_CATALOG:
+        mode = entry.get("default_mode")
+        key = entry["key"]
+        if mode == "range":
+            r = entry.get("default_range", {})
+            param_type = "int" if entry.get("paramType") == "integer" else "float"
+            out[key] = {
+                "type": param_type,
+                "low": r.get("low"),
+                "high": r.get("high"),
+                "log": bool(r.get("log", False)),
+            }
+        elif mode == "choice":
+            out[key] = {
+                "type": "categorical",
+                "choices": list(entry.get("default_choices", [])),
+            }
+    return out
+
+
 class ConfigMixin:
     """Identification, schema, validation, and config file loading."""
 
@@ -36,29 +86,57 @@ class ConfigMixin:
         return BackendInfo(name="lizyml", version=lizyml.__version__)
 
     def get_tuning_defaults(self, task: str) -> TuningDefaults:
-        """P-0109 PR-2 stub — empty catalog defaults.
+        """Catalog-aware Tune defaults for the lizyml backend (P-0109 PR-3).
 
-        Real catalog-aware impl arrives in PR-3
-        (`search_space_catalog` + `TASK_DEFAULT_METRICS` + `metric_direction`
-        wired in). For now this matches the ``BackendCore`` safe default so
-        ``LizyMLAdapter`` satisfies the Protocol unchanged and downstream
-        callers see no behaviour change (the legacy on-the-fly defaults in
-        ``workspace_tune`` / ``_prepare_tune_config`` remain authoritative
-        until PR-4 swaps them out).
+        Implements :meth:`BackendCore.get_tuning_defaults` for lizyml by
+        projecting three SSOTs that already live inside the adapter:
+
+        * ``lizyml_ui_schema._SEARCH_SPACE_CATALOG`` (via
+          :func:`_catalog_default_space`) — the catalog rows with
+          ``default_mode = "range" | "choice"`` define the per-key search
+          space defaults.
+        * ``_TASK_DEFAULT_METRICS`` — the per-task canonical evaluation
+          metric list (Studio-side; binary only as of P-0104 Wave 2.3 /
+          Issue #459).
+        * ``lizyml_metrics.get_metric_directions`` — the optimisation
+          direction implied by the first canonical metric, derived from
+          lizyml's metric registry (single SSOT, INV-T3).
+
+        Tasks outside ``{"binary", "multiclass", "regression"}`` (and the
+        empty string) yield an empty :class:`TuningDefaults` — the
+        adapter cannot propose canonical defaults without a task.
         """
-        return TuningDefaults()
+        if task not in _KNOWN_TASKS:
+            return TuningDefaults()
+        space = _catalog_default_space()
+        metrics: list[Any] = list(_TASK_DEFAULT_METRICS.get(task, []))
+        direction: Literal["maximize", "minimize"] | None = None
+        if metrics:
+            task_dirs = get_metric_directions().get(task, {})
+            canonical = task_dirs.get(str(metrics[0]))
+            if canonical == "maximize":
+                direction = "maximize"
+            elif canonical == "minimize":
+                direction = "minimize"
+        return TuningDefaults(
+            space=space,
+            evaluation_metrics=metrics,
+            direction=direction,
+        )
 
     def compute_effective_tuning(
         self, task: str, overrides: TuningOverrides
     ) -> TuningConfig:
-        """P-0109 PR-2 stub — inline mirror of ``BackendCore``'s safe-default.
+        """Merge :meth:`get_tuning_defaults` for *task* with *overrides*.
 
-        ``ConfigMixin`` does not inherit from ``BackendCore`` (the
-        adapter satisfies the Protocol via duck typing) so we cannot
-        ``super().compute_effective_tuning`` here. PR-3 replaces this
-        with a catalog-aware impl (search_space_catalog + metric_direction
-        + TASK_DEFAULT_METRICS); PR-4 wires the result through the
-        service layer at PUT /config response time and at tune job start.
+        Catalog-aware as of P-0109 PR-3: defaults are sourced from
+        :func:`_catalog_default_space` + :data:`_TASK_DEFAULT_METRICS` +
+        ``lizyml_metrics.get_metric_directions``. ``ConfigMixin`` does
+        not inherit from ``BackendCore`` (the adapter satisfies the
+        Protocol via duck typing), so the merge logic is inlined here
+        instead of delegating via ``super()``. PR-4 will wire the
+        result through the service layer at PUT /config response time
+        and at tune job start (INV-T6: job-time snapshot freeze).
         """
         defaults = self.get_tuning_defaults(task)
         fields_set = overrides.model_fields_set
