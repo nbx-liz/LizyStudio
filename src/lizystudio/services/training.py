@@ -152,6 +152,17 @@ def _prepare_tune_config(config: dict[str, Any]) -> dict[str, Any]:
     # evaluation metric. We now ALWAYS recompute the natural direction
     # from the optimization metric and overwrite when it disagrees,
     # using ``maximize_metrics`` as the single source of truth.
+    #
+    # P-0109 PR-3 staging note: the canonical metric→direction mapping
+    # already lives at the adapter level
+    # (``adapter.get_tuning_defaults``, backed by
+    # ``lizyml_metrics.get_metric_directions``). Removing this local
+    # hardcoded ``maximize_metrics`` set requires the adapter handle in
+    # this helper, which PR-4 wires through alongside the
+    # ``service.set_config`` rewiring. INV-ADAPTER-1 (contract test
+    # ``test_api_and_services_do_not_import_backends_lizyml``) forbids a
+    # direct backend-specific import here, so the drift point stays
+    # until PR-4 — see HISTORY P-0109 (PR chain).
     if "tuning" in result:
         optuna = result["tuning"].get("optuna", {})
         params = optuna.get("params", {})
