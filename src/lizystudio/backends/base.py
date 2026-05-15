@@ -193,6 +193,19 @@ class BackendCore(Protocol):
         from overrides alone with hardcoded fallbacks (``n_trials=50``
         / ``direction="minimize"``). Real adapters override this to
         consult their catalog and registry.
+
+        INV-T3 (P-0109 PR-6b refinement): when a backend exposes a
+        metric registry (as ``LizyMLAdapter`` does via
+        ``lizyml_metrics.get_metric_directions``), it MUST derive
+        ``direction`` from the *effective* first evaluation metric, not
+        from the catalog's canonical default. Without this refinement,
+        a user who overrides ``evaluation_metrics`` to flip from a
+        maximize-metric to a minimize-metric (e.g. ``auc`` → ``logloss``)
+        would silently keep the maximize direction, and the bug would
+        be papered over by ``services/training.py::_prepare_tune_config``'s
+        legacy direction-resolve block (deleted in PR-6b). The safe
+        default below cannot do this lookup (no registry available);
+        it documents the contract for subclass implementers.
         """
         defaults = self.get_tuning_defaults(task)
         fields_set = overrides.model_fields_set
