@@ -53,6 +53,18 @@ interface SearchSpaceTableProps {
    * current task, resolved from ``uiSchema.parameter_bounds[task]``.
    * Forwarded per-row to clamp the Range Min/Max NumberInputs. */
   parameterBounds?: Record<string, { min?: number; max?: number }>;
+  /**
+   * P-0109 PR-6c: keys of ``space.*`` entries the user has explicitly
+   * touched (derived from ``tuning_effective.user_set_paths`` in the
+   * Tune-tab snapshot — entries prefixed with ``"space."`` are
+   * stripped to the bare param name). Per row, when the param key is
+   * a member of this set, ``SearchSpaceRow`` renders a "Modified"
+   * badge so users can distinguish their explicit edits from catalog
+   * defaults. ``undefined`` is treated as the empty set (no row gets
+   * the badge — same behaviour as before this PR) so callers that
+   * have not yet wired the snapshot keep working.
+   */
+  userSetSpaceKeys?: ReadonlySet<string>;
 }
 
 export function SearchSpaceTable({
@@ -74,6 +86,7 @@ export function SearchSpaceTable({
   cvStrategy,
   innerValidOptions,
   parameterBounds,
+  userSetSpaceKeys,
 }: SearchSpaceTableProps) {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   // Initialize addedParams from space keys that exist in additionalParams
@@ -313,6 +326,7 @@ export function SearchSpaceTable({
                 onModelParamChange={onModelParamChange}
                 specialSearchSpaceFields={specialSearchSpaceFields}
                 columns={columns}
+                isUserSet={userSetSpaceKeys?.has(param.key) ?? false}
               />
             ))}
         </div>

@@ -1,7 +1,15 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UiSchema } from "@/api/types";
+import { renderWithQuery } from "@/test/helpers";
 import { TuneTab } from "./TuneTab";
+
+// P-0109 PR-6c: TuneTab now subscribes to ``useTuningSnapshot`` so a
+// ``QueryClientProvider`` is required in the render tree. Use the
+// shared ``renderWithQuery`` helper as the test entry point instead of
+// the raw RTL ``render`` — the alias below keeps the existing test
+// bodies unchanged.
+const render = renderWithQuery;
 
 // Mock SearchSpaceTable to expose its props as callable test handles
 vi.mock("./SearchSpaceTable", () => ({

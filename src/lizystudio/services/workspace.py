@@ -586,11 +586,19 @@ def _current_task(ws: WorkspaceState) -> str:
 def get_tuning_snapshot(ws: WorkspaceState) -> dict[str, Any]:
     """Build the response payload for ``GET /config/tuning-snapshot``.
 
-    Returns ``{"tuning_effective": ..., "tuning_defaults": ...}`` where
-    each side is a plain dict the frontend consumes via the
+    Returns ``{"tuning_effective", "tuning_defaults", "tuning_overrides"}``
+    where each side is a plain dict the frontend consumes via the
     openapi-typescript surface. PR-4b makes ``ws.tuning_overrides`` the
     sole source of Tune intent — the snapshot endpoint reads it
     directly instead of extracting from legacy ``ws.config["tuning"]``.
+
+    PR-6c adds ``tuning_overrides`` to the payload so the frontend can
+    compute a future write body without round-tripping through the
+    legacy ``GET/PUT /config`` shim. ``user_set_paths`` on the
+    effective config is also consumed by the Tune-tab "modified"
+    badge — both sides live on the same payload so a single
+    ``useTuningSnapshot`` subscription drives both the read view and
+    the badge state.
     """
     task = _current_task(ws)
     overrides = _current_overrides(ws)
@@ -599,6 +607,7 @@ def get_tuning_snapshot(ws: WorkspaceState) -> dict[str, Any]:
     return {
         "tuning_effective": effective.model_dump(mode="json"),
         "tuning_defaults": dataclasses.asdict(defaults),
+        "tuning_overrides": overrides.model_dump(mode="json"),
     }
 
 

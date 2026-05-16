@@ -15,6 +15,16 @@ interface TuneEvaluationSectionProps {
   metricDirection?: Record<string, Record<string, string>>;
   evaluation: { metrics?: MetricEntry[] };
   tuningParams: { n_trials?: number; timeout?: number | null };
+  /**
+   * P-0109 PR-6c: canonical fallback metric list for the current
+   * task, sourced from ``GET /config/tuning-snapshot`` →
+   * ``tuning_defaults.evaluation_metrics``. Replaces the
+   * frontend-only ``TASK_DEFAULT_METRICS`` constant (P-0104 Wave 2.3
+   * / Issue #459) that PR-5 left as a render-time fallback. Empty
+   * when the snapshot has not loaded yet or the task has no canonical
+   * default set (catalog returns ``[]`` for unknown tasks).
+   */
+  defaultEvaluationMetrics?: unknown[];
 }
 
 /** Build a MetricEntry — use dict form for precision_at_k */
@@ -25,22 +35,25 @@ function buildEntry(name: string, k?: number): MetricEntry {
   return name;
 }
 
-// P-0104 Wave 2.3 / Issue #459 — per-task canonical default eval
-// metrics used as a render-time fallback when the persisted config
-// has no metrics set. Binary is the only task with a confirmed
-// canonical set; regression / multiclass defaults are deferred to a
-// follow-up issue per #459's scope statement. P-0109 PR-3 moved the
-// SSOT for these to the lizyml adapter
-// (``backends.lizyml.config_mixin._TASK_DEFAULT_METRICS``) — this
-// frontend constant remains the post-PR-5 render fallback and is
-// scheduled for removal in PR-6c once the Tune tab reads its
-// effective state from ``GET /api/workspace/config/tuning-snapshot``
-// (PR-4a #519) instead of the legacy ``GET /api/workspace/config``
-// shim. Until then, dropping this constant would regress the
-// initial Additional-Metrics chip state for binary tasks.
-const TASK_DEFAULT_METRICS: Record<string, string[]> = {
-  binary: ["auc", "auc_pr", "brier", "logloss"],
-};
+/**
+ * Coerce a snapshot ``evaluation_metrics`` entry into the local
+ * MetricEntry union (``string | { [metric]: { ...params } }``). The
+ * snapshot serialises both shapes verbatim, but the openapi-generated
+ * type is ``unknown[]``; this helper narrows defensively so a stale /
+ * mid-load snapshot does not crash the Tune-tab render.
+ */
+function coerceMetricEntry(value: unknown): MetricEntry | null {
+  if (typeof value === "string") return value;
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).length > 0
+  ) {
+    return value as MetricEntry;
+  }
+  return null;
+}
 
 export function TuneEvaluationSection({
   config,
@@ -50,30 +63,40 @@ export function TuneEvaluationSection({
   metricDirection,
   evaluation,
   tuningParams,
+  defaultEvaluationMetrics,
 }: TuneEvaluationSectionProps) {
-  // P-0109 PR-5: derive effective evaluation metrics at render time
-  // instead of seeding them via a useEffect that wrote to PUT /config.
-  // The legacy "metrics seed useEffect" raced two siblings (search-space
-  // init + direction defensive sync) through the WriteFunnel; all three
-  // shared the ``config-form-edit`` reason and the funnel coalesced
-  // them to the last-arriver, dropping the metrics seed.
+  // P-0109 PR-5 + PR-6c: derive effective evaluation metrics at render
+  // time. The legacy "metrics seed useEffect" raced two siblings
+  // (search-space init + direction defensive sync) through the
+  // WriteFunnel; all three shared the ``config-form-edit`` reason and
+  // the funnel coalesced them to the last-arriver, dropping the
+  // metrics seed.
   //
-  // The fix: keep the persisted ``evaluation.metrics`` as the source of
-  // truth and fall back to ``TASK_DEFAULT_METRICS[task]`` when the user
-  // has not yet set anything. The first metric the user explicitly
-  // clicks writes a real PUT through the funnel and pins the list.
+  // The fix: keep the persisted ``evaluation.metrics`` as the source
+  // of truth and fall back to ``defaultEvaluationMetrics`` — sourced
+  // from ``GET /config/tuning-snapshot`` → ``tuning_defaults`` (PR-6c)
+  // — when the user has not yet set anything. The first metric the
+  // user explicitly clicks writes a real PUT through the funnel and
+  // pins the list. The backend adapter owns the per-task canonical
+  // list (INV-T5), so the frontend never carries an adapter-specific
+  // branch.
   const persistedMetrics = evaluation.metrics;
   const evalMetrics: MetricEntry[] = useMemo(() => {
     if (Array.isArray(persistedMetrics) && persistedMetrics.length > 0) {
       return persistedMetrics;
     }
-    if (!task) return [];
-    const fallback = TASK_DEFAULT_METRICS[task];
-    if (!fallback || metricOptions.length === 0) return [];
-    return fallback
-      .filter((m) => metricOptions.includes(m))
-      .map((m) => buildEntry(m));
-  }, [persistedMetrics, task, metricOptions]);
+    if (!task || metricOptions.length === 0) return [];
+    const fallback = defaultEvaluationMetrics ?? [];
+    const out: MetricEntry[] = [];
+    for (const raw of fallback) {
+      const entry = coerceMetricEntry(raw);
+      if (entry === null) continue;
+      const name = metricEntryName(entry);
+      if (!metricOptions.includes(name)) continue;
+      out.push(entry);
+    }
+    return out;
+  }, [persistedMetrics, task, metricOptions, defaultEvaluationMetrics]);
 
   // Widget conformance: fall back to first available metric option
   const optimizationMetric = evalMetrics[0]

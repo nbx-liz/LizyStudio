@@ -1494,4 +1494,84 @@ describe("SearchSpaceTable", () => {
       expect(spaceArg["early_stopping.rounds"].high).toBe(5000);
     });
   });
+
+  // P-0109 PR-6c: ``userSetSpaceKeys`` drives a "Modified" badge that
+  // surfaces per-row whether the user explicitly customised the
+  // search-space entry. The set originates from
+  // ``tuning_effective.user_set_paths`` returned by the
+  // ``useTuningSnapshot`` query — entries prefixed with ``"space."``
+  // stripped to the bare param name (handled in ``TuneTab``).
+  describe("userSetSpaceKeys → Modified badge", () => {
+    const lrCatalog: SearchSpaceCatalogEntry[] = [
+      {
+        key: "learning_rate",
+        title: "Learning Rate",
+        paramType: "number",
+        modes: ["fixed", "range"],
+        group: "model_params",
+      },
+      {
+        key: "max_depth",
+        title: "Max Depth",
+        paramType: "integer",
+        modes: ["fixed", "range"],
+        group: "model_params",
+      },
+    ];
+
+    it("renders the badge for keys in userSetSpaceKeys", () => {
+      render(
+        <SearchSpaceTable
+          space={{
+            learning_rate: { type: "float", low: 0.5, high: 1.0, log: false },
+            max_depth: { type: "int", low: 3, high: 9, log: false },
+          }}
+          modelParams={{}}
+          onChange={vi.fn()}
+          catalog={lrCatalog}
+          userSetSpaceKeys={new Set(["learning_rate"])}
+        />,
+      );
+      expect(
+        screen.getByTestId("search-space-row-modified-learning_rate"),
+      ).toBeInTheDocument();
+      // ``max_depth`` is a catalog default — no badge.
+      expect(
+        screen.queryByTestId("search-space-row-modified-max_depth"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("renders no badges when userSetSpaceKeys is undefined", () => {
+      render(
+        <SearchSpaceTable
+          space={{
+            learning_rate: { type: "float", low: 0.5, high: 1.0, log: false },
+          }}
+          modelParams={{}}
+          onChange={vi.fn()}
+          catalog={lrCatalog}
+        />,
+      );
+      expect(
+        screen.queryByTestId("search-space-row-modified-learning_rate"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("renders no badges when userSetSpaceKeys is empty", () => {
+      render(
+        <SearchSpaceTable
+          space={{
+            learning_rate: { type: "float", low: 0.5, high: 1.0, log: false },
+          }}
+          modelParams={{}}
+          onChange={vi.fn()}
+          catalog={lrCatalog}
+          userSetSpaceKeys={new Set()}
+        />,
+      );
+      expect(
+        screen.queryByTestId("search-space-row-modified-learning_rate"),
+      ).not.toBeInTheDocument();
+    });
+  });
 });
