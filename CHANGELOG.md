@@ -7,6 +7,138 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-05-16
+
+The **Tune backend SSOT consolidation + StudioError observability** patch
+release. Lands the full P-0109 chain (PRs #516..#524) that
+re-architects the Tune workflow around an intent/effective split:
+backend adapters now own Tune defaults, the workspace persists only
+sparse user intent, and the frontend reads via a dedicated
+`/config/tuning-snapshot` endpoint. The first-mount Fixed-defaults
+display bug ([2026-05-14 confirmed](HISTORY.md)) is structurally
+resolved by PR-5 (#521) — three racing `useEffect`s in the Tune tab
+are physically deleted, replaced by render-time fallbacks driven by
+`tuning_effective`. Bundles a small observability follow-up (#513 /
+PR #515) that logs every `StudioError` at WARNING level.
+
+Bundles:
+
+1. **P-0109 Tune SSOT consolidation (Option B, no schema bump)** —
+   `BackendCore` gains `get_tuning_defaults` / `compute_effective_tuning`
+   (#517); `LizyMLAdapter` implements them with task-aware defaults
+   and direction derivation from the effective first metric (#518,
+   #523); `GET /config/tuning-snapshot` + `PUT /config/tuning-overrides`
+   added (#519); `WorkspaceState.tuning_overrides` becomes a
+   first-class field with INV-T6 snapshot freeze at job-start (#520);
+   three Tune-tab `useEffect`s deleted + render-time fallbacks (#521);
+   `useTuningSnapshot` TanStack hook + `SearchSpaceRow` "Modified"
+   badge + `TASK_DEFAULT_METRICS` frontend constant deleted (#524);
+   docs / HISTORY Decision flip / BLUEPRINT / architecture-as-implemented
+   reconciled (#522).
+2. **StudioError observability (#513 / PR #515)** —
+   `studio_error_handler` now emits a WARNING-level log line
+   (`code` / `status_code` / `method` / `path`) for every
+   `StudioError`, with `details` deliberately excluded to avoid
+   leaking user-supplied input. Precursor to R-3.1 typed-error work.
+
+### Added
+
+- **`BackendCore.get_tuning_defaults(task)` Protocol method
+  (P-0109 / #517)** — backend-owned per-task tuning defaults
+  (search space, n_trials, sampler/pruner, evaluation metric list).
+  Returned snapshot is read-only and consumed by both the frontend
+  (Tune tab seed) and the service layer (effective composition).
+- **`BackendCore.compute_effective_tuning(defaults, overrides, task)`
+  Protocol method (P-0109 / #517 / #523)** — pure SSOT for
+  intent/effective composition. Computes the effective Tune state by
+  merging sparse overrides over defaults; `direction` is derived from
+  the effective first metric so a metric-list override propagates to
+  the optimization direction automatically. Returns
+  `user_set_paths` so the UI can mark per-row "Modified" badges.
+- **`GET /api/workspace/config/tuning-snapshot` (P-0109 / #519,
+  augmented in #524)** — returns
+  `{tuning_effective, tuning_defaults, tuning_overrides}`. Primary
+  read path for the Tune tab; `tuning_effective.user_set_paths`
+  drives the "Modified" badge.
+- **`PUT /api/workspace/config/tuning-overrides` (P-0109 / #519)** —
+  accepts a sparse `TuningOverrides` body with REPLACE semantics.
+  Persists user intent without writing catalog defaults to disk.
+- **`SearchSpaceRow` "Modified" badge (P-0109 / #524)** — rendered
+  when the row's path appears in `tuning_effective.user_set_paths`,
+  giving users a clear visual cue for which entries they have
+  explicitly edited vs. catalog defaults.
+- **`useTuningSnapshot` TanStack Query hook (P-0109 / #524)** —
+  canonical client-side accessor for the snapshot endpoint with
+  TanStack cache key alignment (`['workspace', 'tuning-snapshot']`).
+
+### Changed
+
+- **`LizyMLAdapter.compute_effective_tuning` direction derivation
+  (P-0109 / #523)** — now computes `direction` from the *effective*
+  first metric (after override) rather than the default first metric.
+  Ensures that overriding `evaluation_metrics` also flips the
+  optimization direction when needed (e.g. accuracy → log_loss).
+- **`services/training.py::_prepare_tune_config` (P-0109 / #523)** —
+  the hard-coded `maximize_metrics = {"auc","auc_pr","r2","accuracy","f1","auc_mu"}`
+  set is removed. Direction resolution now flows exclusively through
+  the adapter SSOT, eliminating one of two duplicated direction
+  catalogs (INV-T3).
+- **Frontend `TASK_DEFAULT_METRICS` constant deleted (P-0109 / #524)** —
+  the canonical default metric list is taken from
+  `tuning_defaults.evaluation_metrics` via the snapshot endpoint;
+  the duplicated frontend catalog is gone.
+- **Three Tune-tab `useEffect`s physically deleted (P-0109 / #521)** —
+  `TuneTab` search-space initialization, `TuneEvaluationSection`
+  direction sync, and metrics-seed effects are replaced by
+  render-time fallbacks. The first-mount Fixed-defaults bug
+  (which manifested as a flash of catalog defaults before the
+  effects synced) cannot recur because there is no longer any
+  client-side derivation race.
+
+### Fixed
+
+- **StudioError observability — every 4xx now logged (#513 / #515)** —
+  `api/errors.py::studio_error_handler` emits a WARNING-level log
+  line per error: `StudioError <CODE> (<status>) at <METHOD> <PATH>`.
+  Operators can now correlate user-reported 4xx errors with server
+  log entries. `details` deliberately excluded from the WARNING
+  channel to avoid logging user-supplied input.
+
+### Compatibility
+
+- **on-disk `STUDIO_FORMAT_VERSION` is unchanged (still 2)** —
+  P-0109 deliberately took **Option B** (no schema bump). The
+  `WorkspaceConfig.tuning` block on disk retains its v2 shape;
+  `absorb_legacy_tuning` / `get_legacy_config_view` bidirectional
+  shims absorb legacy nested writes into `WorkspaceState.tuning_overrides`
+  at load/save time. INV-T7 (on-disk schema stability) is trivially
+  preserved.
+- **Legacy `PUT /api/workspace/config` (with embedded `tuning` block)
+  continues to work** — Tune-tab edits currently route through this
+  legacy endpoint; A-2 follow-up issue tracks routing them through
+  the new `PUT /config/tuning-overrides` (sparse) endpoint.
+- **No behaviour change to `tune_result.trials` / Optuna re-attach** —
+  PR #420 / v3-20 Tune resume semantics are unaffected.
+
+### Internal
+
+- `BackendAdapter` Protocol extended with `TuningDefaults` /
+  `TuningOverrides` / `TuningConfig` common types (P-0109 / #517).
+- `WorkspaceState.tuning_overrides` is now a first-class field on
+  the state dataclass (P-0109 / #520); `materialize_tuning_for_job`
+  produces an immutable snapshot at job-start (INV-T6).
+- The `_assert_inv_t3(...)` warn-only helper added in PR #523 is
+  currently *not invoked* — the assertion adds tens-of-ms read-only
+  latency before `backend.tune(...)` and interacts with the
+  pause-observation timing in `tune-resume.spec.ts:185`. The helper
+  is retained in source; re-enablement is tracked as follow-up
+  issue A-1. The INV-T3 guarantee itself is unaffected — it is
+  enforced by `LizyMLAdapter.compute_effective_tuning`.
+- HISTORY P-0109 row flipped to **Decision: Approved & shipped
+  (Option B, 2026-05-15)**; ROADMAP §3 P-0109 line moved to the
+  "shipped" tier; BLUEPRINT §Tune Adapter section updated to
+  reference the intent/effective split (#522).
+
 ## [0.6.0] - 2026-05-13
 
 The **Tune workflow polish + v0.5 Exit Criteria closure** release.
