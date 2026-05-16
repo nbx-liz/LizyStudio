@@ -1,7 +1,15 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UiSchema } from "@/api/types";
+import { renderWithQuery } from "@/test/helpers";
 import { TuneTab } from "./TuneTab";
+
+// P-0109 PR-6c: TuneTab now subscribes to ``useTuningSnapshot`` so a
+// ``QueryClientProvider`` is required in the render tree. Use the
+// shared ``renderWithQuery`` helper as the test entry point instead of
+// the raw RTL ``render`` — the alias below keeps the existing test
+// bodies unchanged.
+const render = renderWithQuery;
 
 // Mock SearchSpaceTable to expose its props as callable test handles
 vi.mock("./SearchSpaceTable", () => ({
@@ -445,7 +453,13 @@ describe("TuneTab", () => {
     expect(evaluation.metrics).not.toContain("f1");
   });
 
-  it("auto-initializes search space from catalog entries with default_mode=range", async () => {
+  it("renders catalog range/choice rows without firing a search-space PUT (P-0109 PR-5)", async () => {
+    // Pre-PR-5 a useEffect auto-wrote catalog defaults to
+    // ``config.tuning.optuna.space`` on first mount, racing two
+    // sibling useEffects through the WriteFunnel and dropping the
+    // search-space write. PR-5 deletes the useEffect and instead
+    // merges catalog defaults into the rendered ``effectiveSpace``
+    // memo — no PUT fires, so the race cannot happen.
     const onChange = vi.fn();
     const config = {
       model: { name: "lgbm", params: {} },
@@ -491,31 +505,16 @@ describe("TuneTab", () => {
       />,
     );
 
-    // useEffect runs asynchronously — wait for onChange to be called
-    await vi.waitFor(() => {
-      expect(onChange).toHaveBeenCalled();
-    });
+    // Give the runtime a tick to flush any (now-deleted) effects.
+    await new Promise((r) => setTimeout(r, 50));
 
-    const updated = onChange.mock.calls[0][0] as Record<string, unknown>;
-    const tuning = updated.tuning as Record<string, unknown>;
-    const optuna = tuning.optuna as Record<string, unknown>;
-    const space = optuna.space as Record<string, unknown>;
-
-    // Only range-mode entries should be added
-    expect(space.learning_rate).toMatchObject({
-      type: "float",
-      low: 0.01,
-      high: 0.3,
-      log: true,
-    });
-    expect(space.num_leaves).toMatchObject({
-      type: "int",
-      low: 20,
-      high: 200,
-      log: false,
-    });
-    // fixed_param must NOT be included
-    expect(space.fixed_param).toBeUndefined();
+    // PR-5 invariant: no automatic PUT for catalog defaults.
+    // The previous regression test asserted ``onChange``  *had* been
+    // called — that was the racing useEffect that dropped its write
+    // under the funnel coalesce. After PR-5, no write fires on
+    // mount and ``onChange`` stays untouched until the user actually
+    // edits a row.
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("does not auto-initialize search space when catalog has no range entries", async () => {
@@ -824,7 +823,13 @@ describe("TuneTab", () => {
   // auto-reset
 
   describe("P-0104 Wave 2.3", () => {
-    it("auto-populates tuning.evaluation.metrics with canonical defaults on fresh binary config", () => {
+    it("renders canonical default metrics for binary without firing a metrics-seed PUT (P-0109 PR-5)", () => {
+      // Pre-PR-5 a useEffect wrote ``TASK_DEFAULT_METRICS[task]`` to
+      // ``config.tuning.evaluation.metrics`` on mount and was one of the
+      // three racing writers the user-visible bug traced to. PR-5
+      // deletes the seed useEffect; defaults are computed at render
+      // time so the Optimization Metric chip / Additional Metrics
+      // chips appear without any PUT — the funnel race cannot happen.
       const onChange = vi.fn();
       const config = {
         model: { name: "lgbm", params: {} },
@@ -846,7 +851,7 @@ describe("TuneTab", () => {
           }
         />,
       );
-      // The seeding effect fires synchronously inside useEffect on mount.
+      // PR-5 invariant: no automatic seed PUT.
       const seedingCalls = onChange.mock.calls.filter((c) => {
         const t = (c[0] as Record<string, unknown>).tuning as
           | Record<string, unknown>
@@ -854,12 +859,17 @@ describe("TuneTab", () => {
         const ev = t?.evaluation as { metrics?: unknown[] } | undefined;
         return Array.isArray(ev?.metrics);
       });
-      expect(seedingCalls.length).toBeGreaterThan(0);
-      const seeded = seedingCalls[0][0] as Record<string, unknown>;
-      const ev = (seeded.tuning as Record<string, unknown>).evaluation as {
-        metrics: string[];
-      };
-      expect(ev.metrics).toEqual(["auc", "auc_pr", "brier", "logloss"]);
+      expect(seedingCalls).toHaveLength(0);
+      // The canonical defaults still render via the
+      // ``evalMetrics`` fallback memo: "auc" is shown as the
+      // Optimization Metric, and "auc_pr" / "brier" / "logloss"
+      // appear in Additional Metrics. "f1" is not in the
+      // canonical default set so it appears in the additional
+      // chip list but is not selected.
+      // Use queryAllByText since the SearchSpaceTable also renders
+      // metric chips; assert at least one occurrence of each label.
+      expect(screen.queryAllByText("auc").length).toBeGreaterThan(0);
+      expect(screen.queryAllByText("auc_pr").length).toBeGreaterThan(0);
     });
 
     it("does not seed defaults when tuning.evaluation.metrics is already set (even to [])", () => {

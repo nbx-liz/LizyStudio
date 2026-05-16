@@ -127,4 +127,14 @@ export interface SearchSpaceRowProps {
   onModelParamChange?: (key: string, value: unknown) => void;
   specialSearchSpaceFields?: Record<string, string>;
   columns?: string[];
+  /**
+   * P-0109 PR-6c: ``true`` when the user has explicitly customised
+   * ``space.<param.key>`` (i.e. ``"space.<key>"`` is present in the
+   * ``tuning_effective.user_set_paths`` list returned by
+   * ``GET /config/tuning-snapshot``). Renders a small "Modified"
+   * badge on the row so users can distinguish their explicit edits
+   * from catalog defaults. ``undefined`` is treated as ``false`` for
+   * compatibility with callers that have not yet wired the snapshot.
+   */
+  isUserSet?: boolean;
 }

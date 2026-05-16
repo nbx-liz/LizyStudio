@@ -152,7 +152,7 @@ flowchart TB
 
 | Prefix | Router | 代表エンドポイント |
 |---|---|---|
-| `/api/workspace` | `api/workspace.py` | GET `/status`, POST `/reset`, POST `/data/path`, POST `/data/upload`, GET `/data/preview\|columns\|describe\|split-preview\|column-stats/{c}`, GET/PUT/PATCH `/config`, POST `/config/validate\|upload`, GET `/config/download`, POST `/fit`, POST `/tune` |
+| `/api/workspace` | `api/workspace.py` | GET `/status`, POST `/reset`, POST `/data/path`, POST `/data/upload`, GET `/data/preview\|columns\|describe\|split-preview\|column-stats/{c}`, GET/PUT/PATCH `/config`, POST `/config/validate\|upload`, GET `/config/download`, GET `/config/tuning-snapshot`, PUT `/config/tuning-overrides`, POST `/fit`, POST `/tune` |
 | `/api/jobs` | `api/jobs.py` + `api/retune.py` | GET `/`, GET `/{id}` / `{id}/log` / `{id}/config`, DELETE `/{id}?cascade=`, POST `/{id}/cancel`, POST `/{id}/pause`, POST `/{id}/unpause` (P-0099 v3-20d), GET `/{id}/{metrics\|split-summary\|importance\|importance-kinds\|learning-curve/metrics\|plot/{type}\|plots}`, POST `/{id}/export`, GET `/{id}/export-code`, POST `/{id}/retune`, POST `/{id}/resume`, GET `/{id}/lineage` |
 | `/api/inference` | `api/inference.py` | POST `/run`, POST `/upload`, GET `/history`, GET `/{inf_id}`, GET `/{inf_id}/{predictions\|metrics\|download\|plot/{type}}`, GET `/{inf_id}/comparison/{other_inf_id}` |
 | `/api/backends` | `api/backends.py` | GET `""`, GET `/ui-schema` |
@@ -174,6 +174,8 @@ classDiagram
     +get_ui_schema()
     +get_default_config()
     +validate_config(cfg)
+    +get_tuning_defaults(task)
+    +compute_effective_tuning(task, overrides)
     +load_config_from_file(p)
     +create_model(cfg)
     +fit(model, on_progress)

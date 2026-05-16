@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo } from "react";
+import { useTuningSnapshot } from "@/api/queries/useWorkspace";
 import type { MetricEntry } from "@/api/types";
 import { RetuneSettingsSection } from "@/components/retune";
 import {
@@ -49,27 +50,25 @@ export function TuneTab({
     {},
   );
 
-  // Auto-populate search space with catalog entries that have default_mode: "range".
-  const spaceInitialized = useRef(false);
-  const prevTuningRef = useRef(config.tuning);
-  useEffect(() => {
-    if (prevTuningRef.current && !config.tuning) {
-      spaceInitialized.current = false;
-    }
-    prevTuningRef.current = config.tuning;
-  }, [config.tuning]);
-  useEffect(() => {
-    if (spaceInitialized.current) return;
-    if (Object.keys(searchSpace).length > 0) {
-      spaceInitialized.current = true;
-      return;
-    }
-    const catalogEntries = uiSchema?.search_space_catalog;
-    if (!catalogEntries) return;
-    const defaultSpace: Record<string, unknown> = {};
-    for (const entry of catalogEntries) {
+  // P-0109 PR-5: catalog-default search space, computed locally per render.
+  //
+  // Replaces the legacy "search-space init useEffect" that auto-wrote
+  // catalog defaults to ``config.tuning.optuna.space`` on first mount.
+  // That useEffect raced against TuneEvaluationSection's
+  // direction-sync and metrics-seed useEffects through the WriteFunnel
+  // — all three shared the ``config-form-edit`` reason and the funnel
+  // coalesced them to the last-arriver, leaving the search-space write
+  // dropped and every row rendering in Fixed mode.
+  //
+  // The fix: derive the rendering-only catalog defaults from
+  // ``uiSchema.search_space_catalog`` at render time and merge with
+  // the user's persisted overrides. No backend write fires unless the
+  // user explicitly edits a row, so there is no race to lose.
+  const catalogDefaultSpace = useMemo(() => {
+    const out: Record<string, unknown> = {};
+    for (const entry of uiSchema?.search_space_catalog ?? []) {
       if (entry.default_mode === "range" && entry.default_range) {
-        defaultSpace[entry.key] = {
+        out[entry.key] = {
           type: entry.paramType === "integer" ? "int" : "float",
           low: entry.default_range.low,
           high: entry.default_range.high,
@@ -77,18 +76,20 @@ export function TuneTab({
           category: groupToCategory(entry.group ?? "model_params"),
         };
       } else if (entry.default_mode === "choice" && entry.default_choices) {
-        defaultSpace[entry.key] = {
+        out[entry.key] = {
           type: "categorical",
           choices: entry.default_choices.map(String),
           category: groupToCategory(entry.group ?? "model_params"),
         };
       }
     }
-    if (Object.keys(defaultSpace).length > 0) {
-      spaceInitialized.current = true;
-      onChange(updateOptunaField(config, "space", defaultSpace));
-    }
-  }, [searchSpace, config, onChange, uiSchema]);
+    return out;
+  }, [uiSchema]);
+
+  const effectiveSpace = useMemo(
+    () => ({ ...catalogDefaultSpace, ...searchSpace }),
+    [catalogDefaultSpace, searchSpace],
+  );
 
   // Evaluation from tuning.evaluation (Widget conformance — NOT tuning.optuna.evaluation)
   const evaluation = extractTuningField<{
@@ -145,6 +146,32 @@ export function TuneTab({
     if (objectiveOptions.length > 0) result.objective = objectiveOptions;
     return result;
   }, [objectiveOptions]);
+
+  // P-0109 PR-6c: subscribe to the Tune-tab intent/effective/defaults
+  // triple. Used as:
+  //   * ``tuning_defaults.evaluation_metrics`` — canonical eval-metric
+  //     fallback for ``TuneEvaluationSection`` (replaces the frontend
+  //     ``TASK_DEFAULT_METRICS`` constant that PR-5 left in place).
+  //   * ``tuning_effective.user_set_paths`` — per-row "modified" badge
+  //     provenance for ``SearchSpaceRow``. Entries the user explicitly
+  //     touched render with the badge; catalog-default rows do not.
+  // The query is enabled only when a task is set: a fresh workspace
+  // (no task) returns empty defaults and an empty effective, and
+  // running this before the user picks a task would pollute the cache
+  // with a transient empty result.
+  const { data: tuningSnapshot } = useTuningSnapshot({ enabled: !!task });
+  const defaultEvaluationMetrics = useMemo<unknown[]>(() => {
+    const fromSnapshot = tuningSnapshot?.tuning_defaults.evaluation_metrics;
+    return Array.isArray(fromSnapshot) ? fromSnapshot : [];
+  }, [tuningSnapshot]);
+  const userSetSpaceKeys = useMemo<Set<string>>(() => {
+    const paths = tuningSnapshot?.tuning_effective.user_set_paths ?? [];
+    const out = new Set<string>();
+    for (const p of paths) {
+      if (p.startsWith("space.")) out.add(p.slice("space.".length));
+    }
+    return out;
+  }, [tuningSnapshot]);
 
   const handleParamsChange = (params: Record<string, unknown>) => {
     onChange(updateOptunaField(config, "params", params));
@@ -209,7 +236,7 @@ export function TuneTab({
         <AccordionContent>
           <div className="pl-[18px]">
             <SearchSpaceTable
-              space={searchSpace}
+              space={effectiveSpace}
               modelParams={modelParams}
               onChange={handleSpaceChange}
               catalog={uiSchema?.search_space_catalog}
@@ -229,6 +256,7 @@ export function TuneTab({
               cvStrategy={cvStrategy}
               innerValidOptions={innerValidOptions}
               parameterBounds={parameterBounds}
+              userSetSpaceKeys={userSetSpaceKeys}
             />
           </div>
         </AccordionContent>
@@ -246,6 +274,7 @@ export function TuneTab({
             metricDirection={metricDirection}
             evaluation={evaluation}
             tuningParams={tuningParams}
+            defaultEvaluationMetrics={defaultEvaluationMetrics}
           />
         </AccordionContent>
       </AccordionItem>

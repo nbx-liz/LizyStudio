@@ -5,7 +5,6 @@ Covers: status, reset, data, config, fit, tune.
 
 from __future__ import annotations
 
-import copy
 import logging
 import tempfile
 import time
@@ -39,11 +38,14 @@ from lizystudio.api.models import (
     JobStartResponse,
     PreviewResponseModel,
     SplitPreviewResponseModel,
+    TuningOverridesUpdateResponse,
+    TuningSnapshotResponse,
     ValidationResponse,
     WorkspaceFitRequest,
     WorkspaceStatusResponse,
     WorkspaceTuneRequest,
 )
+from lizystudio.backends.types import TuningOverrides
 from lizystudio.security import (
     check_dataframe_memory,
     read_upload_checked,
@@ -66,12 +68,17 @@ from lizystudio.services.training import (
 )
 from lizystudio.services.workspace import (
     WorkspaceState,
+    absorb_legacy_tuning,
     apply_config_patch,
     get_backend_name,
     get_config_schema,
     get_default_config,
+    get_legacy_config_view,
+    get_tuning_snapshot,
     get_workspace,
     load_config_from_file,
+    materialize_tuning_for_job,
+    update_tuning_overrides,
     validate_config,
     validate_search_space_for_tune,
 )
@@ -426,8 +433,16 @@ def config_defaults(
 def config_get(
     ws: WorkspaceState = Depends(get_workspace),
 ) -> dict[str, Any]:
-    """Return the current workspace config."""
-    return ws.config
+    """Return the current workspace config.
+
+    PR-4b: the response includes a materialised ``tuning`` block
+    synthesised from ``ws.tuning_overrides`` so the legacy pre-PR-5
+    frontend keeps seeing ``config.tuning`` even after the storage
+    rename. Once PR-5 ships, the frontend reads
+    ``GET /config/tuning-snapshot`` directly and this compat shim
+    becomes load-bearing only for YAML download / CLI consumers.
+    """
+    return get_legacy_config_view(ws)
 
 
 def _check_workspace_lock(job_store: JobStore) -> None:
@@ -482,7 +497,13 @@ def config_update(
     errors = validate_config(ws, body)
     blocking = _blocking_errors(errors)
     if not blocking:
-        ws.set_config(body)
+        # P-0109 PR-4b: legacy PUT /config payloads still carry the
+        # materialised ``tuning`` block (pre-PR-5 frontend). Divert it
+        # into ``ws.tuning_overrides`` so the storage rename stays
+        # consistent, then store the stripped config so the workspace
+        # never holds two copies of the same intent.
+        stripped = absorb_legacy_tuning(ws, body)
+        ws.set_config(stripped)
     return {"config": body, "errors": errors, "saved": len(blocking) == 0}
 
 
@@ -510,6 +531,48 @@ def config_patch(
         raise InvalidPatchError(str(exc)) from exc
     ws.set_config(patched)
     return {"config": patched}
+
+
+@router.get("/config/tuning-snapshot", response_model=TuningSnapshotResponse)
+def config_tuning_snapshot(
+    ws: WorkspaceState = Depends(get_workspace),
+) -> dict[str, Any]:
+    """Return the Tune-tab intent/effective split (P-0109 PR-4a).
+
+    Produces ``{tuning_effective, tuning_defaults}`` derived live from
+    the currently-persisted ``ws.config["tuning"]`` via the adapter's
+    catalog (see :func:`get_tuning_snapshot` for the projection rule).
+
+    The endpoint is read-only and storage-shape neutral: PR-4b will move
+    the workspace to persist sparse :class:`TuningOverrides` directly,
+    at which point the projection from legacy nested shape becomes a
+    pass-through. The frontend (PR-5) consumes this snapshot to render
+    Tune-tab rows without the racing seed-then-edit useEffects.
+    """
+    return get_tuning_snapshot(ws)
+
+
+@router.put("/config/tuning-overrides", response_model=TuningOverridesUpdateResponse)
+def config_tuning_overrides_update(
+    body: TuningOverrides,
+    ws: WorkspaceState = Depends(get_workspace),
+    job_store: JobStore = Depends(get_job_store),
+) -> dict[str, Any]:
+    """Apply sparse Tune overrides and return the resulting effective config.
+
+    Body is parsed as :class:`TuningOverrides` (P-0109): every field is
+    optional, ``extra="forbid"`` catches typos, and Pydantic's
+    ``model_fields_set`` lets the merge distinguish "explicit None" from
+    "unset" (INV-T1 / Q4).
+
+    The legacy ``ws.config["tuning"]`` block is rebuilt from the
+    effective result so the existing tune-job path and the PUT /config
+    GET round-trip keep working unchanged — PR-4b moves storage to the
+    sparse form. The same workspace-lock semantics as PUT /config apply:
+    a tune job that is still running blocks the write with 409 (P-0089).
+    """
+    _check_workspace_lock(job_store)
+    return update_tuning_overrides(ws, body)
 
 
 @router.post("/config/validate", response_model=ValidationResponse)
@@ -599,7 +662,11 @@ def workspace_fit(
         blocking = _blocking_errors(errors)
         if blocking:
             raise ValidationError(blocking)
-        ws.set_config(candidate)
+        # P-0109 PR-4b: same compat shim as PUT /config — divert any
+        # ``tuning`` block in the body into ``ws.tuning_overrides`` so
+        # the storage rename stays consistent through every config-set
+        # entry point.
+        ws.set_config(absorb_legacy_tuning(ws, candidate))
     if not ws.config:
         raise WorkspaceNoConfigError()
     if ws.dataframe is None or ws.data_ref is None:
@@ -673,32 +740,23 @@ def workspace_tune(
         blocking = _blocking_errors(errors)
         if blocking:
             raise ValidationError(blocking)
-        ws.set_config(candidate)
+        # P-0109 PR-4b: divert any ``tuning`` block into
+        # ``ws.tuning_overrides``; same compat shim as workspace_fit.
+        ws.set_config(absorb_legacy_tuning(ws, candidate))
     if not ws.config:
         raise WorkspaceNoConfigError()
     if ws.dataframe is None or ws.data_ref is None:
         raise WorkspaceNoDataError()
-    # Inject default tuning config if not set (H-0025) — immutable copy.
-    #
-    # Direction is intentionally NOT hardcoded here (Bug 2026-04-14): a
-    # ``minimize`` default would override the AUC / R2 / accuracy class
-    # of metrics that should be maximized, and ``_prepare_tune_config``'s
-    # auto-resolve was guarded by ``"direction" not in params`` so the
-    # wrong value silently propagated to Optuna. The auto-resolve in
-    # ``_prepare_tune_config`` is now the single source of truth — it
-    # reads ``evaluation.metrics`` and picks ``maximize`` / ``minimize``
-    # from the maximize-set table. Leaving direction unset here lets that
-    # resolver fire on every fresh tune.
-    if ws.config.get("tuning") is None:
-        config_with_tuning = copy.deepcopy(ws.config)
-        config_with_tuning["tuning"] = {
-            "optuna": {
-                "params": {"n_trials": 50, "timeout": None},
-                "space": {},
-            }
-        }
-        ws.set_config(config_with_tuning)
-    errors = validate_config(ws, ws.config)
+    # P-0109 PR-4b / INV-T6: materialize the effective Tune config from
+    # ``ws.tuning_overrides`` into the per-job config snapshot at
+    # job-start time. ``job.config["tuning"]`` is frozen here so the
+    # tune run remains reproducible even if the backend catalog evolves
+    # between this PUT and the next one. Replaces the legacy default-
+    # tuning injection (was inlined as a hardcoded ``{n_trials: 50,
+    # timeout: None, space: {}}``); direction is now resolved through
+    # the adapter (INV-T3) instead of via the hardcoded maximize set.
+    job_config = materialize_tuning_for_job(ws)
+    errors = validate_config(ws, job_config)
     blocking = _blocking_errors(errors)
     if blocking:
         raise ValidationError(blocking)
@@ -706,13 +764,13 @@ def workspace_tune(
     # tuning.optuna.space entries (inverted Range, log+low<=0). Kept out
     # of ``validate_config`` so the save gate (``PUT /config``) stays
     # permissive for WIP edits — see services.workspace docstring.
-    space_errors = validate_search_space_for_tune(ws, ws.config)
+    space_errors = validate_search_space_for_tune(ws, job_config)
     if space_errors:
         raise ValidationError(space_errors)
     # CRITICAL-2: atomic create + slot claim, see workspace_fit above.
     job = job_store.create_and_claim_active(
         backend_name=get_backend_name(ws),
-        config=ws.config,
+        config=job_config,
         data_ref=ws.data_ref,
         job_type="tune",
     )
@@ -723,7 +781,7 @@ def workspace_tune(
             ws=ws,
             job_store=job_store,
             broadcaster=broadcaster,
-            config=ws.config,
+            config=job_config,
             dataframe=ws.dataframe,
             job=job,
         )

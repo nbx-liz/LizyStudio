@@ -345,50 +345,62 @@ def test_tune_injects_default_tuning_config_when_missing(
     client: TestClient,
     tmp_path: Path,
 ) -> None:
-    """POST /tune must inject a default tuning section when config has none (H-0025)."""
+    """POST /tune materializes a tuning block at job start (P-0109 PR-4b / INV-T6).
+
+    Pre-PR-4b this injected ``tuning`` into ``ws.config``; PR-4b moved
+    the materialization to ``materialize_tuning_for_job`` so the job
+    config snapshot — not the workspace — carries the canonical
+    optuna params + space. The workspace itself keeps Tune state in
+    ``ws.tuning_overrides`` (sparse).
+    """
     _load_data_and_config(client, tmp_path)
 
-    # Ensure the stored config has no tuning key
     app = client.app  # type: ignore[attr-defined]
     ws = app.state.workspace
+    # PR-4b: ws.config never holds tuning; the workspace defaults to
+    # ``tuning_overrides=None`` (catalog defaults will materialize at start).
     ws.config.pop("tuning", None)
+    ws.tuning_overrides = None
 
-    with patch(
-        "lizystudio.api.workspace.start_tune_async", return_value="job_tune999"
-    ) as _mock_start:
+    captured: dict[str, Any] = {}
+
+    def fake_start(**kwargs: object) -> str:
+        captured["job_config"] = kwargs["config"]
+        return "job_tune999"
+
+    with patch("lizystudio.api.workspace.start_tune_async", side_effect=fake_start):
         res = client.post("/api/workspace/tune")
 
     assert res.status_code == 200
     body = res.json()
     assert body["job_id"] == "job_tune999"
 
-    # The tuning section must now be in workspace config
-    assert ws.config.get("tuning") is not None
-    tuning = ws.config["tuning"]
-    assert "optuna" in tuning
-    assert tuning["optuna"]["params"]["n_trials"] == 50
+    job_config = captured["job_config"]
+    assert "tuning" in job_config
+    assert "optuna" in job_config["tuning"]
+    assert job_config["tuning"]["optuna"]["params"]["n_trials"] == 50
 
 
 def test_tune_default_tuning_uses_auc_maximize_for_binary(
     client: TestClient,
     tmp_path: Path,
 ) -> None:
-    """Bug 2026-04-14: hardcoded ``direction: minimize`` in the inject path
-    caused AUC to be optimized as if low-is-better. The injected default
-    tuning config must end up with ``direction: maximize`` for the
-    ``binary`` + default-AUC combination after ``_prepare_tune_config``
-    runs, otherwise Optuna walks the wrong way and ``best_params`` is
-    meaningless.
+    """Bug 2026-04-14 / P-0109 PR-4b: default binary tune must run as maximize.
 
-    This is an integration test: it goes through the whole
-    ``POST /workspace/tune`` path so a future regression in either the
-    inject step OR the auto-resolve step in ``_prepare_tune_config``
-    is caught up front.
+    Hardcoded ``direction: minimize`` in the legacy inject path used to
+    flip AUC's optimization direction (low-is-better). PR-4b moves the
+    direction resolution to ``adapter.compute_effective_tuning`` inside
+    ``materialize_tuning_for_job`` — the adapter sources direction from
+    its metric registry (INV-T3). This integration test exercises the
+    whole ``POST /workspace/tune`` path so a future regression in
+    either the materialization step OR ``_prepare_tune_config``'s
+    auto-resolve is caught up front.
     """
     _load_data_and_config(client, tmp_path)
     app = client.app  # type: ignore[attr-defined]
     ws = app.state.workspace
     ws.config.pop("tuning", None)
+    ws.tuning_overrides = None
 
     captured: dict[str, dict] = {}
 
@@ -409,8 +421,8 @@ def test_tune_default_tuning_uses_auc_maximize_for_binary(
     direction = prepared["tuning"]["optuna"]["params"].get("direction")
     assert direction == "maximize", (
         f"Default binary + AUC tune must run as maximize, got {direction!r}. "
-        "Likely cause: workspace_tune injected a hardcoded direction "
-        "('minimize') and _prepare_tune_config refused to override it."
+        "Likely cause: materialize_tuning_for_job emitted the wrong direction, "
+        "or _prepare_tune_config silently flipped it."
     )
 
 
@@ -418,21 +430,36 @@ def test_tune_preserves_existing_tuning_config(
     client: TestClient,
     tmp_path: Path,
 ) -> None:
-    """POST /tune must NOT overwrite a tuning section that already exists."""
+    """POST /tune must honour user-set tuning intent (P-0109 PR-4b).
+
+    Pre-PR-4b this asserted ``ws.config["tuning"]`` survived the call.
+    PR-4b moves intent to ``ws.tuning_overrides`` (sparse), so the
+    invariant is now: a user-set ``n_trials=10`` survives the job-start
+    materialization. The materialized ``job.config["tuning"]`` carries
+    that ``n_trials`` while catalog defaults fill in the rest.
+    """
+    from lizystudio.backends.types import TuningOverrides
+
     _load_data_and_config(client, tmp_path)
 
     app = client.app  # type: ignore[attr-defined]
     ws = app.state.workspace
-    custom_tuning = {"optuna": {"params": {"n_trials": 10}}}
-    ws.config["tuning"] = custom_tuning
+    ws.tuning_overrides = TuningOverrides(n_trials=10)
 
-    with patch(
-        "lizystudio.api.workspace.start_tune_async", return_value="job_tune_custom"
-    ):
+    captured: dict[str, Any] = {}
+
+    def fake_start(**kwargs: object) -> str:
+        captured["job_config"] = kwargs["config"]
+        return "job_tune_custom"
+
+    with patch("lizystudio.api.workspace.start_tune_async", side_effect=fake_start):
         res = client.post("/api/workspace/tune")
 
     assert res.status_code == 200
-    assert ws.config["tuning"] == custom_tuning
+    assert captured["job_config"]["tuning"]["optuna"]["params"]["n_trials"] == 10
+    # The workspace state itself keeps the sparse intent unchanged.
+    assert ws.tuning_overrides is not None
+    assert ws.tuning_overrides.n_trials == 10
 
 
 def test_tune_starts_job_when_data_and_config_present(

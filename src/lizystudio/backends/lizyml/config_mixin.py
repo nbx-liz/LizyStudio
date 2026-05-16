@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 import yaml
 
-from lizystudio.backends.types import BackendInfo, ConfigSchema, IncompatibleMetric
+from lizystudio.backends.lizyml_metrics import get_metric_directions
+from lizystudio.backends.lizyml_ui_schema import _SEARCH_SPACE_CATALOG
+from lizystudio.backends.types import (
+    BackendInfo,
+    ConfigSchema,
+    IncompatibleMetric,
+    TuningConfig,
+    TuningDefaults,
+    TuningOverrides,
+)
 
 from .config_compat import strip_internal_keys, task_params_compat_errors
 
@@ -19,6 +28,54 @@ from .config_compat import strip_internal_keys, task_params_compat_errors
 _REGRESSION_METRIC_WATCHLIST = frozenset({"mape", "rmsle", "r2"})
 
 
+# P-0109 PR-3 / Issue #517 follow-up: per-task canonical default evaluation
+# metric list. Was previously a frontend-only constant
+# (``TASK_DEFAULT_METRICS`` in ``TuneEvaluationSection.tsx``); moved here so
+# the backend owns the SSOT and the frontend no longer needs adapter-specific
+# branches (INV-T5). Multiclass / regression defaults remain deferred —
+# see P-0104 Wave 2.3 (Issue #459) for the scope statement.
+_TASK_DEFAULT_METRICS: dict[str, list[str]] = {
+    "binary": ["auc", "auc_pr", "brier", "logloss"],
+}
+
+# P-0109 PR-3: tasks the lizyml catalog defaults apply to. Anything outside
+# this set (``""`` / unknown) yields an empty :class:`TuningDefaults` —
+# the adapter cannot propose canonical Tune defaults without a task.
+_KNOWN_TASKS: frozenset[str] = frozenset({"binary", "multiclass", "regression"})
+
+
+def _catalog_default_space() -> dict[str, dict[str, Any]]:
+    """Project the lizyml UI catalog into Optuna SpaceEntry dicts (P-0109 PR-3).
+
+    Only entries declaring ``default_mode = "range"`` or
+    ``default_mode = "choice"`` contribute — ``"fixed"`` entries have no
+    canonical search space, they are just fixed values. The resulting
+    dict matches the shape ``lizyml.tuning.parse_space()`` accepts.
+
+    Returns a fresh dict on each call so callers may safely keep the
+    result inside an otherwise-frozen ``TuningDefaults`` snapshot.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for entry in _SEARCH_SPACE_CATALOG:
+        mode = entry.get("default_mode")
+        key = entry["key"]
+        if mode == "range":
+            r = entry.get("default_range", {})
+            param_type = "int" if entry.get("paramType") == "integer" else "float"
+            out[key] = {
+                "type": param_type,
+                "low": r.get("low"),
+                "high": r.get("high"),
+                "log": bool(r.get("log", False)),
+            }
+        elif mode == "choice":
+            out[key] = {
+                "type": "categorical",
+                "choices": list(entry.get("default_choices", [])),
+            }
+    return out
+
+
 class ConfigMixin:
     """Identification, schema, validation, and config file loading."""
 
@@ -27,6 +84,137 @@ class ConfigMixin:
         import lizyml
 
         return BackendInfo(name="lizyml", version=lizyml.__version__)
+
+    def get_tuning_defaults(self, task: str) -> TuningDefaults:
+        """Catalog-aware Tune defaults for the lizyml backend (P-0109 PR-3).
+
+        Implements :meth:`BackendCore.get_tuning_defaults` for lizyml by
+        projecting three SSOTs that already live inside the adapter:
+
+        * ``lizyml_ui_schema._SEARCH_SPACE_CATALOG`` (via
+          :func:`_catalog_default_space`) — the catalog rows with
+          ``default_mode = "range" | "choice"`` define the per-key search
+          space defaults.
+        * ``_TASK_DEFAULT_METRICS`` — the per-task canonical evaluation
+          metric list (Studio-side; binary only as of P-0104 Wave 2.3 /
+          Issue #459).
+        * ``lizyml_metrics.get_metric_directions`` — the optimisation
+          direction implied by the first canonical metric, derived from
+          lizyml's metric registry (single SSOT, INV-T3).
+
+        Tasks outside ``{"binary", "multiclass", "regression"}`` (and the
+        empty string) yield an empty :class:`TuningDefaults` — the
+        adapter cannot propose canonical defaults without a task.
+        """
+        if task not in _KNOWN_TASKS:
+            return TuningDefaults()
+        space = _catalog_default_space()
+        metrics: list[Any] = list(_TASK_DEFAULT_METRICS.get(task, []))
+        direction: Literal["maximize", "minimize"] | None = None
+        if metrics:
+            task_dirs = get_metric_directions().get(task, {})
+            canonical = task_dirs.get(str(metrics[0]))
+            if canonical == "maximize":
+                direction = "maximize"
+            elif canonical == "minimize":
+                direction = "minimize"
+        return TuningDefaults(
+            space=space,
+            evaluation_metrics=metrics,
+            direction=direction,
+        )
+
+    def compute_effective_tuning(
+        self, task: str, overrides: TuningOverrides
+    ) -> TuningConfig:
+        """Merge :meth:`get_tuning_defaults` for *task* with *overrides*.
+
+        Catalog-aware as of P-0109 PR-3: defaults are sourced from
+        :func:`_catalog_default_space` + :data:`_TASK_DEFAULT_METRICS` +
+        ``lizyml_metrics.get_metric_directions``. ``ConfigMixin`` does
+        not inherit from ``BackendCore`` (the adapter satisfies the
+        Protocol via duck typing), so the merge logic is inlined here
+        instead of delegating via ``super()``.
+
+        Direction semantics (P-0109 PR-6b refinement, INV-T3): the
+        ``direction`` field is now derived from the *effective* first
+        evaluation metric — meaning when *overrides* override the
+        ``evaluation_metrics`` list, the direction follows the new
+        metric, not the catalog's canonical direction. Previously the
+        method returned ``defaults.direction`` whenever the user did
+        not set ``overrides.direction`` explicitly, which let a user
+        flip from ``auc`` (maximize) to ``logloss`` (minimize) while
+        leaving ``effective.direction = "maximize"`` — a stale value
+        that ``services/training.py::_prepare_tune_config`` used to
+        silently correct via a hardcoded ``maximize_metrics`` set.
+        PR-6b deletes that downstream re-resolve in favour of doing
+        the right thing here.
+        """
+        defaults = self.get_tuning_defaults(task)
+        fields_set = overrides.model_fields_set
+        user_set: list[str] = [
+            name
+            for name in ("n_trials", "timeout", "direction", "evaluation_metrics")
+            if name in fields_set
+        ]
+        user_set.extend(f"space.{key}" for key in overrides.space)
+        merged_space = {**defaults.space, **overrides.space}
+        merged_metrics = (
+            overrides.evaluation_metrics
+            if overrides.evaluation_metrics is not None
+            else defaults.evaluation_metrics
+        )
+        direction: Literal["maximize", "minimize"]
+        if overrides.direction is not None:
+            direction = overrides.direction
+        else:
+            derived = self._direction_from_metrics(task, merged_metrics)
+            if derived is not None:
+                direction = derived
+            elif defaults.direction is not None:
+                direction = defaults.direction
+            else:
+                direction = "minimize"
+        return TuningConfig(
+            n_trials=overrides.n_trials if overrides.n_trials is not None else 50,
+            timeout=overrides.timeout if "timeout" in fields_set else None,
+            direction=direction,
+            space=merged_space,
+            evaluation_metrics=merged_metrics,
+            user_set_paths=user_set,
+        )
+
+    @staticmethod
+    def _direction_from_metrics(
+        task: str, metrics: list[Any]
+    ) -> Literal["maximize", "minimize"] | None:
+        """Look up the lizyml metric registry direction for *metrics[0]*.
+
+        Returns ``None`` when *task* / *metrics* / the metric name are
+        unknown to the registry. The caller falls back to
+        :attr:`TuningDefaults.direction` (catalog canonical) and then to
+        ``"minimize"`` as the final safe default.
+
+        MetricEntry inputs accept both the bare ``"auc"`` string form
+        and the dict form ``{"precision_at_k": {"k": 10}}`` — the
+        registry is keyed by metric name so the dict's first key is
+        extracted.
+        """
+        if not metrics:
+            return None
+        first = metrics[0]
+        if isinstance(first, str):
+            name = first
+        elif isinstance(first, dict) and first:
+            name = next(iter(first))
+        else:
+            return None
+        canonical = get_metric_directions().get(task, {}).get(name)
+        if canonical == "maximize":
+            return "maximize"
+        if canonical == "minimize":
+            return "minimize"
+        return None
 
     def get_ui_schema(self) -> dict[str, Any]:
         from lizystudio.backends.lizyml_ui_schema import build_ui_schema

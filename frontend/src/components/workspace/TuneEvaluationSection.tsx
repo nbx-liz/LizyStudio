@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useMemo } from "react";
 import type { MetricEntry } from "@/api/types";
 import { metricEntryName } from "@/api/types";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +15,16 @@ interface TuneEvaluationSectionProps {
   metricDirection?: Record<string, Record<string, string>>;
   evaluation: { metrics?: MetricEntry[] };
   tuningParams: { n_trials?: number; timeout?: number | null };
+  /**
+   * P-0109 PR-6c: canonical fallback metric list for the current
+   * task, sourced from ``GET /config/tuning-snapshot`` →
+   * ``tuning_defaults.evaluation_metrics``. Replaces the
+   * frontend-only ``TASK_DEFAULT_METRICS`` constant (P-0104 Wave 2.3
+   * / Issue #459) that PR-5 left as a render-time fallback. Empty
+   * when the snapshot has not loaded yet or the task has no canonical
+   * default set (catalog returns ``[]`` for unknown tasks).
+   */
+  defaultEvaluationMetrics?: unknown[];
 }
 
 /** Build a MetricEntry — use dict form for precision_at_k */
@@ -25,13 +35,25 @@ function buildEntry(name: string, k?: number): MetricEntry {
   return name;
 }
 
-// P-0104 Wave 2.3 / Issue #459 — auto-populate defaults for fresh
-// configs. Binary is the only task with a confirmed canonical set;
-// regression / multiclass defaults are deferred to a follow-up issue
-// per #459's scope statement.
-const TASK_DEFAULT_METRICS: Record<string, string[]> = {
-  binary: ["auc", "auc_pr", "brier", "logloss"],
-};
+/**
+ * Coerce a snapshot ``evaluation_metrics`` entry into the local
+ * MetricEntry union (``string | { [metric]: { ...params } }``). The
+ * snapshot serialises both shapes verbatim, but the openapi-generated
+ * type is ``unknown[]``; this helper narrows defensively so a stale /
+ * mid-load snapshot does not crash the Tune-tab render.
+ */
+function coerceMetricEntry(value: unknown): MetricEntry | null {
+  if (typeof value === "string") return value;
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).length > 0
+  ) {
+    return value as MetricEntry;
+  }
+  return null;
+}
 
 export function TuneEvaluationSection({
   config,
@@ -41,100 +63,62 @@ export function TuneEvaluationSection({
   metricDirection,
   evaluation,
   tuningParams,
+  defaultEvaluationMetrics,
 }: TuneEvaluationSectionProps) {
-  // Current evaluation metrics from config
-  const evalMetrics = evaluation.metrics ?? [];
+  // P-0109 PR-5 + PR-6c: derive effective evaluation metrics at render
+  // time. The legacy "metrics seed useEffect" raced two siblings
+  // (search-space init + direction defensive sync) through the
+  // WriteFunnel; all three shared the ``config-form-edit`` reason and
+  // the funnel coalesced them to the last-arriver, dropping the
+  // metrics seed.
+  //
+  // The fix: keep the persisted ``evaluation.metrics`` as the source
+  // of truth and fall back to ``defaultEvaluationMetrics`` — sourced
+  // from ``GET /config/tuning-snapshot`` → ``tuning_defaults`` (PR-6c)
+  // — when the user has not yet set anything. The first metric the
+  // user explicitly clicks writes a real PUT through the funnel and
+  // pins the list. The backend adapter owns the per-task canonical
+  // list (INV-T5), so the frontend never carries an adapter-specific
+  // branch.
+  const persistedMetrics = evaluation.metrics;
+  const evalMetrics: MetricEntry[] = useMemo(() => {
+    if (Array.isArray(persistedMetrics) && persistedMetrics.length > 0) {
+      return persistedMetrics;
+    }
+    if (!task || metricOptions.length === 0) return [];
+    const fallback = defaultEvaluationMetrics ?? [];
+    const out: MetricEntry[] = [];
+    for (const raw of fallback) {
+      const entry = coerceMetricEntry(raw);
+      if (entry === null) continue;
+      const name = metricEntryName(entry);
+      if (!metricOptions.includes(name)) continue;
+      out.push(entry);
+    }
+    return out;
+  }, [persistedMetrics, task, metricOptions, defaultEvaluationMetrics]);
+
   // Widget conformance: fall back to first available metric option
   const optimizationMetric = evalMetrics[0]
     ? metricEntryName(evalMetrics[0])
     : (metricOptions[0] ?? "");
   const additionalMetricNames = evalMetrics.slice(1).map(metricEntryName);
 
-  // Auto-determine direction from metric_direction mapping
+  // Auto-determine direction from metric_direction mapping.
+  // P-0109 PR-5: pure render-time derivation — no useEffect, no PUT.
+  // The legacy "direction defensive sync useEffect" wrote this value
+  // to ``config.tuning.optuna.params.direction`` on every metric
+  // change and was one of the three racing writers. The backend
+  // ``materialize_tuning_for_job`` (PR-4b INV-T6) now resolves the
+  // canonical direction at job start, so the UI no longer needs to
+  // persist the badge value — it just shows what the adapter would
+  // pick.
   const autoDirection = useMemo(() => {
     if (!task || !optimizationMetric || !metricDirection) return "";
     const taskDirs = metricDirection[task];
     if (!taskDirs) return "minimize";
     return taskDirs[optimizationMetric] ?? "minimize";
   }, [task, optimizationMetric, metricDirection]);
-
-  // Bug 2026-04-14 defensive sync: keep ``optuna.params.direction`` in
-  // step with ``autoDirection`` whenever the metric or task changes.
-  // Without this, a user who never clicks a metric chip can leave the
-  // config carrying a stale direction (the workspace inject path used
-  // to hardcode ``minimize``, and the AUC class of metrics needs
-  // ``maximize``). The backend ``_prepare_tune_config`` also reconciles
-  // this server-side, but having the UI stay consistent avoids the
-  // confusing case where the badge shows ``maximize`` while the raw
-  // config dialog still shows ``minimize``.
-  //
-  // Implementation note: ``config`` and ``onChange`` are pulled through
-  // refs so the effect's dep list can stay narrow (only the resolved
-  // direction). Including ``config`` directly would re-fire on every
-  // edit because we write back to ``config`` ourselves -> infinite loop.
-  const configRef = useRef(config);
-  const onChangeRef = useRef(onChange);
-  configRef.current = config;
-  onChangeRef.current = onChange;
-
-  useEffect(() => {
-    if (!autoDirection) return;
-    const currentCfg = configRef.current;
-    const tuning = (currentCfg.tuning as Record<string, unknown>) ?? {};
-    const optuna = (tuning.optuna as Record<string, unknown>) ?? {};
-    const params = (optuna.params as Record<string, unknown>) ?? {};
-    if (params.direction === autoDirection) return;
-    onChangeRef.current({
-      ...currentCfg,
-      tuning: {
-        ...tuning,
-        optuna: {
-          ...optuna,
-          params: { ...params, direction: autoDirection },
-        },
-      },
-    });
-  }, [autoDirection]);
-
-  // P-0104 Wave 2.3 / Issue #459 — auto-populate the canonical default
-  // metric set for fresh configs. Fires at most once per workspace; if
-  // the user later clears the list explicitly we honor that and do not
-  // re-seed (only an absent ``tuning.evaluation.metrics`` is treated as
-  // "fresh"). Regression and multiclass are deferred until their
-  // canonical defaults are confirmed in a follow-up.
-  const defaultsSeededRef = useRef(false);
-  useEffect(() => {
-    if (defaultsSeededRef.current) return;
-    if (!task) return;
-    if (metricOptions.length === 0) return;
-    // tuning.evaluation.metrics already set (even to []) -> user-owned,
-    // don't re-seed.
-    const currentCfg = configRef.current;
-    const tuning = (currentCfg.tuning as Record<string, unknown>) ?? {};
-    const ev = (tuning.evaluation as Record<string, unknown>) ?? {};
-    if (Array.isArray(ev.metrics)) {
-      defaultsSeededRef.current = true;
-      return;
-    }
-    const defaults = TASK_DEFAULT_METRICS[task];
-    if (!defaults) {
-      defaultsSeededRef.current = true;
-      return;
-    }
-    const available = defaults.filter((m) => metricOptions.includes(m));
-    if (available.length === 0) {
-      defaultsSeededRef.current = true;
-      return;
-    }
-    const newMetrics: MetricEntry[] = available.map((m) => buildEntry(m));
-    onChangeRef.current(
-      updateTuningField(currentCfg, "evaluation", {
-        ...ev,
-        metrics: newMetrics,
-      }),
-    );
-    defaultsSeededRef.current = true;
-  }, [task, metricOptions]);
 
   // Get precision_at_k k-value from current tune evaluation metrics
   const tuneKValue = useMemo(() => {

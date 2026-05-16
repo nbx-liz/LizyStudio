@@ -6,7 +6,7 @@
 - このファイルは **横串インデックス** であり、詳細はリンク先で確認すること。
 - 着手する際は HISTORY に Proposal を起票（変更ゲート対象の場合）→ PLAN にフェーズ追加 → 実装、の順で進める。
 
-最終更新: 2026-05-13（**v0.5.0 release 済 (2026-05-07)** + **`issue-cleanup-plan-2026-05-10.md` Wave 1〜6 完了** + **v3-26 (R-4.2 Pickle compat nightly + P-0107 envelope) 着地** — `PLAN.md` v0.5 phase 全消化。Wave 6 の残りは **#452 の `lifecycle_mixin.tune` 分割（2nd-adapter 議論後に gated）** と **#495（#456 L5 weekly stale-doc cron, deferred tier-3）** のみ。直近の Tier 1 next は **#474 (P-0104 deferred search-space 早期 validate)**。次の節目候補は **v0.6**: 第 2 backend (#403 残・#452-b 解禁トリガ)、Tailwind v4、P-0087 Phase 3、typed error 体系 (R-3.1〜R-3.3) など）
+最終更新: 2026-05-13（**v0.6.0 release 済 (2026-05-13, PyPI lizystudio==0.6.0)** + **`issue-cleanup-plan-2026-05-10.md` Wave 1〜6 完了** — `PLAN.md` v0.5 phase 全消化。直近の Tier 1 next は **#513 (StudioError observability、v0.6.0 検証中に発見した 5 行 PR)** / **#495** / 🔒 **#452-b**。次の節目候補は **v0.7+**: 第 2 backend (#403 残・#452-b 解禁トリガ)、Tailwind v4、P-0087 Phase 3、typed error 体系 (R-3.1〜R-3.3) など）
 
 ---
 
@@ -160,6 +160,7 @@
 - **P-0104**: Tune workflow 全面整備（Re-tune UX + canonical defaults + validation guardrails + LizyML v0.15 SSOT 連動）— Decision 確定、ほぼ着地（残: #474 deferred parse_space validation）
 - **P-0105**: Residuals plot に kind selector（#457）— 着地済
 - **P-0106**: metric 不適合判定を `BackendCore` capability の裏へ（Change Gate、#403）— 着地済（`BackendCore.get_incompatible_metrics`）。完全な 2nd-backend 移行は §3.3 後
+- **P-0109**: Tune 派生デフォルトの backend SSOT 化 + intent/effective 分離（Change Gate）— ✅ Approved & shipped (Option B, 2026-05-15〜2026-05-16, 全 9 PR 着地)。Tune タブ初回マウントで catalog defaults が Fixed 表示になるバグ（[2026-05-14 確認](HISTORY.md)）の根本治療が **PR-5 (#521) で構造的に解消**。`BackendCore.get_tuning_defaults` + `compute_effective_tuning` を Protocol に追加 (#517)、`LizyMLAdapter` 実装 (#518)、追加エンドポイント `GET /config/tuning-snapshot` / `PUT /config/tuning-overrides` (#519)、`WorkspaceState.tuning_overrides` 一級フィールド化 + INV-T6 snapshot 凍結 (#520)、frontend 3 useEffect 物理削除 + render-time fallbacks (#521)、docs reconcile + HISTORY Decision flip (#522)、`compute_effective_tuning` direction 派生 refine + `_prepare_tune_config` hardcoded `maximize_metrics` set 削除 (#523)、`useTuningSnapshot` hook + `SearchSpaceRow` "Modified" badge + `TASK_DEFAULT_METRICS` frontend 定数削除 + snapshot レスポンスへ `tuning_overrides` 追加 (#524)。Option B として実施しなかったもの: (a) `STUDIO_FORMAT_VERSION` 2 → 3 bump（on-disk `WorkspaceConfig.tuning` block は v2 シェイプのまま、`absorb_legacy_tuning` / `get_legacy_config_view` 双方向 shim で吸収）。残存フォローアップ: A-1 `_assert_inv_t3` 再有効化（`tune-resume.spec.ts:185` の pause-timing race 解消後、helper は #523 で残存）、A-2 Tune タブ write path を `PUT /config/tuning-overrides` (sparse) へ移行（現状は legacy `PUT /config` 経由で `absorb_legacy_tuning` shim 吸収）。
 
 ### 3.0 P-0094 (済)：pytest-benchmark performance baseline（Issue #27 (a)）
 
@@ -273,6 +274,7 @@ Wave 6 完了後の Open Issue は **4 件**（#451 / #453 は 2026-05-13 close 
 | **#474** | validation: surface inverted-range / log+low≤0 search-space errors early (deferred from P-0104 Wave 3.1a) | tier-3 / medium | backend `validate_config` で `parse_space()` に通して `search_space_invalid` を早期 surface |
 | **#488** | Migrate frontend to Vite 8 (Rolldown) — e2e `/api/ws` proxy regression blocks the bump | priority-low / area-frontend | vite は v6 据え置き、dependabot.yml で semver-major ignore（PR #489）。Vite 8 dev server が e2e proxy を壊す（`project_vite8_migration_held`） |
 | **#495** | chore(ops): weekly stale-doc audit cron (#456 L5, deferred follow-up) | tier-3 / low | `scripts/audit_stale_docs.py` + `.github/workflows/audit-stale-docs.yml`（cron weekly）+ tracking issue 自動更新 |
+| **#513** | observability(api): log every StudioError in `studio_error_handler` (R-3.1 precursor) | enhancement / small | `api/errors.py::studio_error_handler` に WARNING-level log を 1 行追加（`code` / `status_code` / method / path、PII なし）。R-3.1 typed-error 体系（v0.6+ deferred）への precursor。**v0.6.0 検証中に発見した観測性ギャップ**: 4xx 系 StudioError は uvicorn access log のみで `code` が grep できないため、ユーザ報告のエラーが事後追跡不能 |
 
 ---
 
@@ -298,8 +300,13 @@ Wave 6 完了後の Open Issue は **4 件**（#451 / #453 は 2026-05-13 close 
 
 ### Tier 1：直近の着手候補（ROI 順）
 
-1. **#495** — #456 L5: weekly stale-doc audit cron（`scripts/audit_stale_docs.py` + `.github/workflows/audit-stale-docs.yml` cron weekly、tracking issue 自動更新。tier-3/low、deferred）
-2. **#452-b `lifecycle_mixin.tune` 分割** — 🔒 2nd-adapter 議論（§3.3）後に解禁。それまで着手しない
+1. **A-1 / A-2 — P-0109 follow-up（v0.6.1 後に起票）** — A-1: `_assert_inv_t3` warn-only helper の再有効化（PR #523 で導入 + 一時 disable、`tune-resume.spec.ts:185` の pause-timing race と相互作用、helper 自体は src に残存）。A-2: Tune タブ mutation を legacy `PUT /config` → 新 `PUT /config/tuning-overrides` (sparse REPLACE) へ移行。両者とも tech-debt / low priority、機能影響なし
+2. **#495** — #456 L5: weekly stale-doc audit cron（`scripts/audit_stale_docs.py` + `.github/workflows/audit-stale-docs.yml` cron weekly、tracking issue 自動更新。tier-3/low、deferred）
+3. **#452-b `lifecycle_mixin.tune` 分割** — 🔒 2nd-adapter 議論（§3.3）後に解禁。それまで着手しない
+
+> ~~P-0109 PR-6 残作業~~ ✅ 完了 (#522 / #523 / #524、2026-05-16 着地。全 9 PR (#516〜#524) develop に着地、INV-T3 が `LizyMLAdapter.compute_effective_tuning` の SSOT で enforce、`useTuningSnapshot` hook + "Modified" badge 経由で frontend read path 完成、`TASK_DEFAULT_METRICS` frontend 定数削除、HISTORY Decision flip + ROADMAP / BLUEPRINT / architecture-as-implemented reconcile 完了)
+>
+> ~~#513 (StudioError observability / R-3.1 precursor)~~ ✅ 完了 (PR #515、2026-05-14。`api/errors.py::studio_error_handler` で全 StudioError を WARNING level で log、`code` / `status_code` / method / path、PII なし、`details` は意図的に除外)
 
 > ~~v3-26 (R-4.2 Pickle compat nightly CI)~~ ✅ 完了 (PR #506 / P-0107 envelope + `scripts/pickle_compat_matrix.sh` + `.github/workflows/nightly.yml::pickle-compat` job) — v0.5 Exit Criteria の format/pickle 互換が完全に gating された。残る Exit #5 = 業務利用 KPI のみ要 verify
 >
@@ -329,13 +336,13 @@ Wave 6 完了後の Open Issue は **4 件**（#451 / #453 は 2026-05-13 close 
 | v3-25 | R-4.1 format_version migration matrix CI gate (P-0103) | ✅ 完了 (PR #432 + #434 + #436 + #438) |
 | v3-26 | R-4.2 Pickle compatibility nightly CI | ✅ 完了 (feat/v3-26-pickle-compat-nightly / P-0107) |
 
-直近の next: 上記 Tier 1 の **#474 (search-space 早期 validate)**。v0.6 候補は上記 Tier 2 を参照。
+直近の next: **v0.6.1 patch release**（P-0109 chain bundle + #513 observability、リリース直前）。その後は上記 Tier 1 の A-1 / A-2 follow-up Issue。v0.6 候補は上記 Tier 2 を参照。
 
 ---
 
 ## 8. 運用メモ
 
-- 新規 Proposal を起票するときは **P-0109 から採番**（P-0107 = `PICKLE_INCOMPATIBLE` structured envelope / v3-26、P-0108 = search-space run-gate / #474、いずれも 2026-05-13 着地）。`H-XXXX` 採番は終了。
+- 新規 Proposal を起票するときは **P-0110 から採番**（P-0107 = `PICKLE_INCOMPATIBLE` structured envelope / v3-26、P-0108 = search-space run-gate / #474、いずれも 2026-05-13 着地。P-0109 = 2026-05-14 起票 → 2026-05-16 Approved & shipped (Option B, 全 9 PR 着地)、Tune 派生 SSOT 化）。`H-XXXX` 採番は終了。
 - 新規 PLAN フェーズは **v3-27 以降**を採番（v3-26 = R-4.2 Pickle compat、2026-05-13 着地で v0.5 phase 完全消化）。
 - E2E 単独追加（仕様変更なし）は HISTORY 起票不要、本 ROADMAP の §3 を更新するだけで OK。
 - 本 ROADMAP はステータス変更時に都度更新。タスク完了時は §1 へ移動、新規着手時は §2/§3/§4 へ追加する。

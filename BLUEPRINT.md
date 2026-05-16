@@ -186,6 +186,15 @@ class BackendCore(Protocol):
     ) -> list[IncompatibleMetric]: ...
         # task/target 前提条件に反する設定済みメトリクスの advisory（watchlist と suggested_fix prose は backend 所有）。
         # デフォルトは [] — 実装しない backend は不適合メトリクスを宣言しない。Service が severity="warning" に包む。
+    def get_tuning_defaults(self, task: str) -> TuningDefaults: ...                  # P-0109
+        # backend 自身の catalog (lizyml: search_space_catalog / metric_direction / TASK_DEFAULT_METRICS) から
+        # Tune タブの canonical defaults を生成。frontend には adapter-specific 分岐を持たせない (INV-T5)
+    def compute_effective_tuning(                                                    # P-0109
+        self, task: str, overrides: TuningOverrides
+    ) -> TuningConfig: ...
+        # (task, overrides) → effective TuningConfig の純関数 merge。GET /workspace/config 応答組み立てと
+        # POST /workspace/tune 起動時の effective snapshot 凍結 (INV-T6) で呼ばれる。
+        # direction は本メソッドが SSOT (INV-T3) — services 層に hardcoded maximize-metric set を置かない
     def get_default_config(self, task: str, target: str) -> dict[str, Any]: ...  # H-0025
     def load_config_from_file(self, content: bytes, filename: str) -> dict[str, Any]: ...
 
@@ -312,6 +321,7 @@ class BackendAdapter(
 |------|-----|--------------|
 | `backend` | `BackendAdapter` | サーバー起動時に決定 |
 | `workspace_config` | `dict \| None` | Config設定時に生成 |
+| `tuning_overrides` | `TuningOverrides \| None` | Tune タブの SSOT (P-0109)。sparse user intent のみ保持。`None` = 未触手 / 空 `TuningOverrides()` = catalog defaults へ明示 clear。effective state は `adapter.compute_effective_tuning(task, overrides)` で都度 compute |
 | `workspace_data` | `DataRef \| None` | データ指定時に生成 |
 | `workspace_result` | `Job \| None` | 現セッション中の直近fit結果のみ |
 | `active_job_id` | `str \| None` | 実行中ジョブのスロット。`JobStore.active_job_id` が単一所有者として保持（P-0089 / Issue #279） |
@@ -877,6 +887,12 @@ Data Panel で Task が変更されたとき、`evaluation.metrics` をそのタ
 ハイパーパラメータの探索空間を定義し、最適なパラメータを自動探索するワークフロー。全操作がマウスで完結するよう設計する。
 
 Fit タブと Tune タブは**同一の Config オブジェクト**の異なるセクションを編集する。Tune タブは `tuning` セクションを担当し、`model` / `training` は Fit タブの値を共有する。
+
+**intent / effective 分離（P-0109、2026-05-15 着地）:** Tune タブの SSOT は backend adapter が持つ catalog（lizyml の `search_space_catalog` / `metric_direction` / `TASK_DEFAULT_METRICS`）。workspace に persist されるのは `ws.tuning_overrides: TuningOverrides | None` — ユーザーが明示的に設定したフィールドのみ含む sparse な intent。**effective state**（catalog defaults + overrides を merge した完全な `TuningConfig`）は `adapter.compute_effective_tuning(task, overrides)` で都度 compute され、永続化しない。これにより (a) Tune タブ初回マウントで catalog defaults が UI に必ず反映される、(b) catalog 進化が既存 workspace に自動伝播する、(c) tune job 起動時に effective を `job.config.tuning` に snapshot 凍結することで catalog の将来変更によって過去 job の再現性が破れない（INV-T6）、という 3 つの性質が構造的に成立する。frontend には adapter-specific 分岐を一切持たせない（INV-T5）。API surface:
+
+- `GET /api/workspace/config/tuning-snapshot` → `{tuning_effective: dict, tuning_defaults: dict}`（PR-4a #519）
+- `PUT /api/workspace/config/tuning-overrides` body は sparse `TuningOverrides`、`ws.tuning_overrides` を outright replace、新 effective を echo（PR-4a #519）
+- 既存 `GET/PUT /api/workspace/config` は legacy compat shim 経由でそのまま動作（PR-4b #520）— on-disk persist シェイプは v2 のまま、`STUDIO_FORMAT_VERSION` は 2 据え置き
 
 ```
 ┌──────────────────────────────────┐
@@ -2403,12 +2419,14 @@ Workspace の揮発状態を管理する。
 |---------|------|------|
 | GET | `/api/workspace/config/schema` | Config の JSON Schema を返す |
 | GET | `/api/workspace/config/defaults` | 完全なデフォルト Config を返す（query: `task`, `target`）(H-0025) |
-| GET | `/api/workspace/config` | 現在の Config を返す |
-| PUT | `/api/workspace/config` | Config を更新（バリデーション付き） |
+| GET | `/api/workspace/config` | 現在の Config を返す（legacy compat — `tuning` block は `ws.tuning_overrides` から sparse 投影） |
+| PUT | `/api/workspace/config` | Config を更新（バリデーション付き）。body 内の `tuning` block は `absorb_legacy_tuning` 経由で `ws.tuning_overrides` に吸収される (P-0109 PR-4b 互換 shim) |
 | PATCH | `/api/workspace/config` | Config を部分更新（指定キーのみマージ）（H-0037） |
 | POST | `/api/workspace/config/validate` | Config dict をバリデーションのみ行う |
 | POST | `/api/workspace/config/upload` | YAML/JSON ファイルから読み込み |
 | GET | `/api/workspace/config/download` | 現在の Config を YAML でダウンロード |
+| GET | `/api/workspace/config/tuning-snapshot` | Tune タブ用の effective + defaults 同梱応答 `{tuning_effective, tuning_defaults}`（P-0109 PR-4a / SSOT 読み path） |
+| PUT | `/api/workspace/config/tuning-overrides` | sparse `TuningOverrides` を `ws.tuning_overrides` に outright replace。新 effective を echo（P-0109 PR-4a / SSOT 書き path） |
 
 #### Data
 

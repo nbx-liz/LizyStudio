@@ -2142,3 +2142,335 @@ class TestValidateSearchSpace:
             }
         )
         assert out == []
+
+
+# ---------------------------------------------------------------------------
+# P-0109 PR-3: get_tuning_defaults / compute_effective_tuning
+# ---------------------------------------------------------------------------
+
+
+class TestGetTuningDefaults:
+    """Catalog-aware defaults the adapter exposes via ``get_tuning_defaults``.
+
+    These tests pin the SSOT shape (INV-T5: each adapter is the source of
+    truth for its own defaults) and the catalog-projection rule (entries
+    with ``default_mode`` of "range"/"choice" produce search-space rows;
+    "fixed" rows do not).
+    """
+
+    @pytest.fixture
+    def adapter(self) -> LizyMLAdapter:
+        return LizyMLAdapter()
+
+    def test_binary_has_catalog_space_and_metrics_and_maximize_direction(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        d = adapter.get_tuning_defaults("binary")
+        assert d.space, "binary defaults must carry the catalog search space"
+        # First canonical metric is "auc" → registry direction maximize.
+        assert d.evaluation_metrics == ["auc", "auc_pr", "brier", "logloss"]
+        assert d.direction == "maximize"
+
+    def test_regression_has_catalog_space_but_no_canonical_metric_default(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        # P-0104 Wave 2.3 / Issue #459: only binary has a canonical
+        # default metric list today. Regression / multiclass still defer.
+        d = adapter.get_tuning_defaults("regression")
+        assert d.space, "regression defaults still carry the catalog search space"
+        assert d.evaluation_metrics == []
+        assert d.direction is None
+
+    def test_multiclass_has_catalog_space_but_no_canonical_metric_default(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        d = adapter.get_tuning_defaults("multiclass")
+        assert d.space, "multiclass defaults still carry the catalog search space"
+        assert d.evaluation_metrics == []
+        assert d.direction is None
+
+    def test_empty_task_yields_empty_defaults(self, adapter: LizyMLAdapter) -> None:
+        d = adapter.get_tuning_defaults("")
+        assert d.space == {}
+        assert d.evaluation_metrics == []
+        assert d.direction is None
+
+    def test_unknown_task_yields_empty_defaults(self, adapter: LizyMLAdapter) -> None:
+        d = adapter.get_tuning_defaults("unknown_task")
+        assert d.space == {}
+        assert d.evaluation_metrics == []
+        assert d.direction is None
+
+    def test_space_entries_match_catalog_default_mode_filter(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        """Only catalog rows with ``default_mode`` of range/choice contribute.
+
+        Pins the projection rule. ``num_leaves`` (modes include range
+        but no ``default_mode``) is "fixed" by default and MUST be absent
+        from ``defaults.space``; ``learning_rate`` (``default_mode =
+        "range"``) MUST be present.
+        """
+        d = adapter.get_tuning_defaults("binary")
+        assert "learning_rate" in d.space
+        assert "num_leaves" not in d.space, (
+            "num_leaves has no default_mode in the catalog — "
+            "it must not appear in the canonical defaults space"
+        )
+
+    def test_space_range_entries_have_required_keys(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        d = adapter.get_tuning_defaults("binary")
+        lr = d.space["learning_rate"]
+        assert lr["type"] == "float"
+        assert lr["low"] == 0.0001
+        assert lr["high"] == 0.01
+        assert lr["log"] is True
+
+    def test_space_int_range_entry_is_typed_as_int(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        d = adapter.get_tuning_defaults("binary")
+        depth = d.space["max_depth"]
+        assert depth["type"] == "int"
+        assert depth["low"] == 3
+        assert depth["high"] == 9
+        assert depth["log"] is False
+
+    def test_space_choice_entry_is_categorical_with_choices(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        d = adapter.get_tuning_defaults("binary")
+        max_bin = d.space["max_bin"]
+        assert max_bin["type"] == "categorical"
+        assert max_bin["choices"] == [15, 63, 127, 255, 511]
+
+    def test_returns_independent_snapshots_per_call(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        """Mutating one TuningDefaults must not leak into the next call.
+
+        ``TuningDefaults`` is frozen at the dataclass level but its
+        ``space`` dict is not — defending against accidental aliasing
+        is part of the contract.
+        """
+        a = adapter.get_tuning_defaults("binary")
+        b = adapter.get_tuning_defaults("binary")
+        assert a.space["learning_rate"] is not b.space["learning_rate"], (
+            "different calls must yield independent dict instances"
+        )
+
+
+class TestComputeEffectiveTuning:
+    """Per-key merge semantics against the real lizyml catalog.
+
+    Mirrors the BackendCore Protocol tests (P-0109 PR-2) but exercises
+    the adapter's own override so any regression at the adapter level
+    (not the Protocol level) is caught.
+    """
+
+    @pytest.fixture
+    def adapter(self) -> LizyMLAdapter:
+        return LizyMLAdapter()
+
+    def test_empty_overrides_yields_catalog_defaults_for_binary(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        from lizystudio.backends.types import TuningOverrides
+
+        eff = adapter.compute_effective_tuning("binary", TuningOverrides())
+        assert eff.n_trials == 50  # fall-through default
+        assert eff.timeout is None
+        assert eff.direction == "maximize"  # auc → maximize
+        assert eff.evaluation_metrics == ["auc", "auc_pr", "brier", "logloss"]
+        assert eff.user_set_paths == []
+        assert "learning_rate" in eff.space
+
+    def test_user_override_wins_per_space_key(self, adapter: LizyMLAdapter) -> None:
+        from lizystudio.backends.types import TuningOverrides
+
+        o = TuningOverrides(
+            space={
+                "learning_rate": {
+                    "type": "float",
+                    "low": 0.5,
+                    "high": 1.0,
+                    "log": False,
+                },
+            },
+        )
+        eff = adapter.compute_effective_tuning("binary", o)
+        assert eff.space["learning_rate"]["low"] == 0.5
+        assert eff.space["learning_rate"]["high"] == 1.0
+        # Catalog-only keys survive intact.
+        assert "max_depth" in eff.space
+        assert eff.space["max_depth"]["high"] == 9
+        assert "space.learning_rate" in eff.user_set_paths
+        assert "space.max_depth" not in eff.user_set_paths
+
+    def test_evaluation_metrics_override_replaces_list(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        from lizystudio.backends.types import TuningOverrides
+
+        o = TuningOverrides(evaluation_metrics=["logloss"])
+        eff = adapter.compute_effective_tuning("binary", o)
+        assert eff.evaluation_metrics == ["logloss"]
+        assert "evaluation_metrics" in eff.user_set_paths
+
+    def test_direction_follows_effective_first_metric_after_override(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        """P-0109 PR-6b refinement (INV-T3): when *overrides* replace the
+        ``evaluation_metrics`` list, ``effective.direction`` follows the
+        new first metric via the lizyml metric registry — not the
+        catalog's canonical direction. Previously the method returned
+        ``defaults.direction`` (``"maximize"`` for binary, since auc is
+        first in ``_TASK_DEFAULT_METRICS``) regardless of how the user
+        overrode the metric list, which let ``auc → logloss`` ship as
+        ``direction="maximize"`` and rely on
+        ``_prepare_tune_config``'s legacy ``maximize_metrics`` block to
+        silently correct the drift downstream.
+        """
+        from lizystudio.backends.types import TuningOverrides
+
+        # Override-only: switch from auc (maximize) to logloss (minimize).
+        eff = adapter.compute_effective_tuning(
+            "binary", TuningOverrides(evaluation_metrics=["logloss"])
+        )
+        assert eff.direction == "minimize"
+        # Symmetric round-trip: switching back to a maximize-metric returns
+        # ``"maximize"`` from the registry (not the bare default).
+        eff2 = adapter.compute_effective_tuning(
+            "binary", TuningOverrides(evaluation_metrics=["auc_pr"])
+        )
+        assert eff2.direction == "maximize"
+
+    def test_explicit_direction_override_still_wins_over_registry(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        """A user-supplied ``direction`` ranks above the metric-registry
+        derivation: e.g. someone optimising AUC as a *loss surrogate* can
+        still pin ``direction="minimize"`` and have it survive the
+        refinement. Symmetric upgrade: setting ``direction="maximize"``
+        with a logloss metric also survives — the registry only acts
+        as a default, never as a hard override on user intent."""
+        from lizystudio.backends.types import TuningOverrides
+
+        eff = adapter.compute_effective_tuning(
+            "binary",
+            TuningOverrides(evaluation_metrics=["auc"], direction="minimize"),
+        )
+        assert eff.direction == "minimize"
+        eff2 = adapter.compute_effective_tuning(
+            "binary",
+            TuningOverrides(evaluation_metrics=["logloss"], direction="maximize"),
+        )
+        assert eff2.direction == "maximize"
+
+    def test_direction_falls_back_to_catalog_default_for_unknown_metric(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        """When the override metric is not in the lizyml registry, the
+        derivation step returns ``None`` and the merge falls back to the
+        catalog's canonical direction (``defaults.direction``). For
+        binary that is ``"maximize"`` (auc is the canonical first metric).
+        This keeps a user-added custom metric from accidentally flipping
+        the tuner's direction toward "minimize" when the catalog default
+        was "maximize"."""
+        from lizystudio.backends.types import TuningOverrides
+
+        eff = adapter.compute_effective_tuning(
+            "binary",
+            TuningOverrides(evaluation_metrics=["custom_unknown_metric"]),
+        )
+        assert eff.direction == "maximize"  # catalog canonical for binary
+
+    def test_direction_dict_form_metric_uses_registry(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        """MetricEntry dict form (``{"precision_at_k": {"k": 10}}``) is
+        accepted: direction derivation extracts the metric name (first
+        key) before consulting the registry. precision_at_k is a
+        maximize metric in the lizyml registry."""
+        from lizystudio.backends.types import TuningOverrides
+
+        eff = adapter.compute_effective_tuning(
+            "binary",
+            TuningOverrides(evaluation_metrics=[{"precision_at_k": {"k": 10}}]),
+        )
+        assert eff.direction == "maximize"
+
+    def test_direction_override_wins_over_catalog(self, adapter: LizyMLAdapter) -> None:
+        from lizystudio.backends.types import TuningOverrides
+
+        o = TuningOverrides(direction="minimize")
+        eff = adapter.compute_effective_tuning("binary", o)
+        assert eff.direction == "minimize"
+        assert "direction" in eff.user_set_paths
+
+    def test_explicit_timeout_none_is_tracked(self, adapter: LizyMLAdapter) -> None:
+        from lizystudio.backends.types import TuningOverrides
+
+        eff = adapter.compute_effective_tuning("binary", TuningOverrides(timeout=None))
+        assert eff.timeout is None
+        assert "timeout" in eff.user_set_paths
+
+    def test_catalog_outside_user_param_survives(self, adapter: LizyMLAdapter) -> None:
+        """INV-T2: user-added space keys outside the catalog must persist."""
+        from lizystudio.backends.types import TuningOverrides
+
+        o = TuningOverrides(
+            space={
+                "custom_param": {
+                    "type": "categorical",
+                    "choices": ["a", "b"],
+                },
+            },
+        )
+        eff = adapter.compute_effective_tuning("binary", o)
+        assert "custom_param" in eff.space
+        assert eff.space["custom_param"]["choices"] == ["a", "b"]
+        # Catalog keys also still present.
+        assert "learning_rate" in eff.space
+
+    def test_unknown_task_falls_back_to_overrides_only(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        """Defaults are empty for unknown task — overrides surface verbatim."""
+        from lizystudio.backends.types import TuningOverrides
+
+        o = TuningOverrides(
+            n_trials=10,
+            space={"x": {"type": "float", "low": 0.1, "high": 0.5}},
+        )
+        eff = adapter.compute_effective_tuning("unknown", o)
+        assert eff.n_trials == 10
+        assert eff.space == {"x": {"type": "float", "low": 0.1, "high": 0.5}}
+        assert eff.direction == "minimize"  # no catalog default → fallback
+        assert eff.evaluation_metrics == []
+
+    def test_pure_function_does_not_mutate_overrides(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        from lizystudio.backends.types import TuningOverrides
+
+        space_in: dict[str, dict[str, Any]] = {
+            "learning_rate": {
+                "type": "float",
+                "low": 0.5,
+                "high": 1.0,
+                "log": False,
+            }
+        }
+        o = TuningOverrides(space=space_in)
+        _ = adapter.compute_effective_tuning("binary", o)
+        assert o.space == {
+            "learning_rate": {
+                "type": "float",
+                "low": 0.5,
+                "high": 1.0,
+                "log": False,
+            }
+        }
