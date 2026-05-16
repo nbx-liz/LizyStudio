@@ -32,9 +32,12 @@ function buildEntry(name: string, k?: number): MetricEntry {
 // follow-up issue per #459's scope statement. P-0109 PR-3 moved the
 // SSOT for these to the lizyml adapter
 // (``backends.lizyml.config_mixin._TASK_DEFAULT_METRICS``) — this
-// frontend constant remains the pre-PR-5 render fallback and is
-// scheduled for removal in PR-6 once the snapshot endpoint becomes
-// the read path.
+// frontend constant remains the post-PR-5 render fallback and is
+// scheduled for removal in PR-6c once the Tune tab reads its
+// effective state from ``GET /api/workspace/config/tuning-snapshot``
+// (PR-4a #519) instead of the legacy ``GET /api/workspace/config``
+// shim. Until then, dropping this constant would regress the
+// initial Additional-Metrics chip state for binary tasks.
 const TASK_DEFAULT_METRICS: Record<string, string[]> = {
   binary: ["auc", "auc_pr", "brier", "logloss"],
 };

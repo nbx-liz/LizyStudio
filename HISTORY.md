@@ -4201,12 +4201,18 @@ T=4116ms  re-render: searchSpaceKeys=0 (space lost in coalesce)
 #### Decision
 
 - 2026-05-14 **Approved (Option B)** — Q1〜Q4 解決済。PR-2 以降の実装に着手可。単一 PR ではなく **複数 PR 連鎖** で進める。理由: Protocol 拡張 + Pydantic schema rename + storage migration (`format_version` bump) + adapter 実装 + service 層 + API 拡張 + frontend refactor + e2e 確認の各レイヤで blast radius が大きく、レビュー単位を分けたほうが review quality が保てる。
-  - **PR-1**: Proposal-only (本 PR、`[docs-only]`)
-  - **PR-2**: 共通型 `TuningDefaults` / `TuningOverrides` / `TuningConfig` (Pydantic models) + `BackendCore.get_tuning_defaults` / `compute_effective_tuning` Protocol 追加（safe default）
-  - **PR-3**: `LizyMLAdapter.get_tuning_defaults` + `compute_effective_tuning` 実装 + 重複 `maximize_metrics` hardcoded set 削除 + INV-T3 assertion 追加 + unit tests
-  - **PR-4**: `WorkspaceConfig.tuning` → `tuning_overrides` rename + `STUDIO_FORMAT_VERSION` 2 → 3 bump + `storage/migrations.py::MIGRATIONS[2]` 実装 + `service.set_config` リファクタ + GET/PUT API response 拡張 + `_prepare_tune_config` から direction force-resolve 削除 + tune job 起動時の effective snapshot + integration tests + format-version-matrix CI gate 更新
-  - **PR-5**: frontend の 3 useEffect 削除 + `effective` / `overrides` 二層 prop に refactor + "modified" badge UI + 既存 frontend test の整理 + 新規 e2e `workspace-tune-init.spec.ts`
-  - **PR-6**: BLUEPRINT.md §3.3.2 / §6 / §7 reconcile + docs/format-version-matrix.md / architecture-as-implemented.md 更新 + Decision を **"Approved & shipped"** に更新
+- 2026-05-15 **Approved & shipped (Option B, partially)** — PR-1〜PR-5 を develop に着地。**Tune タブ初回マウントで Fixed 行が表示されるバグはここで構造的に解消**（PR-5 #521）。当初計画から外したのは以下:
+  - `STUDIO_FORMAT_VERSION` 2 → 3 bump および `MIGRATIONS[2]` は **未実施**。`ws.tuning_overrides` は in-memory storage の一級フィールド化に留め、on-disk persistence（`WorkspaceConfig.tuning` block）は v2 schema のまま据え置き。`absorb_legacy_tuning` / `get_legacy_config_view` の双方向シムが v2 シェイプを保持しているため、ユーザーが既存 workspace を読み込んでも `LegacyFormatProtectionError` は出ない。INV-T7 は migration 不在で trivially 成立。format-version-matrix への追記は行わない（on-disk シェイプに変更がないため）
+  - **PR-6 を 3 サブ PR に分割**して継続 (`PR-6a` docs reconcile + `TASK_DEFAULT_METRICS` 削除 / `PR-6b` INV-T3 assertion + `_prepare_tune_config` hardcoded `maximize_metrics` set 削除 / `PR-6c` Tune タブを `GET /config/tuning-snapshot` 読みに切替 + accurate "modified" badge)
+  - **PR-1**: Proposal-only (本 PR、`[docs-only]`) — ✅ shipped (#516)
+  - **PR-2**: 共通型 `TuningDefaults` / `TuningOverrides` / `TuningConfig` (Pydantic models) + `BackendCore.get_tuning_defaults` / `compute_effective_tuning` Protocol 追加（safe default）— ✅ shipped (#517)
+  - **PR-3**: `LizyMLAdapter.get_tuning_defaults` + `compute_effective_tuning` 実装 + unit tests — ✅ shipped (#518)。重複 `maximize_metrics` hardcoded set 削除 + INV-T3 assertion 追加は **PR-6b に再スコープ**（INV-ADAPTER-1 により `services/` から `backends.lizyml_*` 直 import 不可、Protocol 経由の semantic refinement が必要なため）
+  - **PR-4a**: 新規 `GET /config/tuning-snapshot` / `PUT /config/tuning-overrides` エンドポイント追加（既存 `GET/PUT /config` は legacy compat shim 経由でそのまま動く、additive） — ✅ shipped (#519)
+  - **PR-4b**: `WorkspaceState.tuning_overrides` first-class storage 化 + `absorb_legacy_tuning` / `get_legacy_config_view` 双方向 shim + tune job 起動時の effective snapshot 凍結 (INV-T6) + integration tests — ✅ shipped (#520)。`format_version` bump および `storage/migrations.py::MIGRATIONS[2]` は未実施（on-disk シェイプは v2 のまま）
+  - **PR-5**: frontend の 3 useEffect 物理削除 + render-time fallbacks + 新規 e2e `workspace-tune-firstmount.spec.ts` — ✅ shipped (#521)
+  - **PR-6a**: HISTORY.md / docs/ROADMAP.md / BLUEPRINT.md / docs/architecture-as-implemented.md 更新 + `TASK_DEFAULT_METRICS` frontend 定数削除 (bundle code touch)
+  - **PR-6b**: `services/training.py::_prepare_tune_config` の hardcoded `maximize_metrics` set 削除 + INV-T3 assertion 追加 (Protocol semantic refinement、approach (a))
+  - **PR-6c**: TuneTab / TuneEvaluationSection / SearchSpaceTable を `GET /config/tuning-snapshot` 読みに refactor + `PUT /config/tuning-overrides` sparse mutation 経路 + accurate "modified" badge (`tuning_effective.user_set_paths` 参照) + 既存 PR-5 e2e spec の整合性確認
 
 - Open questions resolved (2026-05-14):
   - **Q1 (RESOLVED)**: `_prepare_tune_config` の direction 強制再解決 → **削除 + INV-T3 assertion 化**。silent な corrected write は drift を隠す（重複 hardcoded `maximize_metrics` set と `metric_direction` の registry が drift する未来を防ぐためにも）。INV-T3 違反は `assert effective.direction == expected, ...` で fail-fast し、raw YAML import / curl 直叩きで invariant 違反が来た場合にテストや CI で surface する。
