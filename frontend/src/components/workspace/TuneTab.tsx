@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo } from "react";
+import { useTuningSnapshot } from "@/api/queries/useWorkspace";
 import type { MetricEntry } from "@/api/types";
 import { RetuneSettingsSection } from "@/components/retune";
 import {
@@ -146,6 +147,32 @@ export function TuneTab({
     return result;
   }, [objectiveOptions]);
 
+  // P-0109 PR-6c: subscribe to the Tune-tab intent/effective/defaults
+  // triple. Used as:
+  //   * ``tuning_defaults.evaluation_metrics`` — canonical eval-metric
+  //     fallback for ``TuneEvaluationSection`` (replaces the frontend
+  //     ``TASK_DEFAULT_METRICS`` constant that PR-5 left in place).
+  //   * ``tuning_effective.user_set_paths`` — per-row "modified" badge
+  //     provenance for ``SearchSpaceRow``. Entries the user explicitly
+  //     touched render with the badge; catalog-default rows do not.
+  // The query is enabled only when a task is set: a fresh workspace
+  // (no task) returns empty defaults and an empty effective, and
+  // running this before the user picks a task would pollute the cache
+  // with a transient empty result.
+  const { data: tuningSnapshot } = useTuningSnapshot({ enabled: !!task });
+  const defaultEvaluationMetrics = useMemo<unknown[]>(() => {
+    const fromSnapshot = tuningSnapshot?.tuning_defaults.evaluation_metrics;
+    return Array.isArray(fromSnapshot) ? fromSnapshot : [];
+  }, [tuningSnapshot]);
+  const userSetSpaceKeys = useMemo<Set<string>>(() => {
+    const paths = tuningSnapshot?.tuning_effective.user_set_paths ?? [];
+    const out = new Set<string>();
+    for (const p of paths) {
+      if (p.startsWith("space.")) out.add(p.slice("space.".length));
+    }
+    return out;
+  }, [tuningSnapshot]);
+
   const handleParamsChange = (params: Record<string, unknown>) => {
     onChange(updateOptunaField(config, "params", params));
   };
@@ -229,6 +256,7 @@ export function TuneTab({
               cvStrategy={cvStrategy}
               innerValidOptions={innerValidOptions}
               parameterBounds={parameterBounds}
+              userSetSpaceKeys={userSetSpaceKeys}
             />
           </div>
         </AccordionContent>
@@ -246,6 +274,7 @@ export function TuneTab({
             metricDirection={metricDirection}
             evaluation={evaluation}
             tuningParams={tuningParams}
+            defaultEvaluationMetrics={defaultEvaluationMetrics}
           />
         </AccordionContent>
       </AccordionItem>

@@ -10,6 +10,7 @@ import {
   fetchColumns,
   fetchConfig,
   fetchConfigSchema,
+  fetchTuningSnapshot,
   fetchUiSchema,
   fetchWorkspaceStatus,
 } from "@/api/workspace";
@@ -70,5 +71,32 @@ export function useWorkspaceStatus(options?: { enabled?: boolean }) {
     queryFn: fetchWorkspaceStatus,
     enabled: options?.enabled !== false,
     retry: false,
+  });
+}
+
+/**
+ * P-0109 PR-6c: Tune-tab snapshot subscription.
+ *
+ * Exposes the backend's intent / effective / defaults triple in one
+ * payload so the Tune tab can:
+ *
+ *   1. Read ``tuning_defaults.evaluation_metrics`` as the canonical
+ *      fallback for the Optimization / Additional Metrics widgets —
+ *      replaces the frontend-only ``TASK_DEFAULT_METRICS`` constant
+ *      that was deferred from PR-5.
+ *   2. Render the per-row "modified" badge on SearchSpaceRow from
+ *      ``tuning_effective.user_set_paths`` — entries the user
+ *      explicitly touched (catalog defaults stay un-badged).
+ *
+ * Disabled until a task is set: a fresh workspace returns empty
+ * defaults, and forcing the query to run before the user picks a task
+ * pollutes the cache with a transient empty result that ``setQueryData``
+ * would need to clobber. Pass ``enabled: !!task`` from the caller.
+ */
+export function useTuningSnapshot(options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: queryKeys.tuningSnapshot(),
+    queryFn: ({ signal }) => fetchTuningSnapshot({ signal }),
+    enabled: options?.enabled !== false,
   });
 }

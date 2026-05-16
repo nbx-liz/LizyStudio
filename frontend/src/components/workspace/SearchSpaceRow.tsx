@@ -1,4 +1,5 @@
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -41,6 +42,7 @@ export function SearchSpaceRow({
   onModelParamChange,
   specialSearchSpaceFields,
   columns,
+  isUserSet = false,
 }: SearchSpaceRowProps) {
   const entry = toSpaceEntry(space[param.key]);
   const mode: "fixed" | "range" | "choice" = (() => {
@@ -87,7 +89,24 @@ export function SearchSpaceRow({
             ))}
         </span>
 
-        <span className="flex-1 text-xs font-mono">{param.key}</span>
+        <span className="flex-1 text-xs font-mono inline-flex items-center gap-1.5">
+          {param.key}
+          {/* P-0109 PR-6c: per-row "Modified" badge derived from
+              ``tuning_effective.user_set_paths``. Only rows the user
+              has explicitly customised render the badge — catalog
+              defaults stay un-badged. Tooltip text via ``title`` so
+              screen readers and hover both surface the rationale. */}
+          {isUserSet ? (
+            <Badge
+              variant="secondary"
+              className="text-[10px] px-1 py-0 leading-tight"
+              title="You have customised this parameter — catalog defaults are not in effect for this row."
+              data-testid={`search-space-row-modified-${param.key}`}
+            >
+              Modified
+            </Badge>
+          ) : null}
+        </span>
 
         {/* Mode segment buttons */}
         {/* biome-ignore lint/a11y/noStaticElementInteractions: stopPropagation needed */}

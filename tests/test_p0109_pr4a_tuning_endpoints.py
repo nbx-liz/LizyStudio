@@ -242,11 +242,20 @@ class TestTuningSnapshotEndpoint:
         body = res.json()
         assert "tuning_effective" in body
         assert "tuning_defaults" in body
+        # PR-6c: ``tuning_overrides`` is also surfaced so the frontend
+        # can compute write bodies without re-deriving them from
+        # ``user_set_paths``.
+        assert "tuning_overrides" in body
         # No task set → empty TuningDefaults from the adapter.
         assert body["tuning_defaults"]["space"] == {}
         assert body["tuning_defaults"]["evaluation_metrics"] == []
         # Effective falls back to the empty-overrides safe default.
         assert body["tuning_effective"]["n_trials"] == 50
+        # Fresh workspace → empty overrides (Pydantic default values
+        # serialize to ``None`` / ``{}`` / ``None``).
+        assert body["tuning_overrides"]["space"] == {}
+        assert body["tuning_overrides"]["n_trials"] is None
+        assert body["tuning_overrides"]["evaluation_metrics"] is None
 
     def test_binary_config_returns_catalog_defaults(
         self, client: TestClient, tmp_path: Path
@@ -305,13 +314,57 @@ class TestTuningSnapshotEndpoint:
 
         res = client.get("/api/workspace/config/tuning-snapshot")
         assert res.status_code == 200, res.text
-        eff = res.json()["tuning_effective"]
+        body = res.json()
+        eff = body["tuning_effective"]
         assert eff["n_trials"] == 200
         # The user's override wins per-key over the catalog default.
         assert eff["space"]["learning_rate"]["low"] == 0.1
         assert eff["space"]["learning_rate"]["high"] == 0.5
         # Catalog-only keys (the user didn't touch them) survive intact.
         assert "max_depth" in eff["space"]
+        # PR-6c: ``tuning_overrides`` round-trips the sparse intent. Only
+        # the keys the legacy PUT body touched are present — catalog
+        # defaults stay out of overrides storage.
+        ov = body["tuning_overrides"]
+        assert ov["n_trials"] == 200
+        assert ov["space"] == {
+            "learning_rate": {
+                "type": "float",
+                "low": 0.1,
+                "high": 0.5,
+                "log": False,
+            }
+        }
+        # ``user_set_paths`` lets the frontend render the "modified"
+        # badge — entries the user explicitly touched, not catalog ones.
+        assert "n_trials" in eff["user_set_paths"]
+        assert "space.learning_rate" in eff["user_set_paths"]
+        assert "space.max_depth" not in eff["user_set_paths"]
+
+    def test_overrides_reflect_user_set_paths_after_sparse_put(
+        self, client: TestClient, tmp_path: Path
+    ) -> None:
+        """PR-6c: after a sparse ``PUT /config/tuning-overrides``, the
+        next snapshot's ``tuning_overrides`` echoes the same body that
+        the user just sent — modulo the merge with prior intent.
+
+        This is the contract the frontend write-path migration (P-0109
+        PR-6c follow-up) relies on: read snapshot.tuning_overrides,
+        edit one field, PUT the merged result, refetch and observe.
+        """
+        _load_data_and_binary_config(client, tmp_path)
+        body = {"n_trials": 333, "evaluation_metrics": ["logloss"]}
+        r = client.put("/api/workspace/config/tuning-overrides", json=body)
+        assert r.status_code == 200, r.text
+
+        snap = client.get("/api/workspace/config/tuning-snapshot")
+        assert snap.status_code == 200, snap.text
+        ov = snap.json()["tuning_overrides"]
+        assert ov["n_trials"] == 333
+        assert ov["evaluation_metrics"] == ["logloss"]
+        # Untouched fields are absent / null on overrides.
+        assert ov["timeout"] is None
+        assert ov["direction"] is None
 
 
 # ---------------------------------------------------------------------------

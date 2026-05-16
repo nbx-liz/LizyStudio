@@ -132,27 +132,30 @@ class ValidationResponse(BaseModel):
 class TuningSnapshotResponse(BaseModel):
     """Response for ``GET /api/workspace/config/tuning-snapshot``.
 
-    The pair the frontend Tune tab consumes to render its rows without
-    racing on the WriteFunnel write path (P-0109 PR-5 deletes the three
-    useEffects that compose the legacy seed-then-edit flow).
+    The triple the frontend Tune tab consumes to render its rows
+    without racing on the WriteFunnel write path (P-0109 PR-5 deletes
+    the three useEffects that compose the legacy seed-then-edit flow).
 
     * ``tuning_effective`` — the catalog defaults merged with the user's
       currently-persisted sparse intent. ``user_set_paths`` carries the
-      provenance the frontend will use for the "modified" badge in a
-      follow-up PR (badge rendering is deferred so PR-5 stays focused
-      on the useEffect deletion).
+      provenance the Tune-tab "modified" badge renders against (PR-6c).
     * ``tuning_defaults`` — the pure backend catalog defaults for the
       current task. Useful as the "reset" reference point in the UI.
+    * ``tuning_overrides`` — the persisted sparse intent (PR-6c). The
+      frontend uses this to compute a merged body for ``PUT
+      /config/tuning-overrides`` without re-deriving overrides from
+      ``user_set_paths``.
 
-    Both are returned as plain dicts so the frontend can consume them
-    with the existing openapi-typescript-generated types — without
-    importing backend-side Pydantic / dataclass shapes.
+    All three sides are returned as plain dicts so the frontend can
+    consume them with the existing openapi-typescript-generated types —
+    without importing backend-side Pydantic / dataclass shapes.
     """
 
     model_config = ConfigDict(extra="allow")
 
     tuning_effective: dict[str, Any]
     tuning_defaults: dict[str, Any]
+    tuning_overrides: dict[str, Any]
 
 
 class TuningOverridesUpdateResponse(BaseModel):

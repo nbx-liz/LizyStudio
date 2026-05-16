@@ -76,4 +76,5 @@ export const queryKeys = {
   columns: () => ["columns"] as const,
   files: (path: string) => ["files", path] as const,
   workspaceStatus: () => ["workspace-status"] as const,
+  tuningSnapshot: () => ["tuning-snapshot"] as const,
 } as const;
