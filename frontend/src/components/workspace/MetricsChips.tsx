@@ -19,6 +19,17 @@ interface MetricsChipsProps {
   onChange: (metrics: MetricEntry[]) => void;
   metricsByTask?: Record<string, string[]>;
   conditionalParams?: Record<string, ConditionalParamDef>;
+  /**
+   * Set to `true` once the workspace's seed config has landed (i.e.
+   * `config.config_version` is defined). Issue #529: the task-change
+   * auto-reset useEffect must NOT fire before the seed PUT lands —
+   * otherwise it routes an `onChange([...defaults])` through the
+   * parent's `handleFieldChange`, which reads an empty `configRef` and
+   * emits a partial-body PUT (`{evaluation:{metrics:[...]}}`) that the
+   * backend rejects with `saved=false`. Defaults to `true` so existing
+   * test/story renders (which pre-seed `selectedMetrics`) keep working.
+   */
+  configSeeded?: boolean;
 }
 
 /**
@@ -52,6 +63,7 @@ export function MetricsChips({
   onChange,
   metricsByTask,
   conditionalParams,
+  configSeeded = true,
 }: MetricsChipsProps) {
   // Metric catalog is backend-driven via UiSchema option_sets.metric.
   // Default on task change: ALL metrics enabled for the task.
@@ -62,14 +74,25 @@ export function MetricsChips({
 
   const prevTask = useRef(task);
 
-  // Reset to defaults when task changes or when no metrics are selected
+  // Reset to defaults when task changes or when no metrics are selected.
+  //
+  // Issue #529: gate on `configSeeded` so the auto-reset never fires
+  // during the target-select window when `configRef.current` upstream
+  // is still empty. Firing then would emit a partial-body PUT
+  // (`{evaluation:{metrics:[...]}}`) that the backend silently rejects.
+  // After the seed PUT lands, `configSeeded` flips to true and the
+  // effect runs once to populate metrics if the seed shipped them
+  // empty — but with the buildMergedConfig fix that ships in the same
+  // PR, the seed already carries the task's eval metrics, so this
+  // branch usually no-ops.
   useEffect(() => {
+    if (!configSeeded) return;
     const taskChanged = task !== prevTask.current;
     prevTask.current = task;
     if ((taskChanged || selectedMetrics.length === 0) && available.length > 0) {
       onChange([...available]);
     }
-  }, [task, onChange, available, selectedMetrics.length]);
+  }, [task, onChange, available, selectedMetrics.length, configSeeded]);
 
   if (available.length === 0) return null;
 

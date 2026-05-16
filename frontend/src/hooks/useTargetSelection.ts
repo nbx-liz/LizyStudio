@@ -9,6 +9,7 @@ import {
   getEffectiveCvStrategy,
   resetCvState,
 } from "@/components/workspace/cv-state";
+import { evalMetricMap } from "@/components/workspace/metric-options";
 import type { ConfigWriteFunnel } from "./useConfigWriteFunnel";
 import {
   buildMergedConfig,
@@ -107,6 +108,12 @@ export function useTargetSelection({
 
         if (detectedTask) {
           const defaults = await fetchConfigDefaults(detectedTask, value);
+          // Issue #529: seed `evaluation.metrics` from the UiSchema's
+          // task-keyed eval registry. Without this the merged-config PUT
+          // ships `evaluation.metrics: []`, which lets MetricsChips'
+          // task-change useEffect race the target-select PUT and emit a
+          // partial-body PUT that the backend rejects (saved=false).
+          const evaluationMetrics = evalMetricMap(uiSchema)[detectedTask] ?? [];
           const merged = buildMergedConfig({
             defaults,
             task: detectedTask,
@@ -119,6 +126,7 @@ export function useTargetSelection({
             dataPath,
             target: value,
             overrides: newOverrides,
+            evaluationMetrics,
           });
           // P-0092 Phase 3: route the merged-config PUT through the
           // write funnel when one is wired. The funnel's
