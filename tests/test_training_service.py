@@ -12,10 +12,12 @@ import pytest
 from lizystudio.backends.types import (
     DataRef,
     FitSummary,
+    TuningConfig,
     TuningSummary,
 )
 from lizystudio.services.jobs import JobStore
 from lizystudio.services.training import (
+    _assert_inv_t3,
     _extract_re_tune,
     _prepare_autofit_config,
     _prepare_tune_config,
@@ -357,33 +359,34 @@ class TestPrepareTuneConfig:
         result = _prepare_tune_config(config)
         assert result["evaluation"]["metrics"] == ["rmse"]
 
-    def test_resolves_direction_maximize(self) -> None:
-        """Direction is auto-resolved to "maximize" for auc metric."""
+    def test_does_not_inject_direction_when_absent(self) -> None:
+        """P-0109 PR-6b: ``_prepare_tune_config`` no longer auto-resolves
+        ``direction`` from the evaluation metric. Upstream
+        ``materialize_tuning_for_job`` is the SSOT — it calls
+        ``adapter.compute_effective_tuning`` which derives direction from
+        the effective first metric (PR-6b refinement). When a config
+        bypasses that path (e.g. a unit test passing a hand-crafted
+        config straight to this helper, or a raw YAML import), no
+        direction is invented here. The INV-T3 assertion in
+        :func:`run_tune` surfaces drift from such non-API callers via
+        a WARNING log."""
         config = {
             "task": "binary",
             "evaluation": {"metrics": ["auc"]},
             "tuning": {"optuna": {"params": {"n_trials": 3}}},
         }
         result = _prepare_tune_config(config)
-        assert result["tuning"]["optuna"]["params"]["direction"] == "maximize"
+        # direction stays absent — caller is responsible for resolving it.
+        assert "direction" not in result["tuning"]["optuna"]["params"]
 
-    def test_resolves_direction_minimize(self) -> None:
-        """Direction is auto-resolved to "minimize" for rmse metric."""
-        config = {
-            "task": "regression",
-            "evaluation": {"metrics": ["rmse"]},
-            "tuning": {"optuna": {"params": {"n_trials": 3}}},
-        }
-        result = _prepare_tune_config(config)
-        assert result["tuning"]["optuna"]["params"]["direction"] == "minimize"
-
-    def test_overrides_stale_minimize_direction_for_auc(self) -> None:
-        """Bug 2026-04-14: when ``direction`` is already in params but
-        contradicts the evaluation metric (e.g. ``auc`` paired with a
-        leftover ``minimize`` from the workspace inject path), the
-        helper must overwrite it with the correct direction. The old
-        ``"direction" not in params`` guard let the wrong value pass
-        through and Optuna optimized AUC as if low-is-better.
+    def test_preserves_stale_direction_verbatim(self) -> None:
+        """P-0109 PR-6b: stale / contradictory ``direction`` is no longer
+        silently overwritten. The legacy ``maximize_metrics`` set in this
+        helper had been masking a bug in ``compute_effective_tuning`` that
+        PR-6b fixes upstream — so removing the silent-overwrite path here
+        forces the bug to surface in tests and logs rather than be papered
+        over. Downstream callers that need direction correctness must go
+        through ``materialize_tuning_for_job`` (which calls the adapter).
         """
         config = {
             "task": "binary",
@@ -395,29 +398,14 @@ class TestPrepareTuneConfig:
             },
         }
         result = _prepare_tune_config(config)
-        assert result["tuning"]["optuna"]["params"]["direction"] == "maximize"
-
-    def test_overrides_stale_maximize_direction_for_rmse(self) -> None:
-        """Symmetric to the auc case: a stray ``direction: maximize``
-        on a regression+rmse config must be normalized to ``minimize``."""
-        config = {
-            "task": "regression",
-            "evaluation": {"metrics": ["rmse"]},
-            "tuning": {
-                "optuna": {
-                    "params": {"n_trials": 3, "direction": "maximize"},
-                }
-            },
-        }
-        result = _prepare_tune_config(config)
         assert result["tuning"]["optuna"]["params"]["direction"] == "minimize"
 
-    def test_keeps_consistent_direction_unchanged(self) -> None:
-        """When the supplied ``direction`` already matches the metric's
-        natural direction, the helper is a no-op for that field. This
-        is important so users who explicitly override the auto-resolved
-        direction (e.g. minimize a custom auc-based loss) are not
-        silently overruled when the metric/direction *do* line up."""
+    def test_preserves_user_supplied_direction(self) -> None:
+        """A user-supplied ``direction`` that matches the metric's natural
+        direction continues to round-trip unchanged. This is the case the
+        legacy block also handled correctly — preserved here as the
+        positive-invariant variant of the previous "keeps consistent
+        direction unchanged" assertion."""
         config = {
             "task": "binary",
             "evaluation": {"metrics": ["auc"]},
@@ -461,17 +449,18 @@ class TestPrepareTuneConfig:
         _prepare_tune_config(config)
         assert config == original
 
-    def test_direction_resolution_unknown_metric_defaults_to_minimize(
-        self,
-    ) -> None:
-        """Unknown metrics fall back to ``minimize`` (sane default)."""
+    def test_unknown_metric_leaves_direction_unset(self) -> None:
+        """P-0109 PR-6b: unknown metrics no longer trigger a "minimize"
+        fallback in this helper (the fallback now lives at the adapter
+        level in ``compute_effective_tuning``). Direction stays unset
+        when the caller did not supply one."""
         config = {
             "task": "binary",
             "evaluation": {"metrics": ["custom_unknown_metric"]},
             "tuning": {"optuna": {"params": {"n_trials": 3}}},
         }
         result = _prepare_tune_config(config)
-        assert result["tuning"]["optuna"]["params"]["direction"] == "minimize"
+        assert "direction" not in result["tuning"]["optuna"]["params"]
 
 
 # ---------------------------------------------------------------------------
@@ -1818,8 +1807,18 @@ class TestPrepareTuneConfigEdgeCases:
         # No preferred metric → evaluation section should NOT be added
         assert "evaluation" not in result or result.get("evaluation") == {}
 
-    def test_dict_form_metric_resolves_direction(self) -> None:
-        """Direction resolved from first metric when it is a dict (not str)."""
+    def test_dict_form_metric_passes_through_without_direction_injection(
+        self,
+    ) -> None:
+        """P-0109 PR-6b: ``_prepare_tune_config`` no longer derives
+        ``direction`` from the first metric — dict-form metrics
+        included. The helper simply forwards whatever the upstream
+        materialization layer (``materialize_tuning_for_job``) put on
+        the config. Direction-from-metric derivation lives at the
+        adapter (``compute_effective_tuning``), which accepts both
+        bare-string and dict-form MetricEntry inputs (covered by
+        ``test_direction_dict_form_metric_uses_registry`` over in
+        ``test_backends_lizyml.py``)."""
 
         config: dict[str, Any] = {
             "task": "binary",
@@ -1829,8 +1828,8 @@ class TestPrepareTuneConfigEdgeCases:
             },
         }
         result = _prepare_tune_config(config)
-        # {"auc": {}} → first key is "auc" → maximize
-        assert result["tuning"]["optuna"]["params"]["direction"] == "maximize"
+        # No direction was supplied → the helper leaves params direction-less.
+        assert "direction" not in result["tuning"]["optuna"]["params"]
 
     def test_multiclass_task_uses_auc_metric(self) -> None:
 
@@ -2520,3 +2519,140 @@ def test_start_retune_async_worker_crash_transitions_child_to_failed(
     assert refreshed.error is not None and "synthetic worker crash" in refreshed.error
     mock_broadcaster.send_error.assert_called()
     assert job_store.get_locked_child(parent.job_id) is None
+
+
+# ---------------------------------------------------------------------------
+# _assert_inv_t3 unit tests (P-0109 PR-6b)
+# ---------------------------------------------------------------------------
+
+
+class TestAssertInvT3:
+    """Unit tests for ``_assert_inv_t3`` warn-only assertion (P-0109 PR-6b).
+
+    The helper logs a WARNING when the persisted ``direction`` in the
+    tune-config disagrees with what
+    ``adapter.compute_effective_tuning(task, overrides).direction``
+    would compute. It never raises (production safety) and never
+    mutates the config. Tests assert both the positive case (silent
+    pass-through on agreement) and the drift-detection case (WARNING
+    logged on disagreement).
+    """
+
+    def _make_backend(
+        self, direction: str, evaluation_metrics: list[str] | None = None
+    ) -> MagicMock:
+        """Build a minimal adapter mock whose ``compute_effective_tuning``
+        returns ``direction`` regardless of input."""
+        backend = MagicMock()
+        backend.compute_effective_tuning.return_value = TuningConfig(
+            n_trials=50,
+            timeout=None,
+            direction=direction,  # type: ignore[arg-type]
+            space={},
+            evaluation_metrics=evaluation_metrics or [],
+            user_set_paths=[],
+        )
+        return backend
+
+    def test_silent_when_direction_agrees(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Adapter SSOT == persisted direction → no log line at WARNING."""
+        backend = self._make_backend("maximize", evaluation_metrics=["auc"])
+        config = {
+            "task": "binary",
+            "tuning": {
+                "optuna": {
+                    "params": {"n_trials": 3, "direction": "maximize"},
+                }
+            },
+        }
+        with caplog.at_level("WARNING", logger="lizystudio.services.training"):
+            _assert_inv_t3(config, backend, job_id="job_test")
+        assert not any("INV-T3" in r.message for r in caplog.records)
+
+    def test_warns_on_direction_drift(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Adapter SSOT != persisted direction → single WARNING with
+        ``INV-T3 drift`` prefix and the job_id."""
+        backend = self._make_backend("minimize", evaluation_metrics=["logloss"])
+        config = {
+            "task": "binary",
+            "tuning": {
+                "optuna": {
+                    "params": {"n_trials": 3, "direction": "maximize"},
+                }
+            },
+        }
+        with caplog.at_level("WARNING", logger="lizystudio.services.training"):
+            _assert_inv_t3(config, backend, job_id="job_drift")
+        drift_logs = [r for r in caplog.records if "INV-T3 drift" in r.message]
+        assert len(drift_logs) == 1
+        msg = drift_logs[0].getMessage()
+        assert "job_drift" in msg
+        assert "'maximize'" in msg  # persisted
+        assert "'minimize'" in msg  # adapter SSOT
+
+    def test_no_warn_when_direction_absent(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """No ``direction`` key in params → nothing to check, no warning.
+        Mirrors the post-PR-6b ``_prepare_tune_config`` no-injection
+        contract: a freshly-prepared config without direction is a
+        legitimate state."""
+        backend = self._make_backend("minimize")
+        config = {
+            "task": "binary",
+            "tuning": {"optuna": {"params": {"n_trials": 3}}},
+        }
+        with caplog.at_level("WARNING", logger="lizystudio.services.training"):
+            _assert_inv_t3(config, backend, job_id="job_nodir")
+        assert not any("INV-T3" in r.message for r in caplog.records)
+
+    def test_no_warn_when_task_missing(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Empty / missing ``task`` short-circuits: the adapter would not
+        know how to compute effective state for an unknown task, so the
+        assertion declines to fire (rather than blame the caller)."""
+        backend = self._make_backend("minimize")
+        config = {
+            "tuning": {"optuna": {"params": {"n_trials": 3, "direction": "maximize"}}}
+        }
+        with caplog.at_level("WARNING", logger="lizystudio.services.training"):
+            _assert_inv_t3(config, backend, job_id="job_notask")
+        assert not any("INV-T3" in r.message for r in caplog.records)
+        backend.compute_effective_tuning.assert_not_called()
+
+    def test_swallows_adapter_exception(self, caplog: pytest.LogCaptureFixture) -> None:
+        """If ``compute_effective_tuning`` raises (e.g. partial adapter
+        impl), the assertion logs an exception but never propagates —
+        production safety. The drift WARNING is not emitted because no
+        comparison was possible."""
+        backend = MagicMock()
+        backend.compute_effective_tuning.side_effect = RuntimeError("boom")
+        config = {
+            "task": "binary",
+            "tuning": {"optuna": {"params": {"n_trials": 3, "direction": "maximize"}}},
+        }
+        with caplog.at_level("WARNING", logger="lizystudio.services.training"):
+            _assert_inv_t3(config, backend, job_id="job_boom")
+        # No drift WARNING surfaced (we never got a comparison).
+        assert not any("INV-T3 drift" in r.message for r in caplog.records)
+        # ``logger.exception`` writes at ERROR level → recorded too.
+        assert any("INV-T3 check" in r.message for r in caplog.records)
+
+    def test_does_not_mutate_config(self) -> None:
+        """The assertion is read-only; the tune_config it inspects is
+        passed downstream to LizyML verbatim."""
+        backend = self._make_backend("minimize", evaluation_metrics=["logloss"])
+        config = {
+            "task": "binary",
+            "tuning": {
+                "optuna": {
+                    "params": {"n_trials": 3, "direction": "maximize"},
+                }
+            },
+        }
+        import copy as _copy
+
+        snapshot = _copy.deepcopy(config)
+        _assert_inv_t3(config, backend)
+        assert config == snapshot

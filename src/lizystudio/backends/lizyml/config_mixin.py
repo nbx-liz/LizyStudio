@@ -134,9 +134,21 @@ class ConfigMixin:
         ``lizyml_metrics.get_metric_directions``. ``ConfigMixin`` does
         not inherit from ``BackendCore`` (the adapter satisfies the
         Protocol via duck typing), so the merge logic is inlined here
-        instead of delegating via ``super()``. PR-4 will wire the
-        result through the service layer at PUT /config response time
-        and at tune job start (INV-T6: job-time snapshot freeze).
+        instead of delegating via ``super()``.
+
+        Direction semantics (P-0109 PR-6b refinement, INV-T3): the
+        ``direction`` field is now derived from the *effective* first
+        evaluation metric — meaning when *overrides* override the
+        ``evaluation_metrics`` list, the direction follows the new
+        metric, not the catalog's canonical direction. Previously the
+        method returned ``defaults.direction`` whenever the user did
+        not set ``overrides.direction`` explicitly, which let a user
+        flip from ``auc`` (maximize) to ``logloss`` (minimize) while
+        leaving ``effective.direction = "maximize"`` — a stale value
+        that ``services/training.py::_prepare_tune_config`` used to
+        silently correct via a hardcoded ``maximize_metrics`` set.
+        PR-6b deletes that downstream re-resolve in favour of doing
+        the right thing here.
         """
         defaults = self.get_tuning_defaults(task)
         fields_set = overrides.model_fields_set
@@ -155,10 +167,14 @@ class ConfigMixin:
         direction: Literal["maximize", "minimize"]
         if overrides.direction is not None:
             direction = overrides.direction
-        elif defaults.direction is not None:
-            direction = defaults.direction
         else:
-            direction = "minimize"
+            derived = self._direction_from_metrics(task, merged_metrics)
+            if derived is not None:
+                direction = derived
+            elif defaults.direction is not None:
+                direction = defaults.direction
+            else:
+                direction = "minimize"
         return TuningConfig(
             n_trials=overrides.n_trials if overrides.n_trials is not None else 50,
             timeout=overrides.timeout if "timeout" in fields_set else None,
@@ -167,6 +183,38 @@ class ConfigMixin:
             evaluation_metrics=merged_metrics,
             user_set_paths=user_set,
         )
+
+    @staticmethod
+    def _direction_from_metrics(
+        task: str, metrics: list[Any]
+    ) -> Literal["maximize", "minimize"] | None:
+        """Look up the lizyml metric registry direction for *metrics[0]*.
+
+        Returns ``None`` when *task* / *metrics* / the metric name are
+        unknown to the registry. The caller falls back to
+        :attr:`TuningDefaults.direction` (catalog canonical) and then to
+        ``"minimize"`` as the final safe default.
+
+        MetricEntry inputs accept both the bare ``"auc"`` string form
+        and the dict form ``{"precision_at_k": {"k": 10}}`` — the
+        registry is keyed by metric name so the dict's first key is
+        extracted.
+        """
+        if not metrics:
+            return None
+        first = metrics[0]
+        if isinstance(first, str):
+            name = first
+        elif isinstance(first, dict) and first:
+            name = next(iter(first))
+        else:
+            return None
+        canonical = get_metric_directions().get(task, {}).get(name)
+        if canonical == "maximize":
+            return "maximize"
+        if canonical == "minimize":
+            return "minimize"
+        return None
 
     def get_ui_schema(self) -> dict[str, Any]:
         from lizystudio.backends.lizyml_ui_schema import build_ui_schema

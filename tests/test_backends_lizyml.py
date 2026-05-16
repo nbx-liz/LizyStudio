@@ -2319,6 +2319,89 @@ class TestComputeEffectiveTuning:
         assert eff.evaluation_metrics == ["logloss"]
         assert "evaluation_metrics" in eff.user_set_paths
 
+    def test_direction_follows_effective_first_metric_after_override(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        """P-0109 PR-6b refinement (INV-T3): when *overrides* replace the
+        ``evaluation_metrics`` list, ``effective.direction`` follows the
+        new first metric via the lizyml metric registry — not the
+        catalog's canonical direction. Previously the method returned
+        ``defaults.direction`` (``"maximize"`` for binary, since auc is
+        first in ``_TASK_DEFAULT_METRICS``) regardless of how the user
+        overrode the metric list, which let ``auc → logloss`` ship as
+        ``direction="maximize"`` and rely on
+        ``_prepare_tune_config``'s legacy ``maximize_metrics`` block to
+        silently correct the drift downstream.
+        """
+        from lizystudio.backends.types import TuningOverrides
+
+        # Override-only: switch from auc (maximize) to logloss (minimize).
+        eff = adapter.compute_effective_tuning(
+            "binary", TuningOverrides(evaluation_metrics=["logloss"])
+        )
+        assert eff.direction == "minimize"
+        # Symmetric round-trip: switching back to a maximize-metric returns
+        # ``"maximize"`` from the registry (not the bare default).
+        eff2 = adapter.compute_effective_tuning(
+            "binary", TuningOverrides(evaluation_metrics=["auc_pr"])
+        )
+        assert eff2.direction == "maximize"
+
+    def test_explicit_direction_override_still_wins_over_registry(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        """A user-supplied ``direction`` ranks above the metric-registry
+        derivation: e.g. someone optimising AUC as a *loss surrogate* can
+        still pin ``direction="minimize"`` and have it survive the
+        refinement. Symmetric upgrade: setting ``direction="maximize"``
+        with a logloss metric also survives — the registry only acts
+        as a default, never as a hard override on user intent."""
+        from lizystudio.backends.types import TuningOverrides
+
+        eff = adapter.compute_effective_tuning(
+            "binary",
+            TuningOverrides(evaluation_metrics=["auc"], direction="minimize"),
+        )
+        assert eff.direction == "minimize"
+        eff2 = adapter.compute_effective_tuning(
+            "binary",
+            TuningOverrides(evaluation_metrics=["logloss"], direction="maximize"),
+        )
+        assert eff2.direction == "maximize"
+
+    def test_direction_falls_back_to_catalog_default_for_unknown_metric(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        """When the override metric is not in the lizyml registry, the
+        derivation step returns ``None`` and the merge falls back to the
+        catalog's canonical direction (``defaults.direction``). For
+        binary that is ``"maximize"`` (auc is the canonical first metric).
+        This keeps a user-added custom metric from accidentally flipping
+        the tuner's direction toward "minimize" when the catalog default
+        was "maximize"."""
+        from lizystudio.backends.types import TuningOverrides
+
+        eff = adapter.compute_effective_tuning(
+            "binary",
+            TuningOverrides(evaluation_metrics=["custom_unknown_metric"]),
+        )
+        assert eff.direction == "maximize"  # catalog canonical for binary
+
+    def test_direction_dict_form_metric_uses_registry(
+        self, adapter: LizyMLAdapter
+    ) -> None:
+        """MetricEntry dict form (``{"precision_at_k": {"k": 10}}``) is
+        accepted: direction derivation extracts the metric name (first
+        key) before consulting the registry. precision_at_k is a
+        maximize metric in the lizyml registry."""
+        from lizystudio.backends.types import TuningOverrides
+
+        eff = adapter.compute_effective_tuning(
+            "binary",
+            TuningOverrides(evaluation_metrics=[{"precision_at_k": {"k": 10}}]),
+        )
+        assert eff.direction == "maximize"
+
     def test_direction_override_wins_over_catalog(self, adapter: LizyMLAdapter) -> None:
         from lizystudio.backends.types import TuningOverrides
 
