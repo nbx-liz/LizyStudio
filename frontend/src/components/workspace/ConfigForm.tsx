@@ -655,6 +655,12 @@ export function ConfigForm({
                   onChange={(metrics) => {
                     handleFieldChange(["evaluation", "metrics"], metrics);
                   }}
+                  // Issue #529: suppress the task-change auto-reset
+                  // until the seed config has landed. Without this gate,
+                  // the auto-reset onChange routes through
+                  // `handleFieldChange` with an empty `configRef.current`
+                  // and PUTs a partial body that the backend rejects.
+                  configSeeded={Boolean(config.config_version)}
                   conditionalParams={{
                     precision_at_k: {
                       label: "k",

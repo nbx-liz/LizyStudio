@@ -147,6 +147,73 @@ describe("MetricsChips", () => {
     expect(onChange).toHaveBeenCalledWith(["rmse", "mae", "r2", "mse"]);
   });
 
+  // Issue #529: the task-change auto-reset must be suppressed while the
+  // seed config has not landed (i.e. `configSeeded=false`). Without the
+  // gate, the parent's `handleFieldChange` reads an empty `configRef.current`
+  // and emits a partial-body PUT (`{evaluation:{metrics:[...]}}`) that
+  // the backend rejects with `saved=false`.
+  it("does NOT call onChange when configSeeded=false and task changes (Issue #529)", () => {
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <MetricsChips
+        task="binary"
+        selectedMetrics={["auc"]}
+        onChange={onChange}
+        metricsByTask={ALL_METRICS}
+        configSeeded={false}
+      />,
+    );
+    rerender(
+      <MetricsChips
+        task="regression"
+        selectedMetrics={["auc"]}
+        onChange={onChange}
+        metricsByTask={ALL_METRICS}
+        configSeeded={false}
+      />,
+    );
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("does NOT call onChange when configSeeded=false and selectedMetrics is empty (Issue #529)", () => {
+    const onChange = vi.fn();
+    render(
+      <MetricsChips
+        task="binary"
+        selectedMetrics={[]}
+        onChange={onChange}
+        metricsByTask={BINARY_METRICS}
+        configSeeded={false}
+      />,
+    );
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("auto-resets on transition configSeeded=false -> true with empty selectedMetrics (Issue #529)", () => {
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <MetricsChips
+        task="binary"
+        selectedMetrics={[]}
+        onChange={onChange}
+        metricsByTask={BINARY_METRICS}
+        configSeeded={false}
+      />,
+    );
+    expect(onChange).not.toHaveBeenCalled();
+    rerender(
+      <MetricsChips
+        task="binary"
+        selectedMetrics={[]}
+        onChange={onChange}
+        metricsByTask={BINARY_METRICS}
+        configSeeded={true}
+      />,
+    );
+    // Once seeded, the auto-reset is allowed to populate empty metrics.
+    expect(onChange).toHaveBeenCalledWith(BINARY_METRICS.binary);
+  });
+
   it("renders nothing when task has no metrics", () => {
     const { container } = render(
       <MetricsChips
