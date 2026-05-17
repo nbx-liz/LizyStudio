@@ -6,7 +6,7 @@
 - このファイルは **横串インデックス** であり、詳細はリンク先で確認すること。
 - 着手する際は HISTORY に Proposal を起票（変更ゲート対象の場合）→ PLAN にフェーズ追加 → 実装、の順で進める。
 
-最終更新: 2026-05-13（**v0.6.0 release 済 (2026-05-13, PyPI lizystudio==0.6.0)** + **`issue-cleanup-plan-2026-05-10.md` Wave 1〜6 完了** — `PLAN.md` v0.5 phase 全消化。直近の Tier 1 next は **#513 (StudioError observability、v0.6.0 検証中に発見した 5 行 PR)** / **#495** / 🔒 **#452-b**。次の節目候補は **v0.7+**: 第 2 backend (#403 残・#452-b 解禁トリガ)、Tailwind v4、P-0087 Phase 3、typed error 体系 (R-3.1〜R-3.3) など）
+最終更新: 2026-05-17（**v0.6.1 release 済 (2026-05-16, PyPI lizystudio==0.6.1)** + **v0.6.2 release prep 中** — Target-select 3-issue cluster (#529 / #530 / #531) を develop に着地、PUT count 9 → 2、`saved=False` 0 件、split-preview 400 解消。直近の Tier 1 next は **#527 / #528 (P-0109 follow-up)** / **#495** / 🔒 **#452-b**。次の節目候補は **v0.7+**: 第 2 backend (#403 残・#452-b 解禁トリガ)、Tailwind v4、P-0087 Phase 3、typed error 体系 (R-3.1〜R-3.3) など）
 
 ---
 
@@ -300,10 +300,13 @@ Wave 6 完了後の Open Issue は **4 件**（#451 / #453 は 2026-05-13 close 
 
 ### Tier 1：直近の着手候補（ROI 順）
 
-1. **A-1 / A-2 — P-0109 follow-up（v0.6.1 後に起票）** — A-1: `_assert_inv_t3` warn-only helper の再有効化（PR #523 で導入 + 一時 disable、`tune-resume.spec.ts:185` の pause-timing race と相互作用、helper 自体は src に残存）。A-2: Tune タブ mutation を legacy `PUT /config` → 新 `PUT /config/tuning-overrides` (sparse REPLACE) へ移行。両者とも tech-debt / low priority、機能影響なし
-2. **#495** — #456 L5: weekly stale-doc audit cron（`scripts/audit_stale_docs.py` + `.github/workflows/audit-stale-docs.yml` cron weekly、tracking issue 自動更新。tier-3/low、deferred）
-3. **#452-b `lifecycle_mixin.tune` 分割** — 🔒 2nd-adapter 議論（§3.3）後に解禁。それまで着手しない
+1. **#527 (`_assert_inv_t3` 再有効化)** — A-1 / P-0109 follow-up。`tune-resume.spec.ts:185` の pause-timing race と相互作用、helper 自体は #523 で残存。再有効化条件: `n_trials` 拡大 or pause 観測の堅牢化。tier-3/low、機能影響なし
+2. **#528 (Tune タブ write path → sparse overrides)** — A-2 / P-0109 follow-up。legacy `PUT /config` → 新 `PUT /config/tuning-overrides` (sparse REPLACE) へ移行。refactor only、`absorb_legacy_tuning` shim 依存解消。tier-3/low
+3. **#495** — #456 L5: weekly stale-doc audit cron（`scripts/audit_stale_docs.py` + `.github/workflows/audit-stale-docs.yml` cron weekly、tracking issue 自動更新。tier-3/low、deferred）
+4. **#452-b `lifecycle_mixin.tune` 分割** — 🔒 2nd-adapter 議論（§3.3）後に解禁。それまで着手しない
 
+> ~~#529 / #530 / #531 (Target-select 3-issue cluster)~~ ✅ 完了 (PR #532 / #533、2026-05-16〜17 着地。v0.6.2 でリリース)。Target click あたり PUT count 9 → 2、`saved=False` 0 件、`GET /split-preview` 400 解消。修正: (1) `MetricsChips` task-change useEffect を `configSeeded` prop で gate + `buildMergedConfig` に evaluation.metrics seed (#529); (2) `coalesceByReason` を patch+patch -> `kind: "patch-many"` merge に拡張 + `ConfigForm` auto-reset を `funnel.isFlushing()` で gate (#530); (3) #531 は #529 の symptom で auto-resolve。e2e regression spec `workspace-target-select-puts.spec.ts` で lock
+>
 > ~~P-0109 PR-6 残作業~~ ✅ 完了 (#522 / #523 / #524、2026-05-16 着地。全 9 PR (#516〜#524) develop に着地、INV-T3 が `LizyMLAdapter.compute_effective_tuning` の SSOT で enforce、`useTuningSnapshot` hook + "Modified" badge 経由で frontend read path 完成、`TASK_DEFAULT_METRICS` frontend 定数削除、HISTORY Decision flip + ROADMAP / BLUEPRINT / architecture-as-implemented reconcile 完了)
 >
 > ~~#513 (StudioError observability / R-3.1 precursor)~~ ✅ 完了 (PR #515、2026-05-14。`api/errors.py::studio_error_handler` で全 StudioError を WARNING level で log、`code` / `status_code` / method / path、PII なし、`details` は意図的に除外)
@@ -336,7 +339,7 @@ Wave 6 完了後の Open Issue は **4 件**（#451 / #453 は 2026-05-13 close 
 | v3-25 | R-4.1 format_version migration matrix CI gate (P-0103) | ✅ 完了 (PR #432 + #434 + #436 + #438) |
 | v3-26 | R-4.2 Pickle compatibility nightly CI | ✅ 完了 (feat/v3-26-pickle-compat-nightly / P-0107) |
 
-直近の next: **v0.6.1 patch release**（P-0109 chain bundle + #513 observability、リリース直前）。その後は上記 Tier 1 の A-1 / A-2 follow-up Issue。v0.6 候補は上記 Tier 2 を参照。
+直近の next: **v0.6.2 patch release**（#529 + #530 + #531 bundle、Target-select write-traffic reduction、リリース直前）。その後は上記 Tier 1 の #527 / #528 (P-0109 follow-up Issue)。v0.6 候補は上記 Tier 2 を参照。
 
 ---
 

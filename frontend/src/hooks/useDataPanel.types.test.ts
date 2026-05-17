@@ -93,6 +93,58 @@ describe("buildMergedConfig", () => {
     });
     expect(result.data).toMatchObject({ path: undefined, target: "y" });
   });
+
+  // Issue #529: the merged config must carry the task's eval metrics
+  // so the target-select PUT lands with a non-empty `evaluation.metrics`.
+  // Otherwise MetricsChips' task-change useEffect sees an empty
+  // selection, fires `onChange([...defaults])`, and the parent's
+  // `handleFieldChange` routes a partial body that backend rejects.
+  it("seeds evaluation.metrics from evaluationMetrics param (Issue #529)", () => {
+    const result = buildMergedConfig({
+      defaults: { data: {}, features: {} },
+      task: "binary",
+      strategy: "kfold",
+      folds: 5,
+      dataPath: "/data/x.csv",
+      target: "y",
+      overrides: {},
+      evaluationMetrics: ["auc", "logloss", "f1"],
+    });
+    expect(result.evaluation).toEqual({
+      metrics: ["auc", "logloss", "f1"],
+    });
+  });
+
+  it("falls back to defaults.evaluation when evaluationMetrics is empty", () => {
+    const result = buildMergedConfig({
+      defaults: {
+        data: {},
+        features: {},
+        evaluation: { metrics: ["legacy_metric"] },
+      },
+      task: "binary",
+      strategy: "kfold",
+      folds: 5,
+      dataPath: "/data/x.csv",
+      target: "y",
+      overrides: {},
+      evaluationMetrics: [],
+    });
+    expect(result.evaluation).toEqual({ metrics: ["legacy_metric"] });
+  });
+
+  it("emits evaluation.metrics=[] when neither param nor defaults supply metrics", () => {
+    const result = buildMergedConfig({
+      defaults: { data: {}, features: {} },
+      task: "binary",
+      strategy: "kfold",
+      folds: 5,
+      dataPath: "/data/x.csv",
+      target: "y",
+      overrides: {},
+    });
+    expect(result.evaluation).toEqual({ metrics: [] });
+  });
 });
 
 describe("extractOverrideArrays", () => {

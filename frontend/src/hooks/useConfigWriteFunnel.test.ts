@@ -69,7 +69,7 @@ describe("materializeOp", () => {
 });
 
 describe("coalesceByReason", () => {
-  it("collapses two same-reason ops to the latter (last write wins)", () => {
+  it("collapses two same-reason replace ops to the latter (last write wins)", () => {
     const a: WriteOp = {
       kind: "replace",
       config: { split: { method: "kfold" } },
@@ -95,6 +95,176 @@ describe("coalesceByReason", () => {
       reason: "target-select",
     };
     expect(coalesceByReason(a, b)).toBe(b);
+  });
+
+  // Issue #530: two same-reason patches at DIFFERENT paths must merge
+  // into a patch-many op carrying BOTH path/value pairs. The original
+  // "last write wins" semantics silently dropped the first path.
+  it("merges two same-reason patches with different paths into a patch-many op", () => {
+    const a: WriteOp = {
+      kind: "patch",
+      path: ["model", "params", "objective"],
+      value: "binary",
+      reason: "auto-reset",
+    };
+    const b: WriteOp = {
+      kind: "patch",
+      path: ["model", "params", "metric"],
+      value: ["auc", "binary_logloss"],
+      reason: "auto-reset",
+    };
+    const merged = coalesceByReason(a, b);
+    expect(merged.kind).toBe("patch-many");
+    if (merged.kind !== "patch-many") throw new Error("expected patch-many op");
+    expect(merged.reason).toBe("auto-reset");
+    expect(merged.patches).toEqual([
+      { path: ["model", "params", "objective"], value: "binary" },
+      {
+        path: ["model", "params", "metric"],
+        value: ["auc", "binary_logloss"],
+      },
+    ]);
+  });
+
+  it("collapses two same-reason patches at the SAME path to the latter (last value wins)", () => {
+    const a: WriteOp = {
+      kind: "patch",
+      path: ["model", "params", "objective"],
+      value: "binary",
+      reason: "auto-reset",
+    };
+    const b: WriteOp = {
+      kind: "patch",
+      path: ["model", "params", "objective"],
+      value: "cross_entropy",
+      reason: "auto-reset",
+    };
+    const merged = coalesceByReason(a, b);
+    expect(merged.kind).toBe("patch-many");
+    if (merged.kind !== "patch-many") throw new Error("expected patch-many op");
+    expect(merged.patches).toEqual([
+      { path: ["model", "params", "objective"], value: "cross_entropy" },
+    ]);
+  });
+
+  it("extends an existing patch-many op with a new same-reason patch", () => {
+    const a: WriteOp = {
+      kind: "patch-many",
+      patches: [
+        { path: ["model", "params", "objective"], value: "binary" },
+        { path: ["model", "params", "metric"], value: ["auc"] },
+      ],
+      reason: "auto-reset",
+    };
+    const b: WriteOp = {
+      kind: "patch",
+      path: ["model", "params", "learning_rate"],
+      value: 0.01,
+      reason: "auto-reset",
+    };
+    const merged = coalesceByReason(a, b);
+    expect(merged.kind).toBe("patch-many");
+    if (merged.kind !== "patch-many") throw new Error("expected patch-many op");
+    expect(merged.patches).toEqual([
+      { path: ["model", "params", "objective"], value: "binary" },
+      { path: ["model", "params", "metric"], value: ["auc"] },
+      { path: ["model", "params", "learning_rate"], value: 0.01 },
+    ]);
+  });
+
+  it("a same-path patch overrides the earlier entry inside an existing patch-many", () => {
+    const a: WriteOp = {
+      kind: "patch-many",
+      patches: [
+        { path: ["model", "params", "objective"], value: "binary" },
+        { path: ["model", "params", "metric"], value: ["auc"] },
+      ],
+      reason: "auto-reset",
+    };
+    const b: WriteOp = {
+      kind: "patch",
+      path: ["model", "params", "metric"],
+      value: ["accuracy", "f1"],
+      reason: "auto-reset",
+    };
+    const merged = coalesceByReason(a, b);
+    expect(merged.kind).toBe("patch-many");
+    if (merged.kind !== "patch-many") throw new Error("expected patch-many op");
+    expect(merged.patches).toEqual([
+      { path: ["model", "params", "objective"], value: "binary" },
+      { path: ["model", "params", "metric"], value: ["accuracy", "f1"] },
+    ]);
+  });
+
+  it("a replace op coalesced after a patch wins outright (replace carries authoritative body)", () => {
+    const a: WriteOp = {
+      kind: "patch",
+      path: ["model", "params", "objective"],
+      value: "binary",
+      reason: "auto-reset",
+    };
+    const b: WriteOp = {
+      kind: "replace",
+      config: { task: "regression" },
+      reason: "auto-reset",
+    };
+    expect(coalesceByReason(a, b)).toBe(b);
+  });
+
+  it("a patch op coalesced after a replace keeps the replace (patch cannot override an authoritative body)", () => {
+    const a: WriteOp = {
+      kind: "replace",
+      config: { task: "binary" },
+      reason: "auto-reset",
+    };
+    const b: WriteOp = {
+      kind: "patch",
+      path: ["model", "params", "objective"],
+      value: "binary",
+      reason: "auto-reset",
+    };
+    expect(coalesceByReason(a, b)).toBe(a);
+  });
+});
+
+describe("materializeOp — patch-many", () => {
+  it("applies each entry in order onto the cache snapshot", () => {
+    const op: WriteOp = {
+      kind: "patch-many",
+      patches: [
+        { path: ["model", "params", "objective"], value: "binary" },
+        { path: ["model", "params", "metric"], value: ["auc"] },
+      ],
+      reason: "auto-reset",
+    };
+    const current: ConfigSnapshot = {
+      task: "binary",
+      model: { name: "lgbm", params: { learning_rate: 0.01 } },
+    };
+    const out = materializeOp(op, current);
+    expect(out).toEqual({
+      task: "binary",
+      model: {
+        name: "lgbm",
+        params: {
+          learning_rate: 0.01,
+          objective: "binary",
+          metric: ["auc"],
+        },
+      },
+    });
+  });
+
+  it("handles a cold cache for patch-many ops", () => {
+    const op: WriteOp = {
+      kind: "patch-many",
+      patches: [
+        { path: ["a"], value: 1 },
+        { path: ["b", "c"], value: 2 },
+      ],
+      reason: "auto-reset",
+    };
+    expect(materializeOp(op, undefined)).toEqual({ a: 1, b: { c: 2 } });
   });
 });
 

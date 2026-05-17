@@ -317,6 +317,16 @@ export function ConfigForm({
   // with "All tuning trials failed" because LGBM rejects a multiclass
   // objective on a binary target.
   useEffect(() => {
+    // Issue #530: while the funnel is mid-flight, the observed cache
+    // can lag behind ops we have already queued (e.g. a GET /config
+    // refetch from `handleDataChanged`'s `invalidateQueries` lands
+    // mid PUT-flight and resets `modelParams` to the pre-write
+    // snapshot). If we enqueued obj/metric a microtask ago and then
+    // see `modelParams.objective` still empty before the flush
+    // completes, we would emit a duplicate auto-reset PUT. Bailing
+    // while flushing lets the in-flight PUT land and re-fires us
+    // through the cache update path after it completes.
+    if (funnel?.isFlushing()) return;
     if (!task || !uiSchema?.option_sets) return;
     // Issue #107 regression guard: skip auto-select while the config is
     // still empty or only partially seeded. Writing to an empty config
@@ -390,6 +400,12 @@ export function ConfigForm({
     enqueueAutoReset,
     config.config_version,
     config.task,
+    // Issue #530: `funnel.isFlushing()` is called inside the effect
+    // but the `funnel` reference itself is stable across renders
+    // (memoised by `useConfigWriteFunnel`). Listing it here keeps the
+    // hook deps exhaustive without re-triggering on flush state
+    // changes (which do not produce renders on their own).
+    funnel,
   ]);
 
   if (!rawProperties) return null;
@@ -655,6 +671,12 @@ export function ConfigForm({
                   onChange={(metrics) => {
                     handleFieldChange(["evaluation", "metrics"], metrics);
                   }}
+                  // Issue #529: suppress the task-change auto-reset
+                  // until the seed config has landed. Without this gate,
+                  // the auto-reset onChange routes through
+                  // `handleFieldChange` with an empty `configRef.current`
+                  // and PUTs a partial body that the backend rejects.
+                  configSeeded={Boolean(config.config_version)}
                   conditionalParams={{
                     precision_at_k: {
                       label: "k",
