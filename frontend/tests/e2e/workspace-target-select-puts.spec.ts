@@ -34,7 +34,13 @@ import { dismissOnboarding } from "./helpers/onboarding";
  */
 
 const CSV_PATH = "/tmp/e2e_target_select_puts.csv";
-const PUT_BUDGET = 6;
+// Local measurement: 2 PUTs after #529 + #530 fixes (target-select replace +
+// auto-reset patch-many [objective, metric] merged by the funnel). Budget of
+// 3 gives a 1-PUT headroom for CI scheduling variance (e.g. a third PUT only
+// fires if the auto-reset effect happens to re-fire between the post-flush
+// render and the StrictMode double-invoke; with the isFlushing gate that
+// path is closed). Tighten further if the third PUT class ever vanishes.
+const PUT_BUDGET = 3;
 
 function createBinaryCsv(): void {
   const rows = ["id,age,survived"];
@@ -162,17 +168,20 @@ test.describe("Target selection — no partial PUT, no split-preview 400 (Issue 
         `left ws.config empty (Issue #529 root cause).`,
     ).toHaveLength(0);
 
-    // Invariant 3: PUT count within budget. We measured 4 PUTs after
-    // the fix (1 target-select + 3 auto-reset oscillation from #530).
-    // Budget of 6 gives headroom for #530 not yet being fixed; tighten
-    // when #530 lands.
+    // Invariant 3: PUT count within budget. Pre-#529 fix: 9 PUTs.
+    // After #529 (PR-A): 4 PUTs. After #530 Phase 1 (coalesce
+    // patches): 3 PUTs. After #530 Phase 2 (isFlushing gate): 2 PUTs.
+    // Budget locks the converged value plus a 1-PUT headroom for CI
+    // scheduling variance. If this fails, suspect a new useEffect
+    // that derives state from cache and emits a write, OR a regression
+    // in `coalesceByReason` / the `isFlushing` gate.
     expect(
       targetPuts.length,
       `Target-select fired ${targetPuts.length} PUTs (budget ${PUT_BUDGET}). ` +
-        `Pre-#529 fix this was 9. Investigate if it exceeds the budget — ` +
-        `likely a new useEffect was added that derives state from cache ` +
-        `and emits a write. See also Issue #530 (oscillation between ` +
-        `model.params.objective and model.params.metric).`,
+        `History: 9 -> 4 (#529) -> 3 (#530 Phase 1) -> 2 (#530 Phase 2). ` +
+        `Investigate if it exceeds the budget — suspect a new useEffect ` +
+        `that derives state from cache and emits a write, or a regression ` +
+        `in coalesceByReason / the isFlushing gate.`,
     ).toBeLessThanOrEqual(PUT_BUDGET);
   });
 });

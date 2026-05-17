@@ -9,6 +9,8 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UiSchema } from "@/api/types";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import type { ConfigWriteFunnel } from "@/hooks/useConfigWriteFunnel";
+import { ConfigWriteFunnelProvider } from "@/hooks/useConfigWriteFunnelContext";
 import { ConfigForm } from "./ConfigForm";
 
 // Mock DynParam which needs TooltipProvider.
@@ -1682,5 +1684,131 @@ describe("ConfigForm — advanced DynParam onChange propagation", () => {
     expect(onChange).toHaveBeenCalled();
     const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0];
     expect(lastCall.model.params.feature_fraction).toBe("__changed__");
+  });
+
+  // -------------------------------------------------------------------------
+  // Issue #530 — auto-reset effect must not fire while the funnel is busy.
+  //
+  // Even after Phase 1 of #530 (coalesce same-reason patches at different
+  // paths into one PUT), a subtle mid-flush race remained: after the
+  // target-select PUT lands and ``handleDataChanged`` invalidates the
+  // config query, the GET refetch lands MID-flight of the next auto-reset
+  // PUT. The GET response carries ``model.params: {}`` (because
+  // ``onWriteCommitted`` updates cache then the GET overwrites with the
+  // backend's legacy view of ``ws.config`` which still lacks objective /
+  // metric until the auto-reset PUT completes). The mid-flush re-render
+  // re-fires the effect against the stale snapshot, queueing a duplicate
+  // patch-many that turns into a third byte-identical PUT.
+  //
+  // Phase 2 gates the effect on ``funnel.isFlushing()`` so the
+  // intermediate observation is ignored. The post-flush render fires the
+  // effect again and either bails (cache now agrees) or enqueues once.
+  // -------------------------------------------------------------------------
+
+  function makeStubFunnel(opts: {
+    isFlushing: boolean;
+    onEnqueue?: (op: Parameters<ConfigWriteFunnel["enqueueWrite"]>[0]) => void;
+  }): ConfigWriteFunnel {
+    return {
+      enqueueWrite: vi.fn(async (op) => {
+        opts.onEnqueue?.(op);
+        return {
+          ok: true as const,
+          saved: {} as Record<string, unknown>,
+        };
+      }) as ConfigWriteFunnel["enqueueWrite"],
+      isFlushing: () => opts.isFlushing,
+    };
+  }
+
+  const objectiveMetricUiSchema = {
+    parameter_hints: [],
+    option_sets: {
+      objective: {
+        binary: ["binary", "cross_entropy"],
+        regression: ["huber", "regression_l1"],
+      },
+      metric: {
+        binary: { native: ["auc", "binary_logloss"], feval: [] },
+        regression: { native: ["rmse", "huber"], feval: [] },
+      },
+    },
+  } as unknown as UiSchema;
+
+  const seededEmptyParamsConfig = {
+    config_version: 1,
+    task: "binary",
+    model: {
+      name: "lgbm",
+      params: {}, // empty — would normally trigger auto-reset
+    },
+  };
+
+  it("auto-reset effect skips enqueue while funnel.isFlushing() is true (Issue #530 Phase 2)", async () => {
+    const enqueued: Array<{
+      kind: string;
+      reason: string;
+    }> = [];
+    const funnel = makeStubFunnel({
+      isFlushing: true,
+      onEnqueue: (op) => enqueued.push({ kind: op.kind, reason: op.reason }),
+    });
+
+    render(
+      <TooltipProvider>
+        <ConfigWriteFunnelProvider funnel={funnel}>
+          <ConfigForm
+            schema={minimalSchema}
+            config={seededEmptyParamsConfig}
+            onChange={vi.fn()}
+            task="binary"
+            uiSchema={objectiveMetricUiSchema}
+          />
+        </ConfigWriteFunnelProvider>
+      </TooltipProvider>,
+    );
+
+    // Allow the effect microtasks to flush. The gate must intercept
+    // BEFORE the auto-reset reaches `enqueueWrite`, so no auto-reset op
+    // should ever land in the funnel queue.
+    await new Promise((r) => setTimeout(r, 80));
+
+    const autoResets = enqueued.filter((e) => e.reason === "auto-reset");
+    expect(autoResets).toHaveLength(0);
+  });
+
+  it("auto-reset effect runs normally when funnel.isFlushing() is false (Issue #530 Phase 2)", async () => {
+    const enqueued: Array<{
+      kind: string;
+      reason: string;
+    }> = [];
+    const funnel = makeStubFunnel({
+      isFlushing: false,
+      onEnqueue: (op) => enqueued.push({ kind: op.kind, reason: op.reason }),
+    });
+
+    render(
+      <TooltipProvider>
+        <ConfigWriteFunnelProvider funnel={funnel}>
+          <ConfigForm
+            schema={minimalSchema}
+            config={seededEmptyParamsConfig}
+            onChange={vi.fn()}
+            task="binary"
+            uiSchema={objectiveMetricUiSchema}
+          />
+        </ConfigWriteFunnelProvider>
+      </TooltipProvider>,
+    );
+
+    await new Promise((r) => setTimeout(r, 80));
+
+    // Both objective and metric were empty, so the effect should enqueue
+    // both via `enqueueAutoReset`. Counts here are 2 because each path
+    // is a separate `funnel.enqueueWrite({kind: "patch"})` call —
+    // Phase 1's `coalesceByReason` merges them inside the funnel queue,
+    // but the call sites stay symmetric.
+    const autoResets = enqueued.filter((e) => e.reason === "auto-reset");
+    expect(autoResets.length).toBeGreaterThanOrEqual(2);
   });
 });
