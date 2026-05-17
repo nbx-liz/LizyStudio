@@ -7,6 +7,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-05-17
+
+The **Target-select write-traffic reduction** patch release. Closes
+the three-issue cluster (#529 / #530 / #531) that produced 9 PUTs
+plus a 400 `WORKSPACE_NO_CONFIG` error every time the user picked a
+Target column on a fresh workspace. After this release one Target
+click produces **2 PUTs** — the irreducible minimum — and the
+split-preview 400 disappears.
+
+Bundles:
+
+1. **#529 / PR #532 — partial-body PUTs from `MetricsChips` are
+   eliminated**. The Target-select PUT now seeds `evaluation.metrics`
+   from the UiSchema, and `MetricsChips` gates its task-change
+   `useEffect` on a new `configSeeded` prop so the pre-seed render
+   no longer routes a partial body through `handleFieldChange`. Both
+   silent `saved=false` rejections (with their 5 blocking validation
+   errors) are gone.
+2. **#530 / PR #533 — Target-select PUT oscillation is fixed**.
+   `coalesceByReason` now merges same-reason `kind: "patch"` ops at
+   different paths into a new `kind: "patch-many"` op instead of
+   silently dropping the earlier path. Combined with an
+   `isFlushing` gate on `ConfigForm`'s auto-reset `useEffect`, the
+   GET-refetch-mid-flush race that produced two byte-identical PUTs
+   is closed. PUT count history: 9 -> 4 (#529) -> 3 (Phase 1) -> 2
+   (Phase 2).
+3. **#531 — `GET /split-preview` no longer returns 400 during
+   Target selection**. This was a symptom of #529 (rejected partial
+   PUTs left `ws.config` empty); auto-resolves with the #529 fix and
+   is locked by the e2e regression spec.
+
+### Fixed
+
+- **Partial-body PUTs from `MetricsChips` task-change `useEffect`
+  (#529)** — `MetricsChips` no longer emits `onChange` against an
+  empty `configRef.current` during the pre-seed render window. The
+  emitted body is now always a full config, so the backend's
+  `saved=false, blocking=5` silent rejection cannot occur. Adds
+  `MetricsChips.configSeeded?: boolean` (default `true` for
+  back-compat) and routes `Boolean(config.config_version)` from
+  `ConfigForm`.
+- **Target-select PUT oscillation in `ConfigForm`'s objective /
+  metric auto-reset effect (#530)** — same-reason `kind: "patch"`
+  ops at different paths now coalesce into a new
+  `kind: "patch-many"` variant in `coalesceByReason`. The effect
+  also bails when `funnel.isFlushing()` is true, so the GET-refetch
+  triggered by `handleDataChanged`'s `invalidateQueries` can no
+  longer re-fire the effect against a mid-flush stale snapshot.
+- **`GET /api/workspace/data/split-preview` returning 400
+  `WORKSPACE_NO_CONFIG` (#531)** — auto-resolved as the symptom of
+  #529. The new e2e regression spec
+  (`workspace-target-select-puts.spec.ts`) asserts a zero-count
+  budget for this 400 alongside the PUT-budget assertion.
+
+### Added
+
+- **`MetricsChips.configSeeded?: boolean` prop** — gates the
+  task-change auto-reset `useEffect` on whether the workspace seed
+  config has landed. Default `true` so existing test / Storybook
+  call sites stay backward-compatible.
+- **`buildMergedConfig({ evaluationMetrics })` parameter** — seeds
+  `evaluation.metrics` from the UiSchema's
+  `option_sets.eval_metric[task]` registry. Optional, with a
+  fallback to `defaults.evaluation.metrics ?? []`.
+- **`useConfigWriteFunnel` `kind: "patch-many"` `WriteOp` variant** —
+  funnel-internal op produced by `coalesceByReason` when two
+  same-reason patches at different paths coalesce. `materializeOp`
+  applies each entry in order on top of the cached snapshot. No
+  caller emits this directly.
+- **`frontend/tests/e2e/workspace-target-select-puts.spec.ts`** —
+  Playwright regression spec that intercepts every PUT during
+  Target selection and asserts (a) no partial-body PUT, (b) no 400
+  on `split-preview`, and (c) PUT count within budget (currently 3,
+  measured 2).
+
+### Changed
+
+- **`coalesceByReason` semantics in `useConfigWriteFunnel`** — the
+  legacy "latest wins outright" rule is replaced by a tri-cased
+  reducer: replace always wins, patch-after-replace is dropped, and
+  patch+patch / patch+patch-many merge into a `patch-many` op
+  preserving both paths.
+
+### Compatibility
+
+- **No backend changes.** Same `STUDIO_FORMAT_VERSION` (2). Same
+  API surface. Server-side validation behaviour is unchanged.
+- **No funnel public-API change.** `kind: "patch-many"` is produced
+  only by the funnel itself; every existing writer call site
+  (`useTargetSelection`, `useConfigSync`, `useModelPanelData`,
+  `enqueueAutoReset`) keeps emitting the same `kind: "replace"` /
+  `kind: "patch"` ops as before.
+- **Backward-compatible prop additions.** Both `MetricsChips`'s
+  `configSeeded` and `buildMergedConfig`'s `evaluationMetrics` are
+  optional with safe defaults.
+
 ## [0.6.1] - 2026-05-16
 
 The **Tune backend SSOT consolidation + StudioError observability** patch
