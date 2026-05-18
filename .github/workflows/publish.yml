@@ -12,6 +12,9 @@ jobs:
     environment: pypi
     permissions:
       id-token: write
+      # Allow `gh release create` to publish the GitHub Release in the
+      # post-PyPI step below.
+      contents: write
     env:
       # Prevent local version identifiers (e.g. +dirty, +dN.gHASH)
       # even if the working tree becomes dirty during the build.
@@ -68,3 +71,44 @@ jobs:
           fi
 
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+      # Create the GitHub Release after PyPI upload succeeds. Notes are
+      # extracted verbatim from CHANGELOG.md's section heading
+      # `## [VERSION] - YYYY-MM-DD` so the release page and the file
+      # stay synchronised without a second manual edit step. Skipped (not
+      # failed) when the release already exists, so re-running the
+      # workflow on a re-pushed tag does not clobber a curated release.
+      #
+      # Pre-v0.6.3 releases (v0.6.0 / v0.6.1 / v0.6.2) were created
+      # manually via `gh release create` after PyPI upload. v0.6.1 /
+      # v0.6.2 were briefly forgotten — this step closes that gap.
+      - name: Create GitHub Release from CHANGELOG
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Extract the section between `## [VERSION]` and the next
+          # top-level `## [` heading. Outputs nothing when no section
+          # matches — we treat that as an error since shipping a
+          # release with no notes is almost certainly a mistake.
+          awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" { found=1; next }
+            /^## \[/ && found { exit }
+            found { print }
+          ' CHANGELOG.md > /tmp/release_notes.md
+          if [ ! -s /tmp/release_notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for version $VERSION. Add one matching '## [$VERSION] - YYYY-MM-DD' before tagging."
+            exit 1
+          fi
+          # Upsert semantics: skip (do not clobber) if the release
+          # already exists. Operators who want to refresh notes after
+          # the fact can `gh release edit` manually.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; skipping create. Use 'gh release edit' to refresh notes."
+            exit 0
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file /tmp/release_notes.md \
+            --verify-tag
