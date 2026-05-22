@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **CI: shard the E2E suite across 4 runners + deduplicate lint.** The
+  `e2e-chromium` Playwright job was the sole critical-path bottleneck
+  (~914s of a ~15min run). It is now split into a 4-way `--shard` matrix
+  (`e2e-shard`) with an `e2e-chromium` aggregation gate that preserves
+  the required-status-check name. Each shard runs on its own runner with
+  its own backend process, so the single-worker state-isolation guarantee
+  is unchanged. `ruff`/`mypy` now run only on the 3.11 backend matrix leg
+  (they are Python-version-independent), and a `concurrency` group cancels
+  superseded runs. No test, app, or API change — CI wall-clock drops from
+  ~15min to ~5min.
+
 ## [0.6.3] - 2026-05-23
 
 A **maintenance and test-quality** patch release. No behaviour change,
