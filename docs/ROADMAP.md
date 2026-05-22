@@ -6,7 +6,7 @@
 - このファイルは **横串インデックス** であり、詳細はリンク先で確認すること。
 - 着手する際は HISTORY に Proposal を起票（変更ゲート対象の場合）→ PLAN にフェーズ追加 → 実装、の順で進める。
 
-最終更新: 2026-05-17（**v0.6.1 release 済 (2026-05-16, PyPI lizystudio==0.6.1)** + **v0.6.2 release prep 中** — Target-select 3-issue cluster (#529 / #530 / #531) を develop に着地、PUT count 9 → 2、`saved=False` 0 件、split-preview 400 解消。直近の Tier 1 next は **#527 / #528 (P-0109 follow-up)** / **#495** / 🔒 **#452-b**。次の節目候補は **v0.7+**: 第 2 backend (#403 残・#452-b 解禁トリガ)、Tailwind v4、P-0087 Phase 3、typed error 体系 (R-3.1〜R-3.3) など）
+最終更新: 2026-05-23（**v0.6.2 release 済 (2026-05-17, PyPI lizystudio==0.6.2)** + **v0.6.3 release prep 中** — メンテナンス + テスト品質 patch。#545 (Dependabot 4 PR 統合 + CVE overrides) + #537 (call-count assertion 監査 80 サイト + `tohavebeencalled-guard` CI) を develop に着地、挙動・API・format_version 変更なし。#528 は `TuningOverrides` スキーマと Issue 文面の齟齬で descope、P-0109 follow-up として再 spec 待ち。直近の Tier 1 next は **#527 (P-0109 follow-up)** / **#528 (要再spec)** / **#495** / 🔒 **#452-b**。次の節目候補は **v0.7+**: 第 2 backend (#403 残・#452-b 解禁トリガ)、Tailwind v4、P-0087 Phase 3、typed error 体系 (R-3.1〜R-3.3) など）
 
 ---
 
