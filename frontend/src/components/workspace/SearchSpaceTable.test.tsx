@@ -119,7 +119,7 @@ describe("SearchSpaceTable", () => {
     const rangeButtons = screen.getAllByRole("radio", { name: /range/i });
     fireEvent.click(rangeButtons[0]);
 
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
     const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0];
     // learning_rate should now have a range entry
     expect(lastCall.learning_rate).toBeDefined();
@@ -139,7 +139,7 @@ describe("SearchSpaceTable", () => {
     const fixedButtons = screen.getAllByRole("radio", { name: /fixed/i });
     fireEvent.click(fixedButtons[0]);
 
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
     const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0];
     expect(lastCall.learning_rate).toBeUndefined();
   });
@@ -177,7 +177,7 @@ describe("SearchSpaceTable", () => {
     const rangeBtn = screen.getByRole("radio", { name: /range/i });
     fireEvent.click(rangeBtn);
 
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
     const spaceArg = onChange.mock.calls[0][0];
     expect(spaceArg.max_depth.type).toBe("int");
   });
@@ -281,7 +281,7 @@ describe("SearchSpaceTable", () => {
     const rangeBtn = screen.getByRole("radio", { name: /range/i });
     fireEvent.click(rangeBtn);
 
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
     const spaceArg = onChange.mock.calls[0][0];
     expect(spaceArg.learning_rate).toEqual({
       type: "float",
@@ -315,7 +315,7 @@ describe("SearchSpaceTable", () => {
     const rangeBtn = screen.getByRole("radio", { name: /range/i });
     fireEvent.click(rangeBtn);
 
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
     const spaceArg = onChange.mock.calls[0][0];
     // Falls back to generic {low: 0, high: 1, log: false}
     expect(spaceArg.max_bin.low).toBe(0);
@@ -829,7 +829,7 @@ describe("SearchSpaceTable", () => {
       const choiceBtn = screen.getByRole("radio", { name: /choice/i });
       fireEvent.click(choiceBtn);
 
-      expect(onChange).toHaveBeenCalled();
+      expect(onChange).toHaveBeenCalledTimes(1);
       const spaceArg = onChange.mock.calls[0][0];
       expect(spaceArg.objective.type).toBe("categorical");
       // No current Fixed value -> choices stays empty (the only path
@@ -953,7 +953,7 @@ describe("SearchSpaceTable", () => {
       const choiceBtn = screen.getByRole("radio", { name: /choice/i });
       fireEvent.click(choiceBtn);
 
-      expect(onChange).toHaveBeenCalled();
+      expect(onChange).toHaveBeenCalledTimes(1);
       const spaceArg = onChange.mock.calls[0][0];
       expect(spaceArg.auto_num_leaves.type).toBe("categorical");
       expect(spaceArg.auto_num_leaves.choices).toEqual(["true", "false"]);

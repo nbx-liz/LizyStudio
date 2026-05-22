@@ -230,6 +230,18 @@ jobs:
         working-directory: frontend
         run: bash scripts/check-no-apifetch.sh
 
+  # Issue #537: the v0.6.2 Target-select bug cluster passed the unit suite
+  # because assertions checked that a mock was called, not how many times.
+  # This grep guard stops a new bare ``.toHaveBeenCalled()`` from landing —
+  # callback assertions must use the count-precise ``.toHaveBeenCalledTimes(N)``.
+  tohavebeencalled-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Scan frontend/src test files for bare .toHaveBeenCalled()
+        working-directory: frontend
+        run: bash scripts/check-tohavebeencalled.sh
+
   # C-1 / INV-CI-1: committed schema.d.ts must match freshly-generated
   # output. Prevents drift between backend response_model declarations
   # and the TypeScript types that the frontend compiles against.

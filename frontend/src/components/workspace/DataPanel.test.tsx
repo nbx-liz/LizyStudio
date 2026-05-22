@@ -333,7 +333,7 @@ describe("DataPanel", () => {
     fireEvent.change(fileInput, { target: { files: [file] } });
 
     await waitFor(() => {
-      expect(onDataChanged).toHaveBeenCalled();
+      expect(onDataChanged).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -644,7 +644,7 @@ describe("DataPanel — handleTargetChange", () => {
       expect(mockFetchConfigDefaults).toHaveBeenCalledWith("binary", "target");
     });
     await waitFor(() => {
-      expect(mockUpdateConfig).toHaveBeenCalled();
+      expect(mockUpdateConfig).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -775,7 +775,7 @@ describe("DataPanel — handleTargetChange", () => {
       expect(mockFetchConfigDefaults).toHaveBeenCalledWith("binary", "target");
     });
     await waitFor(() => {
-      expect(mockUpdateConfig).toHaveBeenCalled();
+      expect(mockUpdateConfig).toHaveBeenCalledTimes(1);
     });
 
     // No partial PUT: every updateConfig call during target selection must
@@ -1033,7 +1033,7 @@ describe("DataPanel — handleColumnExpand (column statistics)", () => {
     await userEvent.click(screen.getByTestId("column-row-age"));
 
     await waitFor(() => {
-      expect(mockFetchColumnStats).toHaveBeenCalled();
+      expect(mockFetchColumnStats).toHaveBeenCalledTimes(1);
     });
 
     await waitFor(() => {
@@ -1128,7 +1128,8 @@ describe("DataPanel — column type and exclude toggles", () => {
 
     // After clicking Cat, syncConfig runs and updateConfig is called
     await waitFor(() => {
-      expect(mockUpdateConfig).toHaveBeenCalled();
+      // called twice: initial mount config-sync + the Cat-toggle-driven sync
+      expect(mockUpdateConfig).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -1144,7 +1145,8 @@ describe("DataPanel — column type and exclude toggles", () => {
     await userEvent.click(numButton!);
 
     await waitFor(() => {
-      expect(mockUpdateConfig).toHaveBeenCalled();
+      // called twice: initial mount config-sync + the Num-toggle-driven sync
+      expect(mockUpdateConfig).toHaveBeenCalledTimes(2);
     });
   });
 });
@@ -1213,7 +1215,8 @@ describe("DataPanel — syncConfig AbortController", () => {
 
     // Wait for syncConfig to start
     await waitFor(() => {
-      expect(mockFetchConfig).toHaveBeenCalled();
+      // called twice: initial mount config-sync fetch + the exclude-toggle sync fetch
+      expect(mockFetchConfig).toHaveBeenCalledTimes(2);
     });
 
     // Abort the in-flight request
@@ -1452,7 +1455,8 @@ describe("DataPanel — handleTaskChange and handleExcludeToggle", () => {
 
     // After toggling, syncConfig should run and updateConfig should be called
     await waitFor(() => {
-      expect(mockUpdateConfig).toHaveBeenCalled();
+      // called twice: initial mount config-sync + the exclude-toggle-driven sync
+      expect(mockUpdateConfig).toHaveBeenCalledTimes(2);
     });
   });
 });

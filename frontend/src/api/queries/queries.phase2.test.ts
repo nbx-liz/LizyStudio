@@ -247,7 +247,7 @@ describe("useFiles", () => {
     expect(fetchDirectory).not.toHaveBeenCalled();
 
     rerender({ on: true });
-    await waitFor(() => expect(fetchDirectory).toHaveBeenCalled());
+    await waitFor(() => expect(fetchDirectory).toHaveBeenCalledTimes(1));
   });
 
   it("passes undefined to fetchDirectory for the ~ root sentinel", async () => {

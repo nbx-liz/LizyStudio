@@ -777,13 +777,13 @@ describe("ModelPanel", () => {
     // Push two configs so undo has history
     captured.onChange!({ model: { name: "lgbm", params: { depth: 5 } } });
     await waitFor(() => {
-      expect(mockUpdate).toHaveBeenCalled();
+      expect(mockUpdate).toHaveBeenCalledTimes(1);
     });
 
     (mockUpdate as ReturnType<typeof vi.fn>).mockClear();
     captured.onChange!({ model: { name: "lgbm", params: { depth: 10 } } });
     await waitFor(() => {
-      expect(mockUpdate).toHaveBeenCalled();
+      expect(mockUpdate).toHaveBeenCalledTimes(1);
     });
 
     // Undo should now be enabled
@@ -795,7 +795,7 @@ describe("ModelPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
 
     await waitFor(() => {
-      expect(mockUpdate).toHaveBeenCalled();
+      expect(mockUpdate).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -885,16 +885,16 @@ describe("ModelPanel", () => {
 
     // Push two configs
     captured.onChange!({ model: { name: "lgbm", params: { d: 1 } } });
-    await waitFor(() => expect(mockUpdate).toHaveBeenCalled());
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
     (mockUpdate as ReturnType<typeof vi.fn>).mockClear();
 
     captured.onChange!({ model: { name: "lgbm", params: { d: 2 } } });
-    await waitFor(() => expect(mockUpdate).toHaveBeenCalled());
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
     (mockUpdate as ReturnType<typeof vi.fn>).mockClear();
 
     // Undo
     fireEvent.click(screen.getByRole("button", { name: "Undo" }));
-    await waitFor(() => expect(mockUpdate).toHaveBeenCalled());
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
     (mockUpdate as ReturnType<typeof vi.fn>).mockClear();
 
     // Redo should be enabled
@@ -903,7 +903,7 @@ describe("ModelPanel", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Redo" }));
-    await waitFor(() => expect(mockUpdate).toHaveBeenCalled());
+    await waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
   });
 
   // --- handleLoadPreset ---
@@ -977,7 +977,7 @@ describe("ModelPanel", () => {
     // validateConfig is called after 500ms debounce
     await waitFor(
       () => {
-        expect(mockValidate).toHaveBeenCalled();
+        expect(mockValidate).toHaveBeenCalledTimes(1);
       },
       { timeout: 2000 },
     );

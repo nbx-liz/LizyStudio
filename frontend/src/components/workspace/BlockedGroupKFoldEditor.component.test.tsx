@@ -507,7 +507,8 @@ describe("BlockedGroupKFoldEditor", () => {
     // First is minTrainRows, second is minValidRows
     await user.type(autoInputs[0], "100");
 
-    expect(mockOnChange).toHaveBeenCalled();
+    // called 3 times: one controlled onChange per keystroke ("1", "0", "0")
+    expect(mockOnChange).toHaveBeenCalledTimes(3);
   });
 
   it("calls onBlockedChange when blockMode is changed to sliding", () => {
@@ -540,7 +541,7 @@ describe("BlockedGroupKFoldEditor", () => {
     );
 
     await waitFor(() => {
-      expect(mockOnBlockedChange).toHaveBeenCalled();
+      expect(mockOnBlockedChange).toHaveBeenCalledTimes(1);
     });
 
     expect(mockOnBlockedChange).toHaveBeenCalledWith(

@@ -92,7 +92,7 @@ describe("useMediaQuery", () => {
 
     const { unmount } = renderHook(() => useMediaQuery("(max-width: 767px)"));
     unmount();
-    expect(mql.removeEventListener).toHaveBeenCalled();
+    expect(mql.removeEventListener).toHaveBeenCalledTimes(1);
   });
 
   it("returns false when matchMedia is unavailable (SSR / jsdom edge case)", () => {

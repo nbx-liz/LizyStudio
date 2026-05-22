@@ -125,7 +125,7 @@ describe("useKeyboardShortcuts", () => {
     });
     const preventSpy = vi.spyOn(event, "preventDefault");
     window.dispatchEvent(event);
-    expect(preventSpy).toHaveBeenCalled();
+    expect(preventSpy).toHaveBeenCalledTimes(1);
   });
 
   it("matches first shortcut and stops", () => {
