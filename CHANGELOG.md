@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-05-23
+
+A **maintenance and test-quality** patch release. No behaviour change,
+no API change, no format-version change — `STUDIO_FORMAT_VERSION`
+stays at 2.
+
+Bundles:
+
+1. **#545 — frontend dependency consolidation + security overrides**.
+   Four Dependabot PRs (#541 / #542 / #543 / #544) each touched
+   `frontend/package.json` + `pnpm-lock.yaml` and all failed CI with
+   the same `ERR_PNPM_LOCKFILE_CONFIG_MISMATCH` — the security-audit
+   `overrides` block was written to the lockfile but never synced into
+   `package.json` `pnpm.overrides`. They are consolidated into one
+   change: ten dependency bumps (react-query, tailwind-merge, biome,
+   playwright, tailwindcss, @tailwindcss/vite, @types/node,
+   coverage-istanbul, msw, vitest) plus an explicit `pnpm.overrides`
+   block pinning the CVE-patched transitive versions of axios,
+   brace-expansion, follow-redirects, lodash, and ws.
+
+2. **#537 — call-count assertion audit**. The v0.6.2 Target-select bug
+   cluster (#529 / #530 / #531) slipped past the unit suite because
+   assertions checked *that* a mock was called, not *how many times*.
+   All 80 bare `.toHaveBeenCalled()` sites across 27 test files are
+   converted to `.toHaveBeenCalledTimes(N)`. A new `tohavebeencalled-guard`
+   CI job blocks any regression. Test-only — no production code change.
+
 ## [0.6.2] - 2026-05-17
 
 The **Target-select write-traffic reduction** patch release. Closes
