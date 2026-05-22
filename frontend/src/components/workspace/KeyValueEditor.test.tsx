@@ -77,7 +77,8 @@ describe("KeyValueEditor", () => {
     fireEvent.change(valueInput, { target: { value: "42" } });
 
     // onChange should have been called with the new param (numeric conversion)
-    expect(onChange).toHaveBeenCalled();
+    // called twice: one controlled onChange per field change (key, then value)
+    expect(onChange).toHaveBeenCalledTimes(2);
   });
 
   it("removes custom row and calls onChange when remove button is clicked", () => {

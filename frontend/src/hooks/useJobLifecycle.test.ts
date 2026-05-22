@@ -50,7 +50,7 @@ describe("useJobLifecycle", () => {
     });
 
     expect(cancelJob).toHaveBeenCalledWith("j1");
-    expect(onTerminal).toHaveBeenCalled();
+    expect(onTerminal).toHaveBeenCalledTimes(1);
   });
 
   it("cancel is a no-op when jobId is null", async () => {
@@ -93,7 +93,7 @@ describe("useJobLifecycle", () => {
     // Even though the server errored, the UI must NOT stay in
     // "Cancelling..." — the parent's running flag is released via
     // onTerminal and the transient progress is cleared.
-    expect(onTerminal).toHaveBeenCalled();
+    expect(onTerminal).toHaveBeenCalledTimes(1);
     expect(result.current.progress).toBeNull();
   });
 

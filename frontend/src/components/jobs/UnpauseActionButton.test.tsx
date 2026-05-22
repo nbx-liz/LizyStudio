@@ -92,7 +92,7 @@ describe("UnpauseActionButton", () => {
     );
 
     await waitFor(() => {
-      expect(mockUnpauseJob).toHaveBeenCalled();
+      expect(mockUnpauseJob).toHaveBeenCalledTimes(1);
     });
     expect(onUnpauseStarted).not.toHaveBeenCalled();
   });

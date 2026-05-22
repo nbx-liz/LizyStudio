@@ -126,7 +126,7 @@ describe("SearchSpaceRow – FixedValueEditor", () => {
     );
     const input = screen.getByRole("textbox");
     fireEvent.change(input, { target: { value: "0.05" } });
-    expect(onModelParamChange).toHaveBeenCalled();
+    expect(onModelParamChange).toHaveBeenCalledTimes(1);
   });
 });
 

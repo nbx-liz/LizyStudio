@@ -31,6 +31,11 @@ vi.mock("@/components/workspace/FileBrowser", () => ({
 describe("SetupPanel", () => {
   afterEach(() => {
     cleanup();
+    // File-scoped hoisted mocks accumulate calls across tests; clear them
+    // so per-test `.toHaveBeenCalledTimes(N)` assertions are count-precise.
+    mockUpload.mockClear();
+    mockToast.success.mockClear();
+    mockToast.error.mockClear();
   });
 
   const baseProps = {
@@ -416,7 +421,7 @@ describe("SetupPanel", () => {
       'input[type="file"]',
     ) as HTMLInputElement;
     fireEvent.change(input, { target: { files: [file] } });
-    await waitFor(() => expect(mockUpload).toHaveBeenCalled());
+    await waitFor(() => expect(mockUpload).toHaveBeenCalledTimes(1));
 
     await user.click(screen.getByRole("button", { name: /run inference/i }));
 

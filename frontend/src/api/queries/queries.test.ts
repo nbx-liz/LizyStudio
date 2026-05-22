@@ -209,7 +209,7 @@ describe("useRunInference", () => {
       });
     });
 
-    expect(runInference).toHaveBeenCalled();
+    expect(runInference).toHaveBeenCalledTimes(1);
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: queryKeys.infHistoryAll(),
     });

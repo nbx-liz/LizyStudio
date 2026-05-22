@@ -83,6 +83,10 @@ uv run pytest --cov=src/lizystudio --cov-fail-under=80 -q  # test
 - **Formatter/Linter:** [Biome](https://biomejs.dev/) (ESLint/Prettier are **not** used)
 - **Tests:** [Vitest](https://vitest.dev/) (unit) + [Playwright](https://playwright.dev/) (e2e)
 - **API types:** auto-generated via `openapi-typescript` — never hand-write API types
+- **Mock assertions:** assert the call *count*, not just the fact — use
+  `expect(spy).toHaveBeenCalledTimes(N)`, never bare `expect(spy).toHaveBeenCalled()`.
+  When `N` is not 1, add a one-line comment naming the reason. The
+  `tohavebeencalled-guard` CI job enforces this (Issue #537).
 
 ```bash
 cd frontend

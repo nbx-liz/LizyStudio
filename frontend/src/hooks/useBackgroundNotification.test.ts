@@ -69,7 +69,7 @@ describe("useBackgroundNotification", () => {
     const { result } = renderHook(() => useBackgroundNotification());
     result.current("Job Complete", "Ready");
 
-    expect(Notification.requestPermission).toHaveBeenCalled();
+    expect(Notification.requestPermission).toHaveBeenCalledTimes(1);
     // After permission is granted, notification should be created
     await vi.waitFor(() => {
       expect(mockNotification).toHaveBeenCalledWith("Job Complete", {
@@ -119,7 +119,7 @@ describe("useBackgroundNotification", () => {
 
     // Wait for async requestPermission to complete
     await vi.waitFor(() => {
-      expect(Notification.requestPermission).toHaveBeenCalled();
+      expect(Notification.requestPermission).toHaveBeenCalledTimes(1);
     });
     // Notification should NOT have been created
     expect(mockNotification).not.toHaveBeenCalled();

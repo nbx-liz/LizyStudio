@@ -260,7 +260,8 @@ describe("CvSection", () => {
     await user.type(foldsInput, "10");
 
     // onChange should be called with the new folds value
-    expect(mockOnChange).toHaveBeenCalled();
+    // called 3 times: clear emits one onChange, then one per keystroke ("1", "0")
+    expect(mockOnChange).toHaveBeenCalledTimes(3);
   });
 
   // -------------------------------------------------------------------------

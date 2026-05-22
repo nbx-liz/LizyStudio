@@ -77,7 +77,7 @@ describe("PauseActionButton", () => {
     );
 
     await waitFor(() => {
-      expect(mockPauseJob).toHaveBeenCalled();
+      expect(mockPauseJob).toHaveBeenCalledTimes(1);
     });
     expect(onPauseRequested).not.toHaveBeenCalled();
   });
