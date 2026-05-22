@@ -164,7 +164,7 @@ describe("SearchableSelect (PR-B2 / wide DataFrame)", () => {
     const input = screen.getByPlaceholderText("Search...");
     fireEvent.keyDown(input, { key: "ArrowDown" });
     fireEvent.keyDown(input, { key: "Enter" });
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
     // First option (age) is the default highlight; Enter picks it after
     // ArrowDown moves to the second (color). Either is acceptable as
     // long as some option fired.

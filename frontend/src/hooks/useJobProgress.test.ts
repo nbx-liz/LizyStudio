@@ -214,7 +214,7 @@ describe("useJobProgress — WebSocket subscription", () => {
     expect(disconnectSpy).not.toHaveBeenCalled();
 
     rerender({ id: "j2" });
-    expect(disconnectSpy).toHaveBeenCalled();
+    expect(disconnectSpy).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -228,7 +228,7 @@ describe("useJobProgress — polling fallback", () => {
     );
 
     rerender({ job: runningJob({ status: "completed" }) });
-    expect(onTerminal).toHaveBeenCalled();
+    expect(onTerminal).toHaveBeenCalledTimes(1);
   });
 
   it("fires onTerminal on first observation of an already-terminal job", () => {

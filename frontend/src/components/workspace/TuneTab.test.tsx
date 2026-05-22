@@ -210,7 +210,7 @@ describe("TuneTab", () => {
     const f1Button = f1Buttons[f1Buttons.length - 1].closest("button");
     if (f1Button) fireEvent.click(f1Button);
 
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
   });
 
   it("reads evaluation from tuning.evaluation (not tuning.optuna.evaluation)", () => {
@@ -271,7 +271,7 @@ describe("TuneTab", () => {
     // Click the optimization metric segment button for "f1"
     fe.click(f1Buttons[0].closest("button") ?? f1Buttons[0]);
 
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
     const updated = onChange.mock.calls[0][0];
     // evaluation must be at tuning.evaluation, NOT tuning.optuna.evaluation
     const tuning = updated.tuning as Record<string, unknown>;
@@ -338,7 +338,7 @@ describe("TuneTab", () => {
     const f1Buttons = screen.getAllByText("f1");
     fe.click(f1Buttons[0].closest("button") ?? f1Buttons[0]);
 
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
     const updated = onChange.mock.calls[0][0];
     const tuning = updated.tuning as Record<string, unknown>;
     const optuna = tuning.optuna as Record<string, unknown>;
@@ -406,7 +406,7 @@ describe("TuneTab", () => {
     const kIncrBtn = plusButtons[plusButtons.length - 1].closest("button");
     if (kIncrBtn) fireEvent.click(kIncrBtn);
 
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
     const updated = onChange.mock.calls[0][0];
     const tuning = updated.tuning as Record<string, unknown>;
     const evaluation = tuning.evaluation as {
@@ -446,7 +446,7 @@ describe("TuneTab", () => {
     const f1AdditionalBtn = f1Badges[f1Badges.length - 1].closest("button");
     if (f1AdditionalBtn) fe.click(f1AdditionalBtn);
 
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
     const updated = onChange.mock.calls[0][0];
     const tuning = updated.tuning as Record<string, unknown>;
     const evaluation = tuning.evaluation as { metrics: string[] };
@@ -621,7 +621,7 @@ describe("TuneTab", () => {
     const pakButtons = screen.getAllByText("precision_at_k");
     fe.click(pakButtons[0].closest("button") ?? pakButtons[0]);
 
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
     // Bug 2026-04-14 (4) — Fix 3: TuneEvaluationSection now also runs a
     // defensive useEffect that syncs ``optuna.params.direction`` to the
     // resolved metric direction on mount/metric-change. That effect can
@@ -676,7 +676,7 @@ describe("TuneTab", () => {
     const kIncrBtn = plusButtons[plusButtons.length - 1].closest("button");
     if (kIncrBtn) fireEvent.click(kIncrBtn);
 
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
     const updated = onChange.mock.calls[0][0] as Record<string, unknown>;
     const tuning = updated.tuning as Record<string, unknown>;
     const evaluation = tuning.evaluation as {
@@ -733,7 +733,7 @@ describe("TuneTab", () => {
 
     fireEvent.click(screen.getByTestId("trigger-space-change"));
 
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
     const updated = onChange.mock.calls[0][0] as Record<string, unknown>;
     const tuning = updated.tuning as Record<string, unknown>;
     const optuna = tuning.optuna as Record<string, unknown>;
@@ -752,7 +752,7 @@ describe("TuneTab", () => {
 
     fireEvent.click(screen.getByTestId("trigger-model-param-change"));
 
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
     const updated = onChange.mock.calls[0][0] as Record<string, unknown>;
     const model = updated.model as Record<string, unknown>;
     const params = model.params as Record<string, unknown>;
@@ -793,7 +793,7 @@ describe("TuneTab", () => {
     const f1Buttons = screen.getAllByText("f1");
     fireEvent.click(f1Buttons[0].closest("button") ?? f1Buttons[0]);
 
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
     // Bug 2026-04-14 (4) — Fix 3: pick the click-induced call, not the
     // direction-sync useEffect that fires on mount. See the matching
     // comment in the precision_at_k test above.

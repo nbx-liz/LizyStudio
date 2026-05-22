@@ -127,7 +127,7 @@ describe("useConfigSync", () => {
       wrapper: testWrapper.wrapper,
     });
 
-    await waitFor(() => expect(mocks.updateConfig).toHaveBeenCalled());
+    await waitFor(() => expect(mocks.updateConfig).toHaveBeenCalledTimes(1));
     expect(mocks.fetchConfigDefaults).toHaveBeenCalledWith("binary", "y");
   });
 
@@ -140,7 +140,7 @@ describe("useConfigSync", () => {
 
     // target is set so sync still runs, but fetchConfigDefaults requires
     // both task and target — so it must not be called.
-    await waitFor(() => expect(mocks.updateConfig).toHaveBeenCalled());
+    await waitFor(() => expect(mocks.updateConfig).toHaveBeenCalledTimes(1));
     expect(mocks.fetchConfigDefaults).not.toHaveBeenCalled();
   });
 
@@ -154,7 +154,7 @@ describe("useConfigSync", () => {
       wrapper: testWrapper.wrapper,
     });
 
-    await waitFor(() => expect(mocks.updateConfig).toHaveBeenCalled());
+    await waitFor(() => expect(mocks.updateConfig).toHaveBeenCalledTimes(1));
     const [payload] = mocks.updateConfig.mock.calls[0];
     expect(payload.features.categorical).toEqual(["region"]);
     expect(payload.features.exclude).toEqual(["leaky"]);
@@ -213,7 +213,7 @@ describe("useConfigSync", () => {
     );
 
     rerender({ params: defaultParams({ target: "y" }) });
-    await waitFor(() => expect(mocks.updateConfig).toHaveBeenCalled());
+    await waitFor(() => expect(mocks.updateConfig).toHaveBeenCalledTimes(1));
     // The preseed value differs from the new key → exactly one sync.
     expect(mocks.updateConfig).toHaveBeenCalledTimes(1);
   });

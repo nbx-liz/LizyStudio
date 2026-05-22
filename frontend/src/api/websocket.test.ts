@@ -166,7 +166,7 @@ describe("connectJobProgress", () => {
 
     ws.readyState = MockWebSocket.OPEN;
     cleanup();
-    expect(ws.close).toHaveBeenCalled();
+    expect(ws.close).toHaveBeenCalledTimes(1);
   });
 
   it("cleanup does not close already-closed WebSocket", () => {

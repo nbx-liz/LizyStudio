@@ -346,7 +346,7 @@ describe("ResultsPanel", () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.job("test-job-1") });
     });
 
-    await waitFor(() => expect(onJobDone).toHaveBeenCalled(), {
+    await waitFor(() => expect(onJobDone).toHaveBeenCalledTimes(1), {
       timeout: 3000,
     });
   });
@@ -862,7 +862,7 @@ describe("ResultsPanel", () => {
     const { act } = await import("@testing-library/react");
     act(() => capturedCallbacks.onCompleted?.());
 
-    await waitFor(() => expect(onJobDone).toHaveBeenCalled());
+    await waitFor(() => expect(onJobDone).toHaveBeenCalledTimes(1));
   });
 
   it("shows toast.error on WebSocket onError callback", async () => {
@@ -1004,7 +1004,7 @@ describe("ResultsPanel", () => {
         (toast as unknown as Record<string, ReturnType<typeof vi.fn>>).info,
       ).toHaveBeenCalledWith("Job cancelled"),
     );
-    await waitFor(() => expect(onJobDone).toHaveBeenCalled());
+    await waitFor(() => expect(onJobDone).toHaveBeenCalledTimes(1));
   });
 
   it("shows error toast when cancelJob fails", async () => {

@@ -69,7 +69,7 @@ describe("CommandPalette", () => {
 
     fireEvent.click(screen.getByText("Run Fit"));
 
-    expect(onFit).toHaveBeenCalled();
+    expect(onFit).toHaveBeenCalledTimes(1);
     // Dialog should be closed (no input visible)
     expect(screen.queryByPlaceholderText("Type a command...")).toBeNull();
   });
@@ -98,7 +98,7 @@ describe("CommandPalette", () => {
 
     fireEvent.click(screen.getByText("Run Tune"));
 
-    expect(onTune).toHaveBeenCalled();
+    expect(onTune).toHaveBeenCalledTimes(1);
     expect(screen.queryByPlaceholderText("Type a command...")).toBeNull();
   });
 

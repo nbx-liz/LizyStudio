@@ -339,7 +339,7 @@ describe("ConfigForm", () => {
 
     // Allow the effect to flush.
     await waitFor(() => {
-      expect(onChange).toHaveBeenCalled();
+      expect(onChange).toHaveBeenCalledTimes(1);
     });
     // The reset write must zero the calibration field (immutably).
     const calls = onChange.mock.calls.map((c) => c[0]);
@@ -479,8 +479,10 @@ describe("ConfigForm", () => {
       } as unknown as UiSchema,
     });
 
+    // called 3 times: three task-derived effects fire — calibration clear,
+    // objective reset, and metric reset — once config.task catches up.
     await waitFor(() => {
-      expect(onChange).toHaveBeenCalled();
+      expect(onChange).toHaveBeenCalledTimes(3);
     });
 
     // Calibration must clear (regression doesn't support it).
@@ -881,7 +883,7 @@ describe("ConfigForm — handleHintChange (onChange propagation)", () => {
       .find((el) => el.dataset.hintKey === "objective");
     fireEvent.click(dynParam!);
 
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
     const updatedConfig =
       onChange.mock.calls[onChange.mock.calls.length - 1][0];
     expect(updatedConfig.model.params.objective).toBe("__changed__");
@@ -903,7 +905,7 @@ describe("ConfigForm — handleHintChange (onChange propagation)", () => {
       .find((el) => el.dataset.hintKey === "metric");
     fireEvent.click(dynParam!);
 
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
     const updatedConfig =
       onChange.mock.calls[onChange.mock.calls.length - 1][0];
     expect(updatedConfig.model.params.metric).toBe("__changed__");
@@ -927,7 +929,7 @@ describe("ConfigForm — handleHintChange (onChange propagation)", () => {
       .find((el) => el.dataset.hintKey === "learning_rate");
     fireEvent.click(dynParam!);
 
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
     const updatedConfig =
       onChange.mock.calls[onChange.mock.calls.length - 1][0];
     expect(updatedConfig.model.params.learning_rate).toBe("__changed__");
@@ -955,7 +957,7 @@ describe("ConfigForm — auto-select useEffect", () => {
       } as unknown as UiSchema,
     });
 
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
     const calls = onChange.mock.calls;
     // Find a call that sets objective
     const objCall = calls.find(
@@ -980,7 +982,7 @@ describe("ConfigForm — auto-select useEffect", () => {
       } as unknown as UiSchema,
     });
 
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
     const calls = onChange.mock.calls;
     const metricCall = calls.find(
       ([cfg]) => cfg?.model?.params?.metric !== undefined,
@@ -1328,7 +1330,7 @@ describe("ConfigForm — inner_valid_options (Inner Validation select)", () => {
     const cvOption = screen.getByRole("option", { name: "cv" });
     fireEvent.click(cvOption);
 
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
     const lastCall = onChange.mock.calls.at(-1);
     const nextConfig = lastCall?.[0] as Record<string, unknown>;
     const written = (
@@ -1509,7 +1511,7 @@ describe("ConfigForm — CalibrationSection onChange propagation", () => {
     const toggle = within(calibrationSection).getByRole("switch");
     fireEvent.click(toggle);
 
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
     // After toggling ON (was null), calibration should be set to defaults (non-null object)
     const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0];
     expect(lastCall.calibration).not.toBeNull();
@@ -1681,7 +1683,7 @@ describe("ConfigForm — advanced DynParam onChange propagation", () => {
     expect(advancedParam).toBeDefined();
     fireEvent.click(advancedParam!);
 
-    expect(onChange).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
     const lastCall = onChange.mock.calls[onChange.mock.calls.length - 1][0];
     expect(lastCall.model.params.feature_fraction).toBe("__changed__");
   });

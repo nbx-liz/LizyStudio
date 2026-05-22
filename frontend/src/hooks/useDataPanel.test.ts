@@ -110,7 +110,7 @@ describe("useDataPanel", () => {
     expect(result.current.columns).toHaveLength(2);
     expect(onDataChanged).toHaveBeenCalledTimes(1);
     expect(onTaskChanged).toHaveBeenCalledWith(null);
-    expect(mocks.toastSuccess).toHaveBeenCalled();
+    expect(mocks.toastSuccess).toHaveBeenCalledTimes(1);
     expect(result.current.loading).toBe(false);
   });
 

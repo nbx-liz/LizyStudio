@@ -97,9 +97,9 @@ describe("useDataLoad", () => {
       COLS_OK.columns,
       ["a"],
     );
-    expect(defaultParams.onReset).toHaveBeenCalled();
-    expect(defaultParams.onDataChanged).toHaveBeenCalled();
-    expect(mocks.toastSuccess).toHaveBeenCalled();
+    expect(defaultParams.onReset).toHaveBeenCalledTimes(1);
+    expect(defaultParams.onDataChanged).toHaveBeenCalledTimes(1);
+    expect(mocks.toastSuccess).toHaveBeenCalledTimes(1);
     expect(result.current.loading).toBe(false);
   });
 
@@ -154,8 +154,8 @@ describe("useDataLoad", () => {
 
     expect(result.current.shape).toEqual([100, 5]);
     expect(result.current.dataPath).toBe("/data/x.csv");
-    expect(defaultParams.onColumnsLoaded).toHaveBeenCalled();
-    expect(mocks.toastSuccess).toHaveBeenCalled();
+    expect(defaultParams.onColumnsLoaded).toHaveBeenCalledTimes(1);
+    expect(mocks.toastSuccess).toHaveBeenCalledTimes(1);
   });
 
   it("handleUpload shows toast on failure", async () => {
@@ -233,7 +233,7 @@ describe("useDataLoad", () => {
         COLS_OK.columns,
         ["a"],
       );
-      expect(defaultParams.onDataChanged).toHaveBeenCalled();
+      expect(defaultParams.onDataChanged).toHaveBeenCalledTimes(1);
       // ``onReset`` would clear target/task — must NOT fire during
       // hydration since target is exactly what we're trying to keep.
       expect(defaultParams.onReset).not.toHaveBeenCalled();

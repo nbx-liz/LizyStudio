@@ -54,7 +54,7 @@ describe("DeleteDialog", () => {
 
     await waitFor(() => {
       expect(deleteJob).toHaveBeenCalledWith("job-abc");
-      expect(defaultProps.onDeleted).toHaveBeenCalled();
+      expect(defaultProps.onDeleted).toHaveBeenCalledTimes(1);
       expect(defaultProps.onOpenChange).toHaveBeenCalledWith(false);
     });
   });
