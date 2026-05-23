@@ -129,15 +129,24 @@ test.describe("Tune pause / unpause flow (P-0099 v3-20g)", () => {
     const jobId = tuneBody.job_id as string;
     expect(jobId).toBeTruthy();
 
-    // Wait until the worker has actually claimed the slot — a /pause
-    // before status="running" would 400 with JOB_NOT_RUNNING.
-    await pollJobUntilStatus(request, jobId, "running", 30_000, 250);
-
-    // ---- Pause ------------------------------------------------------------
-    const pauseRes = await request.post(`${API}/jobs/${jobId}/pause`);
+    // ---- Pause (option (c) from #527) -------------------------------------
+    // Retry /pause every 50 ms accepting JOB_NOT_RUNNING (400) until the
+    // worker has claimed the slot and pause returns 200. This guarantees
+    // PAUSE lands at trial 1's first cb boundary — the alternative
+    // (poll for "running" then send /pause) opens a window where the
+    // trial loop can complete entirely before pause is observed, in
+    // which case unpause restarts a fresh study and the test sees
+    // 2 × n_trials total trials. Option (a) (wider n_trials) alone is
+    // insufficient under CI scheduling jitter.
+    let pauseRes = await request.post(`${API}/jobs/${jobId}/pause`);
+    const pauseDeadline = Date.now() + 30_000;
+    while (pauseRes.status() !== 200 && Date.now() < pauseDeadline) {
+      await new Promise((r) => setTimeout(r, 50));
+      pauseRes = await request.post(`${API}/jobs/${jobId}/pause`);
+    }
     expect(
       pauseRes.status(),
-      `POST /pause should accept a running tune; got ${pauseRes.status()} with body ${await pauseRes.text()}`,
+      `POST /pause should eventually accept a running tune; got ${pauseRes.status()} with body ${await pauseRes.text()}`,
     ).toBe(200);
     const pauseBody = await pauseRes.json();
     expect(pauseBody.status).toBe("pause_requested");
