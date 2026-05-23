@@ -4225,3 +4225,210 @@ T=4116ms  re-render: searchSpaceKeys=0 (space lost in coalesce)
   - 各 PR は independent reviewable とする（PR-2 で Protocol だけ通せば backend / frontend は旧挙動のまま動くなど）
   - 既存 frontend bug (Tune タブの search space 全 Fixed) は **PR-5 が merge されるまで残る**。短期 bugfix を別途求める場合は Option A の minimal patch を別 PR で先行させる選択肢もあるが、PR-2〜5 を待てば自然に消えるため不要
   - `format_version` 2 → 3 bump により、PR-4 merge 後に develop で作られた workspace を v0.6 系の runtime で読むと `LegacyFormatProtectionError`。v0.6.x がリリース済の場合はリリースノートに明記する
+
+### P-0110: silent 200 OK + `{saved: false}` 撤廃 → RFC 9457 Problem Details（Change Gate, API contract change）
+
+- **Date:** 2026-05-23 起票（awaiting alignment）
+- **Issue:** #536
+- **Related:** v0.6.2 Target-select バグクラスタ（#529 / #530 / #531）、`useModelPanelData` INV-A1/A2/A3、`useTargetSelection`、`useConfigWriteFunnel`、`api/workspace.py::workspace_save_config_endpoint` ([:507](src/lizystudio/api/workspace.py#L507))、`api/workspace.py::workspace_upload_config_endpoint` ([:613](src/lizystudio/api/workspace.py#L613))、6 件の同型 call-site (`L498/L610/L662/L675/L740/L760`)、`api/errors.py::StudioError` (現行 4xx envelope)、`docs/api.md`、RFC 9457 (Problem Details for HTTP APIs)
+
+#### Motivation
+
+`PUT /api/workspace/config` および `POST /api/workspace/config/upload` は、validation で blocking error が出た場合に HTTP **200 OK** + `{"saved": false, "errors": [...]}` という envelope を返す。これは業界で確立された **「Soft Error / Error Tunneling / Envelope Pattern」アンチパターン** であり、v0.6.2 で発生した Target-select バグクラスタ（#529 / #531）の **root cause** である:
+
+- backend は partial-body PUT を `saved=false, blocking=5` で reject していたが、HTTP は 200 を返していた
+- frontend の `fetch().ok` は `true` を返す
+- ブラウザの Network panel も 200 で **緑表示**
+- E2E suite の `response.status() === 200` も **pass**
+- 唯一の検出経路は response body の `saved` フィールド読み（per-hook で手動）
+
+結果として「validation 失敗を 5 層（frontend / network panel / E2E / monitoring / 開発者の目視）で見逃した」という事象が発生した。
+
+frontend 側で個別の hook が `saved` をチェックする mitigation はすでに存在する (`useModelPanelData` の INV-A1/A2/A3、`useTargetSelection`、`useConfigWriteFunnel`) が、これは **HTTP boundary ではなく per-hook で enforce されている invariant** なので、新規エンドポイントを追加する開発者が同型 envelope を copy すると silent-failure trap を継承してしまう。実際 backend には現在 8 か所の `if not blocking: ... save` パターンがあり、うち 6 か所は `saved` を response にすら載せず HTTP 200 を返している。
+
+業界文脈:
+
+- Compiler — "200 OK: The 'Success' Response That Was Actually a Critical Error"
+- Stacksync — "How to Detect Silent Failures in MuleSoft API Flows"
+- **RFC 9457** — Problem Details for HTTP APIs（推奨される構造化エラーフォーマット。`application/problem+json` media type、4xx/5xx ステータス）
+
+このパターンは HTTP の semantic contract（2xx = side effect committed）を反転させている。contract を復元すれば、Network panel は rejection で赤くなり、`fetch().ok` は truth を反映し、monitoring dashboard は真の availability を報告し、frontend は per-hook の `saved` 検査を捨てて単一の response-envelope adapter に集約できる。
+
+#### Purpose
+
+`PUT /workspace/config` および `POST /workspace/config/upload` の response shape を **RFC 9457 Problem Details (`application/problem+json`)** に統一する。validation rejection は 4xx ステータス（`422 Unprocessable Entity` を基本、`409 Conflict` は既存の `WORKSPACE_LOCKED` のため継続使用）+ structured `errors[]` 配列を返す。
+
+成功時は引き続き 200 + 既存 `{config, errors: []}` shape を返し、warning-only な errors も 200 で運ぶ（severity=warning は side-effect 確定。v0.4.1 P-0100 で確立済）。
+
+#### Invariants
+
+- **INV-API-1 (HTTP-status semantic restoration)**: `/api/workspace/**` で `2xx` を返した場合、副作用（disk write / state update）は **確定している**。`saved: false` は response body から **消える**（`saved` フィールド自体を削除）。
+- **INV-API-2 (rejection は structured)**: validation blocking error による rejection は必ず `application/problem+json` media type で、`{type, title, status, detail, errors: [{code, field, severity, suggested_fix?}]}` の構造を持つ。
+- **INV-API-3 (severity contract preservation)**: `severity == "error"` の errors のみが 4xx を引き起こす。`severity == "warning"` は v0.4.1 P-0100 通り 200 で運ばれ、`errors[]` 配列に同居する（200 でも warnings が来るのは contract 通り）。
+- **INV-API-4 (request body は受領)**: 4xx を返しても、validation エラーを除いた request body は parse 済みで（pydantic レベルの parse error は別途 422 で返す）、エラー再現に必要な diagnostic 情報は `errors[].field` で復元可能。
+- **INV-API-5 (frontend single source of truth)**: 全ての `/workspace/**` API caller は `fetch().ok` を成功判定の **唯一の source** にする。response body 内に成功判定の duplicate を置かない (`saved` を含めない)。
+
+#### Impact
+
+**API contract（← Change Gate 対象）:**
+
+- `PUT /api/workspace/config`:
+  - 旧: `200 OK` + `{config, errors, saved: true|false}` （`saved` の値で側効果有無を表現）
+  - 新: `200 OK` + `{config, errors: [{code, field, severity, suggested_fix?, ...}]}`（成功時、warning 含む可）/ `422 Unprocessable Entity` + `application/problem+json` body（blocking error 時、`errors[]` に詳細）/ `409 Conflict` + `application/problem+json`（既存の `WORKSPACE_LOCKED`）
+- `POST /api/workspace/config/upload`: 同上
+- 残り 6 件の `if not blocking: ... save` 同型 call-site (`L498/L610/L662/L675/L740/L760`) は **全て同パターンで揃える**。silent 200 + 副作用 skip を許容する case を一切残さない（リグレッション防止）。
+- `api/errors.py`:
+  - `StudioError` を `application/problem+json` で serialize するように `studio_error_handler` を拡張。`code` / `recovery_hint` などの既存フィールドは Problem Details の拡張メンバとして温存。
+  - 新規 helper `validation_problem(errors, *, status=422)` で blocking validation を共通 raise。
+- `docs/api.md`: RFC 9457 convention 反映。各エンドポイントの 4xx body shape を例付きで記載。
+
+**frontend:**
+
+- `frontend/src/api/...` (openapi-typescript 由来の生成物): 新 OpenAPI spec から再生成すれば `saved: false` の path が型レベルで消滅する。
+- `useConfigWriteFunnel` / `useModelPanelData` / `useTargetSelection`: `if (!result.saved) ...` の per-hook 検査を `if (!response.ok) ...` に置換（または共通 adapter `assertSavedOrThrow(response)` に集約）。
+- E2E specs: `expect(response.status()).toBe(200)` を引き続き使うが、200 が真の成功を意味するようになるため、`saved` ベースの secondary assertion は不要に。
+
+**互換性:**
+
+- frontend は新 API spec から再生成された型を使うため breaking。同一 PR で frontend / backend を揃える必要あり（split は不可）。
+- 外部 caller（CLI / 自動化スクリプト）が `PUT /config` を叩いている場合、200 を成功とみなす旧クライアントは validation rejection を **silent skip** していた現状から **エラーで停止** に変わる。これは contract 上は正しい挙動だが、行動変容を伴う。リリースノートに明記し、major bump (v0.7.0) で出す。
+- `format_version` は変更不要（on-disk shape は touch しない）。
+- pickle compat matrix への影響なし。
+
+#### Alternatives
+
+- **(a, rejected): 現状維持 + per-endpoint lint rule**:「新規エンドポイントで `saved:` を返す PR は code review で reject」。lint rule の維持コストは小さいが、(1) **既存 8 か所の silent-failure trap は残る**、(2) review fatigue で漏れる、(3) industry 認知のアンチパターン名（"silent 200"）の負債は残るため、本質的な解にならない。**棄却**。
+- **(b, rejected): カスタム envelope `{ok, data, error}`**:JSend / GraphQL 風の `{success, data, error}` を導入。RFC 9457 を採用しないことで標準ツール（curl の `--fail-with-body`、Datadog の HTTP error tracking、Sentry の 4xx 分類）と統合できなくなり、業界標準への接続を失う。**棄却**。
+- **(c, ADOPTED): RFC 9457 Problem Details 全面採用** — 4xx + `application/problem+json` + structured `errors[]`。`fetch().ok` が truth を反映する、Network panel が rejection で赤くなる、existing monitoring が自動的に正しい availability を計算する、frontend は単一 adapter に集約可能。`StudioError` の既存フィールド (`code`, `recovery_hint`) は Problem Details の拡張メンバとして温存できるため、Python 側のコード量増加は限定的。
+
+#### Migration / Deprecation Plan
+
+3 つの選択肢があり、Approved 段階で 1 つを確定する:
+
+- **(M-1) Single-PR cutover (推奨)**: backend + frontend + docs + openapi-typescript regenerate を 1 PR で揃え、major bump v0.7.0 でリリース。外部 caller への breaking はリリースノートで明示。
+- **(M-2) Opt-in header**: `Accept: application/problem+json` を送ったクライアントには新 shape、それ以外は旧 200 + `{saved}`。frontend は新 shape に切替、旧 shape は 1 minor 後に廃止。実装コスト中、外部 caller の移行猶予あり。
+- **(M-3) `format_version`-gated dual shape**: 既存 workspace では旧 shape、新規 workspace では新 shape。実装コスト大、benefit 小。**Approved 段階で M-3 は除外**。
+
+Decision 時に M-1 または M-2 のいずれかを確定する。frontend は内製のみが known caller のため M-1 の breaking は実質的に limited（外部 CLI 利用者は想定上のみ）。
+
+#### Acceptance Criteria
+
+- [ ] `PUT /api/workspace/config` および `POST /api/workspace/config/upload` から `saved` フィールドが消滅（200 OK = side effect committed）
+- [ ] validation rejection は 422（または 409 既存 `WORKSPACE_LOCKED`）+ `application/problem+json` + `errors[]` (code / field / severity / suggested_fix?)
+- [ ] backend regression tests が body の `saved` ではなく HTTP status code を assert（既存 contract test を更新）
+- [ ] frontend の `updateConfig` 系 hook が `fetch().ok` を成功判定の唯一の source とする
+- [ ] `useConfigWriteFunnel` / `useModelPanelData` / `useTargetSelection` から per-hook `saved` 読みが消滅（共通 adapter 経由 or `response.ok` 直接判定）
+- [ ] `docs/api.md` に RFC 9457 convention 反映 + 各エンドポイントの 4xx body shape を例付きで記載
+- [ ] OpenAPI spec が `responses.422.content."application/problem+json"` を export し、openapi-typescript 由来の型に `saved` path が残らない
+- [ ] CHANGELOG に breaking change 明記、メジャーバンプ (v0.7.0)
+
+#### Decision
+
+- 2026-05-23 **Proposal-only kickoff** — Approval / Migration plan (M-1 vs M-2) 確定後に実装 PR を起票する。実装は 1 PR で backend + frontend + docs + openapi 同時に揃える方針（M-1）を推奨案として提示。reviewer が M-2 を選好する場合は段階移行に再分割。Change Gate 通過まで実装着手不可。
+
+#### Open Questions
+
+- **Q1**: Migration plan は M-1（single-PR cutover）/ M-2（opt-in header）のどちらか？
+- **Q2**: `application/problem+json` の `type` URI は何にするか？（社内固定 URI、`https://lizystudio.dev/problems/validation-failed` 形式、または `about:blank` で済ませる）
+- **Q3**: 既存 `errors: []` shape の severity contract（P-0100 で確立）は **そのまま `errors[]` 配列に温存** で良いか？それとも RFC 9457 の `errors` 拡張メンバ規約に合わせて項目名を rename するか？
+- **Q4**: 同 PR で 422 化する対象は 2 endpoint (`PUT /config`, `POST /config/upload`) のみか、それとも残り 6 件の `if not blocking: ...` call-site も同時に揃えるか？ **A**: 同時推奨（リグレッション防止）— ただし reviewer 判断で分割可。
+
+### P-0111: Tune-tab write path の sparse-overrides 経路 — `TuningOverrides` schema 拡張 vs 2-path 許容（P-0109 follow-up）
+
+- **Date:** 2026-05-23 起票（awaiting alignment）
+- **Issue:** #528（descope 済み acceptance criteria を再 spec）
+- **Related:** P-0109 PR-6c (#524) read path 実装、P-0109 PR-4a (#519) `PUT /config/tuning-overrides` 追加、`backends/types.py::TuningOverrides`、`absorb_legacy_tuning` / `get_legacy_config_view` 双方向 shim、`frontend/src/components/workspace/TuneTab.tsx`、`SearchSpaceTable.tsx`、`SearchSpaceRow.tsx`、`TuneEvaluationSection.tsx`、`RetuneSettingsSection.tsx`、Issue #459（`inner_valid` auto-reset）
+
+#### Motivation
+
+P-0109 PR-6c (#524) で Tune タブの **read path** は `useTuningSnapshot` hook + `SearchSpaceRow` "Modified" badge 経由で `GET /config/tuning-snapshot` (snapshot endpoint) に切り替わった。一方 **write path** は依然 legacy `PUT /api/workspace/config` 経由で workspace 全体を round-trip させており、`absorb_legacy_tuning` shim が legacy body 内の `tuning` block を `tuning_overrides` に吸収して `WorkspaceState` に store する状態にある。
+
+`#528` の元の acceptance criterion #1（「legacy `PUT /api/workspace/config` is **not** invoked from Tune-tab code paths」）を実装するため write surface を end-to-end でトレースしたところ、**この criterion は文字通りには実装不可能** であることが判明した。理由は `TuningOverrides` schema が Tune タブで書き込まれるフィールド全てを表現できないため。
+
+`TuningOverrides` の現在のフィールド（`src/lizystudio/backends/types.py`）:
+
+```python
+class TuningOverrides(BaseModel):
+    n_trials: int | None
+    timeout: int | None
+    direction: Literal["maximize", "minimize"] | None
+    space: dict[str, SpaceEntry]
+    evaluation_metrics: list[MetricEntry] | None
+```
+
+Tune タブの write surface 実測:
+
+| Tune-tab mutation | `TuningOverrides` 対応フィールド | route 可否 |
+|---|---|---|
+| `n_trials` / `timeout` (`TuneSettings`) | `n_trials` / `timeout` | ✅ |
+| search space (`SearchSpaceTable::onChange`) | `space` | ✅ |
+| `direction` / `evaluation_metrics` (`TuneEvaluationSection`) | `direction` / `evaluation_metrics` | ✅ |
+| **Fixed-mode `model.params` (`SearchSpaceTable::onModelParamChange`)** | — | ❌ no field |
+| **`model.params.inner_valid` auto-reset useEffect (#459)** | — | ❌ no field |
+| **`tuning.re_tune` (`RetuneSettingsSection`)** | — | ❌ no field |
+
+3 つのフィールド (`model.params` の Fixed-mode hyper-params / `inner_valid` / `re_tune`) は `TuningOverrides` に対応場所が無いため、forced refactor では legacy `PUT /config` に残るか、`TuningOverrides` の data contract を拡張する必要がある。
+
+#### Purpose
+
+P-0109 follow-up として、Tune タブ write path の正しい final shape を確定する。本 Proposal は **どちらの option を採用するかを Decision で確定** し、確定 option に従って実装 PR を起票する Change Gate kickoff。
+
+#### Options
+
+##### (A) 2 経路許容 + acceptance criterion #1 reword（推奨）
+
+- `n_trials` / `timeout` / `direction` / `evaluation_metrics` / `space` の 5 フィールドは `PUT /config/tuning-overrides` (sparse REPLACE) へ route
+- `model.params` (Fixed-mode hyper-params) / `inner_valid` / `re_tune` の 3 フィールドは引き続き legacy `PUT /config` へ route
+- `#528` acceptance criterion #1 を以下に reword:
+  > Tune-tab 内の **tuning-field の write**（`n_trials`/`timeout`/`direction`/`evaluation_metrics`/`space`）は legacy `PUT /api/workspace/config` を **invoke しない**。`model.params` / `inner_valid` / `re_tune` 等の非-tuning フィールドは引き続き legacy 経路を経由する
+- 結果として **Fixed↔Range row-mode toggle** は `space` 変更分の 1 `PUT /config/tuning-overrides` + `model.params` 変更分の 1 legacy `PUT /config` を発行する。surface clarity は部分的に妥協されるが、`useConfigWriteFunnel` の coalesce が同 frame の 2 PUT を維持するため、ユーザー観点での体験は変わらない
+- 実装 blast radius: 中。frontend mutation hook の split + e2e regression spec の write-budget チェック
+- merit: 短期で実現可能、`TuningOverrides` schema は touch しない、Change Gate を再起票しなくて済む
+- demerit: legacy 経路が永続化、surface clarity は半端、将来 `STUDIO_FORMAT_VERSION` v3 bump で `tuning_overrides` を on-disk 一級にした際に再 refactor が必要
+
+##### (B) `TuningOverrides` schema 拡張 → 全フィールド routable に
+
+- `TuningOverrides` に `model_params: dict[str, Any] | None`、`inner_valid: InnerValid | None`、`re_tune: ReTuneConfig | None` を追加
+- `BackendCore.compute_effective_tuning` の戻り値型 `TuningConfig` にも対応フィールドを追加
+- `LizyMLAdapter.compute_effective_tuning` を `model.params` / `inner_valid` / `re_tune` の merge にも対応させる
+- `absorb_legacy_tuning` / `get_legacy_config_view` shim を 3 フィールド分拡張
+- `#528` acceptance criterion #1 は文字通り達成可能
+- 実装 blast radius: 大。Protocol 拡張 + adapter 実装 + shim 拡張 + frontend + e2e
+- merit: surface clarity が完全。legacy `PUT /config` から Tune タブ write が完全に独立
+- demerit: data-contract change のため Change Gate 対象（本 Proposal の Decision 後に **別 Proposal P-0112 を起票**）、`model_params` の Fixed-mode vs Range-mode の semantic を `TuningOverrides` 内でどう区別するか追加設計が必要、`STUDIO_FORMAT_VERSION` 2 → 3 bump の trigger になる可能性
+
+##### (C, rejected): 何もしない（descope 確定）
+
+- `#528` を close、Tune タブ write path は legacy `PUT /config` 経由のまま据え置き
+- merit: 工数ゼロ
+- demerit: 「surface clarity」「schema-bump readiness」「smaller request bodies」という #528 の元の motivation がそのまま放置される。直近の v0.6.x シリーズで Target-select バグクラスタが発生したように、legacy 経由の write が複合 surface を持ち続けると同型バグが再発する余地が残る
+- **棄却**: motivation を放置せず Option A or B のいずれかで前進する
+
+#### Recommendation
+
+**Option A (2 経路許容 + criterion reword)** を推奨。理由:
+
+- 短期で Tune タブ tuning-field の write が legacy から離脱、`#528` の main objective（surface clarity）の 60% を達成
+- `TuningOverrides` schema 拡張は P-0109 の design 上、`STUDIO_FORMAT_VERSION` bump を伴う大規模変更とセットになる（Option B は v0.7+ 候補に retry）
+- v0.6.x シリーズで legacy `PUT /config` 由来の bug クラスタを segment 分離できる（tuning-field と非 tuning-field の bug を独立に観測可能）
+
+Option B は v0.7+ で `STUDIO_FORMAT_VERSION` 2 → 3 bump タイミングで再評価する。その時点で `tuning_overrides` を on-disk 一級にするので、自然に shim 拡張のコストが正当化される。
+
+#### Acceptance Criteria（Option A 採用時）
+
+- [ ] Tune タブの `n_trials` / `timeout` / `direction` / `evaluation_metrics` / `space` 変更が `PUT /api/workspace/config/tuning-overrides` を **必ず** invoke する（regression e2e spec で lock）
+- [ ] 同 Tune タブの `model.params` / `inner_valid` / `re_tune` 変更は **引き続き** legacy `PUT /api/workspace/config` を invoke する（regression spec で同様に lock — 既存挙動の維持を明示）
+- [ ] `useTuningSnapshot` の "Modified" badge は両経路の write 後に正しく更新される（cache invalidation を `useConfigWriteFunnel` で coalesce）
+- [ ] `absorb_legacy_tuning` / `get_legacy_config_view` shim は touch しない（既存テスト緑のまま）
+- [ ] PR-5 の e2e spec `workspace-tune-firstmount.spec.ts`（first-mount invariant — no spurious `tuning.optuna.space` PUT on mount）が緑
+- [ ] 新 e2e spec `workspace-tune-write-routing.spec.ts` で「row-mode toggle が `PUT /config/tuning-overrides` + legacy `PUT /config` の 2 PUT を発行する」ことを assert（write budget = 2、`useConfigWriteFunnel` coalesce 後）
+
+#### Decision
+
+- 2026-05-23 **Proposal-only kickoff** — Option A / B 確定後に実装 PR を起票。Option A は本 Proposal 内で acceptance criterion を完結できる（追加 Proposal 不要）。Option B は data-contract 変更を伴うため別途 P-0112 を起票する必要あり。**reviewer の Option 選好を待つ**。Change Gate 通過まで実装着手不可。
+
+#### Open Questions
+
+- **Q1**: Option A / B のどちらを採用するか？ **推奨**: A
+- **Q2 (Option A 採用時)**: row-mode toggle 由来の 2 PUT は `useConfigWriteFunnel` の coalesce 後に同 frame で発行されるが、両 PUT が同期しないと "Modified" badge が flicker する可能性。badge の cache invalidation を 1 つの effect で gate するか、両 mutation の `onSettled` で個別に invalidate するか？
+- **Q3 (Option A 採用時)**: 既存の `useConfigWriteFunnel` の `coalesceByReason` は同種の reason (`patch` / `replace`) しか merge できない。2 経路（legacy `PUT /config` と `PUT /config/tuning-overrides`）への分離 mutation を funnel 内でどう表現するか — 別 reason として並列に enqueue するか、別 funnel instance を持つか？
