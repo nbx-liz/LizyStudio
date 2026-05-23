@@ -2656,3 +2656,69 @@ class TestAssertInvT3:
         snapshot = _copy.deepcopy(config)
         _assert_inv_t3(config, backend)
         assert config == snapshot
+
+
+# ---------------------------------------------------------------------------
+# Issue #527: _assert_inv_t3 is invoked from run_tune
+# ---------------------------------------------------------------------------
+
+
+def test_run_tune_invokes_assert_inv_t3(
+    job_store: JobStore,
+    sample_data_ref: DataRef,
+    sample_df: pd.DataFrame,
+    mock_backend: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #527 acceptance: ``run_tune`` must invoke ``_assert_inv_t3``.
+
+    The helper was disabled in P-0109 PR-6b while a ``tune-resume.spec.ts``
+    timing race was investigated, then re-enabled after the spec was
+    hardened (n_trials 4 -> 8). This test pins the invocation so a
+    future refactor cannot silently drop it again.
+
+    The subprocess path (``_run_subprocess_job``) is covered transitively
+    because the subprocess re-invokes ``run_tune`` in the child process;
+    the same in-process invocation point is exercised on both paths.
+    """
+    import lizystudio.services.training as training_module
+
+    calls: list[tuple[dict[str, object], object, str | None]] = []
+
+    def _spy(
+        tune_config: dict[str, object],
+        backend: object,
+        *,
+        job_id: str | None = None,
+    ) -> None:
+        calls.append((tune_config, backend, job_id))
+
+    monkeypatch.setattr(training_module, "_assert_inv_t3", _spy)
+
+    config = {
+        "task": "binary",
+        "model": {"name": "lgbm", "params": {"n_estimators": 100}},
+    }
+    job = job_store.create(
+        backend_name="lizyml",
+        config=config,
+        data_ref=sample_data_ref,
+        job_type="tune",
+    )
+    run_tune(
+        job=job,
+        job_store=job_store,
+        backend=mock_backend,
+        config=config,
+        dataframe=sample_df,
+    )
+
+    assert len(calls) == 1, (
+        f"_assert_inv_t3 must be called exactly once per run_tune; got {len(calls)}"
+    )
+    tune_config_arg, backend_arg, job_id_arg = calls[0]
+    assert backend_arg is mock_backend
+    assert job_id_arg == job.job_id
+    # The argument is the post-_prepare_tune_config dict, so it carries
+    # the task forwarded from the original config.
+    assert tune_config_arg.get("task") == "binary"

@@ -13,10 +13,13 @@ const API = "http://localhost:8501/api";
  * branch, subprocess parent finally, JobStore primitives, API
  * validation) surfaces as a black-box failure.
  *
- * The spec uses a small-but-realistic Tune (n_trials=4) so the worker
+ * The spec uses a small-but-realistic Tune (n_trials=8) so the worker
  * is alive long enough for /pause to land mid-flight. Each trial in
  * lizyml is dominated by k-fold CV on 100 rows, so total walltime is
- * ~10-20 s on CI.
+ * ~20-30 s on CI. The wider window (8 vs 4) absorbs the
+ * ~tens-of-ms latency added by ``run_tune``'s ``_assert_inv_t3``
+ * warn-only helper (Issue #527 / P-0109 PR-6b) so the assertion below
+ * does not race the trial loop.
  *
  * Why this lives in Playwright instead of pytest: the only reliable
  * way to exercise the full pause flow is through the public HTTP API
@@ -97,14 +100,17 @@ test.describe("Tune pause / unpause flow (P-0099 v3-20g)", () => {
     expect(defaultsRes.status()).toBe(200);
     const defaults = await defaultsRes.json();
 
-    // n_trials=4 keeps the test under the 3-minute budget while still
+    // n_trials=8 keeps the test under the 3-minute budget while still
     // giving the worker enough wall-clock to be in "running" when the
-    // pause request lands.
+    // pause request lands. Issue #527: this was previously 4 but the
+    // ``_assert_inv_t3`` warn-only helper's ~tens-of-ms latency raced
+    // the pause-observation timing; doubling the trial count makes the
+    // helper's setup cost negligible relative to the trial-loop window.
     const config = {
       ...defaults,
       tuning: {
         optuna: {
-          params: { n_trials: 4, timeout: null },
+          params: { n_trials: 8, timeout: null },
           space: {
             learning_rate: { type: "float", low: 0.001, high: 0.3, log: true },
           },
@@ -181,8 +187,8 @@ test.describe("Tune pause / unpause flow (P-0099 v3-20g)", () => {
     expect(Array.isArray(trials)).toBe(true);
     // INV-4: total trials over the pause/resume round-trip equals
     // n_trials. If lizyml had silently restarted the study instead of
-    // re-attaching, we'd see > 4 (duplicates) or < 4 (lost trials).
-    expect(trials.length).toBe(4);
+    // re-attaching, we'd see > 8 (duplicates) or < 8 (lost trials).
+    expect(trials.length).toBe(8);
   });
 
   test("API: pause on fit job is rejected with JOB_NOT_PAUSEABLE", async ({

@@ -268,14 +268,14 @@ def run_tune(
 ) -> Job:
     """Execute a tune job: tune -> auto-fit with best params (H-0002 B)."""
     tune_config = _prepare_tune_config(config)
-    # P-0109 PR-6b: warn-only INV-T3 assertion deferred to a follow-up
-    # while a CI regression in ``tune-resume.spec.ts`` is investigated.
-    # The Protocol semantic refinement to
-    # ``compute_effective_tuning`` already enforces INV-T3 at the SSOT;
-    # this read-only check would only surface drift from non-API
-    # callers (raw YAML import, direct curl). The function is retained
-    # for future re-enablement once the e2e timing interaction is
-    # understood.
+    # P-0109 PR-6b / Issue #527: warn-only INV-T3 assertion re-enabled
+    # after hardening ``tune-resume.spec.ts`` (n_trials 4 -> 8 widens the
+    # pause-landing wall-clock window so the helper's ~tens-of-ms
+    # latency no longer races the test's pause observation). The helper
+    # is read-only and warn-only -- ``backend.compute_effective_tuning``
+    # is the SSOT, and this check surfaces drift from non-API callers
+    # (raw YAML import, direct curl, stale persisted state).
+    _assert_inv_t3(tune_config, backend, job_id=job.job_id)
     re_tune = _extract_re_tune(config)
     # H-0062: checkpoint directory for incremental trial persistence.
     checkpoint_dir = job_store.job_dir(job.job_id)
