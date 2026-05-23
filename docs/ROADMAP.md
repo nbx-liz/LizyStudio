@@ -6,7 +6,7 @@
 - このファイルは **横串インデックス** であり、詳細はリンク先で確認すること。
 - 着手する際は HISTORY に Proposal を起票（変更ゲート対象の場合）→ PLAN にフェーズ追加 → 実装、の順で進める。
 
-最終更新: 2026-05-23（**v0.6.2 release 済 (2026-05-17, PyPI lizystudio==0.6.2)** + **v0.6.3 release prep 中** — メンテナンス + テスト品質 patch。#545 (Dependabot 4 PR 統合 + CVE overrides) + #537 (call-count assertion 監査 80 サイト + `tohavebeencalled-guard` CI) を develop に着地、挙動・API・format_version 変更なし。#528 は `TuningOverrides` スキーマと Issue 文面の齟齬で descope、P-0109 follow-up として再 spec 待ち。直近の Tier 1 next は **#527 (P-0109 follow-up)** / **#528 (要再spec)** / **#495** / 🔒 **#452-b**。次の節目候補は **v0.7+**: 第 2 backend (#403 残・#452-b 解禁トリガ)、Tailwind v4、P-0087 Phase 3、typed error 体系 (R-3.1〜R-3.3) など）
+最終更新: 2026-05-23（**v0.6.3 develop 着地、v0.6.x patch サイクル継続** — Wave 1 (#554 + #527 + #495) を 2026-05-23 中に完了: PR #555 で #554 (R-1.4 INV-4 violation, unpause 2× n_trials) を構造的に修正 + #527 `_assert_inv_t3` 再有効化を同 PR で同梱、#495 weekly stale-doc cron は PR #550 で shipped (manual close)。Wave 2 として **P-0110 (RFC 9457 Problem Details) / P-0111 (Tune-tab write path Option A)** の Decision を 2026-05-23 確定（実装は v0.7 release window で同時着地候補）。直近の Tier 1 next は **#538 (PUT_BUDGET 横展開)** / **#539 (mutation+PBT)** / 🔒 **#452-b** / 🔒 **#488 (Vite 8)**。次の節目候補は **v0.7.0**: P-0110 + P-0111 implementation + 第 2 backend (#403 残・#452-b 解禁トリガ) + Tailwind v4 + P-0087 Phase 3 + typed error 体系 (R-3.1〜R-3.3) など）
 
 ---
 
@@ -161,8 +161,8 @@
 - **P-0105**: Residuals plot に kind selector（#457）— 着地済
 - **P-0106**: metric 不適合判定を `BackendCore` capability の裏へ（Change Gate、#403）— 着地済（`BackendCore.get_incompatible_metrics`）。完全な 2nd-backend 移行は §3.3 後
 - **P-0109**: Tune 派生デフォルトの backend SSOT 化 + intent/effective 分離（Change Gate）— ✅ Approved & shipped (Option B, 2026-05-15〜2026-05-16, 全 9 PR 着地)。Tune タブ初回マウントで catalog defaults が Fixed 表示になるバグ（[2026-05-14 確認](HISTORY.md)）の根本治療が **PR-5 (#521) で構造的に解消**。`BackendCore.get_tuning_defaults` + `compute_effective_tuning` を Protocol に追加 (#517)、`LizyMLAdapter` 実装 (#518)、追加エンドポイント `GET /config/tuning-snapshot` / `PUT /config/tuning-overrides` (#519)、`WorkspaceState.tuning_overrides` 一級フィールド化 + INV-T6 snapshot 凍結 (#520)、frontend 3 useEffect 物理削除 + render-time fallbacks (#521)、docs reconcile + HISTORY Decision flip (#522)、`compute_effective_tuning` direction 派生 refine + `_prepare_tune_config` hardcoded `maximize_metrics` set 削除 (#523)、`useTuningSnapshot` hook + `SearchSpaceRow` "Modified" badge + `TASK_DEFAULT_METRICS` frontend 定数削除 + snapshot レスポンスへ `tuning_overrides` 追加 (#524)。Option B として実施しなかったもの: (a) `STUDIO_FORMAT_VERSION` 2 → 3 bump（on-disk `WorkspaceConfig.tuning` block は v2 シェイプのまま、`absorb_legacy_tuning` / `get_legacy_config_view` 双方向 shim で吸収）。残存フォローアップ: A-1 `_assert_inv_t3` 再有効化 = PR #551 着手中（Issue #527）、A-2 Tune タブ write path → **P-0111 follow-up Proposal として起票**（Issue #528 再 spec）。
-- **P-0110** (Proposal-only kickoff, 2026-05-23): silent 200 OK + `{saved: false}` envelope を RFC 9457 Problem Details (`application/problem+json` + 4xx) に置換する Change Gate kickoff（Issue #536）。frontend / backend / docs を v0.7.0 major bump で同 PR cutover (M-1) 推奨。実装着手は Decision 確定後。
-- **P-0111** (Proposal-only kickoff, 2026-05-23): Tune タブ write path → `PUT /config/tuning-overrides` (sparse) refactor の re-spec（Issue #528 follow-up）。`TuningOverrides` schema が `model.params` / `inner_valid` / `re_tune` を表現できないため original acceptance criterion #1 が実装不可。Option A (2 経路許容 + criterion reword) 推奨。Option B (schema 拡張) は v0.7+ `STUDIO_FORMAT_VERSION` bump タイミングで再評価。
+- **P-0110** (Approved 2026-05-23, awaiting v0.7 implementation window): silent 200 OK + `{saved: false}` envelope を RFC 9457 Problem Details (`application/problem+json` + 4xx) に置換する Change Gate（Issue #536）。**Decision 確定**: M-1 (single-PR cutover, v0.7.0 major bump) / `type: "about:blank"` / `errors` → `validation_errors` rename / 8 全 call-site 同時化。実装 PR は v0.6.x patch サイクル終了後に起票（`feat(api): adopt RFC 9457 Problem Details for workspace endpoints (P-0110)`）。
+- **P-0111** (Approved 2026-05-23, awaiting v0.7 implementation window): Tune タブ write path → `PUT /config/tuning-overrides` (sparse) refactor の re-spec（Issue #528 follow-up）。**Decision 確定**: Option A 採用 (2 経路許容 + criterion reword) / "Modified" badge は 1 effect で gate / `useConfigWriteFunnel.coalesceByReason` に `legacy_config` / `tuning_overrides` の 2 reason 並列 enqueue。Option B (schema 拡張) は v0.7+ `STUDIO_FORMAT_VERSION` bump タイミングで再評価。実装 PR は v0.7 release window で P-0110 と同時着地候補 (`refactor(frontend): route Tune-tab tuning-field writes through PUT /config/tuning-overrides (P-0111)`)。
 
 ### 3.0 P-0094 (済)：pytest-benchmark performance baseline（Issue #27 (a)）
 
@@ -302,10 +302,10 @@ Wave 6 完了後の Open Issue は **4 件**（#451 / #453 は 2026-05-13 close 
 
 ### Tier 1：直近の着手候補（ROI 順）
 
-1. **#527 (`_assert_inv_t3` 再有効化)** — A-1 / P-0109 follow-up。`tune-resume.spec.ts:185` の pause-timing race と相互作用、helper 自体は #523 で残存。再有効化条件: `n_trials` 拡大 or pause 観測の堅牢化。tier-3/low、機能影響なし
-2. **#528 (Tune タブ write path → sparse overrides)** — A-2 / P-0109 follow-up。legacy `PUT /config` → 新 `PUT /config/tuning-overrides` (sparse REPLACE) へ移行。refactor only、`absorb_legacy_tuning` shim 依存解消。tier-3/low
-3. **#495** — #456 L5: weekly stale-doc audit cron（`scripts/audit_stale_docs.py` + `.github/workflows/audit-stale-docs.yml` cron weekly、tracking issue 自動更新。tier-3/low、deferred）
-4. **#452-b `lifecycle_mixin.tune` 分割** — 🔒 2nd-adapter 議論（§3.3）後に解禁。それまで着手しない
+1. **#538 PUT_BUDGET 横展開** — pilot 4 spec (#553) で landed 済 helper (`request-budget.ts`) を残り surface に templatize（CV strategy / Folds spinbutton / Tab switch / Data-load 等）。tier-4/medium、機械的展開フェーズ。次に着手しやすい
+2. **#539 mutation + property-based testing** — `mutmut` + `hypothesis` + `stryker-js` + `fast-check` を `useConfigWriteFunnel` / `JobStore` 限定で CI 導入。tier-4/low、探索的
+3. **#452-b `lifecycle_mixin.tune` 分割** — 🔒 2nd-adapter 議論（§3.3）後に解禁。それまで着手しない
+4. **#488 Vite 8 移行** — 🔒 Rolldown 移行 / `/api/ws` proxy regression 解消後に着手
 
 > ~~#529 / #530 / #531 (Target-select 3-issue cluster)~~ ✅ 完了 (PR #532 / #533、2026-05-16〜17 着地。v0.6.2 でリリース)。Target click あたり PUT count 9 → 2、`saved=False` 0 件、`GET /split-preview` 400 解消。修正: (1) `MetricsChips` task-change useEffect を `configSeeded` prop で gate + `buildMergedConfig` に evaluation.metrics seed (#529); (2) `coalesceByReason` を patch+patch -> `kind: "patch-many"` merge に拡張 + `ConfigForm` auto-reset を `funnel.isFlushing()` で gate (#530); (3) #531 は #529 の symptom で auto-resolve。e2e regression spec `workspace-target-select-puts.spec.ts` で lock
 >
