@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import * as fs from "node:fs";
 import { isMobileProject } from "./helpers/mobile";
 import { dismissOnboarding } from "./helpers/onboarding";
+import { expectBudget, installFetchRecorder } from "./helpers/request-budget";
 
 /**
  * Issue #529 regression spec — partial-body PUTs from MetricsChips.
@@ -23,7 +24,12 @@ import { dismissOnboarding } from "./helpers/onboarding";
  * the UiSchema's task-keyed eval registry. After both changes, the
  * partial PUTs never fire and split-preview returns 200.
  *
- * This spec intercepts every `PUT /api/workspace/config` and asserts:
+ * This spec uses ``installFetchRecorder`` + ``expectBudget`` from
+ * ``helpers/request-budget.ts`` (Issue #538 helper extraction) so the
+ * pattern is reusable for the other user-action budgets the issue
+ * templates.
+ *
+ * Invariants asserted:
  *   1. No PUT body has only `{evaluation}` at top level (the partial
  *      signature). The body must contain at minimum `config_version`,
  *      `task`, `split`, `data` — the seed config's invariant keys.
@@ -75,42 +81,11 @@ test.describe("Target selection — no partial PUT, no split-preview 400 (Issue 
     // previous test masks the bug.
     await request.post("/api/workspace/reset");
 
-    // Set up interception BEFORE driving any UI so we observe every
+    // Install recorder BEFORE driving any UI so we observe every
     // PUT /config from page load onward — though the partial-PUT bug
     // fires only after Target is picked, capturing the full session
     // gives diagnostic context if the test fails.
-    const allPuts: Array<{
-      keys: string[];
-      hasConfigVersion: boolean;
-      hasTask: boolean;
-      hasSplit: boolean;
-      bodySize: number;
-    }> = [];
-    page.on("request", (req) => {
-      if (req.method() !== "PUT") return;
-      if (!req.url().endsWith("/api/workspace/config")) return;
-      try {
-        const body = req.postDataJSON() as Record<string, unknown>;
-        const keys = Object.keys(body).sort();
-        allPuts.push({
-          keys,
-          hasConfigVersion: "config_version" in body,
-          hasTask: "task" in body,
-          hasSplit: "split" in body,
-          bodySize: req.postData()?.length ?? 0,
-        });
-      } catch {
-        // Ignore non-JSON bodies — none exist on this endpoint.
-      }
-    });
-
-    // Watch for split-preview 400 responses (Bug C / #531 — symptom of
-    // this bug). A passing run should see 200s only.
-    const splitPreview400s: number[] = [];
-    page.on("response", (res) => {
-      if (!res.url().endsWith("/api/workspace/data/split-preview")) return;
-      if (res.status() === 400) splitPreview400s.push(res.status());
-    });
+    const recorder = installFetchRecorder(page);
 
     // Drive the UI flow. Inlining the seed instead of using
     // `seedUiWorkspace` because that helper picks `target="target"` and
@@ -129,7 +104,10 @@ test.describe("Target selection — no partial PUT, no split-preview 400 (Issue 
     });
 
     // Snapshot PUTs BEFORE the Target click so post-click delta is clean.
-    const putsBeforeTarget = allPuts.length;
+    const sinceTargetClick = recorder.snapshot({
+      method: "PUT",
+      urlPattern: "/api/workspace/config",
+    });
 
     const combo = page.getByRole("combobox", { name: /target column/i });
     await expect(combo).toBeEnabled({ timeout: 15_000 });
@@ -140,15 +118,17 @@ test.describe("Target selection — no partial PUT, no split-preview 400 (Issue 
     // 200 ms convergence; CI machines vary.
     await page.waitForTimeout(3000);
 
-    const targetPuts = allPuts.slice(putsBeforeTarget);
+    const targetPuts = sinceTargetClick();
 
     // Invariant 1: NO partial-body PUTs. A partial body has only
     // `evaluation` (or a tiny subset) as the top-level key set. Every
     // PUT must carry the seed config invariants (config_version, task,
     // split).
-    const partials = targetPuts.filter(
-      (p) => !p.hasConfigVersion || !p.hasTask || !p.hasSplit,
-    );
+    const partials = targetPuts.filter((p) => {
+      const body = p.bodyJson;
+      if (!body) return true;
+      return !("config_version" in body) || !("task" in body) || !("split" in body);
+    });
     expect(
       partials,
       `Issue #529 regression — partial-body PUT(s) observed.
@@ -156,11 +136,22 @@ test.describe("Target selection — no partial PUT, no split-preview 400 (Issue 
         `These bodies lack config_version/task/split and the backend ` +
         `rejects them with saved=false, blocking=5. Captured:
 ` +
-        partials.map((p) => `  keys=${JSON.stringify(p.keys)}`).join("\n"),
+        partials
+          .map(
+            (p) =>
+              `  keys=${
+                p.bodyJson ? JSON.stringify(Object.keys(p.bodyJson).sort()) : "(no body)"
+              }`,
+          )
+          .join("\n"),
     ).toHaveLength(0);
 
     // Invariant 2: split-preview never 400'd. Bug C disappears when
     // Bug A is fixed because ws.config is always populated.
+    const splitPreview400s = recorder.matchingResponses({
+      urlPattern: "/api/workspace/data/split-preview",
+      status: 400,
+    });
     expect(
       splitPreview400s,
       `Issue #531 regression — GET /split-preview returned 400 ` +
@@ -183,5 +174,16 @@ test.describe("Target selection — no partial PUT, no split-preview 400 (Issue 
         `that derives state from cache and emits a write, or a regression ` +
         `in coalesceByReason / the isFlushing gate.`,
     ).toBeLessThanOrEqual(PUT_BUDGET);
+
+    // Bonus: smoke-test the helper's expectBudget on the same data so
+    // a future regression in either the helper or the underlying
+    // observer surfaces immediately. Same threshold; redundant by
+    // design.
+    expectBudget(recorder, {
+      method: "PUT",
+      urlPattern: "/api/workspace/config",
+      max: PUT_BUDGET + 1, // +1 because expectBudget counts session-wide, not just post-snapshot
+      label: "Target-select click (session-wide PUT count)",
+    });
   });
 });

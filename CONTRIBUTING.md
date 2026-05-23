@@ -132,6 +132,45 @@ If you add a new Playwright project, also reference it from a workflow (or
 keep its goldens out of git); if you retire one, delete its goldens in the
 same PR — regenerate later via `pnpm test:e2e:update` if it returns.
 
+### E2E request-budget assertions (Issue #538)
+
+Storm / spam / flood-class bugs (v0.6.2 Target-select cluster #529 / #530
+/ #531, polling storm #339, replay loop #341) slip past tests that only
+assert eventual *state*. To detect them, **every E2E spec exercising a
+user action should include at least one request-budget assertion**
+counting HTTP calls per click / submit / load.
+
+Use the helpers in
+[`frontend/tests/e2e/helpers/request-budget.ts`](frontend/tests/e2e/helpers/request-budget.ts):
+
+```ts
+import { installFetchRecorder, expectBudget } from "./helpers/request-budget";
+
+const recorder = installFetchRecorder(page);
+// ...drive UI to "ready" state...
+const sinceClick = recorder.snapshot({
+  method: "PUT",
+  urlPattern: "/api/workspace/config",
+});
+await page.getByRole("combobox", { name: /target/i }).click();
+await page.getByRole("option", { name: "survived" }).click();
+await page.waitForTimeout(3000);
+expect(sinceClick().length).toBeLessThanOrEqual(3);  // budget with rationale comment
+```
+
+Rules:
+
+- Budget values must be justified in a code comment citing a measured
+  baseline or a related Issue (see `workspace-target-select-puts.spec.ts`
+  for the canonical "history: 9 → 4 → 3 → 2" form).
+- Failing budget → investigate the *cause* and either fix the regression
+  or file a follow-up bug. **Never relax the budget to make a failing
+  spec pass.**
+
+Surfaces covered today: target-select, tab-switch, data-load via Path,
+CV strategy change. Folds increment / Fit submit / Tune submit / Tune
+resume / Inference run are follow-ups under #538.
+
 ## Test fixtures
 
 When adding a new transform, parser, or schema mapper, the **first test case
