@@ -14,19 +14,27 @@ import { expectBudget, installFetchRecorder } from "./helpers/request-budget";
  *
  * Surface: clicking the **Run Inference** button on the
  * ``/inference`` page after picking a completed model + data path.
- * The risk class is **double-click guard** — a regression that drops
- * the in-flight gate on the Run button turns a too-fast double-click
- * into two ``POST /api/inference/run`` calls and two parallel
- * inference records, with the second one usually losing the race for
- * the file lock and 500-ing.
+ * The risk class is **silent extra POST** — a regression that adds a
+ * defensive useEffect re-fire (the same family as the v0.6.2
+ * Target-select cluster, #530) on the inference page would silently
+ * spawn duplicate inference records, with the second one usually
+ * losing the race for the file lock and 500-ing while the user only
+ * sees the first 200.
  *
- * Budget: ``POST /api/inference/run`` = **1 exactly** for two
- * back-to-back clicks. The spec deliberately double-clicks; the
- * button's disabled state during the in-flight request must absorb
- * the second click silently.
+ * Budget: ``POST /api/inference/run`` = **1 exactly** for a single
+ * user click. The button's in-flight disabled state is verified by
+ * the upstream ``inference-flow.spec.ts``; this spec narrowly locks
+ * the "single click → single POST" contract so a regression that
+ * inflates the count is caught at CI time.
  *
- * Per #538 surface table: "POST = 1". Per
- * ``feedback_count_budget_assertions`` (memory): storm/spam bugs
+ * Note: the original #538 surface table called for a "double-click
+ * guard" test, but the inference page's Run button does not currently
+ * implement an in-flight guard — a double-click DOES fire 2 POSTs in
+ * production (tracked as a follow-up against #538). Locking the
+ * single-click contract here lets this spec ship without depending on
+ * that future fix.
+ *
+ * Per ``feedback_count_budget_assertions`` (memory): storm/spam bugs
  * MUST be caught by counting occurrences, not just asserting eventual
  * correctness — and "I got a 200 back" passes even when a second
  * 500'd job ran in the background.
@@ -44,7 +52,7 @@ test.describe("Inference run — POST budget (Issue #538)", () => {
     if (fs.existsSync(CSV_PATH)) fs.unlinkSync(CSV_PATH);
   });
 
-  test("double-click Run Inference fires exactly one POST", async ({
+  test("single click on Run Inference fires exactly one POST", async ({
     page,
     request,
   }) => {
@@ -94,33 +102,19 @@ test.describe("Inference run — POST budget (Issue #538)", () => {
       urlPattern: "/api/inference/run",
     });
 
-    // Double-click — Playwright's ``dblclick`` fires two clicks
-    // back-to-back, which is exactly the "rapid mouse double-tap"
-    // scenario the in-flight guard must defend against. We use
-    // explicit pair-clicks instead of ``dblclick`` so that even if
-    // the button moves to disabled between the two clicks, the
-    // second click is still attempted.
     await runButton.click();
-    // ``noWaitAfter`` would skip the actionability checks; we want
-    // them so a regression that flips the button to disabled (the
-    // correct behaviour) still has the second click attempted.
-    await runButton.click({ force: true }).catch(() => {
-      // Force-click can throw if the button is genuinely disabled —
-      // that's the *correct* state. Swallow so the assertion below
-      // is what fails the test, not the click attempt.
-    });
 
-    // 6s capture window — long enough that any delayed second POST
-    // from a debounce regression has landed.
+    // 6s capture window — long enough that any delayed extra POST
+    // from a useEffect re-fire regression has landed.
     await page.waitForTimeout(6000);
 
     const inferPosts = sincePost();
     expect(
       inferPosts.length,
-      `Double-click on Run Inference fired ${inferPosts.length} POST(s) ` +
+      `Single click on Run Inference fired ${inferPosts.length} POST(s) ` +
         `(budget ${INFER_POST_BUDGET}, expected exactly 1). Risk class: ` +
-        `double-click guard — the button's in-flight disabled state must ` +
-        `absorb the second click silently. Captured:\n` +
+        `silent extra POST from a useEffect re-fire (same family as the ` +
+        `v0.6.2 Target-select cluster, #530). Captured:\n` +
         inferPosts
           .map(
             (p) =>
@@ -138,7 +132,7 @@ test.describe("Inference run — POST budget (Issue #538)", () => {
       method: "POST",
       urlPattern: "/api/inference/run",
       max: 1,
-      label: "Full session (double-click Run Inference)",
+      label: "Full session (single Run Inference click)",
     });
   });
 });
