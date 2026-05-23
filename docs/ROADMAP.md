@@ -6,7 +6,7 @@
 - このファイルは **横串インデックス** であり、詳細はリンク先で確認すること。
 - 着手する際は HISTORY に Proposal を起票（変更ゲート対象の場合）→ PLAN にフェーズ追加 → 実装、の順で進める。
 
-最終更新: 2026-05-23（**v0.6.3 develop 着地、v0.6.x patch サイクル継続** — Wave 1 (#554 + #527 + #495) を 2026-05-23 中に完了: PR #555 で #554 (R-1.4 INV-4 violation, unpause 2× n_trials) を構造的に修正 + #527 `_assert_inv_t3` 再有効化を同 PR で同梱、#495 weekly stale-doc cron は PR #550 で shipped (manual close)。Wave 2 として **P-0110 (RFC 9457 Problem Details) / P-0111 (Tune-tab write path Option A)** の Decision を 2026-05-23 確定（実装は v0.7 release window で同時着地候補）。直近の Tier 1 next は **#538 (PUT_BUDGET 横展開)** / **#539 (mutation+PBT)** / 🔒 **#452-b** / 🔒 **#488 (Vite 8)**。次の節目候補は **v0.7.0**: P-0110 + P-0111 implementation + 第 2 backend (#403 残・#452-b 解禁トリガ) + Tailwind v4 + P-0087 Phase 3 + typed error 体系 (R-3.1〜R-3.3) など）
+最終更新: 2026-05-24（**v0.6.4 release 済 (2026-05-23, PyPI `lizystudio==0.6.4`)** — bug-fix + test-infrastructure patch。bundles: #555 (#554 R-1.4 unpause INV-4 fix + #527 `_assert_inv_t3` re-enable), #560 (#559 inference in-flight guard), #558 (#538 PUT_BUDGET fan-out 8/8 surfaces), #561 (#539 mutation+PBT infra), #557 (paths-filter Phase 1), #556 (P-0110/P-0111 Decisions)。挙動・API・format_version 変更なし、`STUDIO_FORMAT_VERSION` は 2 維持。直近の Tier 1 next は v0.7.0 release window 着手判断（**P-0110 RFC 9457 + P-0111 Tune-tab write path** の同 release 内同時実装が承認済）。その他の open issue は 🔒 **#452-b** (2nd-adapter gated) / 🔒 **#488** (Vite Rolldown gated)）
 
 ---
 
@@ -108,6 +108,13 @@
 
 | 完了日 | ID | タイトル | 主要 PR |
 |---|---|---|---|
+| 2026-05-23 | **v0.6.4 release** | Bug-fix + test-infrastructure patch — R-1.4 unpause INV-4 (`run_tune(resume_from_existing_study=True)` + remaining math) + inference double-click guard (`useRef` in-flight) + PUT_BUDGET 8/8 surfaces + mutation + PBT pilots + paths-filter Phase 1 + P-0110/P-0111 Decisions | #555 / #558 / #560 / #561 / #557 / #556 / #562 / #563 (release merge) |
+| 2026-05-23 | #554 (R-1.4 INV-4) + #527 | `POST /jobs/{id}/unpause` was running 2× n_trials silently since v0.5.0; fix adds `resume_from_existing_study` flag + skip-tune-when-full path. `_assert_inv_t3` re-enabled. | #555 |
+| 2026-05-23 | #559 inference guard | `mutation.isPending` is React state (lagged DOM); synchronous `inFlightRef` absorbs back-to-back clicks in same event-loop tick. | #560 |
+| 2026-05-23 | #538 Phase 2 (PUT_BUDGET) | Folds spinbutton / Fit submit / Tune submit / Inference run specs landed; 8 of 8 surfaces from #538 table now lock request counts. | #558 |
+| 2026-05-23 | #539 (mutation + PBT infra) | `hypothesis` + `fast-check` pilots for JobStore + useConfigWriteFunnel; `mutmut` + `stryker-js` configs running nightly non-blocking. fast-check found a real path-prefix edge case on first run. | #561 |
+| 2026-05-23 | #557 (paths-filter Phase 1) | `dorny/paths-filter` gates 3 non-required jobs on relevant area; docs-only PRs skip them (verified via chore PR #562). | #557 |
+| 2026-05-23 | P-0110 + P-0111 Decisions | M-1 single-PR cutover + about:blank URI + `errors`→`validation_errors` rename for P-0110; Option A 2-path tolerant + criterion reword for P-0111. Implementation deferred to v0.7.0 release window. | #556 |
 | 2026-05-13 | Wave 6.4 (#451) | `services/jobs.py` (1062→522 行) を 4 module に分割 — `JobMetadataStore` / `ActiveJobSlot` / `JobControlFlags` / `JobLineage` + thin orchestrator façade。backend 最後の god-class 解消（"C-level closing chapter"） | #499 / #500 / #501 / #502 / #503 |
 | 2026-05-13 | Wave 6.5 (#453) + 6.3-a (#452) | BLUEPRINT / arch-as-implemented / v0.4-business-readiness / ROADMAP を v0.5.0 state に reconcile (#497) + `subprocess_runner.run_job_in_subprocess` を helper 分割 (#498) | #497 / #498 |
 | 2026-05-12 | Wave 6.1-6.3 (#403/#456/#452) | metric-compat を `BackendCore` capability の裏へ (P-0106) + stray-file gate + orphan-golden gate + `workspace_reset` / `_run_job_core` の helper 分割 | #490 / #491 / #492 / #493 / #494 |
@@ -302,8 +309,8 @@ Wave 6 完了後の Open Issue は **4 件**（#451 / #453 は 2026-05-13 close 
 
 ### Tier 1：直近の着手候補（ROI 順）
 
-1. **#538 PUT_BUDGET 横展開** — pilot 4 spec (#553) で landed 済 helper (`request-budget.ts`) を残り surface に templatize（CV strategy / Folds spinbutton / Tab switch / Data-load 等）。tier-4/medium、機械的展開フェーズ。次に着手しやすい
-2. **#539 mutation + property-based testing** — `mutmut` + `hypothesis` + `stryker-js` + `fast-check` を `useConfigWriteFunnel` / `JobStore` 限定で CI 導入。tier-4/low、探索的
+1. **v0.7.0 release window kickoff** — P-0110 (RFC 9457 Problem Details) + P-0111 (Tune-tab write path Option A) の **同 release 内同時実装** が Decision 済。P-0110 は M-1 single-PR cutover (frontend + backend + docs + openapi-typescript regenerate 1 PR で揃え major bump)、P-0111 は Option A (2 経路許容 + criterion reword)。両者の Decision は HISTORY.md / Issue コメントに記録済、実装は cold start 可能。tier-4/medium-high
+2. **mutmut + stryker nightly baseline review** — #561 で導入した nightly mutation-test ジョブの初回 baseline が出たら、score < 70% のモジュールに per-module follow-up Issue を起票（issue #539 の "Out of Scope" に記載のフォロー）
 3. **#452-b `lifecycle_mixin.tune` 分割** — 🔒 2nd-adapter 議論（§3.3）後に解禁。それまで着手しない
 4. **#488 Vite 8 移行** — 🔒 Rolldown 移行 / `/api/ws` proxy regression 解消後に着手
 
