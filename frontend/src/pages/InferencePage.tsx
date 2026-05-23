@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { getErrorMessage } from "@/api/errors";
 import {
@@ -56,6 +56,16 @@ export function InferencePage() {
 
   // Run inference mutation
   const mutation = useRunInference();
+  // Issue #559: ``mutation.isPending`` is React state and only flips to
+  // true after the next render. A double-click within the same
+  // event-loop tick races past the DOM ``disabled`` update and fires
+  // two POSTs — discovered by ``inference-run-puts.spec.ts`` during
+  // #538. Track the in-flight state synchronously in a ref so the
+  // guard works inside one microtask, independent of React's render
+  // schedule. ``mutation.isPending`` is kept for the
+  // ``isRunning`` prop because the button still needs a visible
+  // disabled style.
+  const inFlightRef = useRef(false);
   const runInferenceAction = useCallback(
     (params: {
       dataPath: string;
@@ -64,6 +74,8 @@ export function InferencePage() {
       returnShap: boolean;
     }) => {
       if (!selectedJobId) return;
+      if (inFlightRef.current) return;
+      inFlightRef.current = true;
       mutation.mutate(
         {
           job_id: selectedJobId,
@@ -78,6 +90,9 @@ export function InferencePage() {
           },
           onError: (err) => {
             toast.error(`Inference failed: ${getErrorMessage(err)}`);
+          },
+          onSettled: () => {
+            inFlightRef.current = false;
           },
         },
       );
