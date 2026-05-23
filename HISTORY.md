@@ -4325,13 +4325,12 @@ Decision 時に M-1 または M-2 のいずれかを確定する。frontend は�
 #### Decision
 
 - 2026-05-23 **Proposal-only kickoff** — Approval / Migration plan (M-1 vs M-2) 確定後に実装 PR を起票する。実装は 1 PR で backend + frontend + docs + openapi 同時に揃える方針（M-1）を推奨案として提示。reviewer が M-2 を選好する場合は段階移行に再分割。Change Gate 通過まで実装着手不可。
-
-#### Open Questions
-
-- **Q1**: Migration plan は M-1（single-PR cutover）/ M-2（opt-in header）のどちらか？
-- **Q2**: `application/problem+json` の `type` URI は何にするか？（社内固定 URI、`https://lizystudio.dev/problems/validation-failed` 形式、または `about:blank` で済ませる）
-- **Q3**: 既存 `errors: []` shape の severity contract（P-0100 で確立）は **そのまま `errors[]` 配列に温存** で良いか？それとも RFC 9457 の `errors` 拡張メンバ規約に合わせて項目名を rename するか？
-- **Q4**: 同 PR で 422 化する対象は 2 endpoint (`PUT /config`, `POST /config/upload`) のみか、それとも残り 6 件の `if not blocking: ...` call-site も同時に揃えるか？ **A**: 同時推奨（リグレッション防止）— ただし reviewer 判断で分割可。
+- 2026-05-23 (later, same day) **APPROVED** with the following resolutions to Open Questions Q1–Q4:
+  - **Q1 → M-1 (Single-PR cutover)**: backend + frontend + docs + `openapi-typescript` regenerate を **1 PR** で揃え、**v0.7.0 major bump** でリリース。外部 CLI クライアントへの breaking はリリースノートで明示（frontend は内製のみが known caller のため実質的に limited）。
+  - **Q2 → `type: "about:blank"` (RFC 9457 default)**: 独自ドメイン採番 (`https://lizystudio.dev/problems/<code>`) や URN (`urn:lizystudio:problem:<code>`) は採用しない。Problem の識別子は `StudioError.code` 拡張メンバで提供し、`type` は最シンプルな default で済ませる。curl `--fail-with-body` / Datadog / Sentry の HTTP error tracking と自然に統合できる。
+  - **Q3 → `errors` を `validation_errors` に rename (RFC 9457 規約 align)**: P-0100 で確立した severity contract（`severity == "warning"` → 200 + body 同居、`severity == "error"` → 4xx）はそのまま温存するが、field name は RFC 9457 慣行に揃えるため `errors` → `validation_errors` に rename する。frontend / docs / `openapi-typescript` 由来の生成型を同 PR で同期させる。
+  - **Q4 → 8 全 call-site を同時に揃える**: 同 PR で 2 endpoint (`PUT /config`, `POST /config/upload`) + 残り 6 件の `if not blocking: ...` 同型 call-site (`L498/L610/L662/L675/L740/L760`) を一括で 422 化する。`silent 200 + saved=false` パターンを repo 内から完全に消す（リグレッション防止）。
+- 実装 PR は `feat(api): adopt RFC 9457 Problem Details for workspace endpoints (P-0110)` で起票し、`feat(*) / refactor(*) / docs(history)` 系列で commit 分割。実装着手は v0.7.0 release window のオープン後（v0.6.x の patch サイクル終了後）。
 
 ### P-0111: Tune-tab write path の sparse-overrides 経路 — `TuningOverrides` schema 拡張 vs 2-path 許容（P-0109 follow-up）
 
@@ -4426,9 +4425,8 @@ Option B は v0.7+ で `STUDIO_FORMAT_VERSION` 2 → 3 bump タイミングで�
 #### Decision
 
 - 2026-05-23 **Proposal-only kickoff** — Option A / B 確定後に実装 PR を起票。Option A は本 Proposal 内で acceptance criterion を完結できる（追加 Proposal 不要）。Option B は data-contract 変更を伴うため別途 P-0112 を起票する必要あり。**reviewer の Option 選好を待つ**。Change Gate 通過まで実装着手不可。
-
-#### Open Questions
-
-- **Q1**: Option A / B のどちらを採用するか？ **推奨**: A
-- **Q2 (Option A 採用時)**: row-mode toggle 由来の 2 PUT は `useConfigWriteFunnel` の coalesce 後に同 frame で発行されるが、両 PUT が同期しないと "Modified" badge が flicker する可能性。badge の cache invalidation を 1 つの effect で gate するか、両 mutation の `onSettled` で個別に invalidate するか？
-- **Q3 (Option A 採用時)**: 既存の `useConfigWriteFunnel` の `coalesceByReason` は同種の reason (`patch` / `replace`) しか merge できない。2 経路（legacy `PUT /config` と `PUT /config/tuning-overrides`）への分離 mutation を funnel 内でどう表現するか — 別 reason として並列に enqueue するか、別 funnel instance を持つか？
+- 2026-05-23 (later, same day) **APPROVED — Option A (2 経路許容 + criterion reword)** with the following resolutions to Open Questions Q1–Q3:
+  - **Q1 → Option A 採用**: `n_trials` / `timeout` / `direction` / `evaluation_metrics` / `space` の 5 フィールドは `PUT /config/tuning-overrides` (sparse REPLACE) へ route。`model.params` (Fixed-mode hyper-params) / `inner_valid` (#459) / `re_tune` の 3 フィールドは引き続き legacy `PUT /api/workspace/config` へ route。`#528` acceptance criterion #1 は本 Proposal 内の reword 済み文面で完結。Option B (schema 拡張) は v0.7+ `STUDIO_FORMAT_VERSION` 2 → 3 bump タイミングで再評価（その時点で `tuning_overrides` を on-disk 一級にする計画があるため、自然に shim 拡張のコストが正当化される）。
+  - **Q2 → 1 つの effect で gate**: row-mode toggle 末端で「両 mutation が `onSettled` 完了」を一括カウントし、その後に 1 回だけ `useTuningSnapshot.invalidate()` を trigger。badge は flicker しない。`useConfigWriteFunnel` 側に `onAllSettled` (両 reason の queue が drain した時点で 1 度発火) フックを追加する。両 mutation の `onSettled` 個別 invalidate は採用しない（同 frame で 2 度走ると stale state が一瞬見える）。
+  - **Q3 → 別 reason として並列に enqueue**: `useConfigWriteFunnel.coalesceByReason` の key 集合に `legacy_config` / `tuning_overrides` を追加し、同 funnel 内で 2 本の queue を並走させる。flush タイミングは両者共通 (同 frame バッチ)。既存 funnel の `isFlushing` gate ロジック + v0.6.2 で導入した `kind: "patch-many"` merge を reuse 可能。別 funnel instance は採用しない（flush タイミング同期 + cache invalidation 順序保証の追加コストが大きい）。
+- 実装 PR は `refactor(frontend): route Tune-tab tuning-field writes through PUT /config/tuning-overrides (P-0111)` で起票し、acceptance criteria に従って TDD 実装。実装着手の優先度は v0.6.x patch サイクル後の v0.7 準備期間、または v0.7.0 (P-0110 RFC 9457) と同一 release window で同時着地候補。
