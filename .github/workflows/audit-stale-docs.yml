@@ -1,0 +1,69 @@
+name: Stale-doc audit (#456 L5)
+
+# Runs ``scripts/audit_stale_docs.py`` weekly and either opens or updates
+# a single tracking Issue (titled "[audit] stale handoff/readiness docs
+# (auto-updated)") with the current list. Failure mode covered: M3 from
+# #456 -- rot of plan-class artefacts that no spec doc references.
+#
+# This workflow never fails the build on stale docs alone. The audit
+# output is informational; the maintainer reviews the tracking Issue
+# weekly and either deletes the doc or adds a reference from one of
+# the index files (BLUEPRINT / HISTORY / PLAN / ROADMAP / etc).
+
+on:
+  schedule:
+    - cron: "0 18 * * 0" # Sunday 03:00 JST (after Nightly @ 02:00 JST)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: develop
+          # ``git log -1 --format=%cI`` needs full history per file so the
+          # last-touched timestamp is accurate even for older docs.
+          fetch-depth: 0
+      - name: Run audit
+        id: audit
+        run: |
+          # Write the Markdown report to a file so we can both echo it
+          # to the action log and feed it to the issue body step. The
+          # script always exits 0; we never fail the build.
+          python3 scripts/audit_stale_docs.py --stale-days 30 > audit-report.md
+          cat audit-report.md
+      - name: Open or update tracking Issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_TITLE: "[audit] stale handoff/readiness docs (auto-updated)"
+        run: |
+          set -euo pipefail
+          # Find an existing open tracking issue by exact title match.
+          existing="$(
+            gh issue list \
+              --state open \
+              --search "in:title \"$ISSUE_TITLE\"" \
+              --json number,title \
+              --jq '.[] | select(.title == env.ISSUE_TITLE) | .number' \
+              | head -1
+          )"
+          # Append a footer with the run link so each refresh is traceable.
+          {
+            cat audit-report.md
+            echo ""
+            echo "---"
+            echo "_Last refreshed: $(date -u '+%Y-%m-%d %H:%M UTC') by [run ${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})._"
+          } > issue-body.md
+          if [ -z "$existing" ]; then
+            gh issue create \
+              --title "$ISSUE_TITLE" \
+              --body-file issue-body.md \
+              --label "tier-3,priority-low,area-ops"
+          else
+            gh issue edit "$existing" --body-file issue-body.md
+          fi
