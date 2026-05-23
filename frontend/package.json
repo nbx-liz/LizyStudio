@@ -24,7 +24,8 @@
     "build-storybook": "storybook build",
     "test:storybook": "test-storybook",
     "generate:api": "openapi-typescript http://localhost:8501/openapi.json -o src/api/generated/schema.d.ts",
-    "check:api-types": "bash scripts/check-api-types.sh"
+    "check:api-types": "bash scripts/check-api-types.sh",
+    "mutation:test": "stryker run"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.100.10",
@@ -53,6 +54,8 @@
     "@storybook/react": "^10.3.6",
     "@storybook/react-vite": "^10.3.6",
     "@storybook/test-runner": "^0.24.3",
+    "@stryker-mutator/core": "^9.6.1",
+    "@stryker-mutator/vitest-runner": "^9.6.1",
     "@tailwindcss/vite": "^4.3.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
@@ -64,6 +67,7 @@
     "@types/react-plotly.js": "^2.6.4",
     "@vitejs/plugin-react": "^5.2.0",
     "@vitest/coverage-istanbul": "^4.1.6",
+    "fast-check": "^4.8.0",
     "happy-dom": "^20.9.0",
     "msw": "^2.14.6",
     "openapi-typescript": "^7.13.0",
