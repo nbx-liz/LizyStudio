@@ -410,4 +410,62 @@ describe("InferencePage", () => {
       expect(capturedSetupProps.isRunning).toBe(true);
     });
   });
+
+  // Issue #559: ``mutation.isPending`` is React state and only flips
+  // to true on the next render, so a double-click within the same
+  // event-loop tick used to race past the DOM ``disabled`` update and
+  // fire 2 POSTs. ``runInferenceAction`` now tracks an in-flight ref
+  // synchronously; back-to-back invocations within the same tick must
+  // produce exactly ONE network call. Count-based assertion per
+  // ``feedback_count_budget_assertions``.
+  it("absorbs a back-to-back second invocation while a request is in flight (Issue #559)", async () => {
+    const job = makeJob({ job_id: "job-1" });
+    mockFetchJobs.mockResolvedValue([job]);
+
+    // Never resolve so the first call stays in-flight while the
+    // second invocation is dispatched in the same tick.
+    mockRunInference.mockReturnValue(new Promise(() => {}));
+
+    renderWithProviders(<InferencePage />);
+
+    await waitFor(() => {
+      const jobs = capturedSetupProps.completedJobs as unknown[];
+      expect(jobs).toHaveLength(1);
+    });
+
+    const onSelectJob = capturedSetupProps.onSelectJob as (id: string) => void;
+    act(() => onSelectJob("job-1"));
+
+    const onRunInference = capturedSetupProps.onRunInference as (params: {
+      dataPath: string;
+      sourceType: "path" | "upload";
+      evaluate: boolean;
+      returnShap: boolean;
+    }) => void;
+
+    // Both invocations happen inside the SAME ``act`` so they share
+    // one React batch — ``mutation.isPending`` cannot have flipped to
+    // true between them. The ref guard is the only thing standing
+    // between this scenario and a duplicate POST.
+    act(() => {
+      onRunInference({
+        dataPath: "/data/test.csv",
+        sourceType: "path",
+        evaluate: false,
+        returnShap: false,
+      });
+      onRunInference({
+        dataPath: "/data/test.csv",
+        sourceType: "path",
+        evaluate: false,
+        returnShap: false,
+      });
+    });
+
+    // Settle pending promises so the wrapper doesn't see an unflushed
+    // tick before the count assertion.
+    await waitFor(() => {
+      expect(mockRunInference).toHaveBeenCalledTimes(1);
+    });
+  });
 });
