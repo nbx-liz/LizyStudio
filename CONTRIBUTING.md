@@ -174,6 +174,51 @@ covered end-to-end (Tune resume is structurally protected by Issue
 #554's regression test rather than a request-budget spec because the
 flow is API-driven).
 
+### Property-based testing (Issue #539)
+
+Tests that assert specific (input, expected output) examples can leave
+gaps when bugs only fire on the input-axis product that nobody hand-listed.
+Property-based testing explores the combinatorial space against declared
+invariants. **For code touching concurrency, state machines, or resource
+ownership** (see `invariants-first.md`), declare at least one property
+test per invariant in addition to example-based tests.
+
+- **Backend**: `hypothesis` (dev dep). Tests live in
+  [`tests/property/test_pbt_<topic>.py`](tests/property/).
+- **Frontend**: `fast-check` (dev dep). Tests live in
+  [`<name>.pbt.test.ts`](frontend/src/hooks/useConfigWriteFunnel.pbt.test.ts)
+  — vitest auto-discovers them.
+
+Pilots landed today:
+
+| Module | File | Invariants |
+|---|---|---|
+| `JobStore` state machine | [`tests/property/test_pbt_job_state_machine.py`](tests/property/test_pbt_job_state_machine.py) | INV-no-illegal: every transition not in `LEGAL_TRANSITIONS` is rejected; INV-terminal-no-resurrection: terminal states admit no outgoing transitions. |
+| `useConfigWriteFunnel` pure helpers | [`frontend/src/hooks/useConfigWriteFunnel.pbt.test.ts`](frontend/src/hooks/useConfigWriteFunnel.pbt.test.ts) | 6 properties covering `materializeOp` round-trip / sibling preservation, `coalesceByReason` replace-dominance both directions, disjoint-path merge survival, same-path → next-wins (#530 fix), and the coalesce + materialise composition. |
+
+### Mutation testing (Issue #539 Phase 1)
+
+Complements property tests by perturbing production code and measuring
+whether the suite catches the perturbation. Survival rate (mutation
+score) is a **trend metric, not a PR gate**; thresholds are configured
+so the runs never block a merge. Tightening per module is a follow-up.
+
+- **Backend**: `mutmut`. Scope = JobStore three-file split
+  (`_job_metadata.py` / `_job_active_slot.py` / `_job_control_flags.py`).
+  Config: `[tool.mutmut]` in `pyproject.toml`. Local invocation:
+  `uv run mutmut run`.
+- **Frontend**: `stryker-js` + `@stryker-mutator/vitest-runner`.
+  Scope = `frontend/src/hooks/useConfigWriteFunnel.ts`. Config:
+  [`frontend/stryker.conf.json`](frontend/stryker.conf.json). Local
+  invocation: `pnpm mutation:test`.
+- Nightly CI runs both jobs (`continue-on-error: true`) and uploads
+  artefacts. See `.github/workflows/nightly.yml::mutation-test`.
+
+When a property test reveals a real production bug (as fast-check did
+on the first run with the path-overlap edge case), document the
+boundary in the test rather than silently widening the property —
+that's the invariant becoming load-bearing.
+
 ## Test fixtures
 
 When adding a new transform, parser, or schema mapper, the **first test case

@@ -221,3 +221,62 @@ jobs:
             frontend/test-results/
           retention-days: 14
           if-no-files-found: ignore
+
+  mutation-test:
+    # Issue #539 Phase 1: mutation testing for the JobStore state
+    # machine (backend) + useConfigWriteFunnel (frontend). The score is
+    # a TREND METRIC, not a PR gate — ``continue-on-error: true`` keeps
+    # this job non-blocking. Tightening per module is tracked via
+    # follow-up issues once the baseline lands.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: develop
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.11"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - name: Install Python deps
+        run: uv sync
+      - name: Run mutmut on JobStore state-machine modules
+        # ``run`` may report a non-zero exit when mutations survive;
+        # we still want the report uploaded, so swallow the exit and
+        # write the summary to a fixed path.
+        run: |
+          uv run mutmut run || true
+          uv run mutmut results > .mutmut-results.txt 2>&1 || true
+          echo "----- mutmut summary -----"
+          cat .mutmut-results.txt || true
+      - name: Upload mutmut artefact
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutmut-results
+          path: |
+            .mutmut-results.txt
+            .mutmut-cache/
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Install frontend deps
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - name: Run stryker on useConfigWriteFunnel
+        working-directory: frontend
+        run: pnpm mutation:test || true
+      - name: Upload stryker artefact
+        uses: actions/upload-artifact@v7
+        with:
+          name: stryker-report
+          path: |
+            frontend/reports/
+            frontend/stryker-report.html
+          if-no-files-found: ignore
+          retention-days: 14
