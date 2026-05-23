@@ -129,6 +129,7 @@ def run_job_in_subprocess(
     retune_n_trials: int = 0,
     retune_expand_boundary: bool | None = None,
     retune_boundary_threshold: float | None = None,
+    resume_from_existing_study: bool = False,
 ) -> Job:
     """Execute a job in a subprocess and return the updated Job.
 
@@ -156,6 +157,7 @@ def run_job_in_subprocess(
         retune_n_trials=retune_n_trials,
         retune_expand_boundary=retune_expand_boundary,
         retune_boundary_threshold=retune_boundary_threshold,
+        resume_from_existing_study=resume_from_existing_study,
     )
     returncode = _supervise_child(
         job=job,
@@ -183,6 +185,7 @@ def _write_child_args(
     retune_n_trials: int,
     retune_expand_boundary: bool | None,
     retune_boundary_threshold: float | None,
+    resume_from_existing_study: bool = False,
 ) -> tuple[str, str]:
     """Serialize the child's launch arguments to a temp JSON file.
 
@@ -203,6 +206,7 @@ def _write_child_args(
         "data_path": data_path,
         "job_type": job.job_type,
         "mode": mode,
+        "resume_from_existing_study": resume_from_existing_study,
     }
     if mode == "retune":
         if parent_job_id is None:
@@ -700,6 +704,9 @@ def _child_main(args_path: str, progress_path: str) -> None:
             config=config,
             dataframe=dataframe,
             broadcaster=broadcaster_any,
+            resume_from_existing_study=bool(
+                args.get("resume_from_existing_study", False)
+            ),
         )
     else:
         _write_progress(

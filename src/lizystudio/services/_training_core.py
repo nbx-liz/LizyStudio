@@ -402,6 +402,7 @@ def _run_subprocess_job(
     retune_expand_boundary: bool | None = None,
     retune_boundary_threshold: float | None = None,
     on_data_missing: Callable[[Job], None] | None = None,
+    resume_from_existing_study: bool = False,
 ) -> Job:
     """Run a job via subprocess and update workspace state.
 
@@ -439,6 +440,8 @@ def _run_subprocess_job(
             extra_kwargs["retune_expand_boundary"] = retune_expand_boundary
         if retune_boundary_threshold is not None:
             extra_kwargs["retune_boundary_threshold"] = retune_boundary_threshold
+        if resume_from_existing_study:
+            extra_kwargs["resume_from_existing_study"] = True
         finished = run_job_in_subprocess(
             job=job,
             job_store=job_store,
