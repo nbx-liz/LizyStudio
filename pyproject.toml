@@ -56,6 +56,15 @@ dev = [
     # Issue #27 (a) / P-0094: perf-baseline harness; addopts below skip
     # bench files by default so PR CI runtime stays unchanged.
     "pytest-benchmark>=4.0",
+    # Issue #539: property-based testing for state machines + config funnel.
+    # Pinned major; minor bumps acceptable without re-pinning. Used only
+    # in tests/property/ and tests/regression/test_pbt_*.py.
+    "hypothesis>=6.0",
+    # Issue #539: mutation testing for the JobStore state machine. Runs
+    # nightly only — invocation lives in .github/workflows/nightly.yml and
+    # is non-blocking (the score is a trend metric, not a PR gate). The
+    # ``[tool.mutmut]`` section below scopes the targets.
+    "mutmut>=3.0",
     "httpx>=0.28",
     "pandas-stubs>=2.3.3.260113",
     "types-pyyaml>=6.0.12.20250915",
@@ -149,3 +158,26 @@ markers = [
     "bench: Performance benchmarks (skipped by default; run with --benchmark-only via the nightly workflow)",
     "pickle_compat: Cross-version pickle compatibility tests (skipped by default; run by the nightly pickle-compat job, v3-26)",
 ]
+
+# Issue #539: mutmut targets the JobStore state machine first because the
+# v0.6.x bug history (#337/#339/#530) is dominated by state/concurrency
+# regressions that example-based tests covered structurally but mutation
+# tests would have caught at the predicate level. Scope is intentionally
+# narrow so the nightly run completes in minutes, not hours.
+#
+# Mutation score is reported as a trend metric (see
+# .github/workflows/nightly.yml::mutation-test). Achieving any specific
+# score is NOT a PR gate; tightening per module is a follow-up.
+[tool.mutmut]
+paths_to_mutate = [
+    "src/lizystudio/services/_job_metadata.py",
+    "src/lizystudio/services/_job_active_slot.py",
+    "src/lizystudio/services/_job_control_flags.py",
+]
+# Run the matching test suites so a mutation is "killed" by an existing
+# regression test failing, not by random luck.
+runner = "uv run pytest tests/regression/test_inv_state_machine.py tests/regression/test_inv_pause_keeps_slot.py tests/regression/test_inv_slot_release.py tests/property/test_pbt_job_state_machine.py -x -q --no-cov"
+# Mutmut writes its database under ``.mutmut/`` at the repo root; the
+# block-stray-artefacts hook treats that prefix as managed (see
+# scripts/check_stray.py).
+tests_dir = "tests"

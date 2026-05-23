@@ -4,7 +4,46 @@ on:
   pull_request:
     branches: [main, develop]
 
+# Cancel superseded runs when a PR receives a new push. Only the latest
+# revision's result matters; killing in-flight runs frees runner slots
+# and avoids burning compute on stale commits.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Path-change detector. Downstream jobs gate on these outputs so docs-only
+  # / area-isolated PRs can skip irrelevant heavy jobs. Required status
+  # checks remain unconditional in Phase 1 — only non-blocking jobs use
+  # the `if:` gate to validate the wiring before broader rollout.
+  #
+  # Filter rules force-run the affected area when:
+  #   * source code under the area changes
+  #   * shared metadata (pyproject.toml, uv.lock, package.json) changes
+  #   * this workflow file itself changes (safety net against rule bugs)
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'src/lizystudio/**'
+              - 'tests/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.github/workflows/ci.yml'
+            frontend:
+              - 'frontend/**'
+              - '!frontend/README.md'
+              - '.github/workflows/ci.yml'
+              - 'scripts/check-tohavebeencalled.sh'
+
   backend:
     runs-on: ubuntu-latest
     strategy:
@@ -16,9 +55,16 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync
+      # Lint / format / type-check are Python-version-independent. Run them
+      # only on the 3.11 matrix leg so the 3.10 leg does not duplicate
+      # ~18s of work. `backend (3.11)` stays the required check that
+      # gates them in the branch-protection ruleset.
       - run: uv run ruff check .
+        if: matrix.python-version == '3.11'
       - run: uv run ruff format --check .
+        if: matrix.python-version == '3.11'
       - run: uv run mypy src/lizystudio/
+        if: matrix.python-version == '3.11'
       # Flaky-test strategy (Issue #29): CI reruns failures twice.
       # Local runs do NOT retry so flakiness stays visible. Quarantined
       # tests are excluded from this blocking job (default addopts in
@@ -30,7 +76,12 @@ jobs:
   # Non-blocking quarantine job — captures signal on tests marked
   # `@pytest.mark.quarantine` without failing the PR. Skip cleanly when
   # no tests carry the marker.
+  #
+  # Path-filtered (Phase 1 pilot): docs-only / frontend-only PRs skip
+  # this job. Non-required, so a skipped run cannot affect mergeability.
   backend-quarantine:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -84,7 +135,14 @@ jobs:
   # tells the reviewer the failure is in the storage compat surface,
   # not the broader regression suite. Required check (configure in
   # branch protection alongside backend / frontend / e2e).
+  #
+  # Path-filtered (Phase 1 pilot): docs-only / frontend-only PRs skip
+  # this job. Despite the comment above, this job is NOT currently in
+  # the `Protect main` ruleset's required list (verified 2026-05-23) —
+  # safe to gate.
   format-version-matrix:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -132,8 +190,20 @@ jobs:
   # regression (@visual) and accessibility scans (@a11y) are EXCLUDED
   # here — they are state-sensitive and live on Nightly so they do not
   # block feature PRs on environment noise.
-  e2e-chromium:
+  #
+  # The suite is split into 4 shards (`--shard=N/4`). Each shard is a
+  # separate runner with its own backend process, so the single-worker
+  # state-isolation guarantee (one backend owns one /tmp workspace) is
+  # preserved — sharding does NOT weaken isolation, unlike raising
+  # `workers`. Per-shard names are `e2e-shard (N)`; the `e2e-chromium`
+  # aggregation job below keeps the stable required-check name.
+  e2e-shard:
+    name: e2e-shard
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     defaults:
       run:
         working-directory: frontend
@@ -187,20 +257,42 @@ jobs:
           # inference-flow).  Those assertions are covered by the
           # dedicated Nightly visual job; running them here would red-up
           # PRs whenever the committed golden is missing or stale.
+          # --shard splits the suite across 4 runners; Playwright
+          # distributes tests round-robin so each shard runs ~1/4.
           pnpm exec playwright test \
             --project=chromium \
             --grep-invert="@visual|@a11y|@ci-flaky" \
-            --ignore-snapshots
+            --ignore-snapshots \
+            --shard=${{ matrix.shard }}/4
       - name: Upload Playwright traces/screenshots on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: playwright-report-chromium
+          # Per-shard artifact name — a bare name would collide across
+          # the matrix legs and fail the upload.
+          name: playwright-report-chromium-shard-${{ matrix.shard }}
           path: |
             frontend/playwright-report/
             frontend/test-results/
           retention-days: 7
           if-no-files-found: ignore
+
+  # Aggregation gate. Branch-protection ruleset "Protect main" lists
+  # `e2e-chromium` as a required status check; after the shard split the
+  # matrix job reports per-shard names instead. This job keeps the stable
+  # `e2e-chromium` check green only when every shard passed.
+  e2e-chromium:
+    runs-on: ubuntu-latest
+    needs: [e2e-shard]
+    if: always()
+    steps:
+      - name: Verify all E2E shards passed
+        run: |
+          if [ "${{ needs.e2e-shard.result }}" != "success" ]; then
+            echo "::error::One or more E2E shards failed (result: ${{ needs.e2e-shard.result }})"
+            exit 1
+          fi
+          echo "All E2E shards passed."
 
   # B-9 Part 2 (H-0078 follow-up): guard against raw Tailwind color
   # utilities in frontend source. After the semantic-token migration
@@ -234,7 +326,12 @@ jobs:
   # because assertions checked that a mock was called, not how many times.
   # This grep guard stops a new bare ``.toHaveBeenCalled()`` from landing —
   # callback assertions must use the count-precise ``.toHaveBeenCalledTimes(N)``.
+  #
+  # Path-filtered (Phase 1 pilot): docs-only / backend-only PRs skip
+  # this job. Non-required, so a skipped run cannot affect mergeability.
   tohavebeencalled-guard:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

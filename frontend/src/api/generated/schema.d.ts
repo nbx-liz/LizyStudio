@@ -637,10 +637,13 @@ export interface paths {
          *
          *     Unlike ``POST /resume`` (H-0062 Phase B, failed→child job), unpause
          *     re-uses the SAME ``job_id``: the worker re-attaches to the same
-         *     Optuna study via ``load_if_exists=True`` and continues from
-         *     ``trial N+1``.  Slot ownership stays with the original job_id from
-         *     paused into running (paused→running is a legal INV-3 transition),
-         *     so the active-slot lock is never released across the round-trip.
+         *     Optuna study via ``load_if_exists=True`` and tops the study up to
+         *     the original ``n_trials`` budget — running only the *remaining*
+         *     trials, or skipping the tune phase entirely when the previous run
+         *     already reached the configured budget (Issue #554, INV-4). Slot
+         *     ownership stays with the original job_id from paused into running
+         *     (paused→running is a legal INV-3 transition), so the active-slot
+         *     lock is never released across the round-trip.
          *
          *     Workspace dataframe must still be loaded and matching the job's
          *     original ``data_ref``; mismatched data would silently corrupt the

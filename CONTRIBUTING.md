@@ -132,6 +132,93 @@ If you add a new Playwright project, also reference it from a workflow (or
 keep its goldens out of git); if you retire one, delete its goldens in the
 same PR — regenerate later via `pnpm test:e2e:update` if it returns.
 
+### E2E request-budget assertions (Issue #538)
+
+Storm / spam / flood-class bugs (v0.6.2 Target-select cluster #529 / #530
+/ #531, polling storm #339, replay loop #341) slip past tests that only
+assert eventual *state*. To detect them, **every E2E spec exercising a
+user action should include at least one request-budget assertion**
+counting HTTP calls per click / submit / load.
+
+Use the helpers in
+[`frontend/tests/e2e/helpers/request-budget.ts`](frontend/tests/e2e/helpers/request-budget.ts):
+
+```ts
+import { installFetchRecorder, expectBudget } from "./helpers/request-budget";
+
+const recorder = installFetchRecorder(page);
+// ...drive UI to "ready" state...
+const sinceClick = recorder.snapshot({
+  method: "PUT",
+  urlPattern: "/api/workspace/config",
+});
+await page.getByRole("combobox", { name: /target/i }).click();
+await page.getByRole("option", { name: "survived" }).click();
+await page.waitForTimeout(3000);
+expect(sinceClick().length).toBeLessThanOrEqual(3);  // budget with rationale comment
+```
+
+Rules:
+
+- Budget values must be justified in a code comment citing a measured
+  baseline or a related Issue (see `workspace-target-select-puts.spec.ts`
+  for the canonical "history: 9 → 4 → 3 → 2" form).
+- Failing budget → investigate the *cause* and either fix the regression
+  or file a follow-up bug. **Never relax the budget to make a failing
+  spec pass.**
+
+Surfaces covered today: target-select, tab-switch, data-load via Path,
+CV strategy change, Folds spinbutton, Fit submit, Tune submit,
+Inference run double-click guard. The full #538 surface table is now
+covered end-to-end (Tune resume is structurally protected by Issue
+#554's regression test rather than a request-budget spec because the
+flow is API-driven).
+
+### Property-based testing (Issue #539)
+
+Tests that assert specific (input, expected output) examples can leave
+gaps when bugs only fire on the input-axis product that nobody hand-listed.
+Property-based testing explores the combinatorial space against declared
+invariants. **For code touching concurrency, state machines, or resource
+ownership** (see `invariants-first.md`), declare at least one property
+test per invariant in addition to example-based tests.
+
+- **Backend**: `hypothesis` (dev dep). Tests live in
+  [`tests/property/test_pbt_<topic>.py`](tests/property/).
+- **Frontend**: `fast-check` (dev dep). Tests live in
+  [`<name>.pbt.test.ts`](frontend/src/hooks/useConfigWriteFunnel.pbt.test.ts)
+  — vitest auto-discovers them.
+
+Pilots landed today:
+
+| Module | File | Invariants |
+|---|---|---|
+| `JobStore` state machine | [`tests/property/test_pbt_job_state_machine.py`](tests/property/test_pbt_job_state_machine.py) | INV-no-illegal: every transition not in `LEGAL_TRANSITIONS` is rejected; INV-terminal-no-resurrection: terminal states admit no outgoing transitions. |
+| `useConfigWriteFunnel` pure helpers | [`frontend/src/hooks/useConfigWriteFunnel.pbt.test.ts`](frontend/src/hooks/useConfigWriteFunnel.pbt.test.ts) | 6 properties covering `materializeOp` round-trip / sibling preservation, `coalesceByReason` replace-dominance both directions, disjoint-path merge survival, same-path → next-wins (#530 fix), and the coalesce + materialise composition. |
+
+### Mutation testing (Issue #539 Phase 1)
+
+Complements property tests by perturbing production code and measuring
+whether the suite catches the perturbation. Survival rate (mutation
+score) is a **trend metric, not a PR gate**; thresholds are configured
+so the runs never block a merge. Tightening per module is a follow-up.
+
+- **Backend**: `mutmut`. Scope = JobStore three-file split
+  (`_job_metadata.py` / `_job_active_slot.py` / `_job_control_flags.py`).
+  Config: `[tool.mutmut]` in `pyproject.toml`. Local invocation:
+  `uv run mutmut run`.
+- **Frontend**: `stryker-js` + `@stryker-mutator/vitest-runner`.
+  Scope = `frontend/src/hooks/useConfigWriteFunnel.ts`. Config:
+  [`frontend/stryker.conf.json`](frontend/stryker.conf.json). Local
+  invocation: `pnpm mutation:test`.
+- Nightly CI runs both jobs (`continue-on-error: true`) and uploads
+  artefacts. See `.github/workflows/nightly.yml::mutation-test`.
+
+When a property test reveals a real production bug (as fast-check did
+on the first run with the path-overlap edge case), document the
+boundary in the test rather than silently widening the property —
+that's the invariant becoming load-bearing.
+
 ## Test fixtures
 
 When adding a new transform, parser, or schema mapper, the **first test case

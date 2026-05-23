@@ -1640,6 +1640,7 @@ def test_start_fit_async_subprocess_path(
         job2: Any,
         job_store2: Any,
         broadcaster2: Any,
+        **kwargs: Any,
     ) -> None:
         called["invoked"] = True
         with ws2._lock:
@@ -1697,6 +1698,7 @@ def test_start_tune_async_subprocess_path(
         job2: Any,
         job_store2: Any,
         broadcaster2: Any,
+        **kwargs: Any,
     ) -> None:
         called["invoked"] = True
         with ws2._lock:

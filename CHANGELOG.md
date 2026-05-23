@@ -7,6 +7,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-05-24
+
+A **bug-fix + test-infrastructure** patch release. Two real bug
+fixes (Tune unpause R-1.4 violation, Inference double-click silent
+duplicate POST) plus four test-infrastructure improvements that
+structurally prevent the same bug *classes* in the future. No
+behaviour change to documented flows, no API change, no
+`format_version` change — `STUDIO_FORMAT_VERSION` stays at 2.
+
+Bundles:
+
+1. **#554 / PR #555 — Tune unpause re-runs the full tune loop (R-1.4
+   INV-4 violation)** [BUG]. Shipped in v0.5.0 (P-0099 v3-20d),
+   `POST /jobs/{id}/unpause` re-entered `start_tune_async` → `run_tune`
+   from the top WITHOUT propagating `resume=True` to
+   `lifecycle_mixin.tune`. lizyml attaches to the persisted Optuna
+   study via `load_if_exists=True` and then runs
+   `study.optimize(n_trials=N)` — which by Optuna semantics APPENDS
+   N more trials. When pause arrived after the tune loop completed
+   the study ended at **2 × n_trials** silently. `run_tune` now learns
+   `resume_from_existing_study`; the unpause path inspects the
+   persisted study, computes `remaining = max(0, target - existing)`,
+   and either mutates the n_trials cap downward OR skips the tune
+   phase entirely (reconstructing `TuningSummary` from the persisted
+   study). Issue #527 (`_assert_inv_t3` warn-only re-enabled) ships
+   in the same PR because the original deferral reason was exactly
+   this bug.
+2. **#559 / PR #560 — Run Inference double-click fires 2 silent
+   POSTs** [BUG]. `mutation.isPending` is React state; the DOM
+   `disabled` update lagged the second click by one render. A
+   double-click within one event-loop tick raced past the
+   `SetupPanel` disabled prop and called `mutation.mutate()` twice
+   — the second job usually lost the race for the file lock and 500'd
+   silently while the user only saw the first 200.
+   `InferencePage.runInferenceAction` now tracks a synchronous
+   `inFlightRef`; the second `mutate()` call is absorbed before it
+   leaves the handler. Surfaced by the spec from #538.
+3. **#538 (Phase 2) / PR #558 — PUT_BUDGET helper fan-out to the last
+   4 surfaces** [TEST]. The pilot from #553 (request-budget helper +
+   4 specs) now covers Folds spinbutton / Fit submit / Tune submit /
+   Inference run; 8 of 8 surfaces from the #538 table lock request
+   counts at the E2E layer. fast-CI gates against the storm/spam
+   regression class (#337 / #339 / #530).
+4. **#539 / PR #561 — mutation + property-based testing infra**
+   [TEST]. `hypothesis` (Py) + `fast-check` (TS) pilots for the
+   JobStore state machine + `useConfigWriteFunnel` pure helpers.
+   `mutmut` + `stryker-js` configs running nightly as a
+   non-blocking trend metric. fast-check found a real path-prefix
+   edge case in the funnel coalesce on the first run; the boundary
+   is now codified.
+5. **#557 — CI paths-filter Phase 1** [CI]. Three non-required jobs
+   (`backend-quarantine`, `format-version-matrix`,
+   `tohavebeencalled-guard`) gate on the relevant area; docs-only
+   PRs skip them entirely. PR CI wall-clock drops further on the
+   no-code-touched paths.
+6. **P-0110 + P-0111 Decisions approved (#556)** [DOCS]. Both
+   Change Gate Proposals advanced from "Proposal-only kickoff" to
+   "Approved, awaiting v0.7 implementation window". P-0110 → M-1
+   single-PR cutover with `about:blank` URI + `errors` →
+   `validation_errors` rename + all 8 silent-200 call-sites
+   simultaneously. P-0111 → Option A (2-path tolerant + criterion
+   reword); single `onAllSettled` badge invalidation; parallel
+   `coalesceByReason` enqueue with `legacy_config` /
+   `tuning_overrides` reason keys.
+
+### Changed
+
+- **CI: shard the E2E suite across 4 runners + deduplicate lint.** The
+  `e2e-chromium` Playwright job was the sole critical-path bottleneck
+  (~914s of a ~15min run). It is now split into a 4-way `--shard` matrix
+  (`e2e-shard`) with an `e2e-chromium` aggregation gate that preserves
+  the required-status-check name. Each shard runs on its own runner with
+  its own backend process, so the single-worker state-isolation guarantee
+  is unchanged. `ruff`/`mypy` now run only on the 3.11 backend matrix leg
+  (they are Python-version-independent), and a `concurrency` group cancels
+  superseded runs. No test, app, or API change — CI wall-clock drops from
+  ~15min to ~5min.
+
 ## [0.6.3] - 2026-05-23
 
 A **maintenance and test-quality** patch release. No behaviour change,
