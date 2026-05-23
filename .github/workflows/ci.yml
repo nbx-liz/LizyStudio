@@ -4,6 +4,13 @@ on:
   pull_request:
     branches: [main, develop]
 
+# Cancel superseded runs when a PR receives a new push. Only the latest
+# revision's result matters; killing in-flight runs frees runner slots
+# and avoids burning compute on stale commits.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend:
     runs-on: ubuntu-latest
@@ -16,9 +23,16 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync
+      # Lint / format / type-check are Python-version-independent. Run them
+      # only on the 3.11 matrix leg so the 3.10 leg does not duplicate
+      # ~18s of work. `backend (3.11)` stays the required check that
+      # gates them in the branch-protection ruleset.
       - run: uv run ruff check .
+        if: matrix.python-version == '3.11'
       - run: uv run ruff format --check .
+        if: matrix.python-version == '3.11'
       - run: uv run mypy src/lizystudio/
+        if: matrix.python-version == '3.11'
       # Flaky-test strategy (Issue #29): CI reruns failures twice.
       # Local runs do NOT retry so flakiness stays visible. Quarantined
       # tests are excluded from this blocking job (default addopts in
@@ -132,8 +146,20 @@ jobs:
   # regression (@visual) and accessibility scans (@a11y) are EXCLUDED
   # here — they are state-sensitive and live on Nightly so they do not
   # block feature PRs on environment noise.
-  e2e-chromium:
+  #
+  # The suite is split into 4 shards (`--shard=N/4`). Each shard is a
+  # separate runner with its own backend process, so the single-worker
+  # state-isolation guarantee (one backend owns one /tmp workspace) is
+  # preserved — sharding does NOT weaken isolation, unlike raising
+  # `workers`. Per-shard names are `e2e-shard (N)`; the `e2e-chromium`
+  # aggregation job below keeps the stable required-check name.
+  e2e-shard:
+    name: e2e-shard
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     defaults:
       run:
         working-directory: frontend
@@ -187,20 +213,42 @@ jobs:
           # inference-flow).  Those assertions are covered by the
           # dedicated Nightly visual job; running them here would red-up
           # PRs whenever the committed golden is missing or stale.
+          # --shard splits the suite across 4 runners; Playwright
+          # distributes tests round-robin so each shard runs ~1/4.
           pnpm exec playwright test \
             --project=chromium \
             --grep-invert="@visual|@a11y|@ci-flaky" \
-            --ignore-snapshots
+            --ignore-snapshots \
+            --shard=${{ matrix.shard }}/4
       - name: Upload Playwright traces/screenshots on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: playwright-report-chromium
+          # Per-shard artifact name — a bare name would collide across
+          # the matrix legs and fail the upload.
+          name: playwright-report-chromium-shard-${{ matrix.shard }}
           path: |
             frontend/playwright-report/
             frontend/test-results/
           retention-days: 7
           if-no-files-found: ignore
+
+  # Aggregation gate. Branch-protection ruleset "Protect main" lists
+  # `e2e-chromium` as a required status check; after the shard split the
+  # matrix job reports per-shard names instead. This job keeps the stable
+  # `e2e-chromium` check green only when every shard passed.
+  e2e-chromium:
+    runs-on: ubuntu-latest
+    needs: [e2e-shard]
+    if: always()
+    steps:
+      - name: Verify all E2E shards passed
+        run: |
+          if [ "${{ needs.e2e-shard.result }}" != "success" ]; then
+            echo "::error::One or more E2E shards failed (result: ${{ needs.e2e-shard.result }})"
+            exit 1
+          fi
+          echo "All E2E shards passed."
 
   # B-9 Part 2 (H-0078 follow-up): guard against raw Tailwind color
   # utilities in frontend source. After the semantic-token migration
