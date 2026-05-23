@@ -12,6 +12,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Path-change detector. Downstream jobs gate on these outputs so docs-only
+  # / area-isolated PRs can skip irrelevant heavy jobs. Required status
+  # checks remain unconditional in Phase 1 — only non-blocking jobs use
+  # the `if:` gate to validate the wiring before broader rollout.
+  #
+  # Filter rules force-run the affected area when:
+  #   * source code under the area changes
+  #   * shared metadata (pyproject.toml, uv.lock, package.json) changes
+  #   * this workflow file itself changes (safety net against rule bugs)
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'src/lizystudio/**'
+              - 'tests/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.github/workflows/ci.yml'
+            frontend:
+              - 'frontend/**'
+              - '!frontend/README.md'
+              - '.github/workflows/ci.yml'
+              - 'scripts/check-tohavebeencalled.sh'
+
   backend:
     runs-on: ubuntu-latest
     strategy:
@@ -44,7 +76,12 @@ jobs:
   # Non-blocking quarantine job — captures signal on tests marked
   # `@pytest.mark.quarantine` without failing the PR. Skip cleanly when
   # no tests carry the marker.
+  #
+  # Path-filtered (Phase 1 pilot): docs-only / frontend-only PRs skip
+  # this job. Non-required, so a skipped run cannot affect mergeability.
   backend-quarantine:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -98,7 +135,14 @@ jobs:
   # tells the reviewer the failure is in the storage compat surface,
   # not the broader regression suite. Required check (configure in
   # branch protection alongside backend / frontend / e2e).
+  #
+  # Path-filtered (Phase 1 pilot): docs-only / frontend-only PRs skip
+  # this job. Despite the comment above, this job is NOT currently in
+  # the `Protect main` ruleset's required list (verified 2026-05-23) —
+  # safe to gate.
   format-version-matrix:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -282,7 +326,12 @@ jobs:
   # because assertions checked that a mock was called, not how many times.
   # This grep guard stops a new bare ``.toHaveBeenCalled()`` from landing —
   # callback assertions must use the count-precise ``.toHaveBeenCalledTimes(N)``.
+  #
+  # Path-filtered (Phase 1 pilot): docs-only / backend-only PRs skip
+  # this job. Non-required, so a skipped run cannot affect mergeability.
   tohavebeencalled-guard:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
