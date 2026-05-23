@@ -10,29 +10,29 @@ import { dismissOnboarding } from "./helpers/onboarding";
 import { expectBudget, installFetchRecorder } from "./helpers/request-budget";
 
 /**
- * Issue #538 — Inference run POST budget regression spec.
+ * Issue #538 / #559 — Inference run POST budget regression spec.
  *
  * Surface: clicking the **Run Inference** button on the
  * ``/inference`` page after picking a completed model + data path.
- * The risk class is **silent extra POST** — a regression that adds a
- * defensive useEffect re-fire (the same family as the v0.6.2
- * Target-select cluster, #530) on the inference page would silently
- * spawn duplicate inference records, with the second one usually
- * losing the race for the file lock and 500-ing while the user only
- * sees the first 200.
  *
- * Budget: ``POST /api/inference/run`` = **1 exactly** for a single
- * user click. The button's in-flight disabled state is verified by
- * the upstream ``inference-flow.spec.ts``; this spec narrowly locks
- * the "single click → single POST" contract so a regression that
- * inflates the count is caught at CI time.
+ * Risk classes (both locked here):
  *
- * Note: the original #538 surface table called for a "double-click
- * guard" test, but the inference page's Run button does not currently
- * implement an in-flight guard — a double-click DOES fire 2 POSTs in
- * production (tracked as a follow-up against #538). Locking the
- * single-click contract here lets this spec ship without depending on
- * that future fix.
+ *   1. **Silent extra POST** from a useEffect re-fire (same family
+ *      as the v0.6.2 Target-select cluster, #530). A regression that
+ *      adds a defensive effect re-firing the mutation would inflate
+ *      the per-click POST count.
+ *   2. **Double-click guard** (#559). ``mutation.isPending`` is React
+ *      state and only flips to true after the next render; a
+ *      synthetic double-click within one event-loop tick used to
+ *      race past the DOM ``disabled`` update and fire 2 POSTs. PR
+ *      that closes #559 adds a synchronous ``inFlightRef`` so the
+ *      second ``mutate()`` call is absorbed before it leaves the
+ *      handler.
+ *
+ * Budget: ``POST /api/inference/run`` = **1 exactly** for **two
+ * back-to-back clicks**. The spec deliberately drives the
+ * race condition that surfaced #559; the in-flight ref keeps the
+ * count at 1.
  *
  * Per ``feedback_count_budget_assertions`` (memory): storm/spam bugs
  * MUST be caught by counting occurrences, not just asserting eventual
@@ -43,7 +43,7 @@ import { expectBudget, installFetchRecorder } from "./helpers/request-budget";
 const CSV_PATH = "/tmp/e2e_inference_run_puts.csv";
 const INFER_POST_BUDGET = 1;
 
-test.describe("Inference run — POST budget (Issue #538)", () => {
+test.describe("Inference run — POST budget (Issue #538 / #559)", () => {
   test.beforeAll(() => {
     createTestCsv(100, CSV_PATH);
   });
@@ -52,7 +52,7 @@ test.describe("Inference run — POST budget (Issue #538)", () => {
     if (fs.existsSync(CSV_PATH)) fs.unlinkSync(CSV_PATH);
   });
 
-  test("single click on Run Inference fires exactly one POST", async ({
+  test("double-click on Run Inference fires exactly one POST", async ({
     page,
     request,
   }) => {
@@ -102,7 +102,27 @@ test.describe("Inference run — POST budget (Issue #538)", () => {
       urlPattern: "/api/inference/run",
     });
 
+    // Issue #559 — drive the race condition. The first click sets
+    // ``inFlightRef.current = true`` synchronously inside the
+    // ``runInferenceAction`` callback BEFORE ``mutation.mutate()``
+    // returns; the second click hits the same handler in the same
+    // event-loop tick and is absorbed by the ref check.
+    //
+    // ``{ force: true, noWaitAfter: true }`` skips Playwright's
+    // actionability checks so the second click is attempted even if
+    // the button transitions to disabled in the DOM between the two
+    // events (which is the correct end state, but is async). If the
+    // ref guard is removed, this DOES fire a second POST and the
+    // budget assertion below fails.
     await runButton.click();
+    await runButton
+      .click({ force: true, noWaitAfter: true })
+      .catch(() => {
+        // Force-click can throw if the button is genuinely disabled.
+        // That's the correct end state and complementary to the ref
+        // guard; swallow so the assertion below is what fails the
+        // test, not the click attempt.
+      });
 
     // 6s capture window — long enough that any delayed extra POST
     // from a useEffect re-fire regression has landed.
@@ -111,10 +131,11 @@ test.describe("Inference run — POST budget (Issue #538)", () => {
     const inferPosts = sincePost();
     expect(
       inferPosts.length,
-      `Single click on Run Inference fired ${inferPosts.length} POST(s) ` +
-        `(budget ${INFER_POST_BUDGET}, expected exactly 1). Risk class: ` +
-        `silent extra POST from a useEffect re-fire (same family as the ` +
-        `v0.6.2 Target-select cluster, #530). Captured:\n` +
+      `Double-click on Run Inference fired ${inferPosts.length} POST(s) ` +
+        `(budget ${INFER_POST_BUDGET}, expected exactly 1). Risk classes: ` +
+        `(1) silent extra POST from useEffect re-fire (#530 family); ` +
+        `(2) double-click guard regression (#559 — synchronous ` +
+        `inFlightRef in InferencePage.runInferenceAction). Captured:\n` +
         inferPosts
           .map(
             (p) =>
@@ -132,7 +153,7 @@ test.describe("Inference run — POST budget (Issue #538)", () => {
       method: "POST",
       urlPattern: "/api/inference/run",
       max: 1,
-      label: "Full session (single Run Inference click)",
+      label: "Full session (double-click Run Inference)",
     });
   });
 });
