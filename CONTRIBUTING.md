@@ -168,8 +168,11 @@ Rules:
   spec pass.**
 
 Surfaces covered today: target-select, tab-switch, data-load via Path,
-CV strategy change. Folds increment / Fit submit / Tune submit / Tune
-resume / Inference run are follow-ups under #538.
+CV strategy change, Folds spinbutton, Fit submit, Tune submit,
+Inference run double-click guard. The full #538 surface table is now
+covered end-to-end (Tune resume is structurally protected by Issue
+#554's regression test rather than a request-budget spec because the
+flow is API-driven).
 
 ## Test fixtures
 
