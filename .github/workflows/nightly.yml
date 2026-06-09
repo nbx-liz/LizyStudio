@@ -241,10 +241,13 @@ jobs:
           python-version: "3.11"
       - uses: actions/setup-node@v6
         with:
-          node-version: 20
-      - uses: pnpm/action-setup@v4
-        with:
-          run_install: false
+          node-version: "20"
+      - name: Enable corepack and activate pnpm from packageManager field
+        working-directory: frontend
+        run: |
+          corepack enable
+          corepack prepare --activate
+          pnpm --version
       - name: Install Python deps
         run: uv sync
       - name: Run mutmut on JobStore state-machine modules

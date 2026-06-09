@@ -1,0 +1,202 @@
+name: Nightly streak monitor
+
+# Issue #576: ``continue-on-error: true`` jobs can stay red for weeks
+# without anyone noticing, because the overall workflow conclusion stays
+# ``success``. This monitor fires after every Nightly completion and
+# opens (or bumps) a GitHub Issue when a tracked non-blocking job has
+# failed STREAK_THRESHOLD consecutive times. When the same job recovers,
+# the Issue is closed with a comment.
+#
+# Tracked jobs are listed explicitly (TRACKED_JOBS in the script below)
+# rather than parsed from YAML, so adding or removing surveillance is a
+# visible, reviewable code change.
+
+on:
+  workflow_run:
+    workflows: ["Nightly"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Skip Issue create/comment/close (log only)"
+        type: boolean
+        default: false
+
+permissions:
+  issues: write
+  actions: read
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check streaks on tracked continue-on-error jobs
+        uses: actions/github-script@v8
+        env:
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        with:
+          script: |
+            // Tunables -------------------------------------------------
+            const STREAK_THRESHOLD = 5;
+            const TRACKED_JOBS = [
+              "mutation-test",
+              "E2E visual + a11y (Nightly, non-blocking)",
+            ];
+            const ISSUE_LABEL = "streak-alert";
+            const dryRun = process.env.DRY_RUN === "true";
+
+            // 1. List recent Nightly runs ------------------------------
+            const runs = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: "nightly.yml",
+              per_page: STREAK_THRESHOLD,
+              status: "completed",
+            });
+
+            if (runs.data.workflow_runs.length < STREAK_THRESHOLD) {
+              core.info(
+                `Only ${runs.data.workflow_runs.length} completed runs available ` +
+                `(threshold ${STREAK_THRESHOLD}); skipping streak evaluation.`
+              );
+              return;
+            }
+
+            // 2. Map each run -> per-job conclusion --------------------
+            const perRunJobs = await Promise.all(
+              runs.data.workflow_runs.map(async (r) => {
+                const j = await github.rest.actions.listJobsForWorkflowRun({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id: r.id,
+                });
+                return { run: r, jobs: j.data.jobs };
+              })
+            );
+
+            // 3. For each tracked job, classify the streak -------------
+            for (const jobName of TRACKED_JOBS) {
+              const conclusions = perRunJobs.map(({ run, jobs }) => {
+                const job = jobs.find((j) => j.name === jobName);
+                return {
+                  runId: run.id,
+                  runUrl: run.html_url,
+                  createdAt: run.created_at,
+                  conclusion: job ? job.conclusion : null,
+                };
+              });
+
+              const allFail = conclusions.every((c) => c.conclusion === "failure");
+              const anySuccess = conclusions.some((c) => c.conclusion === "success");
+
+              const issueTitle = `[streak-alert] ${jobName} failed ${STREAK_THRESHOLD}+ consecutive Nightlies`;
+              const existingIssues = await github.rest.issues.listForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: ISSUE_LABEL,
+                state: "open",
+                per_page: 100,
+              });
+              const existing = existingIssues.data.find(
+                (i) => i.title === issueTitle
+              );
+
+              core.info(
+                `Job "${jobName}": conclusions=${JSON.stringify(
+                  conclusions.map((c) => c.conclusion)
+                )}, allFail=${allFail}, anySuccess=${anySuccess}, existing=${
+                  existing ? "#" + existing.number : "none"
+                }`
+              );
+
+              if (allFail) {
+                const latest = conclusions[0];
+                const summary = conclusions
+                  .map(
+                    (c) =>
+                      `- [${c.createdAt}](${c.runUrl}) — ${c.conclusion ?? "missing"}`
+                  )
+                  .join("\n");
+
+                const body = [
+                  `Tracked non-blocking job **${jobName}** has been red for ` +
+                    `the last ${STREAK_THRESHOLD} Nightly runs.`,
+                  "",
+                  "## Recent runs",
+                  summary,
+                  "",
+                  `Latest run: ${latest.runUrl}`,
+                  "",
+                  "## What to do",
+                  "1. Inspect the latest failing run and identify the root cause.",
+                  "2. Open a fix PR. Once the job goes green for a Nightly, this " +
+                    "Issue auto-closes.",
+                  "3. If the failure is intentional / out-of-scope, remove the job " +
+                    "name from `TRACKED_JOBS` in " +
+                    "`.github/workflows/nightly-streak-monitor.yml` with justification.",
+                  "",
+                  "_This Issue was opened automatically by the Nightly streak " +
+                    "monitor (Issue #576)._",
+                ].join("\n");
+
+                if (existing) {
+                  if (dryRun) {
+                    core.info(`[dry-run] would comment on #${existing.number}`);
+                  } else {
+                    await github.rest.issues.createComment({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      issue_number: existing.number,
+                      body: `Streak continues. Latest failure: ${latest.runUrl}`,
+                    });
+                    core.notice(
+                      `Streak continues for "${jobName}"; commented on #${existing.number}.`
+                    );
+                  }
+                } else {
+                  if (dryRun) {
+                    core.info(`[dry-run] would create Issue: ${issueTitle}`);
+                  } else {
+                    const created = await github.rest.issues.create({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      title: issueTitle,
+                      body,
+                      labels: [ISSUE_LABEL],
+                    });
+                    core.notice(
+                      `Opened streak-alert Issue #${created.data.number} for "${jobName}".`
+                    );
+                  }
+                }
+              } else if (anySuccess && existing) {
+                if (dryRun) {
+                  core.info(`[dry-run] would close #${existing.number}`);
+                } else {
+                  const latestSuccess = conclusions.find(
+                    (c) => c.conclusion === "success"
+                  );
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: existing.number,
+                    body:
+                      `Streak broken — a recent Nightly saw "${jobName}" succeed: ` +
+                      `${latestSuccess.runUrl}. Closing.`,
+                  });
+                  await github.rest.issues.update({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: existing.number,
+                    state: "closed",
+                  });
+                  core.notice(
+                    `Closed streak-alert Issue #${existing.number} for "${jobName}".`
+                  );
+                }
+              } else {
+                core.info(
+                  `Job "${jobName}": mixed results, no Issue action.`
+                );
+              }
+            }

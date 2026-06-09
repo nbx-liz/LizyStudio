@@ -9,6 +9,7 @@ import type { components } from "@/api/generated/schema";
 type BackendInfo = components["schemas"]["BackendInfoResponse"];
 type UiSchema = components["schemas"]["UiSchemaResponse"];
 type WorkspaceStatus = components["schemas"]["WorkspaceStatusResponse"];
+type TuningSnapshot = components["schemas"]["TuningSnapshotResponse"];
 
 export const handlers = [
   http.get("/api/backends", () =>
@@ -45,6 +46,36 @@ export const handlers = [
       data_ref: null,
       current_job_id: null,
       files_root: "/tmp",
+    }),
+  ),
+  // Issue #575: TuneTab subscribes to ``useTuningSnapshot`` whenever a task
+  // is selected. Without a default handler the request leaks to happy-dom's
+  // default ``http://localhost:3000``, causing socket-hang-up noise and an
+  // intermittent libuv ``uv__stream_destroy`` worker crash. Empty defaults
+  // keep the snapshot semantically inert so individual tests can override
+  // with ``server.use(...)`` when they need richer data.
+  http.get("/api/workspace/config/tuning-snapshot", () =>
+    HttpResponse.json<TuningSnapshot>({
+      tuning_effective: {
+        n_trials: 0,
+        timeout: null,
+        direction: "maximize",
+        space: {},
+        evaluation_metrics: [],
+        user_set_paths: [],
+      },
+      tuning_defaults: {
+        space: {},
+        evaluation_metrics: [],
+        direction: null,
+      },
+      tuning_overrides: {
+        n_trials: null,
+        timeout: null,
+        direction: null,
+        space: {},
+        evaluation_metrics: null,
+      },
     }),
   ),
 ];

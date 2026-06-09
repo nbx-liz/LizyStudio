@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-06-09
+
+A **maintenance** release: dependency bumps plus CI / test-infrastructure
+hardening. No behaviour change to documented flows, no API change, no
+`format_version` change — `STUDIO_FORMAT_VERSION` stays at 2.
+
+### CI / Test infrastructure
+
+- **#576 Phase 1 / PR #578 — Nightly streak monitor.** Auto-opens (and
+  auto-closes) a GitHub Issue when a tracked `continue-on-error` Nightly
+  job (`mutation-test`, `E2E visual + a11y`) fails 5 consecutive runs, so
+  non-blocking red can no longer hide indefinitely behind a green overall
+  workflow conclusion.
+- **#561 / PR #573 — mutation-test pnpm setup fix.** Swap
+  `pnpm/action-setup@v4` for corepack (`packageManager` field), fixing the
+  recurring "No pnpm version is specified" failure on the Nightly
+  `mutation-test` job.
+- **#575 / PR #577 — MSW strictness.** Close an MSW handler gap and enforce
+  strict unhandled-request failures in the frontend test suite.
+- **PR #574 — visual goldens.** Regenerate 8 stale visual goldens from the
+  Nightly artefact.
+
+### Dependencies
+
+- Frontend (npm): react-ecosystem (#585), prod-minor-patch (#583 / #592),
+  dev-minor-patch (#572 / #582 / #590), storybook (#581), @types/react
+  (#567).
+- Backend: lizyml requirement updated (#584).
+- GitHub Actions: dorny/paths-filter 3→4 (#571).
+
+### Docs
+
+- **PR #564 — ROADMAP** reconciled to post-v0.6.4 state.
+
 ## [0.6.4] - 2026-05-24
 
 A **bug-fix + test-infrastructure** patch release. Two real bug
