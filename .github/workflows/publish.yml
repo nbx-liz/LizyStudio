@@ -23,8 +23,8 @@ jobs:
     steps:
       # Fetch full history and tags so hatch-vcs can resolve the version
       # from the tag that triggered this workflow.
-      # NOTE: actions/checkout@v6 requires explicit fetch-tags: true.
-      - uses: actions/checkout@v6
+      # NOTE: actions/checkout@v7 requires explicit fetch-tags: true.
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
