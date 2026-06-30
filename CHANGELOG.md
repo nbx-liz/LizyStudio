@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-06-30
+
+A **maintenance** release: dependency bumps only. No behaviour change to
+documented flows, no API change, no `format_version` change —
+`STUDIO_FORMAT_VERSION` stays at 2.
+
+### Dependencies
+
+- **Frontend (npm) — react-plotly.js 2.6.0 → 3.0.0 (#609)** [major]. The
+  v3 default export binds `plotly.js/dist/plotly` exactly as v2 did, so the
+  bundled `plotly.js@3.4.0` keeps rendering charts unchanged. The major bump
+  only drops support for plotly.js v1/v2 (peer now `>=3.0.0`, satisfied) and
+  React < 18 (peer now `^18 || ^19`, satisfied); the `<Plot>` props the app
+  uses are unchanged.
+- Frontend (npm): prod-minor-patch (#598 / #604 / #608), dev-minor-patch
+  (#599 / #605 / #607), vitest testing group (#601), @types/react (#595).
+- GitHub Actions: actions/checkout 6→7 (#600), actions/cache 5→6 (#606),
+  actions/github-script 8→9 (#580).
+
 ## [0.6.5] - 2026-06-09
 
 A **maintenance** release: dependency bumps plus CI / test-infrastructure
