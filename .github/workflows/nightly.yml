@@ -16,7 +16,7 @@ jobs:
       matrix:
         python-version: ["3.10", "3.11"]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: develop
       - uses: astral-sh/setup-uv@v7
@@ -39,7 +39,7 @@ jobs:
     # detection by comparing across runs.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: develop
       - uses: astral-sh/setup-uv@v7
@@ -78,7 +78,7 @@ jobs:
     name: Pickle compatibility matrix (v3-26)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: develop
       - uses: astral-sh/setup-uv@v7
@@ -107,7 +107,7 @@ jobs:
     name: Plotly CDN reachability & SRI freshness
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: develop
       - name: Verify CDN bundle is reachable and SRI hash matches
@@ -141,7 +141,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: develop
       - uses: actions/setup-node@v6
@@ -171,7 +171,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: develop
       - uses: astral-sh/setup-uv@v7
@@ -195,7 +195,7 @@ jobs:
           VERSION=$(node -e "console.log(require('@playwright/test/package.json').version)")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
       - name: Cache Playwright browsers
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
@@ -232,7 +232,7 @@ jobs:
     continue-on-error: true
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: develop
       - uses: astral-sh/setup-uv@v7
