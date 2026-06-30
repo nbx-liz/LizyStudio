@@ -23,7 +23,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: develop
           # ``git log -1 --format=%cI`` needs full history per file so the
