@@ -56,8 +56,8 @@ importers:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
       react-plotly.js:
-        specifier: ^3.0.0
-        version: 3.0.0(plotly.js@3.4.0(mapbox-gl@1.13.3))(react@19.2.7)
+        specifier: ^4.0.0
+        version: 4.0.0(plotly.js@3.4.0(mapbox-gl@1.13.3))(react@19.2.7)
       react-resizable-panels:
         specifier: ^4
         version: 4.12.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -4947,10 +4947,6 @@ packages:
     resolution: {integrity: sha512-HgMmCqIJSAKqo68l0rS2AanEWfkxaZ5wNiEFb5ggm08lDs9Xl2KxBlX3PTcaD2chBM1gXAYf491/M2Rv8Jwayg==}
     engines: {node: '>= 0.6.0'}
 
-  loose-envify@1.4.0:
-    resolution: {integrity: sha512-lyuxPGr/Wfhrlem2CL/UcnUc1zcqKAImBDzukY7Y5F/yQiNdko6+fRLevlw1HgMySw7f611UIY408EtxRSoK3Q==}
-    hasBin: true
-
   loupe@3.2.1:
     resolution: {integrity: sha512-CdzqowRJCeLU72bHvWqwRBBlLcMEtIvGrlvef74kMnV2AolS9Y8xUv1I0U/MNAWMhBlKIoyuEgoJ0t/bbwHbLQ==}
 
@@ -5425,9 +5421,6 @@ packages:
     resolution: {integrity: sha512-NxNv/kLguCA7p3jE8oL2aEBsrJWgAakBpgmgK6lpPWV+WuOmY6r2/zbAVnP+T8bQlA0nzHXSJSJW0Hq7ylaD2Q==}
     engines: {node: '>= 6'}
 
-  prop-types@15.8.1:
-    resolution: {integrity: sha512-oj87CgZICdulUohogVAR7AjlC0327U4el4L6eAvOqCeudMDVU0NThNaV+b9Df4dXgSP1gXMTnPdhfe/2qDH5cg==}
-
   protocol-buffers-schema@3.6.1:
     resolution: {integrity: sha512-VG2K63Igkiv9p76tk1lilczEK1cT+kCjKtkdhw1dQZV3k3IXJbd3o6Ho8b9zJZaHSnT2hKe4I+ObmX9w6m5SmQ==}
 
@@ -5485,9 +5478,6 @@ packages:
     peerDependencies:
       react: ^19.2.7
 
-  react-is@16.13.1:
-    resolution: {integrity: sha512-24e6ynE2H+OKt4kqsOvNd8kBpV65zoxbA4BVsEOB3ARVWQki/DHzaUoC5KuON/BiccDaCCTZBuOcfZs70kR8bQ==}
-
   react-is@17.0.2:
     resolution: {integrity: sha512-w2GsyukL62IJnlaff/nRegPQR94C/XXamvMWmSHRJ4y7Ts/4ocGRmTHvOs8PSE6pB3dWOrD/nueuU5sduBsQ4w==}
 
@@ -5497,8 +5487,9 @@ packages:
   react-is@19.2.7:
     resolution: {integrity: sha512-kZFnouyVv7eP/Phmrlo9FK+zcAdriZJvzxXHF1Sl1P377WSGe2G/JxVolhTrB/jeV47lKImhNUsijjHAAbcl/A==}
 
-  react-plotly.js@3.0.0:
-    resolution: {integrity: sha512-4syFBxzhzDKG2ztbJNeKjjbgJj05kzJh5MB3lU1PuY2d2WHs/bfuaK06x5eJUgfMk5DMcuOXdV7UWRuew02ylw==}
+  react-plotly.js@4.0.0:
+    resolution: {integrity: sha512-spKsIYganLXUOoeiUVzUHby1Ea4kK/UKdNRKlxFRfkcB6HlvO1zguqWIdQKwa2AkE+IuCc8lMSy1zmLA6hcgBg==}
+    engines: {node: '>=18'}
     peerDependencies:
       plotly.js: '>=3.0.0'
       react: ^18.0.0 || ^19.0.0
@@ -11443,10 +11434,6 @@ snapshots:
 
   loglevel@1.9.2: {}
 
-  loose-envify@1.4.0:
-    dependencies:
-      js-tokens: 4.0.0
-
   loupe@3.2.1: {}
 
   lru-cache@10.4.3: {}
@@ -12050,12 +12037,6 @@ snapshots:
       kleur: 3.0.3
       sisteransi: 1.0.5
 
-  prop-types@15.8.1:
-    dependencies:
-      loose-envify: 1.4.0
-      object-assign: 4.1.1
-      react-is: 16.13.1
-
   protocol-buffers-schema@3.6.1: {}
 
   proxy-from-env@2.1.0: {}
@@ -12166,18 +12147,15 @@ snapshots:
       react: 19.2.7
       scheduler: 0.27.0
 
-  react-is@16.13.1: {}
-
   react-is@17.0.2: {}
 
   react-is@18.3.1: {}
 
   react-is@19.2.7: {}
 
-  react-plotly.js@3.0.0(plotly.js@3.4.0(mapbox-gl@1.13.3))(react@19.2.7):
+  react-plotly.js@4.0.0(plotly.js@3.4.0(mapbox-gl@1.13.3))(react@19.2.7):
     dependencies:
       plotly.js: 3.4.0(mapbox-gl@1.13.3)
-      prop-types: 15.8.1
       react: 19.2.7
 
   react-refresh@0.18.0: {}
