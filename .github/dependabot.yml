@@ -7,7 +7,11 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 5
+    # Lowered 5 -> 3: every open PR gets rebased when a sibling merges, and
+    # each rebase re-runs the full CI matrix. Measured 2026-07: 27 CI runs
+    # came from 16 branches, i.e. ~40% of runner minutes went to rebase
+    # churn on PRs waiting in the queue.
+    open-pull-requests-limit: 3
     # Delay brand-new releases so breaking patch/minor fixes land upstream first.
     cooldown:
       default-days: 5
@@ -46,6 +50,17 @@ updates:
         patterns:
           - "storybook"
           - "@storybook/*"
+      # Development-dependency majors that no pattern group above claims
+      # (@types/node, fast-check, happy-dom, ...). Without this group each
+      # one opens a solo PR and burns a full CI matrix: in 2026-07 the
+      # single @types/node 26 bump cost 3 CI runs. Dev-only deps cannot
+      # reach users, so the blast radius of bundling them is one red CI.
+      # Production majors deliberately stay solo — react-plotly 2->3 and
+      # Vite 8 both needed individual verification.
+      dev-major:
+        dependency-type: "development"
+        update-types:
+          - "major"
       # Everything else: one weekly PR per production/development split.
       dev-minor-patch:
         dependency-type: "development"
