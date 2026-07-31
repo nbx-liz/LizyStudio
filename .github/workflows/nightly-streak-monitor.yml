@@ -38,27 +38,60 @@ jobs:
           script: |
             // Tunables -------------------------------------------------
             const STREAK_THRESHOLD = 5;
+            // Nightly's jobs are gated on develop activity (see the `guard`
+            // job in nightly.yml), so a Nightly run can complete with every
+            // tracked job reporting `skipped`. Those runs carry no signal:
+            // counting them as "not a failure" would break an ongoing red
+            // streak and silently stop the alert from firing — the exact
+            // false-clean failure mode this monitor exists to prevent.
+            // Look back over a wider window of runs and evaluate only the
+            // ones where the tracked job actually EXECUTED.
+            const RUN_WINDOW = 60;
             const TRACKED_JOBS = [
               "mutation-test",
               "E2E visual + a11y (Nightly, non-blocking)",
             ];
             const ISSUE_LABEL = "streak-alert";
             const dryRun = process.env.DRY_RUN === "true";
+            // A job that never ran contributes no evidence either way.
+            const executed = (c) => c !== null && c !== "skipped";
+
+            // 0. Early exit when the triggering run carries no new data --
+            // `workflow_run` fires after every Nightly, including the
+            // guard-only ones. Re-evaluating then would burn API calls to
+            // reach the identical verdict. Absent on workflow_dispatch, so
+            // a manual run always performs the full evaluation.
+            const triggerRunId = context.payload.workflow_run?.id;
+            if (triggerRunId) {
+              const trigger = await github.rest.actions.listJobsForWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: triggerRunId,
+              });
+              const anyTrackedRan = TRACKED_JOBS.some((name) => {
+                const job = trigger.data.jobs.find((j) => j.name === name);
+                return executed(job ? job.conclusion : null);
+              });
+              if (!anyTrackedRan) {
+                core.info(
+                  `Nightly run ${triggerRunId} skipped every tracked job ` +
+                  `(idle-night guard); streak state is unchanged.`
+                );
+                return;
+              }
+            }
 
             // 1. List recent Nightly runs ------------------------------
             const runs = await github.rest.actions.listWorkflowRuns({
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: "nightly.yml",
-              per_page: STREAK_THRESHOLD,
+              per_page: RUN_WINDOW,
               status: "completed",
             });
 
-            if (runs.data.workflow_runs.length < STREAK_THRESHOLD) {
-              core.info(
-                `Only ${runs.data.workflow_runs.length} completed runs available ` +
-                `(threshold ${STREAK_THRESHOLD}); skipping streak evaluation.`
-              );
+            if (runs.data.workflow_runs.length === 0) {
+              core.info("No completed Nightly runs; skipping streak evaluation.");
               return;
             }
 
@@ -76,7 +109,7 @@ jobs:
 
             // 3. For each tracked job, classify the streak -------------
             for (const jobName of TRACKED_JOBS) {
-              const conclusions = perRunJobs.map(({ run, jobs }) => {
+              const allConclusions = perRunJobs.map(({ run, jobs }) => {
                 const job = jobs.find((j) => j.name === jobName);
                 return {
                   runId: run.id,
@@ -85,6 +118,20 @@ jobs:
                   conclusion: job ? job.conclusion : null,
                 };
               });
+
+              // Drop the runs where this job did not execute, THEN take the
+              // most recent STREAK_THRESHOLD. `conclusions` therefore always
+              // means "the last N Nightlies in which this job actually ran".
+              const ran = allConclusions.filter((c) => executed(c.conclusion));
+              if (ran.length < STREAK_THRESHOLD) {
+                core.info(
+                  `Job "${jobName}": only ${ran.length} of the last ` +
+                  `${allConclusions.length} Nightly runs executed it ` +
+                  `(threshold ${STREAK_THRESHOLD}); skipping streak evaluation.`
+                );
+                continue;
+              }
+              const conclusions = ran.slice(0, STREAK_THRESHOLD);
 
               const allFail = conclusions.every((c) => c.conclusion === "failure");
               const anySuccess = conclusions.some((c) => c.conclusion === "success");
