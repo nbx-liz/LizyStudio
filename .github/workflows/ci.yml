@@ -226,7 +226,7 @@ jobs:
         if: needs.changes.outputs.frontend != 'false'
         working-directory: .
         run: bash scripts/check_orphan_goldens.sh
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         if: needs.changes.outputs.frontend != 'false'
         with:
           node-version: "20"
@@ -276,7 +276,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
       - name: Enable corepack and activate pnpm from packageManager field
@@ -413,7 +413,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
       - name: Enable corepack + pnpm
