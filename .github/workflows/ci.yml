@@ -12,15 +12,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Path-change detector. Downstream jobs gate on these outputs so docs-only
-  # / area-isolated PRs can skip irrelevant heavy jobs. Required status
-  # checks remain unconditional in Phase 1 — only non-blocking jobs use
-  # the `if:` gate to validate the wiring before broader rollout.
+  # Path-change detector. Downstream jobs gate on these outputs so
+  # area-isolated PRs can skip irrelevant heavy work.
+  #
+  # Phase 2 (was: "required checks stay unconditional in Phase 1"). Required
+  # checks now participate, but they gate their STEPS, never the job — a
+  # skipped job reports no context and GitHub scores a skipped required
+  # check as success. Only non-required jobs use a job-level `if:`.
+  # Measured motivation: every PR CI run in 2026-07 came from a dependabot
+  # npm bump, each paying ~11 min for a backend suite with no backend diff.
   #
   # Filter rules force-run the affected area when:
   #   * source code under the area changes
   #   * shared metadata (pyproject.toml, uv.lock, package.json) changes
-  #   * this workflow file itself changes (safety net against rule bugs)
+  #   * a shared shell/python script under scripts/ changes
+  #   * any workflow file changes (safety net against rule bugs)
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -37,14 +43,39 @@ jobs:
               - 'tests/**'
               - 'pyproject.toml'
               - 'uv.lock'
-              - '.github/workflows/ci.yml'
+              - 'scripts/**'
+              # Any workflow edit, not just ci.yml: tests/regression/
+              # test_nightly_streak_monitor.py asserts on the *contents* of
+              # nightly-streak-monitor.yml, so a change there must reach the
+              # backend suite that runs it.
+              - '.github/workflows/**'
             frontend:
               - 'frontend/**'
               - '!frontend/README.md'
-              - '.github/workflows/ci.yml'
-              - 'scripts/check-tohavebeencalled.sh'
+              - 'scripts/**'
+              - '.github/workflows/**'
 
+  # Phase 2 of the path-filter rollout. `backend (3.10)` / `backend (3.11)`
+  # are REQUIRED status checks, so the job itself must always run and
+  # report — a skipped job never reports its context and would block the
+  # PR forever. Only the expensive STEPS are gated, which drops a
+  # frontend-only PR (every dependabot npm bump) from ~5 min to the
+  # 1-minute job floor.
+  #
+  # Two fail-safes guard the required checks against the silent-pass class:
+  #
+  #   1. `if: !cancelled()` — a job with `needs:` is SKIPPED when its
+  #      dependency fails, and GitHub counts a skipped required check as
+  #      SUCCESS. Without this, a broken `changes` job would let a PR merge
+  #      with the whole backend suite never executed. `!cancelled()` runs
+  #      the job anyway (but still honours concurrency cancellation), and an
+  #      unset output then falls through to rule 2.
+  #   2. `!= 'false'`, never `== 'true'` — if paths-filter emits an empty
+  #      output, `== 'true'` would report green having run nothing.
+  #      `!= 'false'` fails safe by running the suite.
   backend:
+    needs: changes
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -52,19 +83,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
+        if: needs.changes.outputs.backend != 'false'
         with:
           enable-cache: true
       - run: uv sync
+        if: needs.changes.outputs.backend != 'false'
       # Lint / format / type-check are Python-version-independent. Run them
       # only on the 3.11 matrix leg so the 3.10 leg does not duplicate
       # ~18s of work. `backend (3.11)` stays the required check that
       # gates them in the branch-protection ruleset.
       - run: uv run ruff check .
-        if: matrix.python-version == '3.11'
+        if: needs.changes.outputs.backend != 'false' && matrix.python-version == '3.11'
       - run: uv run ruff format --check .
-        if: matrix.python-version == '3.11'
+        if: needs.changes.outputs.backend != 'false' && matrix.python-version == '3.11'
       - run: uv run mypy src/lizystudio/
-        if: matrix.python-version == '3.11'
+        if: needs.changes.outputs.backend != 'false' && matrix.python-version == '3.11'
       # Flaky-test strategy (Issue #29): CI reruns failures twice.
       # Local runs do NOT retry so flakiness stays visible. Quarantined
       # tests are excluded from this blocking job (default addopts in
@@ -72,16 +105,22 @@ jobs:
       # Integration tests (P-0095) live in their own job; ignore the
       # directory here so we do not double-run a 14s suite on every PR.
       - run: uv run pytest --ignore=tests/integration --cov=src/lizystudio --cov-report=term-missing --cov-fail-under=80 --reruns 2 --reruns-delay 1 -q
+        if: needs.changes.outputs.backend != 'false'
+      - name: Report skip reason
+        if: needs.changes.outputs.backend == 'false'
+        run: echo "::notice::No backend-relevant paths changed — suite skipped by the ci.yml path filter."
 
   # Non-blocking quarantine job — captures signal on tests marked
   # `@pytest.mark.quarantine` without failing the PR. Skip cleanly when
   # no tests carry the marker.
   #
-  # Path-filtered (Phase 1 pilot): docs-only / frontend-only PRs skip
+  # Path-filtered: docs-only / frontend-only PRs skip
   # this job. Non-required, so a skipped run cannot affect mergeability.
   backend-quarantine:
     needs: changes
-    if: needs.changes.outputs.backend == 'true'
+    # Same fail-safe polarity as the required jobs: a broken `changes` job
+    # must not silently disable this gate (DC4 — inert wiring).
+    if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -111,15 +150,26 @@ jobs:
   # so the ~14s suite parallelises with `backend (3.10)/(3.11)` and
   # does not inflate their wall time. Required check (configure in
   # GitHub branch protection alongside backend / frontend / e2e).
+  #
+  # Required check — job always runs, steps are path-gated (see `backend`
+  # for the two fail-safes).
   integration:
+    needs: changes
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
+        if: needs.changes.outputs.backend != 'false'
         with:
           enable-cache: true
       - run: uv sync
+        if: needs.changes.outputs.backend != 'false'
       - run: uv run pytest tests/integration -v --reruns 2 --reruns-delay 1
+        if: needs.changes.outputs.backend != 'false'
+      - name: Report skip reason
+        if: needs.changes.outputs.backend == 'false'
+        run: echo "::notice::No backend-relevant paths changed — integration suite skipped by the ci.yml path filter."
 
   # P-0103 v3-25b / R-4.1: format_version migration matrix gate. Runs
   # the runtime-fixture matrix (`test_format_version_migration_matrix`)
@@ -136,13 +186,13 @@ jobs:
   # not the broader regression suite. Required check (configure in
   # branch protection alongside backend / frontend / e2e).
   #
-  # Path-filtered (Phase 1 pilot): docs-only / frontend-only PRs skip
+  # Path-filtered: docs-only / frontend-only PRs skip
   # this job. Despite the comment above, this job is NOT currently in
   # the `Protect main` ruleset's required list (verified 2026-05-23) —
   # safe to gate.
   format-version-matrix:
     needs: changes
-    if: needs.changes.outputs.backend == 'true'
+    if: ${{ !cancelled() && needs.changes.outputs.backend != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -157,7 +207,11 @@ jobs:
             tests/test_storage_versions.py \
             -v --reruns 2 --reruns-delay 1
 
+  # Required check — job always runs, steps are path-gated (see `backend`
+  # for the two fail-safes).
   frontend:
+    needs: changes
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -169,20 +223,30 @@ jobs:
       # chromium-mobile orphan cleaned in #455 was found by accident). Pure
       # git/shell — runs in seconds, no extra runner.
       - name: Check for orphan visual goldens
+        if: needs.changes.outputs.frontend != 'false'
         working-directory: .
         run: bash scripts/check_orphan_goldens.sh
       - uses: actions/setup-node@v6
+        if: needs.changes.outputs.frontend != 'false'
         with:
           node-version: "20"
       - name: Enable corepack and activate pnpm from packageManager field
+        if: needs.changes.outputs.frontend != 'false'
         run: |
           corepack enable
           corepack prepare --activate
           pnpm --version
       - run: pnpm install --frozen-lockfile
+        if: needs.changes.outputs.frontend != 'false'
       - run: pnpm check
+        if: needs.changes.outputs.frontend != 'false'
       - run: pnpm build
+        if: needs.changes.outputs.frontend != 'false'
       - run: pnpm vitest run --coverage
+        if: needs.changes.outputs.frontend != 'false'
+      - name: Report skip reason
+        if: needs.changes.outputs.frontend == 'false'
+        run: echo "::notice::No frontend-relevant paths changed — suite skipped by the ci.yml path filter."
 
   # Post-Refactor E2E Gate (CLAUDE.md common/development-workflow.md §3.5).
   # Runs the functional Playwright suite on every PR so structural
@@ -327,11 +391,11 @@ jobs:
   # This grep guard stops a new bare ``.toHaveBeenCalled()`` from landing —
   # callback assertions must use the count-precise ``.toHaveBeenCalledTimes(N)``.
   #
-  # Path-filtered (Phase 1 pilot): docs-only / backend-only PRs skip
+  # Path-filtered: docs-only / backend-only PRs skip
   # this job. Non-required, so a skipped run cannot affect mergeability.
   tohavebeencalled-guard:
     needs: changes
-    if: needs.changes.outputs.frontend == 'true'
+    if: ${{ !cancelled() && needs.changes.outputs.frontend != 'false' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

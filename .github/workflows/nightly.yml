@@ -10,7 +10,48 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Idle-night guard. Every job below re-tests the SAME develop commit on a
+  # day with no pushes, which is where the bulk of this workflow's runner
+  # minutes went (measured 2026-07: 30 scheduled runs against 4 days with
+  # commits — ~87% of runs re-verified an unchanged tree).
+  #
+  # `plotly-cdn` is deliberately NOT gated on this output: it validates an
+  # EXTERNAL resource (CDN reachability + SRI hash freshness), so it can go
+  # red with zero develop activity. Gating it would silence the only check
+  # that watches a dependency we do not control.
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: develop
+      - id: check
+        name: Run only when develop moved since the previous Nightly
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "Manual dispatch — running unconditionally."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          LAST=$(git log -1 --format=%ct)
+          NOW=$(date +%s)
+          AGE_H=$(( (NOW - LAST) / 3600 ))
+          # 25h (not 24h) so cron jitter cannot drop a night that did have a
+          # push a few minutes outside a strict 24h window.
+          if [ "$AGE_H" -lt 25 ]; then
+            echo "::notice::develop HEAD is ${AGE_H}h old — running full Nightly."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::develop HEAD is ${AGE_H}h old (unchanged) — skipping develop-dependent jobs."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
   backend:
+    needs: guard
+    if: needs.guard.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -37,6 +78,8 @@ jobs:
     # bench file runs. The JSON output is uploaded as an artefact for
     # manual inspection. A future Proposal can add automatic regression
     # detection by comparing across runs.
+    needs: guard
+    if: needs.guard.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -76,6 +119,10 @@ jobs:
     # ``tests/bench/`` directory out of the default selection; we run
     # this file by path so the marker-based selection is enough.
     name: Pickle compatibility matrix (v3-26)
+    # PAST_VERSIONS is a hardcoded list, so this job's outcome is a pure
+    # function of the develop tree — safe to gate.
+    needs: guard
+    if: needs.guard.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -105,6 +152,11 @@ jobs:
 
   plotly-cdn:
     name: Plotly CDN reachability & SRI freshness
+    # Intentionally NOT gated on `guard`: the thing under test is an
+    # external CDN artefact, which can change (and break the pinned SRI
+    # hash) on a night when develop saw no commits at all. This is the
+    # only Nightly job whose failure mode is independent of our own tree,
+    # so it keeps the daily cadence.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -136,6 +188,8 @@ jobs:
           echo "✓ SRI hash matches"
 
   frontend:
+    needs: guard
+    if: needs.guard.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -165,6 +219,8 @@ jobs:
   # backlog are clean.
   e2e-visual-a11y:
     name: E2E visual + a11y (Nightly, non-blocking)
+    needs: guard
+    if: needs.guard.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     continue-on-error: true
     defaults:
@@ -228,6 +284,8 @@ jobs:
     # a TREND METRIC, not a PR gate — ``continue-on-error: true`` keeps
     # this job non-blocking. Tightening per module is tracked via
     # follow-up issues once the baseline lands.
+    needs: guard
+    if: needs.guard.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 45
