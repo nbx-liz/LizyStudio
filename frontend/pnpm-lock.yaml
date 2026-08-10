@@ -38,11 +38,11 @@ importers:
         specifier: ^3.1.3
         version: 3.1.3
       js-yaml:
-        specifier: ^5.2.2
-        version: 5.2.2
+        specifier: ^5.2.3
+        version: 5.2.3
       lucide-react:
-        specifier: ^1.27.0
-        version: 1.27.0(react@19.2.8)
+        specifier: ^1.28.0
+        version: 1.28.0(react@19.2.8)
       openapi-fetch:
         specifier: ^0.17.0
         version: 0.17.0
@@ -56,8 +56,8 @@ importers:
         specifier: ^19.2.8
         version: 19.2.8(react@19.2.8)
       react-plotly.js:
-        specifier: ^4.0.0
-        version: 4.0.0(plotly.js@3.4.0(mapbox-gl@1.13.3))(react@19.2.8)
+        specifier: ^4.1.0
+        version: 4.1.0(plotly.js@3.4.0(mapbox-gl@1.13.3))(react@19.2.8)
       react-resizable-panels:
         specifier: ^4
         version: 4.12.2(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -4822,8 +4822,8 @@ packages:
     resolution: {integrity: sha512-qQKT4zQxXl8lLwBtHMWwaTcGfFOZviOJet3Oy/xmGk2gZH677CJM9EvtfdSkgWcATZhj/55JZ0rmy3myCT5lsA==}
     hasBin: true
 
-  js-yaml@5.2.2:
-    resolution: {integrity: sha512-dayzUzKkJ1MkuUtZglSebU43utNXH0OWQByK9rKOOuYIO8M5TV1y+n8ALMdG0rdzBnfNkOmZEqrURepb0ejqBw==}
+  js-yaml@5.2.3:
+    resolution: {integrity: sha512-n+mUVyUX5bVv7G/G2zyIHOhdxfuU1dY2NOFzTQUWiMUbFss8b57NFlgCCaggU78wSw5KVS9cllzeLyzyR+n5nw==}
     hasBin: true
 
   jsdom@29.0.2:
@@ -4988,8 +4988,8 @@ packages:
   lru-cache@5.1.1:
     resolution: {integrity: sha512-KpNARQA3Iwv+jTA0utUVVbrh+Jlrr1Fv0e56GGzAFOXN7dk/FviaDW8LHmK52DlcH4WP2n6gI8vN1aesBFgo9w==}
 
-  lucide-react@1.27.0:
-    resolution: {integrity: sha512-rJicGl/3Fly/E0rOH1YmPZ6e49JCnKknh1ox1vpHnkfjujAkKA6sqUZvH3MTAaXXjgexyUwgNwTJzTtYuAFYJw==}
+  lucide-react@1.28.0:
+    resolution: {integrity: sha512-fARAFJULsGuDDydjp6+6blekG/sBIM29TerzLjc9bQUKAcEfrSc4ZQKb25KRz4OMKd87cZTb5dgq0w/T6KufVg==}
     peerDependencies:
       react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
@@ -5523,8 +5523,8 @@ packages:
   react-is@19.2.8:
     resolution: {integrity: sha512-s5un28nYxKJw5gvUHyW5PCC28CvBqLu9r3cWgzHT4Vo/5fqqkFcdRYsGcKf50WMPpjjFZS5d76fn3YCo2njKwQ==}
 
-  react-plotly.js@4.0.0:
-    resolution: {integrity: sha512-spKsIYganLXUOoeiUVzUHby1Ea4kK/UKdNRKlxFRfkcB6HlvO1zguqWIdQKwa2AkE+IuCc8lMSy1zmLA6hcgBg==}
+  react-plotly.js@4.1.0:
+    resolution: {integrity: sha512-+CJA9xOY4UjH1RnRqQnpBGoFSzsrB/e7CR4k8AMQ20RkBlXjqkiIVLdIA5N1hinEVdoTdhaS6krKEARyfSixXg==}
     engines: {node: '>=18'}
     peerDependencies:
       plotly.js: '>=3.0.0'
@@ -11392,7 +11392,7 @@ snapshots:
     dependencies:
       argparse: 2.0.1
 
-  js-yaml@5.2.2:
+  js-yaml@5.2.3:
     dependencies:
       argparse: 2.0.1
 
@@ -11522,7 +11522,7 @@ snapshots:
     dependencies:
       yallist: 3.1.1
 
-  lucide-react@1.27.0(react@19.2.8):
+  lucide-react@1.28.0(react@19.2.8):
     dependencies:
       react: 19.2.8
 
@@ -12237,7 +12237,7 @@ snapshots:
 
   react-is@19.2.8: {}
 
-  react-plotly.js@4.0.0(plotly.js@3.4.0(mapbox-gl@1.13.3))(react@19.2.8):
+  react-plotly.js@4.1.0(plotly.js@3.4.0(mapbox-gl@1.13.3))(react@19.2.8):
     dependencies:
       plotly.js: 3.4.0(mapbox-gl@1.13.3)
       react: 19.2.8
