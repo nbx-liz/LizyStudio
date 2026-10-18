@@ -13,6 +13,13 @@ raises ``KeyboardInterrupt`` on the main thread so the existing
 - INV-7: on SIGTERM to the child, ``_run_job_core.finally`` runs to
   completion: ``execution.log`` is flushed and terminal status is
   persisted.
+
+  Coverage note: the subprocess tests below exercise only the handler
+  mechanism — a SIGTERM delivered while the child is inside a guarded
+  ``try`` becomes a ``KeyboardInterrupt`` that the ``except`` catches.
+  They do not run ``_child_main`` or ``_run_job_core``, so they do NOT
+  cover a SIGTERM that arrives during ``_child_main`` setup, before
+  ``_run_job_core``'s ``try`` is entered; that window is unguarded.
 - INV-8: the SIGTERM handler is single-shot. A second SIGTERM is
   a no-op (handler reset to SIG_DFL so SIGKILL-class escalation
   via ``proc.kill()`` still works).
@@ -39,10 +46,13 @@ import time
 from lizystudio.services.subprocess_runner import _install_sigterm_handler
 
 _install_sigterm_handler()
-sys.stdout.write("READY\\n")
-sys.stdout.flush()
 
 try:
+    # READY must be emitted inside the try: the parent signals as soon
+    # as it reads READY, so a KeyboardInterrupt raised between the write
+    # and entering the try would escape uncaught (rc=-2 under load).
+    sys.stdout.write("READY\\n")
+    sys.stdout.flush()
     # Block until SIGTERM arrives. time.sleep is interruptible by
     # signals on POSIX.
     for _ in range(100):
@@ -81,8 +91,9 @@ def _wait_for_ready(proc: subprocess.Popen[bytes]) -> None:
     reason="SIGTERM semantics are POSIX-only",
 )
 def test_sigterm_converts_to_keyboardinterrupt() -> None:
-    """INV-7: SIGTERM raises KeyboardInterrupt on the main thread so
-    the existing finally/except path runs instead of _exit."""
+    """INV-7 (handler mechanism): SIGTERM raises KeyboardInterrupt on
+    the main thread so a guarded finally/except path runs instead of
+    _exit. See the module coverage note for what this does not cover."""
     proc = subprocess.Popen(
         [sys.executable, "-u", "-c", _HANDLER_SCRIPT],
         stdout=subprocess.PIPE,
@@ -112,10 +123,11 @@ import time
 from lizystudio.services.subprocess_runner import _install_sigterm_handler
 
 _install_sigterm_handler()
-sys.stdout.write("READY\\n")
-sys.stdout.flush()
 
 try:
+    # Inside the try for the same READY/SIGTERM race as above.
+    sys.stdout.write("READY\\n")
+    sys.stdout.flush()
     for _ in range(100):
         time.sleep(0.1)
 except KeyboardInterrupt:
