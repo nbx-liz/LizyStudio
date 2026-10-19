@@ -4520,6 +4520,8 @@ Option B は v0.7+ で `STUDIO_FORMAT_VERSION` 2 → 3 bump タイミングで�
 
 #### Motivation
 
+以下の行番号は、修正前の develop 52c89e1 のものである。
+
 worker が job を終えると、launcher の thread は次の順に処理する。
 
 1. job の終端の状態を JobStore に保存する（`completed` は `_training_core.py:208-215`、`cancelled` は `:230-235`、`failed` は `:236-242`）。
@@ -4572,12 +4574,12 @@ reset が成功した後は、その reset より前に始まった launcher の
 
 #### Acceptance Criteria
 
-- [x] **起動の途中の reset:** launcher が世代番号を取得したあと、worker の処理が始まる前（`_join_previous_thread` の待ちの間、および `t.start()` と `register_job_thread` の間）を barrier で止め、その間に reset する。その launcher と worker は、`current_job_id`、要約、job thread の登録のどれも書き戻さない。reset の後の `previous_job_thread()` は `None` のまま。（`tests/regression/test_reg_0701_reset_fences_late_workspace_writes.py` の `test_reset_during_launch_is_not_undone`、`test_retune_worker_start_note_after_reset_is_fenced`）
+- [x] **起動の途中の reset:** launcher が世代番号を取得したあと、worker の処理が始まる前（`_join_previous_thread` の待ちの間、および `t.start()` と `register_job_thread` の間）を barrier で止め、その間に reset する。その launcher と worker は、`current_job_id`、要約、job thread の登録のどれも書き戻さない。reset の後の `previous_job_thread()` は `None` のまま。（`tests/regression/test_reg_0701_reset_fences_late_workspace_writes.py` の `test_reset_during_launch_join_is_not_undone`（fit / tune）と `test_reset_between_thread_start_and_registration_is_not_undone`（fit / tune / retune）。retune の起動時の書き込みは `test_retune_worker_start_note_after_reset_is_fenced`）
 - [x] **unpause:** `/unpause` で同じ job id を再開した場合も、世代番号を呼び出しのたびに取得していることを、unpause の前後に reset を挟むテストで確かめる。（`test_relaunching_the_same_job_after_reset_records_again`）
-- [x] **完了の直後の reset:** job が `completed` になってから `record_completion` が呼ばれるまでの間を barrier で止め、その間に reset する。barrier を外したあとも、`current_job_id`、`workspace_fit_result`、`workspace_tune_result` は空のまま。現行コードで失敗する regression test を付ける。（`test_reset_after_completion_is_not_undone_*` の 6 件。fence を無効にすると落ちる）
-- [x] **実行中の reset:** 実行中の job に reset が cancel を要求した場合も、reset の後に workspace の状態が戻らない。（`test_reset_cancelling_a_running_job_is_not_undone`）
-- [x] **reset の後に起動した job:** reset の後に起動した fit / tune / retune は、従来どおり `current_job_id` と要約を記録する。（`test_launch_after_reset_records_normally`）
-- [x] **全経路を覆う:** thread mode と subprocess mode の両方で、fit / tune / retune の完了（completed / cancelled / failed）、失敗を保存したあとの `note_current_job`（`_training_core.py:427`、`training_retune.py:146`）、worker 開始時の `note_current_job`（`training_retune.py:265`）の各経路を確かめる。（thread / subprocess × fit / tune / retune、`test_reset_after_failure_is_not_undone`、`test_early_failure_note_after_reset_is_fenced`、`test_reset_during_retune_launch_fences_the_failure_note`。fence を無効にすると 15 件中 14 件が落ちる）
+- [x] **完了の直後の reset:** job が `completed` になってから `record_completion` が呼ばれるまでの間を barrier で止め、その間に reset する。barrier を外したあとも、`current_job_id`、`workspace_fit_result`、`workspace_tune_result` は空のまま。現行コードで失敗する regression test を付ける。（`test_reset_after_terminal_status_is_not_undone` の completed の 6 件。fence を無効にすると落ちる）
+- [x] **実行中の reset:** 実行中の job に reset が cancel を要求した場合も、reset の後に workspace の状態が戻らない。（`test_api_reset_cancelling_a_running_job_is_not_undone`（fit / tune、thread mode）。本物の `workspace_reset` が cancel を要求し、slot の解放を待ってから reset する。subprocess mode は `record_completion` の後で slot を解放するので、reset の待ちがすでに順序を保証する）
+- [x] **reset の後に起動した job:** reset の後に起動した fit / tune / retune は、従来どおり `current_job_id` と要約を記録する。（`test_launch_after_reset_records_normally`、fit / tune / retune × thread / subprocess の 6 件）
+- [x] **全経路を覆う:** thread mode と subprocess mode の両方で、fit / tune / retune の完了（completed / cancelled / failed）、失敗を保存したあとの `note_current_job`（`_training_core.py:427`、`training_retune.py:146`）、worker 開始時の `note_current_job`（`training_retune.py:265`）の各経路を確かめる。（`test_reset_after_terminal_status_is_not_undone`、fit / tune / retune × thread / subprocess × completed / failed / cancelled の 18 件。失敗時の `note_current_job` は `test_early_failure_note_after_reset_is_fenced` と `test_reset_during_retune_launch_fences_the_failure_note`、worker 開始時の `note_current_job` は `test_retune_worker_start_note_after_reset_is_fenced`。fence を無効にすると 36 件中 30 件が落ち、通る 6 件は reset の後の起動の確認だけ）
 - [x] **#701 の e2e:** `workspace-fit.spec.ts` を CI と同じ shard の構成で繰り返し実行し、retry なしで通る。（ローカルの chromium、spec 全体を `--repeat-each 10 --retries 0` で 98/98 passed。CI の e2e shard は実装 PR で確認する。live backend の probe は修正前 10/10 → 修正後 0/10 で、10 回とも `record_completion` が捨てられたことをログで確認）
 - [x] 捨てた書き込みはログに残る（job id と、起動時と現在の世代番号）。（`test_dropped_write_is_logged`。INFO の `workspace.stale_write_dropped`）
 
