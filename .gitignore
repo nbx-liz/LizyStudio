@@ -55,6 +55,17 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 .benchmarks/
+# Test and mutation-testing outputs (configured in playwright.config.ts,
+# stryker.conf.json and the nightly mutation-test job). The Codex sandbox's
+# relative UV_CACHE_DIR (.uv_cache/) is deliberately NOT ignored here:
+# it is a sandbox configuration bug, tracked in nbx-liz/codex-config#132.
+frontend/test-results/
+frontend/playwright-report/
+frontend/.stryker-tmp/
+frontend/stryker-report.html
+mutants/
+.mutmut-cache/
+.mutmut-results.txt
 
 # Turbo temporary files
 turbo-*.cfg

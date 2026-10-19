@@ -23,6 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
 ]
 dependencies = [
@@ -177,7 +178,12 @@ paths_to_mutate = [
 # Run the matching test suites so a mutation is "killed" by an existing
 # regression test failing, not by random luck.
 runner = "uv run pytest tests/regression/test_inv_state_machine.py tests/regression/test_inv_pause_keeps_slot.py tests/regression/test_inv_slot_release.py tests/property/test_pbt_job_state_machine.py -x -q --no-cov"
-# Mutmut writes its database under ``.mutmut/`` at the repo root; the
-# block-stray-artefacts hook treats that prefix as managed (see
-# scripts/check_stray.py).
+# Mutmut 3.x writes its working tree under ``mutants/`` at the repo root, and
+# the nightly job writes ``.mutmut-results.txt``; both are gitignored.
 tests_dir = "tests"
+
+# The uv version floor for this project (P-0113). ``uv sync --locked`` freezes
+# the dependencies, not the uv executable; an older uv refuses to run here
+# with a clear error instead of misreading the lockfile.
+[tool.uv]
+required-version = ">=0.13"

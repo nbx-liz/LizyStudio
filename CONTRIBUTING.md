@@ -5,29 +5,59 @@ conventions, and quality gates you need to know.
 
 ## Getting started
 
-### Prerequisites
+This section is the one canonical setup guide. `README.md` and
+`frontend/README.md` link here instead of repeating it.
 
-- Python 3.10+
-- Node.js 24+ (pinned via `.nvmrc`; use [fnm](https://github.com/Schniz/fnm) or [nvm](https://github.com/nvm-sh/nvm) to auto-switch)
-- [uv](https://docs.astral.sh/uv/) (Python package manager)
-- [pnpm](https://pnpm.io/) (frontend package manager — activated via Node corepack from `packageManager` field)
+### Supported toolchain
 
-### Development setup
+| Tool | Version | Where it is pinned |
+|---|---|---|
+| Python | 3.10 – 3.14 are supported and tested; develop on **3.12** | `requires-python` and classifiers in `pyproject.toml`; `.python-version` selects 3.12; CI tests 3.10/3.11 on every PR and 3.10–3.14 nightly |
+| uv | 0.13 or newer | `[tool.uv] required-version` in `pyproject.toml` |
+| Node.js | **24** | `.nvmrc`, `engines.node` (pnpm only warns on an older Node) |
+| pnpm | **10.31.0** | `packageManager` in `frontend/package.json`, activated by corepack |
+
+Dependencies are locked: always install with `uv sync --locked` and
+`pnpm install --frozen-lockfile`, as CI does. A lockfile that no longer
+matches `pyproject.toml` or `package.json` then fails loudly, instead of
+being re-resolved silently.
+
+### One-time setup
 
 ```bash
 # Clone the repository
 git clone https://github.com/nbx-liz/LizyStudio.git
 cd LizyStudio
 
-# Backend
-uv sync                             # install Python dependencies
-uv run lizystudio --reload          # dev server on http://localhost:8501
+# Backend: Python dependencies and the git hooks
+uv sync --locked                    # creates .venv with the Python from .python-version
+uv run pre-commit install           # ruff, biome and the stray-artefact check on every commit
 
-# Frontend
+# Frontend: pnpm via corepack, dependencies, the E2E browser
+corepack enable                     # once per Node installation
 cd frontend
-pnpm install                        # install Node dependencies
-pnpm dev                            # Vite dev server on http://localhost:5173 (proxies to 8501)
+pnpm install --frozen-lockfile
+pnpm exec playwright install chromium
 ```
+
+### Daily development
+
+```bash
+uv run lizystudio --reload          # backend dev server on http://localhost:8501
+
+cd frontend
+pnpm dev                            # Vite dev server on http://localhost:5173 (proxies /api to 8501)
+```
+
+Notes:
+
+- `pnpm generate:api` reads the OpenAPI schema from the running backend, so
+  start `uv run lizystudio` first.
+- `pnpm test:e2e` starts its own backend on port 8501 with
+  `LIZYSTUDIO_FILES_ROOT=/tmp`. Locally it reuses a server that already holds
+  the port, and its global setup then fails fast if that server is a plain
+  dev server (`frontend/tests/e2e/global-setup.ts`). Stop the dev server
+  before running E2E.
 
 ## Branch workflow
 
