@@ -130,7 +130,9 @@ def test_inv6_subprocess_abnormal_exit_reconciles_to_failed(
     )
 
     ws = _make_ws_mock()
-    training_module._run_subprocess_job(ws, job, job_store, broadcaster=MagicMock())
+    training_module._run_subprocess_job(
+        ws, job, job_store, broadcaster=MagicMock(), epoch=ws.current_epoch()
+    )
 
     assert job_store.active_job_id is None, (
         "INV-1: slot must release after subprocess abnormal exit"
@@ -304,7 +306,7 @@ def test_inv6_cancel_then_subprocess_kill_reconciles_to_cancelled(
 
     ws = _make_ws_mock()
     result = training_module._run_subprocess_job(
-        ws, job, job_store, broadcaster=MagicMock()
+        ws, job, job_store, broadcaster=MagicMock(), epoch=ws.current_epoch()
     )
 
     assert result.status == "cancelled", (

@@ -403,10 +403,13 @@ def _run_subprocess_job(
     retune_boundary_threshold: float | None = None,
     on_data_missing: Callable[[Job], None] | None = None,
     resume_from_existing_study: bool = False,
+    epoch: int,
 ) -> Job:
     """Run a job via subprocess and update workspace state.
 
-    Shared by fit, tune, and retune subprocess paths.
+    Shared by fit, tune, and retune subprocess paths. *epoch* is the
+    workspace reset generation the launcher captured (P-0114); workspace
+    writes from an older generation are dropped.
     """
     from lizystudio.services.subprocess_runner import run_job_in_subprocess
     from lizystudio.services.workspace import get_backend_name
@@ -424,7 +427,7 @@ def _run_subprocess_job(
                 job_store.update(job)
                 if broadcaster is not None:
                     broadcaster.send_error(job.job_id, job.error)
-                ws.note_current_job(job.job_id)
+                ws.note_current_job(job.job_id, epoch=epoch)
                 job_store.record_job_terminal(job.job_type, "failed")
                 terminal_already_recorded = True
             return job
@@ -454,6 +457,7 @@ def _run_subprocess_job(
             fit_result=finished.fit_result,
             tune_result=finished.tune_result,
             job_id=finished.job_id,
+            epoch=epoch,
         )
         return finished
     finally:

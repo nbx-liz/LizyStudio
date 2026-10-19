@@ -84,7 +84,9 @@ def test_subprocess_job_releases_slot_on_success(
         _fake_run_subprocess,
     )
 
-    training_module._run_subprocess_job(ws, job, job_store, broadcaster=MagicMock())
+    training_module._run_subprocess_job(
+        ws, job, job_store, broadcaster=MagicMock(), epoch=ws.current_epoch()
+    )
 
     assert job_store.active_job_id is None, (
         "subprocess success path must release the active slot"
@@ -108,7 +110,9 @@ def test_subprocess_job_releases_slot_on_exception(
     )
 
     with pytest.raises(RuntimeError, match="simulated"):
-        training_module._run_subprocess_job(ws, job, job_store, broadcaster=MagicMock())
+        training_module._run_subprocess_job(
+            ws, job, job_store, broadcaster=MagicMock(), epoch=ws.current_epoch()
+        )
 
     assert job_store.active_job_id is None, (
         "subprocess failure path must still release the slot"
@@ -124,7 +128,9 @@ def test_subprocess_job_releases_slot_when_data_ref_missing(
     ws.data_ref = None
     job = _make_claimed_job(job_store)
 
-    training_module._run_subprocess_job(ws, job, job_store, broadcaster=MagicMock())
+    training_module._run_subprocess_job(
+        ws, job, job_store, broadcaster=MagicMock(), epoch=ws.current_epoch()
+    )
 
     assert job_store.active_job_id is None
     reloaded = job_store.get(job.job_id)

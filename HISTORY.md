@@ -4510,3 +4510,77 @@ Option B は v0.7+ で `STUDIO_FORMAT_VERSION` 2 → 3 bump タイミングで�
 - [ ] `.python-version` があり、`uv sync --locked` が 3.12 で `.venv` を作る。
 - [ ] uv 0.13 未満では、`required-version` を理由にはっきりしたエラーになる。
 - [ ] `CONTRIBUTING.md` § Getting started が、この約束を唯一の正本として説明する。README と frontend/README は、そこへのリンクにする。
+
+
+### P-0114: workspace の reset を、それより前に起動した worker の書き込みから守る（Change Gate: 共有状態の不変条件、Issue #701）
+
+- **Date:** 2026-10-19 起票、同日 accepted
+- **Issue:** #701
+- **Related:** `services/workspace.py`（`WorkspaceState.reset` / `record_completion` / `note_current_job`）、`api/workspace.py`（`workspace_reset`、`_teardown_active_job`）、`services/training.py`（`start_fit_async` / `start_tune_async`）、`services/training_retune.py`、`services/_training_core.py`（`_run_subprocess_job`）、`frontend/src/pages/WorkspacePage.tsx`（`current_job_id` からの再接続）、Epic #635（同じ種類の、古い書き手の問題）
+
+#### Motivation
+
+worker が job を終えると、launcher の thread は次の順に処理する。
+
+1. job の終端の状態を JobStore に保存する（`completed` は `_training_core.py:208-215`、`cancelled` は `:230-235`、`failed` は `:236-242`）。
+2. そのあとで `ws.record_completion(...)` を呼び、workspace の `current_job_id` と fit/tune の要約を書く。呼び出し箇所は `training.py:504`、`:558`、`training_retune.py:290`、subprocess mode では `_training_core.py:453` である。
+
+`note_current_job` の呼び出しは 3 か所あり、性質がそれぞれ違う。
+- `_training_core.py:427` と `training_retune.py:146` は、JobStore に失敗を保存したあとで呼ぶ。
+- `training_retune.py:265` は、成否にかかわらず worker の開始時に呼ぶ。
+
+もう 1 つ、workspace に書き込む箇所がある。どの launcher も `t.start()` のあとで `ws.register_job_thread(t)` を呼ぶ（`training.py:510` など）。`reset()` は `_job_thread` を `None` にする（`workspace.py:66`）ので、`t.start()` と `register_job_thread` の間に reset が入ると、reset より前の thread がまた登録される。すると次の `_join_previous_thread` はその古い thread を待ち、強制解放の経路では最大 30 秒の待ちや `PreviousJobStillRunningError` につながる。
+
+ほかの workspace の項目（`model`、`config`、`data_ref`、`dataframe`、`tuning_overrides`、temp files）を書き換えるのは、`WorkspaceState` 自身のメソッドと API のリクエスト処理だけである。worker からは書き込まない。
+
+`POST /api/workspace/reset` は、active な job を止めて slot の解放を待ち（`_teardown_active_job`）、それから `ws.reset()` で `current_job_id` と要約を消す（`workspace.py:55-65`）。ところが reset には、それより前に起動した worker がこの後で書き込むのを止める仕組みがない。そのため、次の 2 つの経路で古い job が workspace に戻ってくる。
+
+- **完了の直後の reset（実測）。** job が `completed` になった直後に reset すると、約 0.35〜0.53 秒後に `current_job_id` が元の job に戻った。ローカルの backend（develop be17fe6）で 10 回試して 10 回とも起きた。#701 の e2e の flake の原因であり、CI の trace とも一致する。
+- **実行中の reset（code からの推定）。** reset が実行中の job に cancel を要求すると、worker は `cancelled` で終わって slot を解放する。reset はその解放を待ってから `ws.reset()` を行う。しかし launcher は、終わった job の status にかかわらず `record_completion(job_id=...)` を呼ぶ（`training.py:496-508`）。そのため、reset の後で、cancel された job が workspace に戻る可能性がある。
+
+利用者への影響: reset した直後に、消したはずの job の結果が workspace に再び現れ、UI もその job に再接続する（`WorkspacePage.tsx:75-77`）。
+
+#### Purpose
+
+reset が成功した後は、その reset より前に始まった launcher の呼び出しやその worker が、workspace の状態（`current_job_id`、`workspace_fit_result`、`workspace_tune_result`、job thread の登録）を書き換えられないようにする。job そのものの lifecycle（status、cancel flag、slot）は対象外とし、#613 / #697（Epic #635）で扱う。
+
+#### Options
+
+##### (A) reset の世代番号（epoch）で古い書き込みを弾く（推奨）
+
+- `WorkspaceState` に世代番号を持たせ、`reset()` のたびに lock の下で 1 つ進める。
+- 世代番号は、launcher の呼び出しごとに入口で取得する。取得するのは `_join_previous_thread` より前である。job の作成時に取得するのではない。`/unpause` は同じ job id で `start_tune_async` をもう一度呼ぶので、呼び出しのたびに新しく取得する必要がある。
+- 取得した世代番号を worker に渡す。
+- `record_completion`、`note_current_job`、`register_job_thread` の 3 つは、世代番号を受け取り、lock の下で現在の値と比べる。一致しないときは書かずに捨て、ログに残す。
+- 影響範囲は `WorkspaceState`、fit / tune / retune の launcher、subprocess の launcher である。API と保存形式は変わらない。
+
+##### (B) reset が worker の thread の終了を待つ
+
+- reset が `_job_thread` を join してから `ws.reset()` を行う。
+- 欠点: `t.start()` と `register_job_thread` の間に reset が入ると、reset からは thread が見えず、待つことができない。thread が終わらない場合は reset が止まる。reset は 12 秒で強制解放に進む作りなので、待ち時間の上限とも整合しない。
+
+##### (C) `record_completion` を終端の状態の保存より前に行う
+
+- thread mode では、終端の状態の保存と slot の解放より前に workspace へ書くので、完了直後の reset と、通常の cancel 経路の reset の両方が閉じる。
+- 欠点: subprocess mode には同じ並べ替えを適用できない。親が結果を受け取るのは、子が終端の状態を保存した後だからである（`_training_core.py:453`）。強制解放の経路と `register_job_thread` の窓も残る。そのため、どの mode にも一様には効かない。
+
+#### Compatibility
+
+- **API:** 変更なし。
+- **状態:** reset の後は、その前に起動した job の要約を workspace が持たなくなる（意図した変化）。job そのもの（JobStore の記録、Jobs の一覧、`/jobs/{id}` の結果）には影響しない。
+- **保存形式:** 変更なし。
+
+#### Acceptance Criteria
+
+- [ ] **起動の途中の reset:** launcher が世代番号を取得したあと、worker の処理が始まる前（`_join_previous_thread` の待ちの間、および `t.start()` と `register_job_thread` の間）を barrier で止め、その間に reset する。その launcher と worker は、`current_job_id`、要約、job thread の登録のどれも書き戻さない。reset の後の `previous_job_thread()` は `None` のまま。
+- [ ] **unpause:** `/unpause` で同じ job id を再開した場合も、世代番号を呼び出しのたびに取得していることを、unpause の前後に reset を挟むテストで確かめる。
+- [ ] **完了の直後の reset:** job が `completed` になってから `record_completion` が呼ばれるまでの間を barrier で止め、その間に reset する。barrier を外したあとも、`current_job_id`、`workspace_fit_result`、`workspace_tune_result` は空のまま。現行コードで失敗する regression test を付ける。
+- [ ] **実行中の reset:** 実行中の job に reset が cancel を要求した場合も、reset の後に workspace の状態が戻らない。
+- [ ] **reset の後に起動した job:** reset の後に起動した fit / tune / retune は、従来どおり `current_job_id` と要約を記録する。
+- [ ] **全経路を覆う:** thread mode と subprocess mode の両方で、fit / tune / retune の完了（completed / cancelled / failed）、失敗を保存したあとの `note_current_job`（`_training_core.py:427`、`training_retune.py:146`）、worker 開始時の `note_current_job`（`training_retune.py:265`）の各経路を確かめる。
+- [ ] **#701 の e2e:** `workspace-fit.spec.ts` を CI と同じ shard の構成で繰り返し実行し、retry なしで通る。
+- [ ] 捨てた書き込みはログに残る（job id と、起動時と現在の世代番号）。
+
+#### Decision
+
+- **2026-10-19 accepted**（owner）: Option A（reset の世代番号）を採用する。

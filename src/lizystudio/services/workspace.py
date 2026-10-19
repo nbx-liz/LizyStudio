@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import logging
 import re
 import threading
 from dataclasses import dataclass, field
@@ -22,6 +23,8 @@ from lizystudio.backends.types import (
     TuningOverrides,
     TuningSummary,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -51,10 +54,15 @@ class WorkspaceState:
     _job_thread: threading.Thread | None = field(default=None, repr=False)
     # Temp files to clean up on reset
     _temp_files: list[str] = field(default_factory=list, repr=False)
+    # P-0114: reset generation. ``reset()`` advances it; a launcher captures
+    # it on entry and the post-job writers drop writes from an older one, so
+    # a worker launched before a reset cannot restore the state it cleared.
+    _epoch: int = field(default=0, repr=False)
 
     def reset(self) -> None:
         """Clear everything except the backend adapter."""
         with self._lock:
+            self._epoch += 1
             self.config = {}
             self.tuning_overrides = None
             self.data_ref = None
@@ -128,16 +136,50 @@ class WorkspaceState:
 
     # --- Background job thread coordination (A-4) ---
 
-    def register_job_thread(self, thread: threading.Thread) -> None:
+    def current_epoch(self) -> int:
+        """Return the reset generation (P-0114).
+
+        Launchers call this on entry, before ``_join_previous_thread``, and
+        pass the value to :meth:`register_job_thread`,
+        :meth:`record_completion` and :meth:`note_current_job`.
+        """
+        with self._lock:
+            return self._epoch
+
+    def _is_stale_locked(self, epoch: int, *, kind: str, job_id: str) -> bool:
+        """Return ``True`` (and log) when *epoch* predates the last reset.
+
+        Caller must hold ``self._lock``. Logged at INFO: after a user reset,
+        dropping the write is the designed outcome, not a fault.
+        """
+        if epoch == self._epoch:
+            return False
+        _logger.info(
+            "event='workspace.stale_write_dropped' kind=%s job=%s "
+            "launched_epoch=%d current_epoch=%d",
+            kind,
+            job_id,
+            epoch,
+            self._epoch,
+        )
+        return True
+
+    def register_job_thread(
+        self, thread: threading.Thread, *, epoch: int, job_id: str
+    ) -> bool:
         """Record *thread* as the currently-active background job thread.
 
         Replaces any previously-registered handle under the workspace
         lock so the reader side (:meth:`previous_job_thread`) never sees
         a torn write when a new job is started while the previous one is
-        still winding down.
+        still winding down. Returns ``False`` without registering when
+        the workspace was reset after the launcher captured *epoch*.
         """
         with self._lock:
+            if self._is_stale_locked(epoch, kind="register_job_thread", job_id=job_id):
+                return False
             self._job_thread = thread
+            return True
 
     def previous_job_thread(self) -> threading.Thread | None:
         """Return the most recently registered background job thread."""
@@ -150,23 +192,33 @@ class WorkspaceState:
         fit_result: FitSummary | None,
         tune_result: TuningSummary | None,
         job_id: str,
-    ) -> None:
+        epoch: int,
+    ) -> bool:
         """Atomically update the post-job workspace state.
 
         Fit / tune / retune launchers write three related fields when a
         job finishes: the fit summary, the tune summary, and the active
         job id. Routing them through a single method guarantees readers
-        observe a consistent snapshot.
+        observe a consistent snapshot. Returns ``False`` without writing
+        when the workspace was reset after the launcher captured *epoch*.
         """
         with self._lock:
+            if self._is_stale_locked(epoch, kind="record_completion", job_id=job_id):
+                return False
             self.workspace_fit_result = fit_result
             self.workspace_tune_result = tune_result
             self.current_job_id = job_id
+            return True
 
-    def note_current_job(self, job_id: str) -> None:
-        """Update only the current job id (for early-failure paths)."""
+    def note_current_job(self, job_id: str, *, epoch: int) -> bool:
+        """Update only the current job id (early-failure and retune-start
+        paths). Returns ``False`` without writing when the workspace was
+        reset after the launcher captured *epoch*."""
         with self._lock:
+            if self._is_stale_locked(epoch, kind="note_current_job", job_id=job_id):
+                return False
             self.current_job_id = job_id
+            return True
 
 
 def get_workspace(request: Request) -> WorkspaceState:

@@ -234,7 +234,7 @@ class TestThreadJoinOnNewJob:
 
         stuck_thread = threading.Thread(target=stuck_target, daemon=True)
         stuck_thread.start()
-        ws.register_job_thread(stuck_thread)
+        ws.register_job_thread(stuck_thread, epoch=ws.current_epoch(), job_id="stuck")
 
         try:
             job = job_store.create(

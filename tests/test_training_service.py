@@ -1602,7 +1602,7 @@ def test_run_subprocess_job_no_data_ref_sets_failed_status(
         job_type="fit",
     )
 
-    _run_subprocess_job(ws, job, job_store, mock_broadcaster)
+    _run_subprocess_job(ws, job, job_store, mock_broadcaster, epoch=ws.current_epoch())
 
     assert job.status == "failed"
     assert "No data loaded" in (job.error or "")
@@ -1777,7 +1777,7 @@ def test_run_subprocess_job_success_updates_workspace(
         lambda **_kwargs: finished_job,
     )
 
-    _run_subprocess_job(ws, job, job_store, mock_broadcaster)
+    _run_subprocess_job(ws, job, job_store, mock_broadcaster, epoch=ws.current_epoch())
 
     assert ws.workspace_fit_result is fit_result
     assert ws.workspace_tune_result is None
@@ -2286,6 +2286,7 @@ def test_start_retune_async_subprocess_path_when_openmp_present(
         n_trials: int,
         expand_boundary: Any,
         boundary_threshold: Any,
+        epoch: int,
     ) -> Any:
         called["invoked"] = True
         called["parent_id"] = parent_job.job_id
@@ -2445,6 +2446,7 @@ def test_run_retune_subprocess_helper_fails_child_on_missing_data_ref_path(
         n_trials=5,
         expand_boundary=None,
         boundary_threshold=None,
+        epoch=ws.current_epoch(),
     )
 
     # Returned job reflects the failed state (same instance mutated).

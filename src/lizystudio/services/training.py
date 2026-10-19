@@ -483,6 +483,9 @@ def start_fit_async(
     job: Job,
 ) -> str:
     """Spawn a background thread for fit; update workspace state on completion."""
+    # P-0114: capture the reset generation before the join, so a reset
+    # during the join (or any time later) fences this launch's writes.
+    epoch = ws.current_epoch()
     _join_previous_thread(ws)
 
     from lizystudio.services.openmp_detect import should_use_subprocess
@@ -491,7 +494,7 @@ def start_fit_async(
 
     def _run() -> None:
         if use_subprocess:
-            _run_subprocess_job(ws, job, job_store, broadcaster)
+            _run_subprocess_job(ws, job, job_store, broadcaster, epoch=epoch)
         else:
             finished = run_fit(
                 job=job,
@@ -505,11 +508,12 @@ def start_fit_async(
                 fit_result=finished.fit_result,
                 tune_result=None,
                 job_id=finished.job_id,
+                epoch=epoch,
             )
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
-    ws.register_job_thread(t)
+    ws.register_job_thread(t, epoch=epoch, job_id=job.job_id)
     return job.job_id
 
 
@@ -530,6 +534,9 @@ def start_tune_async(
     budget against the persisted Optuna study and avoid double-spending
     the user's trial budget on resume.
     """
+    # P-0114: captured per invocation (``/unpause`` re-enters with the same
+    # job id) and before the join; see :func:`start_fit_async`.
+    epoch = ws.current_epoch()
     _join_previous_thread(ws)
 
     from lizystudio.services.openmp_detect import should_use_subprocess
@@ -544,6 +551,7 @@ def start_tune_async(
                 job_store,
                 broadcaster,
                 resume_from_existing_study=resume_from_existing_study,
+                epoch=epoch,
             )
         else:
             finished = run_tune(
@@ -559,11 +567,12 @@ def start_tune_async(
                 fit_result=finished.fit_result,
                 tune_result=finished.tune_result,
                 job_id=finished.job_id,
+                epoch=epoch,
             )
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
-    ws.register_job_thread(t)
+    ws.register_job_thread(t, epoch=epoch, job_id=job.job_id)
     return job.job_id
 
 
