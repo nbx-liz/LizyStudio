@@ -88,7 +88,12 @@ def _git_last_touched(repo: Path, rel_path: str) -> datetime | None:
     stamp = result.stdout.strip()
     if not stamp:
         return None
-    # ``%cI`` is strict ISO-8601 (e.g. ``2026-05-23T12:34:56+00:00``).
+    # ``%cI`` is strict ISO-8601 (e.g. ``2026-05-23T12:34:56+00:00``), but
+    # git prints a UTC committer date as ``...Z``, which Python 3.10's
+    # ``fromisoformat`` rejects (3.11+ accepts it). requires-python is
+    # ">=3.10", so normalise the suffix first.
+    if stamp.endswith("Z"):
+        stamp = stamp[:-1] + "+00:00"
     dt = datetime.fromisoformat(stamp)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)

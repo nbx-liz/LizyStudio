@@ -4430,3 +4430,55 @@ Option B は v0.7+ で `STUDIO_FORMAT_VERSION` 2 → 3 bump タイミングで�
   - **Q2 → 1 つの effect で gate**: row-mode toggle 末端で「両 mutation が `onSettled` 完了」を一括カウントし、その後に 1 回だけ `useTuningSnapshot.invalidate()` を trigger。badge は flicker しない。`useConfigWriteFunnel` 側に `onAllSettled` (両 reason の queue が drain した時点で 1 度発火) フックを追加する。両 mutation の `onSettled` 個別 invalidate は採用しない（同 frame で 2 度走ると stale state が一瞬見える）。
   - **Q3 → 別 reason として並列に enqueue**: `useConfigWriteFunnel.coalesceByReason` の key 集合に `legacy_config` / `tuning_overrides` を追加し、同 funnel 内で 2 本の queue を並走させる。flush タイミングは両者共通 (同 frame バッチ)。既存 funnel の `isFlushing` gate ロジック + v0.6.2 で導入した `kind: "patch-many"` merge を reuse 可能。別 funnel instance は採用しない（flush タイミング同期 + cache invalidation 順序保証の追加コストが大きい）。
 - 実装 PR は `refactor(frontend): route Tune-tab tuning-field writes through PUT /config/tuning-overrides (P-0111)` で起票し、acceptance criteria に従って TDD 実装。実装着手の優先度は v0.6.x patch サイクル後の v0.7 準備期間、または v0.7.0 (P-0110 RFC 9457) と同一 release window で同時着地候補。
+
+### P-0112: 開発・CI・配布ビルドの Node baseline を 20 → 24 に引き上げる（Change Gate: ビルド・配布方式の変更）
+
+- **Date:** 2026-10-19 起票、同日 accepted
+- **Issue:** なし（post-migration 環境整備 plan v4 の step 5）
+- **Related:** `.nvmrc`、`frontend/package.json` `engines` / `devDependencies.@types/node`、`.github/workflows/{ci,nightly,publish}.yml` の `actions/setup-node`、`README.md`、`CONTRIBUTING.md`、`frontend/README.md`
+
+#### Motivation
+
+- Node 20 は 2026-04 に EOL になった。それでも repo の baseline は 20 のまま残っている。該当箇所は `.nvmrc` の `20`、`engines.node` の `>=20`、workflow の `node-version: "20"` の 7 か所（ci.yml の 3 か所、nightly.yml の 3 か所、publish.yml の 1 か所）、文書の 4 行（3 ファイル。README は「Node.js 20+ / pnpm v9」と書いており、pnpm の版も実際と違う）。
+- 開発機の既定は Node 24 である。Codex CLI は Node 24 の global npm にしか入っておらず、`fnm default 20` にすると `codex` が PATH から消え、lizy-reviewer の run が `capability_unverified` で拒否された（2026-10-19、lizy-harness#174）。repo の baseline を開発機に合わせないと、手元と CI の Node が恒常的に食い違う。
+- wheel と sdist には build 済みの frontend が同梱される（`pyproject.toml` の `artifacts = ["src/lizystudio/static/**"]`）。そのため Node は利用者の実行時要件ではない。影響を受けるのは開発者と、publish 時の frontend build だけである。
+
+#### Purpose
+
+開発・CI・publish build の Node を 24 に揃え、宣言（`engines`）と実際に使う版を一致させる。
+
+#### Scope
+
+1. `.nvmrc` を `24` にする。
+2. `actions/setup-node` の `node-version` を 7 か所すべて `"24"` にする。
+3. `engines.node` を `">=24"` にする（owner 決定 O2）。
+4. `@types/node` を `^24` 系に揃え、`pnpm-lock.yaml` を再生成する。現在の `^26.6.2` のままだと、Node 24 にない API が型の上では通ってしまう。
+5. Node と pnpm に関する記述を直す: `README.md:133`（pnpm v9 → 10 も含む）、`CONTRIBUTING.md:11`、`frontend/README.md:7,11`。
+
+同じ PR に Python 側の CI 修正も含める。内容は、すべての `uv sync` を `--locked` にすること、matrix の `python-version` を `setup-uv` に渡すこと、matrix 以外の job で 3.12 を固定すること、nightly に 3.12/3.13 の leg を足すこと。これは宣言済みの内容を CI が実際に検証するようにする修正で、本 Proposal の Change Gate の対象には含めない（plan v4 D1）。commit は分ける。
+
+#### Compatibility
+
+- **利用者:** 影響なし。wheel は build 済みの frontend を含み、Node を要求しない。
+- **開発者:** 破壊的。Node 20〜23 では `engines` の宣言に合わない。実測（2026-10-19、pnpm 10.31.0 / Node v20.20.2）では、`pnpm install` は `WARN Unsupported engine: wanted: {"node":">=24"}` を出すだけで成功した（exit 0）。拒否されるのは `engine-strict=true` を付けた場合だけである。repo に `.npmrc` はなく、`engine-strict` は既定で無効なので、`engines` は警告による下限の宣言にとどまる。強制にするかどうかは別途判断する（Dependabot の npm updater が使う Node の版を確かめてからにする）。
+- **publish:** frontend build の Node が 24 になる。static の出力が変わらないことを、実装 PR で build の比較により確認する。
+- **`packageManager` (`pnpm@10.31.0`):** 変更しない。
+
+#### Alternatives
+
+- (a) **開発と CI だけを 24 にし、`engines` は `>=20` のまま残す**: 却下（O2）。宣言は 20 なのに、20 で build できることを誰も検証しない状態が残る。
+- (b) **Node 22 (LTS) にする**: 開発機の 24 と食い違ううえ、22 の EOL は 2027-04 で寿命が短い。
+- (c) **現状維持（20）**: EOL の版の上で CI を続けることになり、手元との食い違いも解消しない。
+
+#### Acceptance Criteria
+
+- [ ] repo 内で Node の版を宣言する箇所（`.nvmrc`、`engines.node`、全 workflow の `node-version`、上記の文書）がすべて 24 を指し、20 を指す記述が残っていない（grep で確認する）。
+- [ ] `@types/node` が `^24` 系になり、`pnpm install --frozen-lockfile` と `pnpm build`、`tsc -b` が Node 24 で通る。
+- [ ] **static build の同一性:** base（develop を Node 20 で build）と head（本 PR を Node 24 で build）を、別々の `git worktree` で `pnpm install --frozen-lockfile && pnpm build` する。Vite は `../src/lizystudio/static` に出力し、`emptyOutDir` で前回の出力を消すため、worktree を分けて出力が混ざらないようにする。比較するのは両者の `src/lizystudio/static/` 配下で、ファイル一覧と内容が byte 単位で一致することを合格条件とする（`diff -r`）。一致しなかった場合は不合格とし、原因を調べて owner の判断を仰ぐ。
+- [ ] **Node 20 での挙動:** head を Node 20 で `pnpm install` すると、`engines` を理由に `WARN Unsupported engine` が出る（2026-10-19 に実測。当初の「拒否される」という見込みは誤りで、DC7 にあたる）。実際の出力を PR に記録する。
+- [ ] **publish のリハーサル**（publish.yml は `v*` の tag push でしか起動しないため、手元で行う）: Node 24 で `pnpm build` → `uv build` を実行する。wheel と sdist の両方に `lizystudio/static/index.html` と `assets/` が含まれることを、archive の一覧で確かめる。新しい venv に wheel を install して server を起動し、`GET /` が `index.html` を返すことも確かめる。
+- [ ] PR の CI（frontend、e2e の 4 shard、api-types-drift、backend、integration）がすべて Node 24 で緑になる。
+
+#### Decision
+
+- **2026-10-19 accepted**（owner）: Scope 1〜5 をそのまま採用する。`engines.node` は `>=24` とする（Alternatives (a) は採らない）。Python の CI 修正は同じ PR の別 commit とし、本 Proposal の gate の対象外とする。実装 PR では、Acceptance Criteria の実測結果を PR 本文に記録する。

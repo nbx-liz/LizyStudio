@@ -30,16 +30,18 @@ jobs:
           fetch-tags: true
 
       - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
       - name: Enable corepack and activate pnpm from packageManager field
         run: |
           corepack enable
           (cd frontend && corepack prepare --activate && pnpm --version)
 
       # Backend: install, lint, test
-      - run: uv sync
+      - run: uv sync --locked
       - run: uv run pytest -q
       - run: uv run mypy src/lizystudio/
 

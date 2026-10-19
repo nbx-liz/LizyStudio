@@ -54,16 +54,20 @@ jobs:
     if: needs.guard.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     strategy:
+      # Every leg reports: a failing version must not cancel the others,
+      # their results are the evidence for the Python floor (plan v4 step 5).
+      fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v7
         with:
           ref: develop
       - uses: astral-sh/setup-uv@v7
         with:
+          python-version: ${{ matrix.python-version }}
           enable-cache: true
-      - run: uv sync
+      - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy src/lizystudio/
@@ -89,7 +93,7 @@ jobs:
         with:
           enable-cache: true
           python-version: "3.11"
-      - run: uv sync
+      - run: uv sync --locked
       - name: Run benchmark
         run: |
           uv run pytest tests/bench/ \
@@ -132,7 +136,7 @@ jobs:
         with:
           enable-cache: true
           python-version: "3.11"
-      - run: uv sync
+      - run: uv sync --locked
       - name: Run synthetic-drift unit gate
         # The in-process tests rewrite ``model_meta.json`` to simulate
         # past minor saves; they are fast and run before the venv
@@ -200,7 +204,7 @@ jobs:
           ref: develop
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
       - name: Enable corepack and activate pnpm from packageManager field
         run: |
           corepack enable
@@ -232,10 +236,11 @@ jobs:
           ref: develop
       - uses: astral-sh/setup-uv@v7
         with:
+          python-version: "3.12"
           enable-cache: true
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
       - name: Enable corepack and activate pnpm from packageManager field
         run: |
           corepack enable
@@ -243,7 +248,7 @@ jobs:
           pnpm --version
       - name: Install backend deps
         working-directory: .
-        run: uv sync
+        run: uv sync --locked
       - run: pnpm install --frozen-lockfile
       - name: Get Playwright version
         id: pw-version
@@ -309,7 +314,7 @@ jobs:
           python-version: "3.11"
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
       - name: Enable corepack and activate pnpm from packageManager field
         working-directory: frontend
         run: |
@@ -317,7 +322,7 @@ jobs:
           corepack prepare --activate
           pnpm --version
       - name: Install Python deps
-        run: uv sync
+        run: uv sync --locked
       - name: Run mutmut on JobStore state-machine modules
         # ``run`` may report a non-zero exit when mutations survive;
         # we still want the report uploaded, so swallow the exit and

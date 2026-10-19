@@ -78,6 +78,9 @@ jobs:
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     strategy:
+      # Every leg reports: a failing version must not cancel the others,
+      # their results are the evidence for the Python floor (plan v4 step 5).
+      fail-fast: false
       matrix:
         python-version: ["3.10", "3.11"]
     steps:
@@ -85,8 +88,9 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         if: needs.changes.outputs.backend != 'false'
         with:
+          python-version: ${{ matrix.python-version }}
           enable-cache: true
-      - run: uv sync
+      - run: uv sync --locked
         if: needs.changes.outputs.backend != 'false'
       # Lint / format / type-check are Python-version-independent. Run them
       # only on the 3.11 matrix leg so the 3.10 leg does not duplicate
@@ -127,8 +131,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
         with:
+          python-version: "3.12"
           enable-cache: true
-      - run: uv sync
+      - run: uv sync --locked
       - name: Run quarantined tests (non-blocking)
         run: |
           set +e
@@ -162,8 +167,9 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         if: needs.changes.outputs.backend != 'false'
         with:
+          python-version: "3.12"
           enable-cache: true
-      - run: uv sync
+      - run: uv sync --locked
         if: needs.changes.outputs.backend != 'false'
       - run: uv run pytest tests/integration -v --reruns 2 --reruns-delay 1
         if: needs.changes.outputs.backend != 'false'
@@ -198,8 +204,9 @@ jobs:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
         with:
+          python-version: "3.12"
           enable-cache: true
-      - run: uv sync
+      - run: uv sync --locked
       - run: |
           uv run pytest \
             tests/regression/test_format_version_migration_matrix.py \
@@ -229,7 +236,7 @@ jobs:
       - uses: actions/setup-node@v7
         if: needs.changes.outputs.frontend != 'false'
         with:
-          node-version: "20"
+          node-version: "24"
       - name: Enable corepack and activate pnpm from packageManager field
         if: needs.changes.outputs.frontend != 'false'
         run: |
@@ -275,10 +282,11 @@ jobs:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
         with:
+          python-version: "3.12"
           enable-cache: true
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
       - name: Enable corepack and activate pnpm from packageManager field
         run: |
           corepack enable
@@ -286,7 +294,7 @@ jobs:
           pnpm --version
       - name: Install backend deps
         working-directory: .
-        run: uv sync
+        run: uv sync --locked
       - run: pnpm install --frozen-lockfile
       # Build static assets so the backend's SPA fallback is mounted
       # (server.py gates the mount on ``STATIC_DIR/index.html`` existing).
@@ -427,16 +435,17 @@ jobs:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
         with:
+          python-version: "3.12"
           enable-cache: true
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
       - name: Enable corepack + pnpm
         working-directory: frontend
         run: |
           corepack enable
           corepack prepare --activate
-      - run: uv sync
+      - run: uv sync --locked
       - name: Install frontend deps
         working-directory: frontend
         run: pnpm install --frozen-lockfile
