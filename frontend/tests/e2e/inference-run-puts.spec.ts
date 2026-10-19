@@ -30,9 +30,12 @@ import { expectBudget, installFetchRecorder } from "./helpers/request-budget";
  *      handler.
  *
  * Budget: ``POST /api/inference/run`` = **1 exactly** for **two
- * back-to-back clicks**. The spec deliberately drives the
- * race condition that surfaced #559; the in-flight ref keeps the
- * count at 1.
+ * clicks dispatched in one browser task** while the first request is
+ * held in flight. The spec deliberately drives the race condition that
+ * surfaced #559; the in-flight ref keeps the count at 1. Issue #699:
+ * two separately awaited Playwright clicks made the result depend on
+ * inference latency, so the hold and the single-task dispatch are
+ * load-bearing.
  *
  * Per ``feedback_count_budget_assertions`` (memory): storm/spam bugs
  * MUST be caught by counting occurrences, not just asserting eventual
@@ -102,27 +105,46 @@ test.describe("Inference run — POST budget (Issue #538 / #559)", () => {
       urlPattern: "/api/inference/run",
     });
 
-    // Issue #559 — drive the race condition. The first click sets
-    // ``inFlightRef.current = true`` synchronously inside the
-    // ``runInferenceAction`` callback BEFORE ``mutation.mutate()``
-    // returns; the second click hits the same handler in the same
-    // event-loop tick and is absorbed by the ref check.
+    // Issue #559 / #699 — drive the race condition deterministically.
     //
-    // ``{ force: true, noWaitAfter: true }`` skips Playwright's
-    // actionability checks so the second click is attempted even if
-    // the button transitions to disabled in the DOM between the two
-    // events (which is the correct end state, but is async). If the
-    // ref guard is removed, this DOES fire a second POST and the
-    // budget assertion below fails.
-    await runButton.click();
-    await runButton
-      .click({ force: true, noWaitAfter: true })
-      .catch(() => {
-        // Force-click can throw if the button is genuinely disabled.
-        // That's the correct end state and complementary to the ref
-        // guard; swallow so the assertion below is what fails the
-        // test, not the click attempt.
-      });
+    // Hold every inference POST at the network layer until both clicks
+    // have been dispatched, so the first request stays in flight however
+    // fast inference is. Without the hold, a fast response settles the
+    // mutation and re-arms ``inFlightRef`` before a later click lands,
+    // and that click is a valid new invocation (#699). The recorder
+    // counts on ``page.on("request")``, which fires before routing.
+    let releasePosts: () => void = () => {};
+    const postsHeld = new Promise<void>((resolve) => {
+      releasePosts = resolve;
+    });
+    await page.route("**/api/inference/run", async (route) => {
+      await postsHeld;
+      await route.continue();
+    });
+
+    // Dispatch both clicks synchronously inside one browser task. The
+    // second click reaches ``runInferenceAction`` before React can render
+    // ``mutation.isPending`` into the button's ``disabled`` attribute, so
+    // only the synchronous ``inFlightRef`` check can absorb it. Two
+    // separately awaited Playwright clicks cannot do this: the second one
+    // lands either on a natively disabled button (passing without ever
+    // reaching the ref) or after a fast response re-enabled it.
+    const disabledAtDispatch = await runButton.evaluate(
+      (button: HTMLButtonElement) => {
+        const states: boolean[] = [];
+        states.push(button.disabled);
+        button.click();
+        states.push(button.disabled);
+        button.click();
+        return states;
+      },
+    );
+    releasePosts();
+
+    // Both clicks must have hit an enabled button; otherwise the budget
+    // below would pass on the DOM ``disabled`` path without testing the
+    // ref guard.
+    expect(disabledAtDispatch).toEqual([false, false]);
 
     // 6s capture window — long enough that any delayed extra POST
     // from a useEffect re-fire regression has landed.
