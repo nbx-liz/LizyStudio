@@ -438,7 +438,9 @@ def test_subprocess_finally_keeps_slot_when_child_wrote_paused(
     ws.data_ref = _make_data_ref()
     ws.record_completion = MagicMock()
 
-    tc._run_subprocess_job(ws, job, job_store, broadcaster=None)
+    tc._run_subprocess_job(
+        ws, job, job_store, broadcaster=None, epoch=ws.current_epoch()
+    )
 
     assert job_store.active_job_id == job.job_id, (
         "INV-pause-6: subprocess parent finally must NOT release the slot "

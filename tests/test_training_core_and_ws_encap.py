@@ -181,13 +181,13 @@ def test_register_and_previous_thread_roundtrip() -> None:
 
     t1 = threading.Thread(target=_noop, daemon=True)
     t1.start()
-    ws.register_job_thread(t1)
+    ws.register_job_thread(t1, epoch=ws.current_epoch(), job_id="t1")
     assert ws.previous_job_thread() is t1
 
     # Second registration replaces the first handle.
     t2 = threading.Thread(target=_noop, daemon=True)
     t2.start()
-    ws.register_job_thread(t2)
+    ws.register_job_thread(t2, epoch=ws.current_epoch(), job_id="t2")
     assert ws.previous_job_thread() is t2
 
     t1.join()
@@ -206,7 +206,9 @@ def test_record_completion_updates_three_fields_atomically() -> None:
         fold_count=5,
         params={},
     )
-    ws.record_completion(fit_result=fit, tune_result=None, job_id="job_abc")
+    ws.record_completion(
+        fit_result=fit, tune_result=None, job_id="job_abc", epoch=ws.current_epoch()
+    )
     assert ws.workspace_fit_result is fit
     assert ws.workspace_tune_result is None
     assert ws.current_job_id == "job_abc"
@@ -218,7 +220,7 @@ def test_note_current_job_only_sets_id() -> None:
     from lizystudio.services.workspace import WorkspaceState
 
     ws = WorkspaceState(backend=get_adapter("lizyml"))
-    ws.note_current_job("job_xyz")
+    ws.note_current_job("job_xyz", epoch=ws.current_epoch())
     assert ws.current_job_id == "job_xyz"
     assert ws.workspace_fit_result is None
     assert ws.workspace_tune_result is None
@@ -258,7 +260,7 @@ def test_register_and_previous_are_thread_safe() -> None:
             th = threading.Thread(target=_worker, daemon=True)
             th.start()
             barrier.wait()  # force simultaneous entry
-            ws.register_job_thread(th)
+            ws.register_job_thread(th, epoch=ws.current_epoch(), job_id="th")
             allowed.add(id(th))
             observed = ws.previous_job_thread()
             if observed is None:
@@ -431,7 +433,7 @@ class _StubWsWithData:
         self.noted: list[str] = []
         self.completions: list[dict[str, object]] = []
 
-    def note_current_job(self, job_id: str) -> None:
+    def note_current_job(self, job_id: str, *, epoch: int) -> None:
         self.noted.append(job_id)
 
     def record_completion(self, **kwargs: object) -> None:
@@ -445,7 +447,7 @@ class _StubWsNoData:
         self.data_ref = None
         self.noted: list[str] = []
 
-    def note_current_job(self, job_id: str) -> None:
+    def note_current_job(self, job_id: str, *, epoch: int) -> None:
         self.noted.append(job_id)
 
     def record_completion(self, **_: object) -> None:  # pragma: no cover
@@ -510,6 +512,7 @@ def test_run_subprocess_job_forwards_optional_kwargs_individually(
         retune_n_trials=20,
         retune_expand_boundary=True,
         retune_boundary_threshold=0.5,
+        epoch=0,
     )
 
     assert captured["mode"] == "retune"
@@ -550,6 +553,7 @@ def test_run_subprocess_job_omits_none_kwargs(
         _make_pending_tune_job(),  # type: ignore[arg-type]
         _StubJobStoreForSubprocess(),  # type: ignore[arg-type]
         _StubBroadcaster(),  # type: ignore[arg-type]
+        epoch=0,
     )
 
     assert "mode" not in captured
@@ -573,6 +577,7 @@ def test_run_subprocess_job_fails_when_no_data_loaded() -> None:
         _make_pending_tune_job(),  # type: ignore[arg-type]
         job_store,  # type: ignore[arg-type]
         broadcaster,  # type: ignore[arg-type]
+        epoch=0,
     )
 
     assert result.status == "failed"  # type: ignore[attr-defined]

@@ -172,6 +172,7 @@
 - **P-0111** (Approved 2026-05-23, awaiting v0.7 implementation window): Tune タブ write path → `PUT /config/tuning-overrides` (sparse) refactor の re-spec（Issue #528 follow-up）。**Decision 確定**: Option A 採用 (2 経路許容 + criterion reword) / "Modified" badge は 1 effect で gate / `useConfigWriteFunnel.coalesceByReason` に `legacy_config` / `tuning_overrides` の 2 reason 並列 enqueue。Option B (schema 拡張) は v0.7+ `STUDIO_FORMAT_VERSION` bump タイミングで再評価。実装 PR は v0.7 release window で P-0110 と同時着地候補 (`refactor(frontend): route Tune-tab tuning-field writes through PUT /config/tuning-overrides (P-0111)`)。
 - **P-0112** (✅ shipped 2026-10-19, PR #703): 開発・CI・publish build の Node baseline を 20 → 24 に引き上げた。`.nvmrc` / workflow 7 か所 / `engines.node >=24` / `@types/node ^24` / 文書。同 PR で Python CI も修正（全 `uv sync --locked`、matrix の実 Python 化、nightly 3.12/3.13）。engine-strict は強制しない（owner 決定）。
 - **P-0113** (Approved 2026-10-19): Python と uv の toolchain の約束。対応範囲 = テストしている版（3.10〜3.14、上限なし）、`.python-version` = 3.12、`[tool.uv] required-version = ">=0.13"`。手順書は CONTRIBUTING.md § Getting started に一本化。
+- **P-0114** (Approved 2026-10-19, Issue #701): workspace の reset を、それより前に起動した worker の書き込みから守る。`WorkspaceState` に reset の世代番号を持たせ、launcher が起動時に取得した番号と一致しない `record_completion` / `note_current_job` / `register_job_thread` を捨ててログに残す。Epic #635（古い書き手の問題）の一部。
 
 ### 3.0 P-0094 (済)：pytest-benchmark performance baseline（Issue #27 (a)）
 
