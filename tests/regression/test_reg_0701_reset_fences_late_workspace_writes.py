@@ -199,15 +199,18 @@ def test_reset_after_terminal_status_is_not_undone(
 # --- AC4: reset of a running job through the real API path -------------------
 
 
+@pytest.mark.parametrize("mode", _MODES)
 @pytest.mark.parametrize("kind", ("fit", "tune"))
 def test_api_reset_cancelling_a_running_job_is_not_undone(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, mode: str
 ) -> None:
     """``workspace_reset`` requests cancel, waits for the active slot, then
     resets. In thread mode ``_run_job_core`` releases the slot in its
-    ``finally`` and only then does the launcher call ``record_completion``,
-    so that write lands after the reset. (Subprocess mode releases the slot
-    after ``record_completion``, so the reset's slot wait already orders it.)
+    ``finally`` before the launcher calls ``record_completion``. In
+    subprocess mode the parent releases it only after ``record_completion``,
+    but once the child has persisted ``cancelled`` the reset's slot wait
+    reclaims the slot itself (``force_release_active_if``), so in both modes
+    the reset can run before the launcher's write.
     """
     store = JobStore(tmp_path)
     ws = _ws()
@@ -230,7 +233,10 @@ def test_api_reset_cancelling_a_running_job_is_not_undone(
             time.sleep(0.005)
         _finish(store, j, "cancelled")
         epoch = ws.current_epoch()
-        store.release_active(j.job_id)  # the core's finally
+        if mode == "thread":
+            store.release_active(j.job_id)  # the core's finally
+        # Subprocess mode: the parent's finally releases the slot later; the
+        # reset reclaims it from the terminal status on disk instead.
         # Hand control back to the launcher only once the reset has run,
         # which is the order that restored the job before P-0114.
         while ws.current_epoch() == epoch:
@@ -238,7 +244,7 @@ def test_api_reset_cancelling_a_running_job_is_not_undone(
             time.sleep(0.005)
         return j
 
-    _route(monkeypatch, kind, "thread", _cancellable)
+    _route(monkeypatch, kind, mode, _cancellable)
     _, launch = _prepare_existing(store, ws, kind, job)
     started = _capture_thread(monkeypatch)
 
