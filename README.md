@@ -130,7 +130,7 @@ variables are unset.
 ### Prerequisites
 
 - Python 3.10+ with [uv](https://docs.astral.sh/uv/)
-- Node.js 20+ with [pnpm](https://pnpm.io/) v9
+- Node.js 24+ with [pnpm](https://pnpm.io/) 10 (pinned via `packageManager`; enable with `corepack enable`)
 
 ### Setup
 

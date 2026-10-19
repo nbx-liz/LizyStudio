@@ -200,7 +200,7 @@ jobs:
           ref: develop
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
       - name: Enable corepack and activate pnpm from packageManager field
         run: |
           corepack enable
@@ -235,7 +235,7 @@ jobs:
           enable-cache: true
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
       - name: Enable corepack and activate pnpm from packageManager field
         run: |
           corepack enable
@@ -309,7 +309,7 @@ jobs:
           python-version: "3.11"
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
       - name: Enable corepack and activate pnpm from packageManager field
         working-directory: frontend
         run: |

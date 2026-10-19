@@ -229,7 +229,7 @@ jobs:
       - uses: actions/setup-node@v7
         if: needs.changes.outputs.frontend != 'false'
         with:
-          node-version: "20"
+          node-version: "24"
       - name: Enable corepack and activate pnpm from packageManager field
         if: needs.changes.outputs.frontend != 'false'
         run: |
@@ -278,7 +278,7 @@ jobs:
           enable-cache: true
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
       - name: Enable corepack and activate pnpm from packageManager field
         run: |
           corepack enable
@@ -430,7 +430,7 @@ jobs:
           enable-cache: true
       - uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "24"
       - name: Enable corepack + pnpm
         working-directory: frontend
         run: |
