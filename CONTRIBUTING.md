@@ -29,15 +29,19 @@ being re-resolved silently.
 git clone https://github.com/nbx-liz/LizyStudio.git
 cd LizyStudio
 
-# Backend: Python dependencies and the git hooks
+# Backend: Python dependencies
 uv sync --locked                    # creates .venv with the Python from .python-version
-uv run pre-commit install           # ruff, biome and the stray-artefact check on every commit
 
 # Frontend: pnpm via corepack, dependencies, the E2E browser
 corepack enable                     # once per Node installation
 cd frontend
 pnpm install --frozen-lockfile
 pnpm exec playwright install chromium
+cd ..
+
+# Git hooks, last: the biome hook runs `pnpm check`, which needs the
+# frontend dependencies above ("biome: not found" otherwise)
+uv run pre-commit install           # ruff, biome and the stray-artefact check on every commit
 ```
 
 ### Daily development
