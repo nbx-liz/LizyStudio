@@ -231,8 +231,10 @@ def test_api_reset_cancelling_a_running_job_is_not_undone(
         while not store.is_cancel_requested(j.job_id):
             assert time.monotonic() < deadline, "reset never requested cancel"
             time.sleep(0.005)
-        _finish(store, j, "cancelled")
+        # Read the epoch while the status is still non-terminal and the slot
+        # still held, so the reset cannot have advanced it yet.
         epoch = ws.current_epoch()
+        _finish(store, j, "cancelled")
         if mode == "thread":
             store.release_active(j.job_id)  # the core's finally
         # Subprocess mode: the parent's finally releases the slot later; the
