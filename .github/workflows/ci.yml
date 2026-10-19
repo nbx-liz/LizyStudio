@@ -328,8 +328,23 @@ jobs:
             --grep-invert="@visual|@a11y|@ci-flaky" \
             --ignore-snapshots \
             --shard=${{ matrix.shard }}/4
-      - name: Upload Playwright traces/screenshots on failure
-        if: failure()
+      # Issue #701 / CLAUDE.md §7: a test that fails and then passes on
+      # retry leaves the job green, so `failure()` alone discards the
+      # failed attempt's trace that root-causing needs. Traces are
+      # retain-on-failure (playwright.config.ts), so any trace.zip left
+      # after a green run marks a retried test. No pipe: under the
+      # runner's `-eo pipefail`, `find | grep -q` can lose to SIGPIPE.
+      - name: Detect retried E2E tests
+        id: retried
+        if: success()
+        run: |
+          if [ -n "$(find test-results -name trace.zip -print -quit 2>/dev/null)" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upload Playwright traces/screenshots on failure or retry
+        if: failure() || steps.retried.outputs.found == 'true'
         uses: actions/upload-artifact@v7
         with:
           # Per-shard artifact name — a bare name would collide across

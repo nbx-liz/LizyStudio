@@ -267,8 +267,18 @@ jobs:
           pnpm exec playwright test \
             --project=chromium \
             --grep="@visual|@a11y"
-      - name: Upload Playwright traces/screenshots on failure
-        if: failure()
+      # Same retry-rescued trace capture as ci.yml `e2e-shard` (Issue #701).
+      - name: Detect retried E2E tests
+        id: retried
+        if: success()
+        run: |
+          if [ -n "$(find test-results -name trace.zip -print -quit 2>/dev/null)" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upload Playwright traces/screenshots on failure or retry
+        if: failure() || steps.retried.outputs.found == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: playwright-visual-a11y
