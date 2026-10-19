@@ -13,9 +13,9 @@
 # Usage:
 #   scripts/dev_acceptance.sh WORKDIR [REV] [LABEL]
 #
-#   WORKDIR  a directory that does not exist yet, or one a previous run of
-#            this script created (it holds a .dev-acceptance marker). Inside a
-#            sandbox it must be writable there.
+#   WORKDIR  a directory that does not exist yet; its parent must exist. The
+#            script never deletes anything, so use a new WORKDIR for each run.
+#            Inside a sandbox it must be writable there.
 #   REV      the revision of this repository to check (default origin/develop).
 #            Run `git fetch` beforehand, outside any sandbox.
 #   LABEL    a free-text label for the summary header (default: the host name).
@@ -36,18 +36,18 @@ rev=${2:-origin/develop}
 label=${3:-$(hostname)}
 src=$(git -C "$(dirname "$0")" rev-parse --show-toplevel) || exit 2
 
-if [ -e "$work" ] && [ ! -f "$work/.dev-acceptance" ]; then
-  echo "dev_acceptance: refusing to replace $work: it exists and was not created by this script" >&2
-  exit 2
-fi
 commit=$(git -C "$src" rev-parse --verify --quiet "$rev^{commit}") || {
   echo "dev_acceptance: unknown revision: $rev" >&2
   exit 2
 }
-
-rm -rf "$work"
-mkdir -p "$work/logs" || exit 2
-touch "$work/.dev-acceptance"
+# Refuse rather than replace: the script never deletes a directory.
+mkdir "$work" 2>/dev/null || {
+  echo "dev_acceptance: cannot create $work: it already exists or its parent is missing; use a new WORKDIR" >&2
+  exit 2
+}
+# Absolute from here on: the steps below change into the clone.
+work=$(cd "$work" && pwd) || exit 2
+mkdir "$work/logs" || exit 2
 logs=$work/logs
 summary=$work/summary.txt
 : > "$summary"
@@ -70,6 +70,11 @@ step python-version    bash -c 'uv python find >/dev/null && cat .python-version
 step uv-sync-locked    uv sync --locked
 step venv-python       bash -c 'want=$(cat .python-version); .venv/bin/python -c "import sys; v=\"%d.%d\" % sys.version_info[:2]; assert v == sys.argv[1], v; print(v)" "$want"'
 step node-version      bash -c 'want=$(cat .nvmrc); node -v | grep -q "^v$want\." && node -v'
+# CONTRIBUTING runs `corepack enable` once per Node installation. Run it here
+# only when no pnpm is on PATH yet: it writes shims next to Node, which a
+# sandbox may not allow even though the shims already exist. pnpm-version then
+# checks that the pnpm found is the pinned one.
+step corepack-enable   bash -c 'command -v pnpm >/dev/null || corepack enable'
 step pnpm-version      bash -c 'cd frontend && want=$(sed -n "s/.*\"packageManager\": *\"pnpm@\([^\"]*\)\".*/\1/p" package.json) && test -n "$want" && test "$(pnpm --version)" = "$want" && echo "$want"'
 step pnpm-install      bash -c 'cd frontend && pnpm install --frozen-lockfile'
 step playwright-inst   bash -c 'cd frontend && pnpm exec playwright install chromium'
@@ -88,7 +93,7 @@ step pnpm-build        bash -c 'cd frontend && pnpm build'
 step e2e-functional    bash -c 'cd frontend && pnpm exec playwright test --project=chromium --grep-invert "@visual|@a11y|@ci-flaky" --ignore-snapshots --retries 0 --reporter=line'
 # Nothing above may leave a tracked change or a non-ignored untracked file.
 # Ignored output (.venv, tool caches) is expected and is not checked.
-step tree-clean        bash -c 'test -z "$(git status --porcelain)" || { git status --porcelain; exit 1; }'
+step tree-clean        bash -c 'out=$(git status --porcelain) || exit 1; test -z "$out" || { printf "%s\n" "$out"; exit 1; }'
 
 echo "== done $(date -u +%FT%TZ)" | tee -a "$summary"
 exit $failed
