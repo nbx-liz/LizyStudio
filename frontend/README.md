@@ -12,9 +12,14 @@ Run `node -v` to confirm. If you see anything below `v24`, install Node 24 via y
 
 ## Install
 
+The full one-time setup (backend, git hooks, toolchain versions) is in
+[../CONTRIBUTING.md § Getting started](../CONTRIBUTING.md#getting-started).
+For the frontend alone:
+
 ```bash
 cd frontend
-pnpm install
+pnpm install --frozen-lockfile
+pnpm exec playwright install chromium   # browser for pnpm test:e2e
 ```
 
 ## Develop
@@ -71,4 +76,4 @@ pnpm check:api-types                  # Verify the generated file is up to date
 - Technical spec: [../BLUEPRINT.md](../BLUEPRINT.md)
 - Proposal history: [../HISTORY.md](../HISTORY.md)
 - Phased roadmap: [../PLAN.md](../PLAN.md)
-- Development rules: [../CLAUDE.md](../CLAUDE.md)
+- Contributing and setup: [../CONTRIBUTING.md](../CONTRIBUTING.md)

@@ -4472,13 +4472,41 @@ Option B は v0.7+ で `STUDIO_FORMAT_VERSION` 2 → 3 bump タイミングで�
 
 #### Acceptance Criteria
 
-- [ ] repo 内で Node の版を宣言する箇所（`.nvmrc`、`engines.node`、全 workflow の `node-version`、上記の文書）がすべて 24 を指し、20 を指す記述が残っていない（grep で確認する）。
-- [ ] `@types/node` が `^24` 系になり、`pnpm install --frozen-lockfile` と `pnpm build`、`tsc -b` が Node 24 で通る。
-- [ ] **static build の同一性:** base（develop を Node 20 で build）と head（本 PR を Node 24 で build）を、別々の `git worktree` で `pnpm install --frozen-lockfile && pnpm build` する。Vite は `../src/lizystudio/static` に出力し、`emptyOutDir` で前回の出力を消すため、worktree を分けて出力が混ざらないようにする。比較するのは両者の `src/lizystudio/static/` 配下で、ファイル一覧と内容が byte 単位で一致することを合格条件とする（`diff -r`）。一致しなかった場合は不合格とし、原因を調べて owner の判断を仰ぐ。
-- [ ] **Node 20 での挙動:** head を Node 20 で `pnpm install` すると、`engines` を理由に `WARN Unsupported engine` が出る（2026-10-19 に実測。当初の「拒否される」という見込みは誤りで、DC7 にあたる）。実際の出力を PR に記録する。
-- [ ] **publish のリハーサル**（publish.yml は `v*` の tag push でしか起動しないため、手元で行う）: Node 24 で `pnpm build` → `uv build` を実行する。wheel と sdist の両方に `lizystudio/static/index.html` と `assets/` が含まれることを、archive の一覧で確かめる。新しい venv に wheel を install して server を起動し、`GET /` が `index.html` を返すことも確かめる。
-- [ ] PR の CI（frontend、e2e の 4 shard、api-types-drift、backend、integration）がすべて Node 24 で緑になる。
+- [x] repo 内で Node の版を宣言する箇所（`.nvmrc`、`engines.node`、全 workflow の `node-version`、上記の文書）がすべて 24 を指し、20 を指す記述が残っていない（grep で確認する）。
+- [x] `@types/node` が `^24` 系になり、`pnpm install --frozen-lockfile` と `pnpm build`、`tsc -b` が Node 24 で通る。
+- [x] **static build の同一性:** base（develop を Node 20 で build）と head（本 PR を Node 24 で build）を、別々の `git worktree` で `pnpm install --frozen-lockfile && pnpm build` する。Vite は `../src/lizystudio/static` に出力し、`emptyOutDir` で前回の出力を消すため、worktree を分けて出力が混ざらないようにする。比較するのは両者の `src/lizystudio/static/` 配下で、ファイル一覧と内容が byte 単位で一致することを合格条件とする（`diff -r`）。一致しなかった場合は不合格とし、原因を調べて owner の判断を仰ぐ。
+- [x] **Node 20 での挙動:** head を Node 20 で `pnpm install` すると、`engines` を理由に `WARN Unsupported engine` が出る（2026-10-19 に実測。当初の「拒否される」という見込みは誤りで、DC7 にあたる）。実際の出力を PR に記録する。
+- [x] **publish のリハーサル**（publish.yml は `v*` の tag push でしか起動しないため、手元で行う）: Node 24 で `pnpm build` → `uv build` を実行する。wheel と sdist の両方に `lizystudio/static/index.html` と `assets/` が含まれることを、archive の一覧で確かめる。新しい venv に wheel を install して server を起動し、`GET /` が `index.html` を返すことも確かめる。
+- [x] PR の CI（frontend、e2e の 4 shard、api-types-drift、backend、integration）がすべて Node 24 で緑になる。
 
 #### Decision
 
 - **2026-10-19 accepted**（owner）: Scope 1〜5 をそのまま採用する。`engines.node` は `>=24` とする（Alternatives (a) は採らない）。Python の CI 修正は同じ PR の別 commit とし、本 Proposal の gate の対象外とする。実装 PR では、Acceptance Criteria の実測結果を PR 本文に記録する。
+- **2026-10-19 shipped**: PR #703（develop `be17fe6`）。Acceptance Criteria の実測結果はすべて PR 本文に記録した（static は Node 20/24 で `diff -r` 一致・4 ファイル、publish のリハーサルは wheel/sdist に static が入り `GET /` が 200、CI は 3.10/3.11 とも 1673 件通過）。pnpm は `engines` 違反で警告するだけで、install は拒否しない。owner は engine-strict を**強制しない**と決定した（2026-10-19。Dependabot の npm updater が使う Node の版に左右されないようにするため）。
+
+
+### P-0113: Python と uv の toolchain の約束（Change Gate: 配布メタデータと開発 toolchain）
+
+- **Date:** 2026-10-19 起票、同日 accepted
+- **Issue:** なし（post-migration 環境整備 plan v5 の E2/E3）
+- **Related:** P-0112（Node 24）、`pyproject.toml`（`requires-python`、classifiers、`[tool.uv]`）、`.python-version`、`.github/workflows/{ci,nightly}.yml`、`CONTRIBUTING.md` § Getting started
+
+#### Motivation
+
+- `requires-python = ">=3.10"` には上限がない。classifiers は 3.13 まで、`uv.lock` は 3.14 以降も解決し、手元の `.venv` は uv が選んだ 3.14 で全テストが通っていた。対応範囲が、どこにも一貫して書かれていなかった。
+- `.python-version` がないため、開発で使う版が、その機械に入っている Python で決まっていた。
+- `uv sync --locked` が固定するのは依存関係だけで、uv 本体の版は固定されない。
+
+#### Decision（owner、2026-10-19）
+
+- **対応範囲 = テストしている版:** 3.10〜3.14。`requires-python` に上限は付けない。classifiers に 3.14 を足し、nightly の backend matrix を 3.10〜3.14 にする。PR の必須 check は、従来どおり 3.10 と 3.11 を実際の版で実行する。
+- **開発で使う版:** `.python-version` = 3.12。matrix 以外の CI job と同じ版である。
+- **uv:** `[tool.uv] required-version = ">=0.13"`。下限だけを固定し、新しい版への追従は妨げない。
+- **下限の 3.10:** 維持する。3.10 は 2026-10 に EOL になるので、下限を上げるかどうかは、後で別の議題として扱う。
+
+#### Acceptance Criteria
+
+- [ ] classifiers が nightly の matrix と一致する（3.10〜3.14）。
+- [ ] `.python-version` があり、`uv sync --locked` が 3.12 で `.venv` を作る。
+- [ ] uv 0.13 未満では、`required-version` を理由にはっきりしたエラーになる。
+- [ ] `CONTRIBUTING.md` § Getting started が、この約束を唯一の正本として説明する。README と frontend/README は、そこへのリンクにする。

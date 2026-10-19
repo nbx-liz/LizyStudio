@@ -54,11 +54,12 @@ jobs:
     if: needs.guard.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     strategy:
-      # Every leg reports: a failing version must not cancel the others,
-      # their results are the evidence for the Python floor (plan v4 step 5).
+      # Every leg reports: a failing version must not cancel the others.
+      # The tested versions are the supported range (P-0113), so the
+      # classifiers in pyproject.toml must list exactly these.
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v7
         with:
