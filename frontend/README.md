@@ -4,7 +4,7 @@ React + TypeScript + Vite UI for [LizyStudio](https://github.com/nbx-liz/LizyStu
 
 ## Prerequisites
 
-- **Node.js 24 or newer** — declared via `engines.node` in `package.json` and pinned in `.nvmrc`. CI and the publish build run on Node 24 (P-0112). pnpm refuses to install on an older Node, so 24 is the enforced floor rather than a recommendation.
+- **Node.js 24 or newer** — declared via `engines.node` in `package.json` and pinned in `.nvmrc`. CI and the publish build run on Node 24 (P-0112). On an older Node, pnpm prints `WARN Unsupported engine` and continues, so treat 24 as the required floor even though nothing refuses the install.
 - **pnpm 10 or newer** — the project pins `pnpm@10.31.0` via the `packageManager` field. Enable corepack once with `corepack enable` and pnpm will match automatically.
 - A running backend on `http://localhost:8501` for `pnpm dev` (the Vite dev server proxies API calls there).
 

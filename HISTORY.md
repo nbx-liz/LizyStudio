@@ -4460,7 +4460,7 @@ Option B は v0.7+ で `STUDIO_FORMAT_VERSION` 2 → 3 bump タイミングで�
 #### Compatibility
 
 - **利用者:** 影響なし。wheel は build 済みの frontend を含み、Node を要求しない。
-- **開発者:** 破壊的。Node 20〜23 では `engines` の宣言に合わない。pnpm は root project の `engines` を検査するので、こうした版では `pnpm install` を拒否する見込みである（`ERR_PNPM_UNSUPPORTED_ENGINE`）。実際の挙動は実装 PR で Node 20 を使って確かめ、結果を記録する。
+- **開発者:** 破壊的。Node 20〜23 では `engines` の宣言に合わない。実測（2026-10-19、pnpm 10.31.0 / Node v20.20.2）では、`pnpm install` は `WARN Unsupported engine: wanted: {"node":">=24"}` を出すだけで成功した（exit 0）。拒否されるのは `engine-strict=true` を付けた場合だけである。repo に `.npmrc` はなく、`engine-strict` は既定で無効なので、`engines` は警告による下限の宣言にとどまる。強制にするかどうかは別途判断する（Dependabot の npm updater が使う Node の版を確かめてからにする）。
 - **publish:** frontend build の Node が 24 になる。static の出力が変わらないことを、実装 PR で build の比較により確認する。
 - **`packageManager` (`pnpm@10.31.0`):** 変更しない。
 
@@ -4475,7 +4475,7 @@ Option B は v0.7+ で `STUDIO_FORMAT_VERSION` 2 → 3 bump タイミングで�
 - [ ] repo 内で Node の版を宣言する箇所（`.nvmrc`、`engines.node`、全 workflow の `node-version`、上記の文書）がすべて 24 を指し、20 を指す記述が残っていない（grep で確認する）。
 - [ ] `@types/node` が `^24` 系になり、`pnpm install --frozen-lockfile` と `pnpm build`、`tsc -b` が Node 24 で通る。
 - [ ] **static build の同一性:** base（develop を Node 20 で build）と head（本 PR を Node 24 で build）を、別々の `git worktree` で `pnpm install --frozen-lockfile && pnpm build` する。Vite は `../src/lizystudio/static` に出力し、`emptyOutDir` で前回の出力を消すため、worktree を分けて出力が混ざらないようにする。比較するのは両者の `src/lizystudio/static/` 配下で、ファイル一覧と内容が byte 単位で一致することを合格条件とする（`diff -r`）。一致しなかった場合は不合格とし、原因を調べて owner の判断を仰ぐ。
-- [ ] **Node 20 の拒否:** head を Node 20 で `pnpm install` すると、`engines` を理由に拒否される（`ERR_PNPM_UNSUPPORTED_ENGINE` など）。実際の出力を PR に記録する。
+- [ ] **Node 20 での挙動:** head を Node 20 で `pnpm install` すると、`engines` を理由に `WARN Unsupported engine` が出る（2026-10-19 に実測。当初の「拒否される」という見込みは誤りで、DC7 にあたる）。実際の出力を PR に記録する。
 - [ ] **publish のリハーサル**（publish.yml は `v*` の tag push でしか起動しないため、手元で行う）: Node 24 で `pnpm build` → `uv build` を実行する。wheel と sdist の両方に `lizystudio/static/index.html` と `assets/` が含まれることを、archive の一覧で確かめる。新しい venv に wheel を install して server を起動し、`GET /` が `index.html` を返すことも確かめる。
 - [ ] PR の CI（frontend、e2e の 4 shard、api-types-drift、backend、integration）がすべて Node 24 で緑になる。
 
