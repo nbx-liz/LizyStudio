@@ -63,6 +63,50 @@ Notes:
   dev server (`frontend/tests/e2e/global-setup.ts`). Stop the dev server
   before running E2E.
 
+### Checking a new machine
+
+`scripts/dev_acceptance.sh` checks that a machine, or an agent's sandbox, can
+develop LizyStudio. It makes a fresh clone of this repository at a revision,
+runs the one-time setup above in its order, and then runs the main checks
+locally. CI's guard jobs (for example `api-types-drift` and the grep
+guards) are not repeated. The checks are:
+
+- ruff, ruff format, mypy;
+- pytest, unit and integration;
+- pre-commit on all files;
+- biome, vitest, the build;
+- the functional E2E suite without retries.
+
+The setup includes `corepack enable`, but only when no `pnpm` is on `PATH`
+yet. The next step checks that the `pnpm` it finds is the pinned version.
+
+A last step checks that the earlier steps left no tracked change and no
+untracked file that Git does not ignore. Ignored output (`.venv`, tool
+caches) is expected and is not checked.
+
+Each step prints `STEP <name> PASS|FAIL <seconds>s`; its log is in
+`WORKDIR/logs/<name>.log`. The script exits 0 only when every step passed.
+
+Run `git fetch origin` first, outside any sandbox. The default revision is
+`origin/develop`. Stop any dev server on port 8501 before running the script.
+WORKDIR must not exist yet, and its parent must exist. The script never
+deletes anything, so each command below names a new directory per run.
+
+```bash
+# On the machine itself
+scripts/dev_acceptance.sh "/tmp/lizystudio-acceptance-$(date +%Y%m%d-%H%M%S)"
+
+# Inside the Claude Code Bash sandbox: have Claude Code run this through its
+# Bash tool without disabling the sandbox. WORKDIR must be sandbox-writable.
+scripts/dev_acceptance.sh "$TMPDIR/lizystudio-acceptance-$(date +%Y%m%d-%H%M%S)" origin/develop claude-sandbox
+
+# Inside the Codex sandbox (development profile). -C sets the sandbox's
+# writable working directory; WORKDIR must be inside it.
+mkdir -p /tmp/lizystudio-acceptance-codex
+codex sandbox -P development -C /tmp/lizystudio-acceptance-codex \
+  bash "$PWD/scripts/dev_acceptance.sh" "/tmp/lizystudio-acceptance-codex/run-$(date +%Y%m%d-%H%M%S)" origin/develop codex-sandbox
+```
+
 ## Branch workflow
 
 ```
