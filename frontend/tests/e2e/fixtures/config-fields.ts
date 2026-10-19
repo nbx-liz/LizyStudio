@@ -1,5 +1,8 @@
 import type { Locator, Page } from "@playwright/test";
-import type { ConfigFieldSpec } from "../helpers/config-reflection";
+import {
+  type ConfigFieldSpec,
+  waitForConfigSettle,
+} from "../helpers/config-reflection";
 
 /**
  * Phase C (gui-e2e-plan §4.2) — fixture data driving the
@@ -316,15 +319,7 @@ const splitShuffleKfold: FixtureEntry = {
     // Switch from the seeded stratified_kfold to kfold so the
     // Shuffle row mounts. KFold's FALLBACK_CV_STRATEGY_FIELDS
     // includes "shuffle"; stratified_kfold does not.
-    await page.getByRole("radio", { name: "KFold", exact: true }).click();
-    // Wait until the Shuffle row appears (it's the proxy for "the
-    // saved config has flipped to kfold AND the conditional render
-    // has settled"). Without this, the spec races the rerender
-    // and the locator can resolve before the row mounts.
-    await page
-      .locator('label:text-is("Shuffle")')
-      .first()
-      .waitFor({ state: "visible", timeout: 5000 });
+    await switchToCvStrategy(page, "KFold", "Shuffle", "kfold", "shuffle");
   },
 };
 
@@ -358,20 +353,38 @@ const tuningTimeout: FixtureEntry = {
 };
 
 /**
- * Time-series strategy preconditions share boilerplate: switch
- * via the Strategy radio and wait for the conditional row's label
- * to mount. Centralising avoids per-fixture drift.
+ * CV strategy preconditions share boilerplate: switch via the
+ * Strategy radio, wait for the conditional row's label to mount,
+ * then wait until the backend's SAVED config reflects the switch.
+ *
+ * The label alone is not enough (#707): the row mounts from local
+ * state as soon as the radio is clicked, while the config PUT goes
+ * out a few milliseconds later (useConfigSync effect → write
+ * funnel). Reading the baseline before that PUT commits returns the
+ * pre-switch config, where the field under test is missing.
+ *
+ * `savedKey` is the `split.*` key that must be present once the
+ * switch is saved; omit it for fields whose default is absent.
  */
 async function switchToCvStrategy(
   page: Page,
   strategyLabel: string,
   rowLabelText: string,
+  method: string,
+  savedKey?: string,
 ): Promise<void> {
   await page.getByRole("radio", { name: strategyLabel, exact: true }).click();
   await page
     .locator(`label:text-is("${rowLabelText}")`)
     .first()
     .waitFor({ state: "visible", timeout: 5000 });
+  await waitForConfigSettle(page.request, (config) => {
+    const split = config.split as Record<string, unknown> | undefined;
+    return (
+      split?.method === method &&
+      (savedKey === undefined || savedKey in split)
+    );
+  });
 }
 
 const splitGap: FixtureEntry = {
@@ -391,7 +404,7 @@ const splitGap: FixtureEntry = {
     },
   } as ConfigFieldSpec<unknown>,
   precondition: async (page) => {
-    await switchToCvStrategy(page, "TimeSeriesSplit", "Gap");
+    await switchToCvStrategy(page, "TimeSeriesSplit", "Gap", "time_series", "gap");
   },
 };
 
@@ -414,7 +427,13 @@ const splitPurgeGap: FixtureEntry = {
     },
   } as ConfigFieldSpec<unknown>,
   precondition: async (page) => {
-    await switchToCvStrategy(page, "PurgedTimeSeries", "Purge Gap");
+    await switchToCvStrategy(
+      page,
+      "PurgedTimeSeries",
+      "Purge Gap",
+      "purged_time_series",
+      "purge_gap",
+    );
   },
 };
 
@@ -437,7 +456,13 @@ const splitEmbargo: FixtureEntry = {
     },
   } as ConfigFieldSpec<unknown>,
   precondition: async (page) => {
-    await switchToCvStrategy(page, "PurgedTimeSeries", "Embargo");
+    await switchToCvStrategy(
+      page,
+      "PurgedTimeSeries",
+      "Embargo",
+      "purged_time_series",
+      "embargo",
+    );
   },
 };
 
@@ -465,7 +490,7 @@ const splitTrainSizeMax: FixtureEntry = {
     },
   } as ConfigFieldSpec<unknown>,
   precondition: async (page) => {
-    await switchToCvStrategy(page, "TimeSeriesSplit", "Gap");
+    await switchToCvStrategy(page, "TimeSeriesSplit", "Gap", "time_series");
     // Train Size Max sits below Gap; wait for its label too so the
     // locator is reachable when assertConfigReflection resolves it.
     await page
@@ -494,7 +519,7 @@ const splitTestSizeMax: FixtureEntry = {
     },
   } as ConfigFieldSpec<unknown>,
   precondition: async (page) => {
-    await switchToCvStrategy(page, "TimeSeriesSplit", "Gap");
+    await switchToCvStrategy(page, "TimeSeriesSplit", "Gap", "time_series");
     await page
       .locator("label")
       .filter({ hasText: "Test Size Max" })
