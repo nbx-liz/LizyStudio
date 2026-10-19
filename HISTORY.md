@@ -4586,3 +4586,4 @@ reset が成功した後は、その reset より前に始まった launcher の
 #### Decision
 
 - **2026-10-19 accepted**（owner）: Option A（reset の世代番号）を採用する。
+- **2026-10-19 shipped**: PR #709（develop `113514a`）。Codex の head review は 4 round 目で APPROVE。指摘はすべて regression test と本節の記録に関するもので、`src/` の実装への指摘はなかった。CI は retry なしで緑。#701 は手動で close した。

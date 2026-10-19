@@ -63,6 +63,47 @@ Notes:
   dev server (`frontend/tests/e2e/global-setup.ts`). Stop the dev server
   before running E2E.
 
+### Checking a new machine
+
+`scripts/dev_acceptance.sh` checks that a machine, or an agent's sandbox, can
+develop LizyStudio. It makes a fresh clone of this repository at a revision,
+runs the one-time setup above in its order, and then runs the main checks
+locally. CI's guard jobs (for example `api-types-drift` and the grep
+guards) are not repeated. The checks are:
+
+- ruff, ruff format, mypy;
+- pytest, unit and integration;
+- pre-commit on all files;
+- biome, vitest, the build;
+- the functional E2E suite without retries.
+
+A last step checks that the earlier steps left no tracked change and no
+untracked file that `.gitignore` does not cover. Ignored output (`.venv`,
+tool caches) is expected and is not checked.
+Each step prints `STEP <name> PASS|FAIL <seconds>s`; its log is in
+`WORKDIR/logs/<name>.log`. The script exits 0 only when every step passed.
+
+Run `git fetch origin` first, outside any sandbox. The default revision is
+`origin/develop`. Stop any dev server on port 8501 before running it.
+
+```bash
+# On the machine itself
+scripts/dev_acceptance.sh /tmp/lizystudio-acceptance
+
+# Inside the Claude Code Bash sandbox: have Claude Code run this through its
+# Bash tool without disabling the sandbox. WORKDIR must be sandbox-writable.
+scripts/dev_acceptance.sh "$TMPDIR/lizystudio-acceptance" origin/develop claude-sandbox
+
+# Inside the Codex sandbox (development profile). -C sets the sandbox's
+# writable working directory; WORKDIR must be inside it.
+mkdir -p /tmp/lizystudio-acceptance-codex
+codex sandbox -P development -C /tmp/lizystudio-acceptance-codex \
+  bash "$PWD/scripts/dev_acceptance.sh" /tmp/lizystudio-acceptance-codex/run origin/develop codex-sandbox
+```
+
+WORKDIR must not exist yet, or must be one a previous run of the script
+created. The script refuses to replace any other directory.
+
 ## Branch workflow
 
 ```
