@@ -344,7 +344,7 @@ jobs:
             echo "found=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Upload Playwright traces/screenshots on failure or retry
-        if: failure() || steps.retried.outputs.found == 'true'
+        if: failure() || (!cancelled() && steps.retried.outputs.found == 'true')
         uses: actions/upload-artifact@v7
         with:
           # Per-shard artifact name — a bare name would collide across
