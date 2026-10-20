@@ -4587,3 +4587,285 @@ reset が成功した後は、その reset より前に始まった launcher の
 
 - **2026-10-19 accepted**（owner）: Option A（reset の世代番号）を採用する。
 - **2026-10-19 shipped**: PR #709（develop `113514a`）。Codex の head review は 4 round 目で APPROVE。指摘はすべて regression test と本節の記録に関するもので、`src/` の実装への指摘はなかった。CI は retry なしで緑。#701 は手動で close した。
+
+
+### P-0116: lizyml 0.20.0 に追従する（Change Gate: 外部依存・API の応答・保存する設定の形）
+
+- **Date:** 2026-10-21 起票、同日 accepted
+- **番号:** P-0115 は #711 のコメントで案として使っている。混同を避けるため、この Proposal は P-0116 とする。
+- **Issue:** #721。親 Epic は #638（adapter 境界と API 契約）。
+- **Related:**
+  - Epic #635（job lifecycle）、#623（optuna の生 API の置き換え）
+  - 子 Issue #688（step 格子）、#689（smart 次元の真偽値と範囲）、#690（`cross_entropy_lambda`）、#691（`TUNING_FAILED`）
+  - #528 / P-0111（Tune タブの書き込み経路）
+  - 方針の決定カード D-20261020-008（seed は LizyML に合わせる、旧 job は不可能な操作だけ拒否、inner_valid は A 案、下限は `>=0.20.0`）
+  - 一時停止が study を止めない件は #719 で扱い、本 Proposal の範囲外とする（D-20261021-004）。
+
+#### Motivation
+
+以下の行番号は develop `e5cc5d0` のものである。
+
+LizyStudio は lizyml 0.15.0 にロックしたまま、宣言上の範囲だけが `<0.19.0` まで広がっていた（#584 / #639 / #692）。0.16 以降は一度も実行で確かめていない。2026-10-20 に lizyml 0.20.0 が公開された。
+
+そこで、使い捨ての作業コピーで lizyml だけを 0.20.0 に上げ（`uv.lock` で動いた依存は lizyml のみ）、テストを実行した（Phase 1）。
+
+- **backend:** 8 件失敗、1703 件成功。
+  - UI schema の契約テスト 1 件: `purged_time_series` が `embargo` を宣言している。0.20 の受け付ける項目は `purge_gap`。
+  - retune の end-to-end 1 件: autofit が smart / training の名前を `model.params` に入れ、拒否された。
+  - テストの設定 6 件: 評価指標と逆の `direction` を明示しており、H-0099 で拒否された。
+- **integration:** 1 件失敗。既存の study に再び接続するには `resume=True` が要る（H-0122）。
+- **functional E2E:** 22 件失敗、128 件成功。
+  - 21 件は Tune を使うテストで、原因は下記の阻害要因 1 つである。E2E が残した失敗 job 8 件も、すべて同じ拒否による。
+  - 残る 1 件（`workspace-fit.spec.ts:521`）は #717 と同じ負荷時の flake である。単独で 2/2 通る。
+
+**阻害要因: 0.20 では、既定の探索空間を使う Tune がすべて trial 0 の前に失敗する。**
+- `config_mixin.py:47-76`（`_catalog_default_space`）は、catalog の 13 次元を `type/low/high/log/choices` だけで組み立てる。`group` を捨てるので、`category` が付かない。
+- この空間は `workspace.py:611` で job の設定に展開される。
+- 0.20 は Tune の受け付け時（`core/_tuning_admission.py:172-274`）に、`category` の無い `num_leaves_ratio` などを「LightGBM の知らない名前」として拒否する。`early_stopping.rounds` と `validation_ratio` も同様に拒否する。
+- 加えて 0.20 では、training の次元に使える名前は `early_stopping_rounds` と `validation_ratio` だけである（`core/_tuning_validation.py:26,79-92`）。点つきの名前は使えない。
+
+**0.15 で作った job（実物）を 0.20 のサーバで開いた結果。** 0.15 のサーバで HTTP API から Fit、Tune、一時停止中の Tune を作り、その job 保存先を 0.20 のサーバで開いた。
+- **問題なく動いた:** 一覧、詳細、指標、plot、split 重要度、lineage、log、推論（SHAP を含む）、モデルの export。
+- **すでに明示的に拒否される:** retune。400 `PICKLE_INCOMPATIBLE` になる。
+- **汎用の 500 `BACKEND_ERROR` になる:**
+  - SHAP 重要度。LizyML は `MODEL_NOT_FIT`（`pipeline_state_per_fold` が無い）を返している。
+  - Tune した job の export-code。0.15 のモデルの `model.params` に smart / training の名前があり、LizyML が `CONFIG_INVALID` を返している。
+- **再開すると job が失敗する:** 一時停止中の Tune の unpause。
+
+#### Purpose
+
+LizyStudio を lizyml `>=0.20.0,<0.21.0` で動かす。その上で、次の 3 つを満たす。
+
+1. Fit、Tune、retune、unpause、Apply to Fit が 0.20 の契約どおりの設定を送る。
+2. 0.15 で作った job は、行を残したまま、できない操作だけを明確なエラーで拒否する（D-20261020-008）。
+3. 0.20 への追従に必要なテストと fixture を、0.20 の挙動に合わせて作り直す。
+
+一時停止が study を止めない件（#719）は扱わない。
+
+#### 決めること
+
+##### D1. 探索空間の送り方
+
+0.20 の空間の形式（H-0123）は 2 通りある。
+- `{type, low, high, log?, step?, category?}`
+- `{type: categorical, choices, category?}`
+
+`category` は `model` / `smart` / `training` のどれかで、省略すると `model` になる。
+- `smart` に置ける名前は `auto_num_leaves`, `num_leaves_ratio`, `min_data_in_leaf_ratio`, `min_data_in_bin_ratio`, `feature_weights`, `balanced` に限られる（`estimators/lgbm/provider.py:50-57`）。
+- `training` に置ける名前は `early_stopping_rounds` と `validation_ratio` に限られる（`core/_tuning_validation.py:26,79-92`）。
+
+`space_mode` の既定は `merge` で、LizyML の既定の空間に利用者の次元を重ね、`first_metric_only` と `metric` を固定で加える。`replace` は利用者の次元だけを探索し、固定の値も加えない（`core/_tuning_space.py:78-130`、`estimators/lgbm/defaults.py:147-157`）。
+
+**UI の `group` は LizyML の `category` と一致しない。** たとえば `num_leaves` は UI では `smart_params` に置かれている（`lizyml_ui_schema.py:138-143`）が、LizyML では native の model の次元であり、`category: smart` で送ると拒否される。そのため `group` から `category` を機械的に作ることはしない。
+
+- **(A) Studio の catalog を正とし、送る形を明示した対応表で決める（推奨）**
+  - **対応表:** catalog の全 25 行について、送るときの名前と `category`（Tune の次元のとき）、または Fit の設定の行き先（固定値のとき）を、backend の 1 つの表で定める（D2 の表と共通にする）。UI の `group` からは独立させる。
+    - 表に無い名前は、LizyML の既定どおり `model` の次元として送る。その名前が正しいかどうかは LizyML の受け付け検査に任せる。
+      - たとえば `min_child_samples` のような LightGBM の正規の名前は、表に無くても正当な入力である。
+      - Studio の側で拒否する関門は設けない。保存済みの Tune の空間 22 件を表と照合した結果、表に無い名前は 0/22 だった。
+    - 表が catalog の全行を覆うことはテストで確かめる（DC3 の防止）。
+  - **既定の次元:** 既定で探索する 13 次元を、表の名前と `category` で送る。training の名前は `early_stopping.rounds` から `early_stopping_rounds` に変える。
+  - **`space_mode`:** 常に `replace` を明示する。
+    - こうすると、UI に表示した範囲がそのまま探索され、LizyML の既定の次元（`objective` など）が混ざらない。
+    - `replace` では `first_metric_only` と `metric` が入らないので、Studio が固定値として `model.params` に入れる。値は今の Fit と同じものにする。
+  - **持ち主が無効な smart の次元:** `num_leaves_ratio` は `auto_num_leaves=true` のときだけ意味を持つ。LizyML は、持ち主が無効なときに利用者が書いた `num_leaves_ratio` を拒否する（`_tuning_validation.py:301-351`）。Studio が展開した次元は、LizyML から見るとすべて利用者が書いたものになる。
+    - そのため Studio は、`auto_num_leaves` が固定で `false` のときは `num_leaves_ratio` を送らない。
+    - `auto_num_leaves` 自体を choice で探索するときは、`true` が選びうるので送る。
+  - **training の次元（Studio の方針）:** LizyML は、`training.early_stopping.enabled=false` でも `early_stopping_rounds` の次元を拒否しない。探索した値が early stopping を有効にする（`_model_factories.py:691-715`）。
+    - これは利用者が early stopping を無効にした意図に反する。そのため Studio の方針として、`early_stopping.enabled` が固定で `false` のときは `early_stopping_rounds` と `validation_ratio` を送らない。
+    - これは LizyML の要求ではなく Studio の決めごとであり、テストで固定する。
+  - **送る前の検査:** 0.20 の受け付け検査は、上記のほかに次の空間も拒否する（`core/_tuning_admission.py:172-274`）。`replace` にしても、この検査は避けられない。
+    - 同じ parameter を 2 つの綴りで書いたもの（alias を含む）
+    - training の設定が持つ model の次元（例: `seed`、early stopping が有効なときの `early_stopping_round`）
+    - 有効な smart の設定が管理する model の次元（例: `auto_num_leaves=true` のときの `num_leaves`）
+    - task に合わない `objective`
+
+    Studio はこれらの規則を写さない。LizyML の検査には公開の入口が無く（いずれも `core/_tuning_admission.py` の内部関数）、規則を写すと 2 つ目の規則の集まりができて食い違う（DC3）からである。
+    - Studio は自分で作る空間が対応表と持ち主の規則によって受け付けられるようにする。
+    - 利用者が書いた空間を LizyML が拒否した場合は、その拒否を trial 0 の前の job の失敗として返す。このとき、汎用の文言ではなく、LizyML の構造化された文脈（`surface`、`reason`、`dim`、`key`。`tuning/_space_format.py:103-138`）から次元の名前と理由を示す。
+    - 拒否は trial の前に起きるので、計算は無駄にならない。
+  - 長所: UI の表示と実際に探索する範囲が一致する。0.15 の時と同じ 13 次元を探索するので、結果の変化が小さい。
+  - 短所: LizyML が既定の空間を改善しても、Studio には自動では入らない。
+- **(B) 利用者が編集した次元だけを送り、残りは LizyML の既定に任せる（`merge`）**
+  - 長所: 送る量が少ない。LizyML の既定にそのまま追従する。
+  - 短所: catalog の既定の範囲と、実際に探索する範囲が食い違う。たとえば `learning_rate` は、Studio の catalog では 0.0001-0.01（`lizyml_ui_schema.py:225-232`）、LizyML の既定では 0.0001-0.1（`defaults.py:126-129`）である。UI の表示が実際と合わなくなる（DC3 の形）。
+
+真偽値の choices（#689）と step の格子（#688）は、この形式の変更と同じ経路なので、同じ PR 群で扱う。
+
+##### D2. Fit の設定への分配を 1 か所にまとめる
+
+0.20 の `TuningResult` は、`best_model_params`、`best_smart_params`、`best_training_params` を分けて持つ。`best_params` は平らにまとめた表示用の値であり、`model.params` に入れると拒否される。
+
+いま平らな値をそのまま `model.params` に入れている箇所は 5 つある。
+- autofit: `_training_core.py:337-347`
+- retune: `training_retune.py:109`
+- unpause の skip 経路: `training.py:287-337`。Optuna の `study.best_params` から作り直す。
+- フロントエンドの Apply to Fit: `TuneTrialsSection.tsx:32-53`
+- フロントエンドの Fixed モード: `TuneTab.tsx:184-190`。smart / training を含むすべての行を `model.params[key]` に書く。
+
+- **(A) backend に分配の処理を 1 つ作り、5 か所すべてをそこに通す（推奨）**
+  - 行き先は D1 と共通の対応表で決める。catalog の全 25 行の行き先は次のとおり。
+
+    | 行（catalog の key） | Fit の設定の行き先 |
+    |---|---|
+    | `n_estimators`, `learning_rate`, `max_depth`, `max_bin`, `feature_fraction`, `bagging_fraction`, `bagging_freq`, `lambda_l1`, `lambda_l2`, `objective`, `metric`, `first_metric_only`, `verbose`, `num_leaves` | `model.params.<key>` |
+    | `auto_num_leaves`, `num_leaves_ratio`, `min_data_in_leaf_ratio`, `min_data_in_bin_ratio`, `feature_weights`, `balanced` | `model.<key>`（LGBMConfig の項目） |
+    | `seed` | `training.seed` |
+    | `early_stopping.enabled` | `training.early_stopping.enabled` |
+    | `early_stopping.rounds`（Tune の結果では `early_stopping_rounds`） | `training.early_stopping.rounds` |
+    | `inner_valid` | `training.early_stopping.inner_valid` |
+    | `validation_ratio` | `training.early_stopping.inner_valid`（`method: holdout`, `ratio`） |
+
+  - **inner_valid の印（D-20261020-008 の A 案）:**
+    - 利用者が UI で選んだ値は `inner_valid_explicit: true` で書く。Fixed モードの `inner_valid` と `validation_ratio` の固定値がこれにあたる。
+    - Tune が選んだ `validation_ratio` は `inner_valid_explicit: false` で書き、LizyML の split に応じた自動解決を残す。
+  - **どこから値をとるか:**
+    - Tune の結果: LizyML が返す 3 つの辞書の分類をそのまま使う。
+    - unpause の skip 経路: Optuna の名前から推測しない。`Model.restore_tuning(storage, study_name)`（`core/_model_tuning.py:564`）で分類済みの `TuningResult` を得る。
+    - Fixed モード: 上の表で決める。表に無い名前は `model.params` に入れ、LizyML の検査に任せる（D1 と同じ扱い）。
+  - **API:** `tune_result` に 3 つの辞書を追加する（既存の `best_params` は残す）。Apply to Fit と Fixed モードは、分配済みの設定を backend から受け取る。
+- **(B) autofit と retune では、Tune したのと同じ Model の `fit()` を呼ぶ（LizyML が推奨する経路）**
+  - 長所: 設定を作り直さないので、分配の誤りが起きない。
+  - 短所: job に保存される設定と、実際に fit した設定が一致しなくなる。設定からの再現（export-code、Re-fit、Apply to Fit）が別の経路になり、結局は (A) の処理も必要になる。
+
+##### D3. unpause と再開の約束（H-0122）
+
+0.20 の `tune(resume=...)` の約束は次のとおりである。
+- `resume=False` のまま既存の study に接続すると `CONFIG_INVALID` になる。
+- `n_trials` は round ごとの数であり、合計ではない。
+- 途中で終わった（open な）round を再開すると、その round の残りだけを実行する。別の `n_trials` を指定すると拒否される（`_tuning_plan.py:217-218,353-354,415,470`）。
+- v0.19 より前の study は再開できない（`_tuning_resume.py:229-266`）。
+
+いまの `run_tune`（`training.py:442-449`）は `resume` を渡さない。代わりに、#554 の修正で `n_trials` を「元の数 − 済んだ数」に書き換えている（`training.py:415-420`）。この計算は、`tuning.re_tune` で round が複数ある場合と open な round の場合に、0.20 の約束と合わない。
+
+今の一時停止は、実行中の round の後の進捗の呼び出しで効く（#719）。そのため、一時停止した study は次の 2 つの状態のどちらかになる。
+- 予定した round がすべて済んでいる。
+- 一部の round が済み、残りの round がまだ始まっていない。round が複数の Tune で、最後でない round の最中に一時停止した場合である。
+
+- **提案:** unpause は `lizyml.tuning.read_study_lineage` で study の状態を読み、job を起動する前に分岐を決める。
+  - **すべての round が済んでいる:** Tune を実行せず、`restore_tuning` の結果から D2 の分配を通して Fit に進む。
+  - **済んだ round が予定より少なく、open な round は無い:** 残りの各 round を `resume=True` と round ごとの `n_trials` で実行する。
+    - この状態は、今の一時停止で実際に作れる。round が複数の Tune を 1 round 目の最中に一時停止すればよい。受け入れテストではこれを使う。
+  - **open な round がある:** 今は一時停止でこの状態を作れない（#719）。job の失敗からも、unpause には来ない。worker が強制終了された job は `failed` になり（`subprocess_runner.py:318-360`）、unpause は `paused` だけを受け付ける（`api/jobs.py:345-357`）からである。
+    - この場合も、`resume=True` で `n_trials` を渡さずに呼ぶ。こうすると LizyML は、その round に記録した予算の残りだけを実行する（`_tuning_plan.py:430-476`）。これは 0.20 の約束どおりの再開であり、専用の拒否は設けない。
+      - `n_trials` を明示して、それが記録した予算と異なる場合だけ、LizyML は拒否する（`:415-416`）。そのため、この分岐では `n_trials` を渡してはいけない。
+    - ただし、この分岐を unpause から end-to-end で確かめるテストは、#719 で一時停止が round の途中で止まるようになってから加える。本 Proposal の受け入れ基準には含めない。
+    - 保留メモ: #719 が直るまで、P-0099 INV-4（「unpause は trial N+1 から続ける」）のうち round の途中からの再開は、実際には起きない。
+  - **LizyML の記録が無い（v0.19 より前の）study:** D4 のとおり拒否する。
+- `/retune` と `/resume`（`training_retune.py:99-105`）は、すでに `resume=True` を渡している。0.20 で動くことを E2E で確かめる。
+
+##### D4. 0.15 で作った job の、できない操作を明確に拒否する
+
+| 操作 | 0.20 の挙動（実測） | 提案する応答 |
+|---|---|---|
+| unpause（0.15 の一時停止中の Tune） | 再開すると job が失敗する。0.15 の study は v0.19 より前なので再開できない | job の起動前に 400 で拒否する。既存の `CheckpointIncompatibleError` → `PICKLE_INCOMPATIBLE` と同じ形にし、`recovery_hint` は「新しい Tune を始める」とする |
+| SHAP 重要度、SHAP の plot | 汎用の 500。LizyML は `MODEL_NOT_FIT`、`context.missing == "pipeline_state_per_fold"`（`core/_model_tables.py:153-172`） | 専用の 4xx（例: `REFIT_REQUIRED`）と「再 Fit が必要」という案内 |
+| Tune した job の export-code | 汎用の 500。LizyML は `CONFIG_INVALID`、`model.params` に LightGBM の知らない名前がある（`_model_persistence.py:437-447`） | 同じく専用の 4xx と「再 Fit が必要」という案内 |
+
+- **判定の条件はそれぞれの症状だけに絞る。** `MODEL_NOT_FIT` と `CONFIG_INVALID` は、旧い artifact 以外でも使われる広いコードである。たとえば `MODEL_NOT_FIT` は学習データが無い場合にも出る。
+  - SHAP: `MODEL_NOT_FIT` で、`context.missing` が `pipeline_state_per_fold` のときだけ。
+  - export-code: 起動前の検査として、保存されたモデルの `model.params` の名前に、D1 の対応表で `model.params` 以外に行く名前（smart / training）が含まれるときだけ。それ以外の `CONFIG_INVALID` は、今と同じ扱いのまま変えない。
+  - unpause: study に LizyML の記録が無いとき（D3）。
+- **応答の形:** 既存の `PlotNotAvailableError` → 404（`api/jobs.py:560-563`）と同じく、adapter が専用の例外を出し、route が `BackendError` より先に変換する。
+- Firing rate: SHAP gate 144/144 and export-code gate 21/21 — invoked under a lizyml 0.20.0 server on every completed job persisted on this machine (main tree `.lizystudio/jobs` 149 + Phase 1 seed 3 = 152; 144 completed, of which 21 Tune): all 144 SHAP calls hit `MODEL_NOT_FIT` with `pipeline_state_per_fold` missing and all 21 export-code calls hit `CONFIG_INVALID` for non-LightGBM names in `model.params` (server log counts, 2026-10-21); the unpause gate fires on 1/1 paused Tune, whose study has no LizyML record (written by 0.15.0).
+
+##### D5. 機械的な変更（判断を要しない）
+
+- **依存:** `pyproject.toml` の範囲を `lizyml[...]>=0.20.0,<0.21.0` にする（下限は D-20261020-008）。`uv.lock` で動くのは lizyml だけである。
+- **seed（D-20261020-008: LizyML に合わせる）:** Studio は固定の `42` を書くのをやめる。今は CV の既定（`lizyml_ui_schema.py:616` の `cv_defaults.random_state`、フロントエンドの `cv-state.ts:95`）が書いている。0.20 では、split と isotonic が `training.seed` を受け継ぐ（H-0080）。利用者が値を明示したときだけ書く。結果が 0.15 と変わることを CHANGELOG に書く。
+- **`embargo` → `purge_gap`:** ui_schema（`lizyml_ui_schema.py:586-593`）と、フロントエンドの `cv-state.ts`（`:53-54`、`:98-99`、`:111`、`:126-127`、`:262-263`、`:367`）と `CvSection.tsx:257-261` を変える。0.20 は `embargo` を非推奨として受け付け、その値を `purge_gap` に足す。そのため、保存済みの設定の読み込みは壊れない。
+- **`direction`:** 利用者が明示したときだけ送る。
+  - 今は `workspace.py:605` が常に書いている。フロントエンドも、指標を変えるたびに `TuneEvaluationSection.tsx:149-154` で書いている。
+  - 0.20 では省略すると指標から決まり、矛盾した値を明示すると拒否される（H-0099）。
+  - テストの設定 6 件も同じ方針で直す。
+- **inner_valid（A 案、D-20261020-008）:** UI で選んだときだけ `inner_valid_explicit: true` にし、既定と自動の推奨では `false` を書く。印は常に書き、`validation_ratio` を落とす。
+- **回帰での stratify:** 0.20 は job を実行する時点で `CONFIG_INVALID` にする（`build_splitter`）。`/config/validate` では捕まらないので、UI（`CvSection`、inner_valid の picker）で回帰のときは選べないようにする。
+- **pickle 互換の matrix:** `scripts/pickle_compat_matrix.sh:37` と `nightly.yml` の `PAST_VERSIONS` を `0.17.0 0.18.0 0.19.0` にする。
+- **production の fixture:** lizyml 0.9.1 で採ったもの（`tests/fixtures/lizyml/README.md:36-38`）を 0.20.0 で採り直す。フロントエンドの複製（`frontend/src/__fixtures__/lizyml/`）も同時に更新する。
+- **#690:** `cross_entropy_lambda` を binary の objective から外す（`lizyml_ui_schema.py:63`）。0.20 では DESERIALIZATION_FAILED の原因にもなる。
+- **#691:** `TUNING_FAILED` を、汎用の 500 ではない、意味のあるエラーとして返す。
+
+##### D6. PR の進め方
+
+lock を上げた時点で Tune がすべて失敗する。そのため、lock だけを先に develop に入れることはできない（CI が緑にならない）。
+
+- **(A) 統合ブランチ `feat/lizyml-020` に PR を積み、全部が緑になってから develop へ 1 回で merge する（推奨）**
+  - 統合ブランチの中の順序:
+    1. lock の更新と D5
+    2. D1（探索空間）と D2（分配）
+    3. D3（unpause）と D4（旧 job の拒否）
+    4. fixture の採り直し
+  - 長所: 1 つの PR が小さく、レビューしやすい。develop はずっと緑のまま。
+  - 短所: 統合ブランチを develop に追従させる手間がある。
+- **(B) 1 つの大きな PR にする**
+  - 長所: 手間が少ない。
+  - 短所: backend とフロントエンドにまたがる大きな差分になり、Codex のレビューが長引きやすい。
+
+#### Compatibility
+
+- **外部依存:** lizyml の下限が 0.20.0 になる。lizyml 0.19 以下の環境には、この LizyStudio を入れられない。0.20 で保存したモデルは、古い lizyml では読めない（一方向）。
+- **API の応答:**
+  - `tune_result` に `best_model_params` / `best_smart_params` / `best_training_params` を追加する（追加のみ）。
+  - 0.15 の job に対する SHAP、export-code、unpause が、500 から 4xx の専用のエラーに変わる。
+- **保存する設定の形:** 新しい job の設定は、空間の `category`、`early_stopping_rounds`、`space_mode: replace`、`purge_gap` を持つ。`direction` は明示したときだけ持つ。0.15 の job の保存済みの設定は書き換えない。
+- **結果の変化（LizyML 側の変更による）:** seed の扱い（splitter と isotonic が `training.seed` を受け継ぐ）、`model.feature_weights` と `fit(params=)` が実際に効くようになったこと（H-0094）、Platt の再定義、SHAP が fold ごとになったこと。同じ設定でも 0.15 と数値が変わりうる。CHANGELOG に書く。
+- **format_version:** LizyStudio 自身の保存形式は変えない。
+
+#### 採らなかった案
+
+- **lizyml 0.16〜0.19 を経由して段階的に上げる:** D-20261020-008 で 0.20.0 に直接上げると決めた。
+- **0.15 の job を 0.20 の形に変換する:** D-20261020-008（旧 job は行を残し、できない操作だけ拒否）に反する。0.15 の study は LizyML 側でも再開できない。
+
+#### Acceptance Criteria
+
+- [ ] lizyml 0.20.0 のロックで、backend・integration・functional E2E が retry なしで緑になる。
+- [ ] **探索空間（D1）:**
+  - 既定の空間による Tune が完了する。
+  - 保存された job の設定は、空間の全次元に対応表どおりの名前と `category` を持ち、`space_mode: replace` を持つ。
+  - 実際の探索次元は、送った次元と一致する。`objective` などの LizyML の既定の次元は含まない。確かめるには、Tune の結果の `TuningResult.rounds[].space_snapshot`（`core/types/tuning_result.py:68-86`）を使う。
+  - `first_metric_only` と `metric` が固定値として `model.params` に入る。
+- [ ] **対応表（D1・D2）:** catalog の全 25 行が対応表に載っていることをテストで確かめる。表に無い LightGBM の正規の名前（例: `min_child_samples`）は、`model` の次元として受け付けられる。
+- [ ] **持ち主の状態（D1）:**
+  - `auto_num_leaves` の固定 `true` / 固定 `false` / choice の 3 通りと、`early_stopping.enabled` の `true` / `false` を組み合わせたテストで、次を確かめる。
+    - 送る次元が D1 の規則どおりになる。
+    - Tune が LizyML に受け付けられる。
+  - `num_leaves` は model の次元として送られる。
+- [ ] **LizyML が拒否した空間（D1）:** 次の空間で Tune を始めると、job は trial 0 の前に失敗する。job の error は汎用の文言ではなく、問題の次元の名前と理由を示す。
+  - alias の重複（例: `lambda_l2` と `reg_lambda`）
+  - training が持つ model の次元（例: `seed`）
+  - `auto_num_leaves=true` のときの `num_leaves`
+  - task に合わない `objective`
+- [ ] **分配（D2）:** 5 か所それぞれについて、できあがった Fit の設定の全体を期待値と比べるテストを置く。
+  - 5 か所: autofit、retune、unpause の skip 経路、Apply to Fit、Fixed モード
+  - 期待値に含めるもの: `model.params`、`model` の smart の項目、`training.seed`、`training.early_stopping` の全体、inner_valid の印
+  - smart / training の名前が `model.params` に入らないことだけを確かめるテストでは足りない。
+- [ ] **inner_valid の印（D-20261020-008 の A 案）:** 次の書き手すべてで、印が値つきで必ず書かれ、`validation_ratio` が書かれないことをテストで確かめる。
+  - 既定の設定（Fit タブ、Tune タブ）: `false`
+  - CV の変更による自動の推奨: `false`
+  - UI の picker で選んだ値: `true`
+  - Fixed モードの固定値: `true`
+  - Tune が選んだ `validation_ratio`: `false`
+- [ ] **unpause（D3）:**
+  - 全 round が済んだ study は、Tune を実行せずに Fit に進む。
+  - round が複数の Tune を最初の round の最中に一時停止すると、unpause は残りの round を `resume=True` で実行する。最終的な round 数と trial 数が、当初の計画と一致する。
+- [ ] **0.15 で作った job（D4）:** Phase 1 で 0.15 のサーバが作った実物を fixture にして、次を確かめる。
+  - unpause は job の起動前に 400 で拒否され、「新しい Tune を始める」という案内を返す。
+  - SHAP と、Tune した job の export-code は、500 ではなく専用の 4xx を返す。
+  - 一覧、詳細、推論、split 重要度は従来どおり動く。
+  - 判定が広すぎないことも確かめる。0.20 で作った job で起きる別の `MODEL_NOT_FIT`（学習データが無い場合）と別の `CONFIG_INVALID` は、専用の 4xx に変換されない。
+- [ ] **`direction`:** 利用者が明示した場合だけ job の設定に入る。指標を変えただけでは入らない。
+- [ ] **seed:** 新しい job の設定は、利用者が明示しない限り、split の `random_state` を持たない。split と isotonic は `training.seed` を受け継ぐ。CHANGELOG に結果の変化を書く。
+- [ ] **`embargo`:** `embargo` を持つ保存済みの設定を読んでも job が動く。新しく書く設定は `purge_gap` だけを持つ。
+- [ ] **回帰での stratify:** UI で選べない。API から送られた場合は、job の失敗ではなく、意味のあるエラーで拒否される。対象は stratified な CV、`groups.stratify`、inner_valid の `stratify`。
+- [ ] **#690:** binary の objective の選択肢に `cross_entropy_lambda` が無い。
+- [ ] **#691:** `TUNING_FAILED` は、汎用の 500 ではなく専用のエラーとして返る。
+- [ ] **`PAST_VERSIONS`:** 0.17 / 0.18 / 0.19 を検査する。
+- [ ] **production の fixture:** lizyml 0.20.0 で採り直し、README の記録を更新する。
+
+#### Decision
+
+- **2026-10-21 accepted**（owner）: すべての推奨案を採用する（D1 (A)、D2 (A)、D3、D4、D5、D6 (A)）。Codex の critique は 3 round 目で APPROVE（指摘は 7 → 2 → 0）。決定カードは D-20261021-005。
+- **進め方（owner、2026-10-21）:**
+  - 統合ブランチ `feat/lizyml-020` に向けた子 PR は、Codex の APPROVE と、手元での受け入れ確認の全テストが通ったら、確認なしで merge する。
+  - CI は develop / main に向けた PR でしか走らない。そのため、`feat/lizyml-020` → develop の draft PR を最初に開く。子 PR を merge したら、その draft PR の CI が緑になってから次の子 PR に進む。`ci.yml` は変えない（D-20261021-006）。
+  - develop への最後の merge は、owner に確認してから行う。
