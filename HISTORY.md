@@ -4789,6 +4789,8 @@ LizyStudio を lizyml `>=0.20.0,<0.21.0` で動かす。その上で、次の 3 
 
 lock を上げた時点で Tune がすべて失敗する。そのため、lock だけを先に develop に入れることはできない（CI が緑にならない）。
 
+> **2026-10-21 改訂:** 下の (A) の「統合ブランチの中の順序」は、子 PR ごとに緑という関門を通れない（DC7）。そのため、Decision の「D6 の改訂」の 8 本の順序に置き換えた。統合ブランチを使うことは変えない。
+
 - **(A) 統合ブランチ `feat/lizyml-020` に PR を積み、全部が緑になってから develop へ 1 回で merge する（推奨）**
   - 統合ブランチの中の順序:
     1. lock の更新と D5
@@ -4869,3 +4871,23 @@ lock を上げた時点で Tune がすべて失敗する。そのため、lock �
   - 統合ブランチ `feat/lizyml-020` に向けた子 PR は、Codex の APPROVE と、手元での受け入れ確認の全テストが通ったら、確認なしで merge する。
   - CI は develop / main に向けた PR でしか走らない。そのため、`feat/lizyml-020` → develop の draft PR を最初に開く。子 PR を merge したら、その draft PR の CI が緑になってから次の子 PR に進む。`ci.yml` は変えない（D-20261021-006）。
   - develop への最後の merge は、owner に確認してから行う。
+- **D6 の改訂（owner、2026-10-21）:** 統合ブランチの中の順序を、0.15 と 0.20 の両方で動く部分を先に入れ、lock を後で上げる 8 本に改める。merge の条件（Codex の APPROVE、手元の全テスト、draft PR の CI）は変えない。決定カードは D-20261021-008。
+  - **理由:** 受諾時の順序では、lock を上げた子 PR 1 に D1・D2・D3 が無いので、Tune の E2E 21 件、retune、integration が失敗したまま残る。そのため、子 PR ごとに緑という関門を通れない（DC7）。Codex の検討で、次の 2 点を確かめた。
+    - 0.15 も、利用者の空間が空でなければ既定の空間を置き換え、固定値を足さない（lizyml 0.15 `core/model.py:619-630`）。これは 0.20 の `replace` と同じである。
+    - そのため、D1 と D2 の大部分は 0.15 のままで入れられる。
+  - **子 PR の順序:**
+
+    | # | lizyml | 内容 |
+    |---|---|---|
+    | 1 | 0.15 | D1 のうち両方のバージョンで動く部分（対応表、`category`、`early_stopping_rounds` の名前、持ち主の規則、`metric` / `first_metric_only` の固定値、真偽値の choices（#689））。`space_mode` と `step` はまだ送らない |
+    | 2 | 0.15 | D2（分配の処理、`tune_result` の 3 つの辞書）。Tune が選んだ ratio は、印が使えるようになるまで `validation_ratio` で渡し、自動解決を残す |
+    | 3 | 0.15 | D5 のうち両方のバージョンで動く部分（`embargo` を `purge_gap` に合算する、回帰の stratify の拒否、#690、#691） |
+    | 4 | 0.20 に上げる | 最小の切り替え: lock の更新、`space_mode: replace`、保存済みの study への `resume=True` での再接続、`direction` が指標と逆のテスト 6 件の修正 |
+    | 5 | 0.20 | `step`（#688）、受け付け時のエラーの文脈、`direction` の省略、seed、inner_valid の印 |
+    | 6 | 0.20 | D3（`read_study_lineage` と `restore_tuning`） |
+    | 7 | 0.20 | D4（0.15 の job の明確な拒否） |
+    | 8 | 0.20 | production の fixture の採り直し、`PAST_VERSIONS` を 0.17 / 0.18 / 0.19 にする |
+
+  - **0.20 より前に入れてはいけないもの:**
+    - `direction` の省略。0.15 は省略すると `minimize` になり（lizyml 0.15 `config/schema.py:433-437`）、maximize の指標を逆向きに最適化してしまう。
+    - `step` のテスト。0.15 は `step` を黙って無視する（DC1）。0.15 の次元の型には `step` の欄が無く（lizyml 0.15 `core/types/search_dim.py:20-64`）、`parse_space` も `step` を読まない（`tuning/search_space.py:116-171`）。`step` が加わったのは 0.20 である（lizyml 0.20 `core/types/search_dim.py:20-59`）。そのため、0.15 ではテストが通っても何も確かめていない。
