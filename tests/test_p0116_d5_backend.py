@@ -19,7 +19,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from lizystudio.backends.exceptions import TuningFailedError
+from lizystudio.backends.exceptions import SearchSpaceRefusedError, TuningFailedError
 from lizystudio.backends.lizyml import LizyMLAdapter
 from lizystudio.backends.lizyml.space_wire import to_wire_config
 from lizystudio.backends.lizyml_ui_schema import build_ui_schema
@@ -307,4 +307,186 @@ class TestTuningFailed:
         assert job.error.splitlines()[0] == message
         broadcaster.send_error.assert_called_once_with(
             "job_x", message, code="TUNING_FAILED"
+        )
+
+
+_SPACE = "tuning.optuna.space"
+_REFUSED = "LizyML refused the search space"
+
+
+class TestSearchSpaceRefused:
+    """lizyml's pre-trial space refusals keep their own error (P-0116 D1).
+
+    The context shapes are the five lizyml 0.20 raises from ``model.tune()``
+    (measured by running each against the adapter).  Studio copies none of
+    lizyml's rules; it only names the dims lizyml named.
+    """
+
+    def _tune_raising(self, exc: Exception) -> BaseException:
+        adapter = LizyMLAdapter()
+        model = MagicMock()
+        model.tune.side_effect = exc
+        with pytest.raises(Exception) as excinfo:
+            adapter.tune(model)
+        return excinfo.value
+
+    @pytest.mark.parametrize(
+        ("context", "dims"),
+        [
+            pytest.param(
+                {
+                    "conflicts": [
+                        {
+                            "surface": _SPACE,
+                            "parameter": "learning_rate",
+                            "dimensions": ["eta", "learning_rate"],
+                        }
+                    ]
+                },
+                ("eta", "learning_rate"),
+                id="alias",
+            ),
+            pytest.param(
+                {
+                    "conflicts": [
+                        {
+                            "surface": _SPACE,
+                            "name": "seed",
+                            "config_path": "training.seed",
+                        }
+                    ]
+                },
+                ("seed",),
+                id="training-owned-model-dim",
+            ),
+            pytest.param(
+                {
+                    "managed": [
+                        {
+                            "surface": _SPACE,
+                            "name": "num_leaves",
+                            "canonical": "num_leaves",
+                            "smart_param": "auto_num_leaves",
+                        }
+                    ]
+                },
+                ("num_leaves",),
+                id="smart-managed",
+            ),
+            pytest.param(
+                {
+                    "task": "binary",
+                    "objective": "regression",
+                    "surface": _SPACE,
+                    "dim": "objective",
+                    "key": "choices",
+                    "value": "regression",
+                },
+                ("objective",),
+                id="objective",
+            ),
+            pytest.param(
+                {
+                    "surface": _SPACE,
+                    "reason": "bound_off_grid",
+                    "dim": "max_bin",
+                    "key": "low",
+                    "grid_low": 64,
+                    "grid_high": 192,
+                },
+                ("max_bin",),
+                id="off-grid",
+            ),
+            pytest.param(
+                {"surface": _SPACE, "names": ["foo", "bar"], "category": "smart"},
+                ("foo", "bar"),
+                id="names-list",
+            ),
+            pytest.param(
+                {"surface": "tune(space=)", "dim": "early_stopping_rounds"},
+                ("early_stopping.rounds",),
+                id="later-round-space-and-wire-name",
+            ),
+        ],
+    )
+    def test_space_refusal_names_the_dims(
+        self, context: dict[str, Any], dims: tuple[str, ...]
+    ) -> None:
+        raised = self._tune_raising(
+            _lizyml_error("CONFIG_INVALID", "lizyml says why.", context)
+        )
+        assert isinstance(raised, SearchSpaceRefusedError)
+        assert raised.dims == dims
+        assert str(raised) == f"{_REFUSED} ({', '.join(dims)}): lizyml says why."
+
+    def test_refusal_without_a_dim_falls_back_to_the_message(self) -> None:
+        raised = self._tune_raising(
+            _lizyml_error(
+                "CONFIG_INVALID", "bad space.", {"surface": _SPACE, "reason": "x"}
+            )
+        )
+        assert isinstance(raised, SearchSpaceRefusedError)
+        assert raised.dims == ()
+        assert str(raised) == f"{_REFUSED}: bad space."
+
+    def test_dims_come_only_from_space_entries(self) -> None:
+        context = {
+            "conflicts": [
+                {"surface": "model.params", "name": "seed"},
+                {"surface": _SPACE, "name": "bagging_seed"},
+            ]
+        }
+        raised = self._tune_raising(_lizyml_error("CONFIG_INVALID", "m", context))
+        assert isinstance(raised, SearchSpaceRefusedError)
+        assert raised.dims == ("bagging_seed",)
+
+    @pytest.mark.parametrize(
+        "context",
+        [
+            pytest.param({}, id="empty"),
+            pytest.param(
+                {"validation_errors": [{"loc": ["tuning", "optuna", "space"]}]},
+                id="pydantic",
+            ),
+            # Exact surface match: these surfaces only start like the space.
+            pytest.param({"surface": "tuning.optuna.space_mode"}, id="space_mode"),
+            pytest.param({"surface": "tuning.optuna.params.direction"}, id="direction"),
+            pytest.param({"surface": "tuning.study"}, id="study"),
+            pytest.param(
+                {"conflicts": [{"surface": "model.params", "name": "seed"}]},
+                id="model-params-conflict",
+            ),
+            pytest.param({"conflicts": "not-a-list"}, id="malformed"),
+        ],
+    )
+    def test_non_space_config_invalid_passes_through(
+        self, context: dict[str, Any]
+    ) -> None:
+        original = _lizyml_error("CONFIG_INVALID", "not the space", context)
+        assert self._tune_raising(original) is original
+
+    def test_other_codes_with_a_space_surface_pass_through(self) -> None:
+        original = _lizyml_error(
+            "DATA_SCHEMA_INVALID", "m", {"surface": _SPACE, "dim": "x"}
+        )
+        assert self._tune_raising(original) is original
+
+    def test_job_reports_the_space_refused_code(self) -> None:
+        from lizystudio.services._training_core import _apply_job_outcome
+
+        job = MagicMock(job_id="job_x", status="queued", error=None)
+        store = MagicMock()
+        broadcaster = MagicMock()
+        refusal = f"{_REFUSED} (max_bin): off grid."
+
+        def execute(_cb: Any) -> Any:
+            raise SearchSpaceRefusedError(refusal, dims=("max_bin",))
+
+        _apply_job_outcome(job, store, broadcaster, execute_fn=execute, cb=MagicMock())
+
+        message = f"SearchSpaceRefusedError: {refusal}"
+        assert job.status == "failed"
+        assert job.error.splitlines()[0] == message
+        broadcaster.send_error.assert_called_once_with(
+            "job_x", message, code="SEARCH_SPACE_REFUSED"
         )

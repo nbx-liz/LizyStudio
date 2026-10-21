@@ -664,6 +664,9 @@ class TestLizyMLAdapterUiSchema:
         defaults = caps["cv_defaults"]
         assert "n_splits" in defaults
         assert defaults["n_splits"] == 5
+        # D-20261020-008: Studio stops writing a split seed of its own; the
+        # split inherits training.seed in lizyml 0.20.
+        assert "random_state" not in defaults
 
     def test_capabilities_cv_default_strategy(self) -> None:
         """capabilities must include cv_default_strategy per task."""

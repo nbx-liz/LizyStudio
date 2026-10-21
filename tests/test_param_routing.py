@@ -96,24 +96,25 @@ class TestRouting:
     def test_validation_ratio_keeps_split_aware_resolution(self) -> None:
         # A ratio, from a tune or from Fixed mode, is not a method choice:
         # lizyml keeps resolving the inner split, with this ratio
-        # (D-20261020-008 option A: explicit only for a picker choice).
+        # (D-20261020-008 option A: explicit only for a picker choice).  The
+        # marker says so; the deprecated validation_ratio is not written.
         out = route_model_params(_fit_config({"validation_ratio": 0.25}))
         es = out["training"]["early_stopping"]
-        assert es["validation_ratio"] == 0.25
         assert es["inner_valid"] == {"method": "holdout", "ratio": 0.25}
+        assert es["inner_valid_explicit"] is False
+        assert "validation_ratio" not in es
         assert out["model"]["params"] == {}
 
     def test_inner_valid_method_keeps_split_aware_resolution(self) -> None:
         # model.params.inner_valid is written both by a user pick and by the
         # Tune tab's automatic CV recommendation (TuneTab.tsx:212-220); the
-        # name does not tell them apart.  Until the UI marks a pick (child 5,
-        # the 0.20 marker), the method is carried with validation_ratio kept,
-        # which lizyml 0.15 reads as not explicit (D-20261020-008 option A:
-        # an automatic recommendation is never explicit).
+        # name does not tell them apart.  Routing marks it automatic; a user
+        # pick reaches routing with a true marker, which is kept (child 5b).
         out = route_model_params(_fit_config({"inner_valid": "time_holdout"}))
         es = out["training"]["early_stopping"]
         assert es["inner_valid"] == {"method": "time_holdout", "ratio": 0.1}
-        assert es["validation_ratio"] == 0.1
+        assert es["inner_valid_explicit"] is False
+        assert "validation_ratio" not in es
         assert out["model"]["params"] == {}
 
     def test_tune_tab_output_with_a_tuned_ratio_stays_automatic(self) -> None:
@@ -124,23 +125,76 @@ class TestRouting:
         )
         es = out["training"]["early_stopping"]
         assert es["inner_valid"] == {"method": "group_holdout", "ratio": 0.2}
-        assert es["validation_ratio"] == 0.2
+        assert es["inner_valid_explicit"] is False
+        assert "validation_ratio" not in es
 
     def test_inner_valid_on_a_config_without_early_stopping(self) -> None:
         config = {"task": "binary", "model": {"params": {"inner_valid": "holdout"}}}
         out = route_model_params(config)
         assert out["training"]["early_stopping"] == {
             "inner_valid": {"method": "holdout", "ratio": 0.1},
-            "validation_ratio": 0.1,
+            "inner_valid_explicit": False,
         }
 
-    def test_a_lizyml_020_marker_is_left_untouched(self) -> None:
-        # lizyml 0.20 defaults dump inner_valid_explicit: false. Routing does
-        # not decide explicitness, so the marker stays as the config has it.
-        config = _fit_config({"inner_valid": "holdout", "validation_ratio": 0.2})
-        config["training"]["early_stopping"]["inner_valid_explicit"] = False
+    def test_routed_ratio_without_inner_valid_becomes_a_holdout(self) -> None:
+        config = {
+            "task": "binary",
+            "model": {"params": {"validation_ratio": 0.3}},
+            "training": {"early_stopping": {"enabled": True}},
+        }
+        es = route_model_params(config)["training"]["early_stopping"]
+        assert es == {
+            "enabled": True,
+            "inner_valid": {"method": "holdout", "ratio": 0.3},
+            "inner_valid_explicit": False,
+        }
+
+    def test_routed_inner_valid_writes_false_marker(self) -> None:
+        config = _fit_config({"inner_valid": "holdout"})
+        assert "inner_valid_explicit" not in config["training"]["early_stopping"]
         es = route_model_params(config)["training"]["early_stopping"]
         assert es["inner_valid_explicit"] is False
+
+    @pytest.mark.parametrize("marker", [True, False])
+    def test_existing_true_marker_is_kept(self, marker: bool) -> None:
+        # The UI marks a user pick true (D-20261020-008 option A); routing
+        # flips neither a true nor a false marker.
+        config = _fit_config({"inner_valid": "holdout", "validation_ratio": 0.2})
+        config["training"]["early_stopping"]["inner_valid_explicit"] = marker
+        es = route_model_params(config)["training"]["early_stopping"]
+        assert es["inner_valid_explicit"] is marker
+
+    def test_non_bool_marker_is_replaced_by_false(self) -> None:
+        # lizyml reads the marker with bool(), so the string "false" would
+        # count as an explicit pick (DC1).
+        config = _fit_config({"inner_valid": "holdout"})
+        config["training"]["early_stopping"]["inner_valid_explicit"] = "false"
+        es = route_model_params(config)["training"]["early_stopping"]
+        assert es["inner_valid_explicit"] is False
+
+    def test_stale_validation_ratio_is_removed(self) -> None:
+        # A stale validation_ratio beside the routed inner_valid would
+        # contradict its ratio, which lizyml refuses.
+        config = _fit_config({"validation_ratio": 0.3})
+        config["training"]["early_stopping"]["validation_ratio"] = 0.15
+        es = route_model_params(config)["training"]["early_stopping"]
+        assert "validation_ratio" not in es
+        assert es["inner_valid"]["ratio"] == 0.3
+
+    def test_picker_without_a_ratio_reads_the_stale_ratio_first(self) -> None:
+        config = _fit_config({"inner_valid": "holdout"})
+        del config["training"]["early_stopping"]["inner_valid"]
+        config["training"]["early_stopping"]["validation_ratio"] = 0.15
+        es = route_model_params(config)["training"]["early_stopping"]
+        assert es["inner_valid"] == {"method": "holdout", "ratio": 0.15}
+        assert "validation_ratio" not in es
+
+    def test_no_inner_split_routed_leaves_early_stopping_alone(self) -> None:
+        es = route_model_params(_fit_config({"early_stopping_rounds": 70}))["training"][
+            "early_stopping"
+        ]
+        assert es["validation_ratio"] == 0.1
+        assert "inner_valid_explicit" not in es
 
     @pytest.mark.parametrize(
         "order",
@@ -246,7 +300,7 @@ class TestFiveWriters:
         "enabled": True,
         "rounds": 73,
         "inner_valid": {"method": "holdout", "ratio": 0.13},
-        "validation_ratio": 0.13,
+        "inner_valid_explicit": False,
     }
 
     def _base(self) -> dict[str, Any]:
@@ -295,3 +349,58 @@ class TestFiveWriters:
             }
         )
         self._check(to_wire_config(base))
+
+    def test_autofit_forces_false_over_picker_true(self) -> None:
+        # A Tune-chosen ratio is not a user pick (D-20261020-008 option A,
+        # D-20261021-013), so autofit marks the inner split automatic even
+        # when the Fit tab's picker had marked it explicit.
+        from lizystudio.services._training_core import _prepare_autofit_config
+
+        base = self._base()
+        base["training"]["early_stopping"]["inner_valid_explicit"] = True
+        handed = to_wire_config(_prepare_autofit_config(base, self.TUNED))
+        assert handed["training"]["early_stopping"] == self.EXPECTED_EARLY_STOPPING
+
+
+class TestAutofitMarker:
+    """``_prepare_autofit_config`` marks a tuned inner split automatic."""
+
+    def _prepare(self, config: dict[str, Any], best: dict[str, Any]) -> Any:
+        from lizystudio.services._training_core import _prepare_autofit_config
+
+        return _prepare_autofit_config(config, best)
+
+    @pytest.mark.parametrize("name", ["validation_ratio", "inner_valid"])
+    def test_tuned_inner_split_forces_false(self, name: str) -> None:
+        config = _fit_config({})
+        config["training"]["early_stopping"]["inner_valid_explicit"] = True
+        value: Any = 0.2 if name == "validation_ratio" else "holdout"
+        out = self._prepare(config, {name: value})
+        assert out["training"]["early_stopping"]["inner_valid_explicit"] is False
+
+    def test_absent_sections_are_created(self) -> None:
+        out = self._prepare({"task": "binary"}, {"validation_ratio": 0.2})
+        assert out["training"] == {"early_stopping": {"inner_valid_explicit": False}}
+
+    def test_no_tuned_inner_split_leaves_the_marker(self) -> None:
+        config = _fit_config({})
+        config["training"]["early_stopping"]["inner_valid_explicit"] = True
+        out = self._prepare(config, {"learning_rate": 0.01})
+        assert out["training"]["early_stopping"]["inner_valid_explicit"] is True
+
+    @pytest.mark.parametrize(
+        "training",
+        ["not-a-dict", None, {"early_stopping": None}, {"early_stopping": "x"}],
+    )
+    def test_malformed_sections_are_left_for_lizyml(self, training: Any) -> None:
+        # Like routing, a malformed section is lizyml's schema to reject (DC1).
+        config = {"task": "binary", "training": training}
+        out = self._prepare(config, {"validation_ratio": 0.2})
+        assert out["training"] == training
+
+    def test_input_is_not_mutated(self) -> None:
+        config = _fit_config({})
+        config["training"]["early_stopping"]["inner_valid_explicit"] = True
+        before = copy.deepcopy(config)
+        self._prepare(config, {"validation_ratio": 0.2})
+        assert config == before

@@ -16,6 +16,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
+from lizystudio.backends.exceptions import SearchSpaceRefusedError
 from lizystudio.backends.lizyml.adapter import LizyMLAdapter
 from lizystudio.backends.lizyml.config_mixin import _catalog_default_space
 from lizystudio.backends.lizyml.space_wire import WIRE_TABLE
@@ -67,3 +68,88 @@ def test_false_boolean_choice_trains_the_smart_param_off() -> None:
     result = _tune(config)
 
     assert result.best_smart_params["auto_num_leaves"] is False
+
+
+@pytest.mark.integration
+def test_log_rows_with_ui_step_are_admitted() -> None:
+    """Regression for #688: a log range with the UI step_map step is admitted.
+
+    The UI's Range switch adds the step_map step to every row.  lizyml 0.20
+    put learning_rate's 1e-4 low off its 1e-3 grid and refused the Tune
+    before trial 0; the step is now dropped for log ranges only.
+    """
+    space = {
+        "learning_rate": {
+            "type": "float",
+            "low": 0.0001,
+            "high": 0.1,
+            "log": True,
+            "step": 0.001,
+        },
+        "feature_fraction": {
+            "type": "float",
+            "low": 0.5,
+            "high": 1.0,
+            "log": False,
+            "step": 0.05,
+        },
+    }
+
+    result = _tune(_tune_config(space, n_trials=2))
+
+    assert len(result.trials) == 2
+    dims = {dim.name: dim for dim in result.rounds[0].space_snapshot}
+    assert dims["learning_rate"].log is True
+    assert dims["learning_rate"].step is None
+    assert dims["feature_fraction"].step == 0.05
+
+
+_INT = {"type": "int", "low": 8, "high": 64}
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("space", "dims"),
+    [
+        pytest.param(
+            {
+                "learning_rate": {"type": "float", "low": 0.01, "high": 0.1},
+                "eta": {"type": "float", "low": 0.01, "high": 0.1},
+            },
+            ("eta", "learning_rate"),
+            id="alias",
+        ),
+        pytest.param({"seed": {**_INT}}, ("seed",), id="training-owned-model-dim"),
+        pytest.param({"num_leaves": {**_INT}}, ("num_leaves",), id="auto-num-leaves"),
+        pytest.param(
+            {"objective": {"type": "categorical", "choices": ["regression"]}},
+            ("objective",),
+            id="objective",
+        ),
+        pytest.param(
+            {"max_bin": {"type": "int", "low": 63, "high": 250, "step": 64}},
+            ("max_bin",),
+            id="off-grid",
+        ),
+    ],
+)
+def test_space_refusal_is_its_own_error(
+    space: dict[str, Any], dims: tuple[str, ...]
+) -> None:
+    """lizyml's pre-trial space refusals surface by dim (P-0116 D1).
+
+    Each of the five refusal shapes lizyml 0.20 raises reaches the job as
+    :class:`SearchSpaceRefusedError`, from ``tune`` (not ``create_model``),
+    before any trial is reported.
+    """
+    df = pd.read_csv(FIXTURE / "data.csv")
+    backend = LizyMLAdapter()
+    model = backend.create_model(_tune_config(space, n_trials=1), df)
+    reports: list[dict[str, Any]] = []
+
+    with pytest.raises(SearchSpaceRefusedError) as excinfo:
+        backend.tune(model, on_progress=lambda **kw: reports.append(kw))
+
+    assert excinfo.value.dims == dims
+    assert not [r for r in reports if r.get("trial_results")]
+    assert all(r["current"] == 0 for r in reports)

@@ -625,10 +625,11 @@ def build_ui_schema() -> dict[str, Any]:
                     "min_valid_rows",
                 ],
             },
+            # No ``random_state``: the split inherits ``training.seed``
+            # (D-20261020-008, follow LizyML on the seed).
             "cv_defaults": {
                 "n_splits": 5,
                 "shuffle": True,
-                "random_state": 42,
                 "gap": 0,
             },
             "cv_default_strategy": {

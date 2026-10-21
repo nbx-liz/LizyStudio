@@ -18,6 +18,7 @@ from lizystudio.backends.lizyml.space_wire import (
     WIRE_TABLE,
     WireNameCollisionError,
     to_wire_config,
+    to_wire_entry,
     to_wire_space,
 )
 from lizystudio.backends.lizyml_ui_schema import _SEARCH_SPACE_CATALOG
@@ -154,6 +155,60 @@ class TestToWireSpace:
         assert space == before
 
 
+LOG_RANGE = {"type": "float", "low": 1e-4, "high": 0.1, "log": True}
+
+
+class TestLogRangeStep:
+    """A log range is sent without ``step`` (#688, D-20261021-017 option 2).
+
+    The UI ``step_map`` gives every range a step, but lizyml 0.20 puts a
+    stepped dim on the multiples of its step, and the catalog's log lows
+    (learning_rate 1e-4, lambda_l2 1e-6) are not on that grid.  A linear
+    range keeps its step; an off-grid one is lizyml's to refuse.
+    """
+
+    def test_log_range_drops_step(self) -> None:
+        raw = {**LOG_RANGE, "step": 0.001}
+        assert to_wire_entry("learning_rate", raw) == (
+            "learning_rate",
+            {**LOG_RANGE, "category": "model"},
+        )
+
+    def test_log_range_drops_step_for_non_catalog_name(self) -> None:
+        # step_map also covers additional params such as min_child_weight.
+        raw = {**LOG_RANGE, "step": 0.001}
+        assert to_wire_entry("min_child_weight", raw) == ("min_child_weight", LOG_RANGE)
+
+    def test_linear_range_keeps_step(self) -> None:
+        raw = {**RANGE, "step": 0.05}
+        _name, entry = to_wire_entry("feature_fraction", raw)
+        assert entry["step"] == 0.05
+
+    @pytest.mark.parametrize("log", ["true", 1, None])
+    def test_non_bool_log_keeps_step(self, log: Any) -> None:
+        # Only a real boolean is a log range; anything else is lizyml's to
+        # judge, with the step it was given (DC1).
+        raw = {**LOG_RANGE, "log": log, "step": 0.001}
+        _name, entry = to_wire_entry("learning_rate", raw)
+        assert entry["step"] == 0.001
+        assert entry["log"] == log
+
+    def test_input_is_not_mutated(self) -> None:
+        raw = {**LOG_RANGE, "step": 0.001}
+        before = copy.deepcopy(raw)
+        to_wire_entry("learning_rate", raw)
+        assert raw == before
+
+    def test_to_wire_config_drops_step_from_log_ranges(self) -> None:
+        space = {
+            "learning_rate": {**LOG_RANGE, "step": 0.001},
+            "feature_fraction": {**RANGE, "step": 0.05},
+        }
+        wire = to_wire_config(_config(space))["tuning"]["optuna"]["space"]
+        assert "step" not in wire["learning_rate"]
+        assert wire["feature_fraction"]["step"] == 0.05
+
+
 class TestOwnerRules:
     """Dims whose owner can never be on are not sent (P-0116 D1).
 
@@ -287,6 +342,35 @@ class TestRunGate:
         errors = LizyMLAdapter().validate_search_space(space)
         paths = [e["path"] for e in errors]
         assert paths == ["tuning.optuna.space.early_stopping.rounds"]
+
+    def test_ui_range_switch_of_log_rows_passes_run_gate(self) -> None:
+        # The two catalog log rows lizyml 0.20 refused once the UI's Range
+        # switch added the step_map step (#688): learning_rate 1e-4 on a 1e-3
+        # grid, lambda_l2 1e-6 on a 1e-4 grid.
+        from lizystudio.backends.lizyml import LizyMLAdapter
+
+        space = {
+            "learning_rate": {**LOG_RANGE, "step": 0.001},
+            "lambda_l2": {
+                "type": "float",
+                "low": 1e-6,
+                "high": 10.0,
+                "log": True,
+                "step": 0.0001,
+            },
+        }
+        assert LizyMLAdapter().validate_search_space(space) == []
+
+    def test_off_grid_linear_range_refused_at_run_gate(self) -> None:
+        from lizystudio.backends.lizyml import LizyMLAdapter
+
+        space = {"max_bin": {"type": "int", "low": 63, "high": 250, "step": 64}}
+        errors = LizyMLAdapter().validate_search_space(space)
+        assert [e["path"] for e in errors] == ["tuning.optuna.space.max_bin"]
+        # lizyml names the nearest on-grid range; the fix suggests it.
+        fix = errors[0]["suggested_fix"]
+        assert "Min=64" in fix
+        assert "Max=192" in fix
 
 
 class TestWireNameCollisions:

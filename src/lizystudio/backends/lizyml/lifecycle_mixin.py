@@ -10,35 +10,90 @@ from typing import Any
 import pandas as pd
 
 from lizystudio.backends.base import ProgressCallback
-from lizystudio.backends.exceptions import TuningFailedError
+from lizystudio.backends.exceptions import SearchSpaceRefusedError, TuningFailedError
 from lizystudio.backends.types import FitSummary, TuningSummary
 
 from .config_compat import parse_re_tune, strip_internal_keys
 from .serialization import serialize_tuning_result
-from .space_wire import to_wire_config
+from .space_wire import catalog_key_for_wire_name, to_wire_config
 
 logger = logging.getLogger(__name__)
 
 
 def _run_tune_round(model: Any, **kwargs: Any) -> Any:
-    """Run one ``model.tune`` round, reporting ``TUNING_FAILED`` as its own error.
+    """Run one ``model.tune`` round, reporting two lizyml failures as their own.
 
-    lizyml raises ``TUNING_FAILED`` when every trial of a round fails; the
-    job then shows it under that code instead of as a generic backend error
-    (P-0116 D5, #691).  Every other error propagates unchanged.
+    * ``TUNING_FAILED`` (every trial of a round failed) becomes
+      :class:`TuningFailedError` (P-0116 D5, #691).
+    * A ``CONFIG_INVALID`` about the search space, raised before the first
+      trial, becomes :class:`SearchSpaceRefusedError` naming the dims lizyml
+      named (P-0116 D1).
+
+    The job then shows each under its own code instead of as a generic
+    backend error.  Every other error propagates unchanged.
     """
     from lizyml.core.exceptions import LizyMLError
 
     try:
         return model.tune(**kwargs)
     except LizyMLError as exc:
-        if getattr(exc.code, "value", None) != "TUNING_FAILED":
+        code = getattr(exc.code, "value", None)
+        if code == "TUNING_FAILED":
+            message = exc.user_message
+            first_error = (exc.context or {}).get("first_error")
+            if first_error:
+                message = f"{message} First trial error: {first_error}"
+            raise TuningFailedError(message) from exc
+        dims = _space_refusal_dims(exc.context) if code == "CONFIG_INVALID" else None
+        if dims is None:
             raise
-        message = exc.user_message
-        first_error = (exc.context or {}).get("first_error")
-        if first_error:
-            message = f"{message} First trial error: {first_error}"
-        raise TuningFailedError(message) from exc
+        named = f" ({', '.join(dims)})" if dims else ""
+        raise SearchSpaceRefusedError(
+            # No "before the first trial": a resume whose space no longer
+            # matches the study is refused the same way, mid-study.
+            f"LizyML refused the search space{named}: {exc.user_message}",
+            dims=dims,
+        ) from exc
+
+
+# Where lizyml says a refused dim was declared: the config's space, or a
+# later round's ``tune(space=)``.  Matched exactly (DC2): neighbours such as
+# ``tuning.optuna.space_mode`` are not the space.
+_SPACE_SURFACES: frozenset[str] = frozenset({"tuning.optuna.space", "tune(space=)"})
+
+
+def _space_refusal_dims(context: Any) -> tuple[str, ...] | None:
+    """The catalog keys of the dims a space refusal names.
+
+    ``None`` when *context* is not about the search space: no space surface
+    at its top level, nor in a ``conflicts`` / ``managed`` entry.  The dims
+    are read best-effort from the keys lizyml 0.20 uses (``dim``, ``names``,
+    ``dimensions``, ``name``) and may be empty; no lizyml rule is copied.
+    """
+    if not isinstance(context, dict):
+        return None
+    entries: list[dict[str, Any]] = [context]
+    for key in ("conflicts", "managed"):
+        listed = context.get(key)
+        if isinstance(listed, list):
+            entries.extend(entry for entry in listed if isinstance(entry, dict))
+    space_entries = [
+        entry
+        for entry in entries
+        if isinstance(entry.get("surface"), str) and entry["surface"] in _SPACE_SURFACES
+    ]
+    if not space_entries:
+        return None
+    names: list[str] = []
+    for entry in space_entries:
+        for key in ("dim", "name"):
+            if isinstance(entry.get(key), str):
+                names.append(entry[key])
+        for key in ("names", "dimensions"):
+            listed = entry.get(key)
+            if isinstance(listed, list):
+                names.extend(name for name in listed if isinstance(name, str))
+    return tuple(dict.fromkeys(catalog_key_for_wire_name(name) for name in names))
 
 
 class LifecycleMixin:
