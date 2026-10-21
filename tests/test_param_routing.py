@@ -103,29 +103,99 @@ class TestRouting:
         assert es["inner_valid"] == {"method": "holdout", "ratio": 0.25}
         assert out["model"]["params"] == {}
 
-    def test_picker_inner_valid_becomes_an_explicit_choice(self) -> None:
+    def test_inner_valid_method_keeps_split_aware_resolution(self) -> None:
+        # model.params.inner_valid is written both by a user pick and by the
+        # Tune tab's automatic CV recommendation (TuneTab.tsx:212-220); the
+        # name does not tell them apart.  Until the UI marks a pick (child 5,
+        # the 0.20 marker), the method is carried with validation_ratio kept,
+        # which lizyml 0.15 reads as not explicit (D-20261020-008 option A:
+        # an automatic recommendation is never explicit).
         out = route_model_params(_fit_config({"inner_valid": "time_holdout"}))
         es = out["training"]["early_stopping"]
         assert es["inner_valid"] == {"method": "time_holdout", "ratio": 0.1}
-        # lizyml 0.15 treats inner_valid without validation_ratio as explicit.
-        assert "validation_ratio" not in es
+        assert es["validation_ratio"] == 0.1
         assert out["model"]["params"] == {}
 
-    def test_picker_and_ratio_together(self) -> None:
+    def test_tune_tab_output_with_a_tuned_ratio_stays_automatic(self) -> None:
+        # Real Tune-tab output after autofit: the automatic inner_valid
+        # recommendation plus the tuned validation_ratio.
         out = route_model_params(
             _fit_config({"inner_valid": "group_holdout", "validation_ratio": 0.2})
         )
         es = out["training"]["early_stopping"]
         assert es["inner_valid"] == {"method": "group_holdout", "ratio": 0.2}
-        assert "validation_ratio" not in es
+        assert es["validation_ratio"] == 0.2
 
-    def test_picker_on_a_config_without_early_stopping(self) -> None:
+    def test_inner_valid_on_a_config_without_early_stopping(self) -> None:
         config = {"task": "binary", "model": {"params": {"inner_valid": "holdout"}}}
         out = route_model_params(config)
-        assert out["training"]["early_stopping"]["inner_valid"] == {
-            "method": "holdout",
-            "ratio": 0.1,
+        assert out["training"]["early_stopping"] == {
+            "inner_valid": {"method": "holdout", "ratio": 0.1},
+            "validation_ratio": 0.1,
         }
+
+    def test_a_lizyml_020_marker_is_left_untouched(self) -> None:
+        # lizyml 0.20 defaults dump inner_valid_explicit: false. Routing does
+        # not decide explicitness, so the marker stays as the config has it.
+        config = _fit_config({"inner_valid": "holdout", "validation_ratio": 0.2})
+        config["training"]["early_stopping"]["inner_valid_explicit"] = False
+        es = route_model_params(config)["training"]["early_stopping"]
+        assert es["inner_valid_explicit"] is False
+
+    @pytest.mark.parametrize(
+        "order",
+        [
+            ("early_stopping.rounds", "early_stopping_rounds"),
+            ("early_stopping_rounds", "early_stopping.rounds"),
+        ],
+    )
+    def test_both_rounds_spellings_the_tuned_spelling_wins(
+        self, order: tuple[str, str], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # A stale Fixed-mode value (catalog spelling) and a tuned value (wire
+        # spelling, from best_params) can both be present; the tuned one wins
+        # whatever the dict order, and the dropped one is logged.
+        values = {"early_stopping.rounds": 150, "early_stopping_rounds": 73}
+        params = {name: values[name] for name in order}
+        with caplog.at_level("WARNING"):
+            out = route_model_params(_fit_config(params))
+        assert out["training"]["early_stopping"]["rounds"] == 73
+        assert out["model"]["params"] == {}
+        assert "early_stopping.rounds" in caplog.text
+
+    @pytest.mark.parametrize(
+        ("training", "where"),
+        [
+            ("not-a-dict", "training"),
+            ({"seed": 1, "early_stopping": "not-a-dict"}, "early_stopping"),
+        ],
+    )
+    def test_malformed_training_sections_are_not_replaced(
+        self, training: Any, where: str
+    ) -> None:
+        # strip_internal_keys keeps malformed shapes so lizyml's schema rejects
+        # them; routing must not swap them for empty dicts (DC1).
+        config = {
+            "task": "binary",
+            "model": {
+                "params": {"seed": 7, "early_stopping_rounds": 70},
+                "num_leaves_ratio": 1.0,
+            },
+            "training": training,
+        }
+        out = route_model_params(config)
+        assert out["training"] == training
+        assert out["model"]["params"] == {"seed": 7, "early_stopping_rounds": 70}
+
+    def test_malformed_training_still_routes_smart_names(self) -> None:
+        config = {
+            "task": "binary",
+            "model": {"params": {"num_leaves_ratio": 0.6}},
+            "training": "not-a-dict",
+        }
+        out = route_model_params(config)
+        assert out["model"]["num_leaves_ratio"] == 0.6
+        assert out["training"] == "not-a-dict"
 
     def test_input_is_not_mutated(self) -> None:
         config = _fit_config(
@@ -178,7 +248,9 @@ class TestFiveWriters:
     }
 
     def _base(self) -> dict[str, Any]:
-        config = _fit_config({"objective": "binary"})
+        # The Tune tab writes the CV-recommended inner_valid into model.params
+        # on its own (TuneTab.tsx:212-220), so every writer carries it.
+        config = _fit_config({"objective": "binary", "inner_valid": "holdout"})
         config["tuning"] = {"optuna": {"params": {"n_trials": 3}, "space": {}}}
         return config
 

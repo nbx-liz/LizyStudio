@@ -25,12 +25,15 @@ build Fit configs from tune results move onto it separately (P-0116 D2).
 from __future__ import annotations
 
 import copy
+import logging
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from lizystudio.backends.lizyml_ui_schema import _SEARCH_SPACE_CATALOG
 
 Category = Literal["model", "smart", "training"]
+
+_logger = logging.getLogger(__name__)
 
 
 class WireNameCollisionError(ValueError):
@@ -246,14 +249,24 @@ def route_model_params(config: dict[str, Any]) -> dict[str, Any]:
 
     Native LightGBM names, including unknown ones, stay in ``model.params``.
     A routed value wins over the value already at its destination: autofit
-    merges tuned values into ``model.params`` on top of the Fit tab's.
+    merges tuned values into ``model.params`` on top of the Fit tab's.  When
+    both rounds spellings are present, the tuned one (``early_stopping_rounds``,
+    the wire name ``best_params`` carries) wins over a stale Fixed-mode
+    ``early_stopping.rounds`` whatever the dict order, and the dropped value is
+    logged.
 
-    ``validation_ratio`` keeps lizyml's split-aware inner-split resolution
-    (it is written beside ``inner_valid``, which lizyml reads as not
-    explicit), whether it was tuned or fixed; a ratio is not a method choice.
-    The ``inner_valid`` picker value is the explicit choice: it becomes the
-    ``inner_valid`` method and drops ``validation_ratio`` (D-20261020-008
-    option A).  The returned config is a copy; *config* is not mutated.
+    Explicitness of the inner split is not decided here.  The ``inner_valid``
+    method is carried, and ``validation_ratio`` is kept beside it, so lizyml
+    0.15 keeps resolving the inner split by the outer one: the Tune tab writes
+    ``inner_valid`` both for a user pick and for its automatic CV
+    recommendation, and the name cannot tell them apart (D-20261020-008
+    option A).  A lizyml 0.20 ``inner_valid_explicit`` marker in the config is
+    left as it is.
+
+    Training destinations are routed only when ``training`` and
+    ``training.early_stopping`` are dicts or absent; a malformed section is
+    left for lizyml's schema to reject, and its names stay in ``model.params``.
+    The returned config is a copy; *config* is not mutated.
     """
     model = config.get("model")
     params = model.get("params") if isinstance(model, dict) else None
@@ -266,46 +279,84 @@ def route_model_params(config: dict[str, Any]) -> dict[str, Any]:
 
     out = copy.deepcopy(config)
     out_model = out["model"]
-    training = out.setdefault("training", {})
-    if not isinstance(training, dict):
-        training = out["training"] = {}
-    early_stopping = training.setdefault("early_stopping", {})
-    if not isinstance(early_stopping, dict):
-        early_stopping = training["early_stopping"] = {}
+    training_ok = _section_ok(out, "training") and _section_ok(
+        out.get("training") or {}, "early_stopping"
+    )
 
     kept: dict[str, Any] = {}
-    picker: Any = None
-    ratio: Any = None
+    candidates: dict[str, list[tuple[str, WireRow, Any]]] = {}
     for name, value in out_model["params"].items():
         row = _row_for_param(name)
         if row is None or row.fit_dest.startswith("model.params."):
             kept[name] = value
         elif row.fit_dest.startswith("model."):
             out_model[row.fit_dest.removeprefix("model.")] = value
-        elif row.wire_name == "inner_valid":
+        elif not training_ok:
+            kept[name] = value
+        else:
+            candidates.setdefault(row.wire_name, []).append((name, row, value))
+    out_model["params"] = kept
+    if not candidates:
+        return out
+
+    training = out.setdefault("training", {})
+    early_stopping = training.setdefault("early_stopping", {})
+    picker: Any = None
+    ratio: Any = None
+    for items in candidates.values():
+        _name, row, value = _pick_candidate(items)
+        dest = row.fit_dest
+        if row.wire_name == "inner_valid":
             picker = value
         elif row.wire_name == "validation_ratio":
             ratio = value
-        elif row.fit_dest == "training.seed":
+        elif dest == "training.seed":
             training["seed"] = value
         else:
-            early_stopping[row.fit_dest.removeprefix("training.early_stopping.")] = (
-                value
-            )
-    out_model["params"] = kept
+            early_stopping[dest.removeprefix("training.early_stopping.")] = value
 
-    if ratio is not None:
+    if picker is not None:
+        if ratio is None:
+            ratio = _inner_ratio(early_stopping)
+        early_stopping["inner_valid"] = {"method": picker, "ratio": ratio}
+    elif ratio is not None:
         inner = early_stopping.get("inner_valid")
         if isinstance(inner, dict):
             early_stopping["inner_valid"] = {**inner, "ratio": ratio}
+    if ratio is not None:
         early_stopping["validation_ratio"] = ratio
-    if picker is not None:
-        early_stopping["inner_valid"] = {
-            "method": picker,
-            "ratio": ratio if ratio is not None else _inner_ratio(early_stopping),
-        }
-        early_stopping.pop("validation_ratio", None)
     return out
+
+
+def _pick_candidate(
+    items: list[tuple[str, WireRow, Any]],
+) -> tuple[str, WireRow, Any]:
+    """Choose one of several names that route to one destination.
+
+    The wire spelling is the one tune results carry, so it wins; the others
+    are logged rather than dropped silently.
+    """
+    if len(items) == 1:
+        return items[0]
+    wire = [item for item in items if item[0] == item[1].wire_name]
+    chosen = wire[-1] if wire else items[-1]
+    for name, _row, _value in items:
+        if name != chosen[0]:
+            _logger.warning(
+                "model.params has both %r and %r for one lizyml setting; keeping %r",
+                name,
+                chosen[0],
+                chosen[0],
+            )
+    return chosen
+
+
+def _section_ok(parent: Any, name: str) -> bool:
+    """Whether ``parent[name]`` is a dict or absent, so routing may write into it."""
+    if not isinstance(parent, dict):
+        return False
+    value = parent.get(name)
+    return value is None or isinstance(value, dict)
 
 
 def to_wire_config(config: dict[str, Any]) -> dict[str, Any]:
