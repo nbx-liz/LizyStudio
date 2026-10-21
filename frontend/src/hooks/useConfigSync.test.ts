@@ -243,6 +243,39 @@ describe("useConfigSync", () => {
     expect(mocks.toastError).not.toHaveBeenCalled();
   });
 
+  // P-0116 child 5b: a CV strategy change re-derives the inner split
+  // automatically, so the "user chose it" marker goes back to false and the
+  // stale validation_ratio is still dropped.
+  it("a CV strategy change writes inner_valid_explicit=false and drops validation_ratio", async () => {
+    mocks.fetchConfig.mockResolvedValue({
+      ...baseConfig,
+      training: {
+        early_stopping: {
+          enabled: true,
+          validation_ratio: 0.1,
+          inner_valid_explicit: true,
+          inner_valid: { method: "holdout", ratio: 0.1 },
+        },
+      },
+    });
+    const { wrapper } = testWrapper;
+    const { rerender } = renderHook(
+      ({ cv }) => useConfigSync(defaultParams({ cv })),
+      { wrapper, initialProps: { cv: INITIAL_CV_STATE } },
+    );
+    await waitFor(() => expect(mocks.updateConfig).toHaveBeenCalledTimes(1));
+
+    rerender({ cv: { ...INITIAL_CV_STATE, strategy: "group_kfold" } });
+    await waitFor(() => expect(mocks.updateConfig).toHaveBeenCalledTimes(2));
+
+    const [payload] = mocks.updateConfig.mock.calls[1];
+    const es = payload.training.early_stopping;
+    expect(es.inner_valid_explicit).toBe(false);
+    expect(es).not.toHaveProperty("validation_ratio");
+    expect(es.enabled).toBe(true);
+    expect(es.inner_valid.method).toBe("group_holdout");
+  });
+
   // -------------------------------------------------------------------------
   // P-0090 / Issue #278 residual: useConfigSync must update the TanStack
   // Query cache atomically with its successful PUT, not only invalidate via

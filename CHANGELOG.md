@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Cross-validation `random_state` no longer defaults to 42 (P-0116).** A new
+  config carries no split `random_state`, so the split inherits `training.seed`
+  under lizyml 0.20 (H-0080). Fits and Tunes created with default settings use
+  a different split than on 0.6.x, so their scores differ from earlier runs.
+  Set Random State explicitly in the CV section to keep a fixed split.
+
 ## [0.6.6] - 2026-06-30
 
 A **maintenance** release: dependency bumps only. No behaviour change to

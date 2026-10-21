@@ -144,6 +144,9 @@ export function useConfigSync({
           ...baseTraining,
           early_stopping: {
             ...earlyStoppingWithoutVr,
+            // P-0116 child 5b: the strategy switch re-derives the inner
+            // split on its own, so it is automatic again, not the user's.
+            inner_valid_explicit: false,
             inner_valid: pruneInnerValidForMethod(innerValid, recommended),
           },
         };
