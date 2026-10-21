@@ -15,6 +15,7 @@ match the same class.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 
 class CancelledError(Exception):
@@ -180,6 +181,34 @@ class PlotNotAvailableError(Exception):
         self.available = available
 
 
+class RefitRequiredError(Exception):
+    """Raised when a stored model needs a new Fit before an operation (P-0116 D4).
+
+    Models written by an older backend version can lack what the current
+    one needs.  ``kind`` names the case:
+
+    * ``"shap_per_fold_state_missing"``: SHAP needs per-fold pipeline
+      states the artifact does not hold;
+    * ``"export_param_names"``: the stored ``model.params`` hold names the
+      current backend routes elsewhere, listed in ``names``.
+
+    The API layer translates this to HTTP 400 with code ``REFIT_REQUIRED``.
+    Each adapter raises it only for its exact symptom; other failures of the
+    same operation stay generic backend errors.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: Literal["shap_per_fold_state_missing", "export_param_names"],
+        names: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.names = names
+
+
 class TuningFailedError(Exception):
     """Raised when a tune ends without a usable trial (P-0116 D5, #691).
 
@@ -216,6 +245,7 @@ __all__ = [
     "LegacyFormatProtectionError",
     "PausedError",
     "PlotNotAvailableError",
+    "RefitRequiredError",
     "SearchSpaceRefusedError",
     "StudyNotResumableError",
     "TuningFailedError",

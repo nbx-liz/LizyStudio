@@ -23,6 +23,8 @@ from lizystudio.backends.lizyml.study_continuation import (
     Continuation,
     plan_continuation,
     read_continuation,
+    require_continuable,
+    verify_continuable,
 )
 
 pytestmark = pytest.mark.unit
@@ -158,3 +160,65 @@ def test_read_continuation_propagates_lineage_read_errors(
     monkeypatch.setattr(study_continuation, "read_study_lineage", failing_read)
     with pytest.raises(RuntimeError, match="storage exploded"):
         read_continuation("sqlite:///x.db", "studio-tune-x", planned_rounds=1)
+
+
+# --- P-0116 D4 (child 7): the unpause preflight shares the refusal rule ---
+
+
+@pytest.mark.parametrize("state", ["legacy", "unreadable", "inconsistent"])
+def test_require_continuable_refuses_the_unresumable_states(state: Any) -> None:
+    with pytest.raises(StudyNotResumableError) as excinfo:
+        require_continuable(StudyLineage(state=state))
+    assert excinfo.value.state == state
+
+
+def test_require_continuable_refuses_an_open_study_without_its_round() -> None:
+    with pytest.raises(StudyNotResumableError) as excinfo:
+        require_continuable(StudyLineage(state="open", open_round=None))
+    assert excinfo.value.state == "open"
+
+
+@pytest.mark.parametrize(
+    "lineage",
+    [
+        StudyLineage(state="absent"),
+        StudyLineage(state="uninitialized"),
+        StudyLineage(state="no_round"),
+        StudyLineage(state="completed", rounds=(_round(1),)),
+        StudyLineage(state="open", rounds=(_round(1), _round(2, "open")), open_round=2),
+    ],
+    ids=lambda lineage: lineage.state,
+)
+def test_require_continuable_admits_what_plan_continuation_plans(
+    lineage: StudyLineage,
+) -> None:
+    require_continuable(lineage)
+    # The worker plans the same lineage without refusing it.
+    plan_continuation(lineage, planned_rounds=2)
+
+
+def test_verify_continuable_reads_the_lineage_and_refuses_legacy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[Any, Any]] = []
+
+    def fake_read(storage: Any, study_name: Any) -> StudyLineage:
+        calls.append((storage, study_name))
+        return StudyLineage(state="legacy")
+
+    monkeypatch.setattr(study_continuation, "read_study_lineage", fake_read)
+    with pytest.raises(StudyNotResumableError) as excinfo:
+        verify_continuable("sqlite:///x.db", "studio-tune-x")
+    assert excinfo.value.state == "legacy"
+    assert calls == [("sqlite:///x.db", "studio-tune-x")]
+
+
+def test_verify_continuable_propagates_lineage_read_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def failing_read(storage: Any, study_name: Any) -> StudyLineage:
+        raise RuntimeError("storage exploded")
+
+    monkeypatch.setattr(study_continuation, "read_study_lineage", failing_read)
+    with pytest.raises(RuntimeError, match="storage exploded"):
+        verify_continuable("sqlite:///x.db", "studio-tune-x")

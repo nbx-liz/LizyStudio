@@ -265,6 +265,23 @@ def _inner_ratio(early_stopping: dict[str, Any]) -> Any:
     return early_stopping.get("validation_ratio", _DEFAULT_INNER_RATIO)
 
 
+def names_routed_outside_model_params(params: Any) -> tuple[str, ...]:
+    """The ``model.params`` names lizyml 0.20 reads outside ``model.params``.
+
+    A name counts when its table row (either spelling) has a destination
+    other than ``model.params.*``: smart parameters, training settings,
+    ``seed`` and the like.  A non-dict *params* has none.
+    """
+    if not isinstance(params, dict):
+        return ()
+    return tuple(
+        name
+        for name in params
+        if (row := _row_for_param(name)) is not None
+        and not row.fit_dest.startswith("model.params.")
+    )
+
+
 def route_model_params(config: dict[str, Any]) -> dict[str, Any]:
     """Move ``model.params`` names lizyml reads elsewhere to their Fit-config place.
 
@@ -293,11 +310,7 @@ def route_model_params(config: dict[str, Any]) -> dict[str, Any]:
     """
     model = config.get("model")
     params = model.get("params") if isinstance(model, dict) else None
-    if not isinstance(params, dict) or not any(
-        (row := _row_for_param(name)) is not None
-        and not row.fit_dest.startswith("model.params.")
-        for name in params
-    ):
+    if not names_routed_outside_model_params(params):
         return config
 
     out = copy.deepcopy(config)

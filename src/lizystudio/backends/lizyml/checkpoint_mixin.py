@@ -50,6 +50,20 @@ class CheckpointMixin:
         except PicklePreflightError as exc:
             raise CheckpointPreflightError(str(exc)) from exc
 
+    def verify_study_continuable(self, storage: str, study_name: str) -> None:
+        """Refuse a stored study an unpause cannot continue (P-0116 D4).
+
+        Reads the study's lizyml lineage and applies the refusal rule
+        ``tune(resume=True)`` applies when the job runs, so the unpause
+        route refuses before relaunching: ``legacy`` (written before lizyml
+        0.19, e.g. by 0.15), ``unreadable`` and ``inconsistent`` studies
+        raise :class:`StudyNotResumableError`.
+        """
+        # Imported here so importing the adapter does not import lizyml.
+        from .study_continuation import verify_continuable
+
+        verify_continuable(storage, study_name)
+
     def verify_checkpoint_compatibility(self, job_dir: Path) -> None:
         """Validate ``job_dir/model_meta.json`` against the current runtime (H-0068).
 

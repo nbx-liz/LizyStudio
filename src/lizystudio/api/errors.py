@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
+
+if TYPE_CHECKING:
+    from lizystudio.backends.exceptions import CheckpointIncompatibleError
+    from lizystudio.backends.exceptions import (
+        RefitRequiredError as BackendRefitRequiredError,
+    )
 
 _backend_logger = logging.getLogger("lizystudio.errors")
 
@@ -146,6 +152,33 @@ class PlotNotAvailableError(StudioError):
         )
 
 
+class RefitRequiredError(StudioError):
+    """HTTP 400 envelope for a stored model that needs a new Fit (P-0116 D4).
+
+    Translated from :class:`lizystudio.backends.exceptions.RefitRequiredError`
+    by the importance, plot and export-code endpoints: a model written by an
+    older backend version lacks what the operation needs (``kind``), and only
+    a new Fit with the current version restores it.
+    """
+
+    def __init__(self, reason: str, *, kind: str, names: tuple[str, ...] = ()) -> None:
+        super().__init__(
+            "REFIT_REQUIRED",
+            reason,
+            400,
+            details={
+                "kind": kind,
+                "names": list(names),
+                "recovery_hint": "Fit the model again with the current version",
+            },
+        )
+
+
+def refit_required_from(exc: BackendRefitRequiredError) -> RefitRequiredError:
+    """The HTTP envelope for a backend's refit refusal (P-0116 D4)."""
+    return RefitRequiredError(str(exc), kind=exc.kind, names=exc.names)
+
+
 class ConfigBuildError(StudioError):
     """Config assembly failed (e.g. missing required fields) (H-0041)."""
 
@@ -222,6 +255,22 @@ class PickleIncompatibleError(StudioError):
             400,
             details=details,
         )
+
+
+def pickle_incompatible_from(
+    subject: str, exc: CheckpointIncompatibleError
+) -> PickleIncompatibleError:
+    """The HTTP envelope for a backend's checkpoint refusal (P-0107, P-0116 D4).
+
+    Forwards the backend's structured classification so the frontend can
+    render a kind-specific recovery hint instead of a raw message.
+    """
+    return PickleIncompatibleError(
+        f"{subject}: {exc}",
+        kind=exc.kind,
+        recovery_hint=exc.recovery_hint,
+        suggested_fix=exc.suggested_fix,
+    )
 
 
 class ParentLockedError(StudioError):

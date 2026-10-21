@@ -3,15 +3,46 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
-from lizystudio.backends.exceptions import PlotNotAvailableError
+from lizystudio.backends.exceptions import PlotNotAvailableError, RefitRequiredError
 from lizystudio.backends.types import PlotData, PredictionSummary
 
+from .space_wire import names_routed_outside_model_params
+
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _shap_refit_required() -> Iterator[None]:
+    """Report SHAP on an artifact without per-fold states as a refit (P-0116 D4).
+
+    lizyml raises ``MODEL_NOT_FIT`` with ``context.missing ==
+    "pipeline_state_per_fold"`` when the artifact predates per-fold pipeline
+    states (written by lizyml 0.15).  Only that exact symptom becomes
+    :class:`RefitRequiredError`; any other ``MODEL_NOT_FIT`` (for example,
+    no training data) and every other error propagate unchanged.
+    """
+    from lizyml.core.exceptions import LizyMLError
+
+    try:
+        yield
+    except LizyMLError as exc:
+        if (
+            getattr(exc.code, "value", None) == "MODEL_NOT_FIT"
+            and (exc.context or {}).get("missing") == "pipeline_state_per_fold"
+        ):
+            raise RefitRequiredError(
+                "SHAP needs a model fitted with the current version: "
+                f"{exc.user_message}",
+                kind="shap_per_fold_state_missing",
+            ) from exc
+        raise
 
 
 class EvaluationMixin:
@@ -58,7 +89,8 @@ class EvaluationMixin:
         return summary
 
     def importance(self, model: Any, kind: str = "split") -> dict[str, float]:
-        result: dict[str, float] = model.importance(kind=kind)
+        with _shap_refit_required():
+            result: dict[str, float] = model.importance(kind=kind)
         return result
 
     def importance_kinds(self, model: Any) -> list[str]:
@@ -136,7 +168,9 @@ class EvaluationMixin:
             # ``shap-summary`` is the dedicated SHAP-only entry point
             # (see _PLOT_DISPATCH note on Issue #373).
             call_kwargs["kind"] = "shap"
-        fig = getattr(model, method_name)(**call_kwargs)
+        plot_fn: Callable[..., Any] = getattr(model, method_name)
+        with _shap_refit_required():
+            fig = plot_fn(**call_kwargs)
         return PlotData(plotly_json=fig.to_json())
 
     def available_plots(self, model: Any) -> list[str]:
@@ -177,7 +211,25 @@ class EvaluationMixin:
         return str(exported)
 
     def export_code(self, model: Any, path: str) -> str:
-        """Generate standalone Python code from *model* into *path*."""
+        """Generate standalone Python code from *model* into *path*.
+
+        A model whose stored ``model.params`` hold names lizyml 0.20 reads
+        elsewhere (a Tune written by lizyml 0.15) is refused with
+        :class:`RefitRequiredError` before lizyml's own ``CONFIG_INVALID``
+        (P-0116 D4).  The stored config is read, not the export params,
+        which carry ``seed`` for every model.
+        """
+        cfg = model.fit_result.run_meta.config_normalized
+        model_cfg = cfg.get("model") if isinstance(cfg, dict) else None
+        params = model_cfg.get("params") if isinstance(model_cfg, dict) else None
+        names = names_routed_outside_model_params(params)
+        if names:
+            raise RefitRequiredError(
+                "Code export needs a model fitted with the current version: "
+                f"model.params holds {', '.join(names)}",
+                kind="export_param_names",
+                names=names,
+            )
         exported: Path = model.export_code(path)
         return str(exported)
 
