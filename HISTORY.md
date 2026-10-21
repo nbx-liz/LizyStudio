@@ -4900,9 +4900,13 @@ lock を上げた時点で Tune がすべて失敗する。そのため、lock �
     - **名前で決めて正確な理由:** LizyML の smart と training の名前は閉じた集合で、すべて対応表にある。
     - **やめたもの:** D2 (A) の「`tune_result` に 3 つの辞書を足す」と「unpause の skip 経路で `restore_tuning` を使う」。受け入れ基準の「5 か所それぞれの Fit の設定の全体を期待値と比べる」は、`create_model` が LizyML に渡す設定で確かめる。
     - **inner_valid の印（A 案の解釈）:**
-      - picker の値（`inner_valid` の method）は明示として扱う。
-      - `validation_ratio` は、Tune が選んだ値も Fixed モードの固定値も、明示として扱わない。名前からはどちらの値か区別できない。また、ratio は method の選択ではないので、split に応じた自動の解決を残す。
-      - これは D2 (A) の「Fixed モードの `validation_ratio` の固定値は `true`」を改めたものである。受け入れ基準の該当行も、この扱いで確かめる。
+      - 振り分けでは、明示かどうかを決めない。`inner_valid` の method は運ぶが、`validation_ratio` を横に残す。そのため lizyml 0.15 は、外側の split に合わせた自動の解決を続ける。0.20 の `inner_valid_explicit` の印が設定にあれば、そのまま残す。
+      - 理由は 2 つある。
+        - Tune タブは、利用者が選んだときだけでなく、CV に合わせた自動の推奨でも `model.params.inner_valid` を書く（`TuneTab.tsx:212-220`）。名前からはどちらか区別できない。A 案では、自動の推奨は明示ではない。
+        - `validation_ratio` も、Tune が選んだ値か Fixed モードの固定値かを名前から区別できない。また、ratio は method の選択ではない。
+      - 利用者が選んだことを UI から伝え、印を `true` にするのは、子 PR 5（印は 0.20 にしかない）で行う。
+      - これは D2 (A) の「Fixed モードの `inner_valid` と `validation_ratio` の固定値は `true`」を、子 PR 5 まで延ばしたものである。受け入れ基準の該当行は、子 PR 5 で確かめる。
+      - 当初のカード D-20261021-012 の「picker の値は明示」は、D-20261021-013 で置き換えた。
   - **0.20 より前に入れてはいけないもの:**
     - `direction` の省略。0.15 は省略すると `minimize` になり（lizyml 0.15 `config/schema.py:433-437`）、maximize の指標を逆向きに最適化してしまう。
     - `step` のテスト。0.15 は `step` を黙って無視する（DC1）。0.15 の次元の型には `step` の欄が無く（lizyml 0.15 `core/types/search_dim.py:20-64`）、`parse_space` も `step` を読まない（`tuning/search_space.py:116-171`）。`step` が加わったのは 0.20 である（lizyml 0.20 `core/types/search_dim.py:20-59`）。そのため、0.15 ではテストが通っても何も確かめていない。
