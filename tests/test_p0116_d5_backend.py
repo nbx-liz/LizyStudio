@@ -406,6 +406,25 @@ class TestSearchSpaceRefused:
                 id="smart-dimension-collision",
             ),
             pytest.param(
+                # lizyml 0.20 _tuning_validation: a model dim of the space the
+                # space's own smart dim manages.  Both keys name the space.
+                {
+                    "managed": [
+                        {
+                            "surface": _SPACE,
+                            "name": "num_leaves",
+                            "canonical": "num_leaves",
+                            "smart_param": "auto_num_leaves",
+                            "smart_dimensions": ["auto_num_leaves"],
+                            "space_surface": _SPACE,
+                        }
+                    ],
+                    "space_surface": _SPACE,
+                },
+                ("num_leaves", "auto_num_leaves"),
+                id="both-locators",
+            ),
+            pytest.param(
                 {
                     "task": "binary",
                     "objective": "regression",

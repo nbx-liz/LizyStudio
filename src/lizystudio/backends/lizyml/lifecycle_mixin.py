@@ -73,8 +73,9 @@ def _space_refusal_dims(context: Any) -> tuple[str, ...] | None:
     new list key is covered too).  The dims are read best-effort and may be
     empty: from a ``surface`` entry its ``dim`` / ``name`` / ``names`` /
     ``dimensions`` / ``parameter``, from a ``space_surface`` entry its
-    ``smart_dimensions`` (its ``name`` is the colliding fixed name, not a
-    dim).  No lizyml rule is copied.
+    ``smart_dimensions`` (a ``name`` located only by ``space_surface`` is
+    the colliding fixed name, not a dim), and from an entry with both, both.
+    No lizyml rule is copied.
     """
     if not isinstance(context, dict):
         return None
@@ -93,7 +94,9 @@ def _space_refusal_dims(context: Any) -> tuple[str, ...] | None:
             names.extend(_strings(entry, "names", "dimensions"))
             if isinstance(entry.get("parameter"), str):
                 names.append(entry["parameter"])
-        elif _in_space(entry.get("space_surface")):
+        # Not elif: an entry can carry both, a space dim managed by a smart
+        # dim of the same space, and then both are dims of the refusal.
+        if _in_space(entry.get("space_surface")):
             located = True
             names.extend(_strings(entry, "smart_dimensions"))
     if not located:
