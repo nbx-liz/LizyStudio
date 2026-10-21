@@ -317,9 +317,10 @@ _REFUSED = "LizyML refused the search space"
 class TestSearchSpaceRefused:
     """lizyml's pre-trial space refusals keep their own error (P-0116 D1).
 
-    The context shapes are the five lizyml 0.20 raises from ``model.tune()``
-    (measured by running each against the adapter).  Studio copies none of
-    lizyml's rules; it only names the dims lizyml named.
+    The context shapes are the ones lizyml 0.20 raises from ``model.tune()``
+    (measured by running each against the adapter), including the
+    ``unknown`` list for a model dim lizyml does not know.  Studio copies
+    none of lizyml's rules; it only names the dims lizyml named.
     """
 
     def _tune_raising(self, exc: Exception) -> BaseException:
@@ -372,6 +373,16 @@ class TestSearchSpaceRefused:
                 },
                 ("num_leaves",),
                 id="smart-managed",
+            ),
+            pytest.param(
+                {"unknown": [{"surface": _SPACE, "name": "not_a_param"}]},
+                ("not_a_param",),
+                id="unknown-model-dim",
+            ),
+            pytest.param(
+                {"refused": [{"surface": _SPACE, "parameter": "max_bin"}]},
+                ("max_bin",),
+                id="any-list-key-parameter-only",
             ),
             pytest.param(
                 {

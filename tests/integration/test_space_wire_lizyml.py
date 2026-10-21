@@ -131,6 +131,11 @@ _INT = {"type": "int", "low": 8, "high": 64}
             ("max_bin",),
             id="off-grid",
         ),
+        pytest.param(
+            {"not_a_param": {"type": "float", "low": 0.1, "high": 0.9}},
+            ("not_a_param",),
+            id="unknown-model-dim",
+        ),
     ],
 )
 def test_space_refusal_is_its_own_error(

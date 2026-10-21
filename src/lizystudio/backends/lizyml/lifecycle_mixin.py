@@ -66,15 +66,16 @@ def _space_refusal_dims(context: Any) -> tuple[str, ...] | None:
     """The catalog keys of the dims a space refusal names.
 
     ``None`` when *context* is not about the search space: no space surface
-    at its top level, nor in a ``conflicts`` / ``managed`` entry.  The dims
-    are read best-effort from the keys lizyml 0.20 uses (``dim``, ``names``,
-    ``dimensions``, ``name``) and may be empty; no lizyml rule is copied.
+    at its top level, nor in an entry of any list it carries (lizyml 0.20
+    uses ``conflicts``, ``managed`` and ``unknown``; the key is not matched,
+    so a new list key is covered too).  The dims are read best-effort from
+    the keys lizyml uses (``dim``, ``name``, ``names``, ``dimensions``,
+    ``parameter``) and may be empty; no lizyml rule is copied.
     """
     if not isinstance(context, dict):
         return None
     entries: list[dict[str, Any]] = [context]
-    for key in ("conflicts", "managed"):
-        listed = context.get(key)
+    for listed in context.values():
         if isinstance(listed, list):
             entries.extend(entry for entry in listed if isinstance(entry, dict))
     space_entries = [
@@ -93,6 +94,8 @@ def _space_refusal_dims(context: Any) -> tuple[str, ...] | None:
             listed = entry.get(key)
             if isinstance(listed, list):
                 names.extend(name for name in listed if isinstance(name, str))
+        if isinstance(entry.get("parameter"), str):
+            names.append(entry["parameter"])
     return tuple(dict.fromkeys(catalog_key_for_wire_name(name) for name in names))
 
 
