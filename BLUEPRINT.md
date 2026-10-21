@@ -1041,7 +1041,7 @@ Range / Choice / Fixed のデフォルト初期値（P-0104 Wave 2.2 / Issue #45
 
 | パラメータ | default_mode | low / 値 | high | log | 備考 |
 |-----------|-------------|---------|------|-----|------|
-| `objective` | Choice | `option_sets.objective[task]`（LizyML `LGBMProvider.objective_choices(task)` SSOT — P-0104 Wave 3.1a。Studio が出さないものは `_REFUSED_OBJECTIVES` で除く。binary の `cross_entropy_lambda` は確率を返さないので除く — #690、P-0116 D5） | — | — | regression: `[regression, regression_l1, huber, fair, poisson, quantile, mape, gamma, tweedie]` / binary: `[binary, cross_entropy]` / multiclass: `[multiclass, multiclassova]` |
+| `objective` | Choice | `option_sets.objective[task]`（LizyML `LGBMProvider.objective_choices(task)` SSOT — P-0104 Wave 3.1a。Studio が出さないものは `_REFUSED_OBJECTIVES` で除く。今は空である。binary の `cross_entropy_lambda` は確率を返さないので除いていたが、lizyml 0.19 以降は binary の選択肢に無い — #690、P-0116 D5・子 PR 4） | — | — | regression: `[regression, regression_l1, huber, fair, poisson, quantile, mape, gamma, tweedie]` / binary: `[binary, cross_entropy]` / multiclass: `[multiclass, multiclassova]` |
 | `metric` | Choice | `option_sets.metric[task]`（`{native, feval}` — LizyML `LGBMProvider.metric_choices(task)` SSOT）の `native ∪ feval` | — | — | binary native: `[binary_logloss, binary_error, auc, average_precision, cross_entropy, cross_entropy_lambda, kullback_leibler]` / feval（"Custom (slow)" バッジ）: `[f1, brier, ece, precision_at_k, accuracy]` |
 | `first_metric_only` | Fixed | `True` | — | — | — |
 | `n_estimators` | Range | 500 | 2000 | false | step=100（`step_map`） |

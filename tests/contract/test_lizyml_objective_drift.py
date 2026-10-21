@@ -42,8 +42,8 @@ def _provider():
 def test_option_sets_objective_matches_lizyml_canonical() -> None:
     """The objective list is LizyML's, minus Studio's conscious refusals.
 
-    ``_REFUSED_OBJECTIVES`` is the only divergence (``cross_entropy_lambda``
-    on binary, Issue #690); everything else must still follow the provider.
+    ``_REFUSED_OBJECTIVES`` is the only allowed divergence (empty since the
+    lizyml 0.20 bump, Issue #690); everything else must follow the provider.
     """
     schema = _ui_schema()
     provider = _provider()
@@ -59,9 +59,8 @@ def test_option_sets_objective_matches_lizyml_canonical() -> None:
 
 def test_refused_objectives_are_real_lizyml_names() -> None:
     # A refusal of a name the installed LizyML no longer lists is a stale
-    # entry (DC3). lizyml 0.19 drops cross_entropy_lambda from the binary
-    # choices itself, so this fails after the 0.20 bump on purpose: the
-    # bump (P-0116 child 4) removes the entry.
+    # entry (DC3). This is what flagged binary cross_entropy_lambda after the
+    # 0.20 bump (lizyml 0.19 dropped it), so P-0116 child 4 removed it.
     provider = _provider()
     for task, refused in _REFUSED_OBJECTIVES.items():
         assert task in _TASKS

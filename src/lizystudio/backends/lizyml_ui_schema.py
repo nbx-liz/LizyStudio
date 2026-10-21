@@ -58,13 +58,10 @@ def _get_lgbm_provider() -> LGBMProvider:
 
 
 # Objectives Studio does not offer although an installed lizyml lists them.
-# ``cross_entropy_lambda`` outputs LightGBM's lambda, not a probability, so a
-# binary model trained with it fails the evaluator or returns non-probabilities;
-# lizyml 0.19 drops it from the binary choices (H-0125, Issue #690).  The
-# *metric* of that name stays valid.
-_REFUSED_OBJECTIVES: dict[str, frozenset[str]] = {
-    "binary": frozenset({"cross_entropy_lambda"}),
-}
+# Empty since the lizyml 0.20 bump: the one entry, binary
+# ``cross_entropy_lambda`` (Issue #690), is no longer a lizyml binary choice
+# (dropped in 0.19, H-0125), and the drift contract flags a stale entry.
+_REFUSED_OBJECTIVES: dict[str, frozenset[str]] = {}
 
 
 def _build_objective_option_sets() -> dict[str, list[str]]:
