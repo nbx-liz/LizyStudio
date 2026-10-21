@@ -364,32 +364,38 @@ def merge_embargo_into_purge_gap(config: dict[str, Any]) -> dict[str, Any]:
 
     lizyml 0.15's splitter leaves a dead zone of ``purge_gap + embargo``
     before each test fold, and 0.20 deprecates ``embargo`` by adding it to
-    ``purge_gap``; the sum keeps the split identical on both.  A zero or null
-    ``embargo`` is dropped.  A non-integer one (``True``, a string) is left for
-    lizyml's schema to reject rather than being summed into a valid-looking
-    value.  The returned config is a copy; *config* is not mutated.
+    ``purge_gap``; the sum keeps the split identical on both.  A zero
+    ``embargo`` is simply dropped.
+
+    Only a config both lizyml versions accept is rewritten: ``embargo`` and
+    ``purge_gap`` (when present) must be non-negative integers, and neither
+    legacy alias (``gap``, ``embargo_pct``) may be present.  Anything else —
+    a null or negative value, a non-integer, an alias beside ``embargo`` —
+    is returned unchanged for lizyml's schema to reject, so the sum never
+    turns a refused config into a valid-looking one (DC1).  The returned
+    config is a copy; *config* is not mutated.
     """
     split = config.get("split")
     if not isinstance(split, dict) or "embargo" not in split:
         return config
     if split.get("method") != "purged_time_series":
         return config
+    if "gap" in split or "embargo_pct" in split:
+        return config
     embargo = split["embargo"]
     purge_gap = split.get("purge_gap", 0)
-    if embargo is None or (_is_int(embargo) and embargo == 0):
-        out = copy.deepcopy(config)
-        out["split"].pop("embargo")
-        return out
-    if not _is_int(embargo) or not _is_int(purge_gap):
+    if not (_is_count(embargo) and _is_count(purge_gap)):
         return config
     out = copy.deepcopy(config)
     out["split"].pop("embargo")
-    out["split"]["purge_gap"] = purge_gap + embargo
+    if embargo:
+        out["split"]["purge_gap"] = purge_gap + embargo
     return out
 
 
-def _is_int(value: Any) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
+def _is_count(value: Any) -> bool:
+    """A non-negative ``int`` that is not a ``bool``."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def to_wire_config(config: dict[str, Any]) -> dict[str, Any]:

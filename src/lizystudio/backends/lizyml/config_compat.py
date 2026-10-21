@@ -234,6 +234,26 @@ def task_params_compat_errors(config: dict[str, Any]) -> list[dict[str, Any]]:
 _STRATIFIED_SPLIT_METHODS = frozenset({"stratified_kfold", "stratified_group_kfold"})
 
 
+def _inner_valid_in_effect(early_stopping: Any) -> bool:
+    """Whether lizyml uses the configured ``inner_valid`` as written.
+
+    With early stopping off lizyml builds no inner split.  Otherwise it uses
+    the configured one only when it is explicit, and resolves its own from
+    the outer split when not: lizyml 0.20 reads the ``inner_valid_explicit``
+    marker, and without the marker both versions treat an ``inner_valid``
+    written beside ``validation_ratio`` as not explicit.  lizyml 0.20 refuses
+    a regression ``stratify`` on the same condition.
+    """
+    if not isinstance(early_stopping, dict):
+        return False
+    if early_stopping.get("enabled", True) is False:
+        return False
+    marker = early_stopping.get("inner_valid_explicit")
+    if isinstance(marker, bool):
+        return marker
+    return "validation_ratio" not in early_stopping
+
+
 def regression_stratify_errors(config: dict[str, Any]) -> list[dict[str, Any]]:
     """Refuse stratification on a regression task (P-0116 D5).
 
@@ -279,7 +299,11 @@ def regression_stratify_errors(config: dict[str, Any]) -> list[dict[str, Any]]:
     inner = (
         early_stopping.get("inner_valid") if isinstance(early_stopping, dict) else None
     )
-    if isinstance(inner, dict) and inner.get("stratify") is True:
+    if (
+        isinstance(inner, dict)
+        and inner.get("stratify") is True
+        and _inner_valid_in_effect(early_stopping)
+    ):
         refuse(
             ("training", "early_stopping", "inner_valid", "stratify"),
             "training.early_stopping.inner_valid.stratify=true",

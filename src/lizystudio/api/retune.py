@@ -155,6 +155,13 @@ def _claim_retune_slot(parent_job_id: str, job_store: JobStore) -> str:
     return placeholder
 
 
+def _require_valid_parent_config(ws: WorkspaceState, parent: Job) -> None:
+    """Apply the /fit and /tune config gate to the stored parent config (P-0116 D5)."""
+    from lizystudio.api.workspace import require_relaunchable_config
+
+    require_relaunchable_config(ws, parent.config)
+
+
 @router.post("/{job_id}/retune", response_model=RetuneJobResponse)
 def retune_job(
     job_id: str,
@@ -170,6 +177,7 @@ def retune_job(
     if parent.status != "completed":
         raise JobNotCompletedError(job_id)
     _require_tune_job_with_checkpoint(parent, job_store, ws.backend)
+    _require_valid_parent_config(ws, parent)
     _validate_n_trials(body.n_trials)
     _validate_boundary_threshold(body.boundary_threshold)
 
@@ -239,6 +247,7 @@ def resume_job(
             f"Resume is only available on failed tune jobs (status={parent.status})",
         )
     _require_tune_job_with_checkpoint(parent, job_store, ws.backend)
+    _require_valid_parent_config(ws, parent)
 
     # Auto-compute remaining trials from original config when not provided.
     n_trials = body.n_trials

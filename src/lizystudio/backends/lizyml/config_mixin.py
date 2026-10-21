@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any, Literal
 
@@ -259,7 +260,10 @@ class ConfigMixin:
         clean = self._strip_internal_keys(config)
         errors: list[dict[str, Any]] = []
         try:
-            LizyMLConfig.model_validate(clean)
+            # A copy: lizyml's before-validators pop keys from the input dict
+            # (0.15's EarlyStoppingConfig pops ``validation_ratio``), and the
+            # checks below must see the config as written.
+            LizyMLConfig.model_validate(copy.deepcopy(clean))
         except ValidationError as exc:
             errors.extend(exc.errors())  # type: ignore[arg-type]
 

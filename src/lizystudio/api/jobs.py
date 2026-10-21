@@ -357,6 +357,10 @@ def unpause_job(
         )
     if ws.dataframe is None or ws.data_ref is None:
         raise WorkspaceNoDataError()
+    # P-0116 D5: the /fit and /tune config gate also applies to a relaunch.
+    from lizystudio.api.workspace import require_relaunchable_config
+
+    require_relaunchable_config(ws, job.config)
 
     # Clear the pause flag BEFORE re-launching so the cb does not
     # immediately raise PausedError again on its first observation.
