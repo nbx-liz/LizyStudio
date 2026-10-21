@@ -53,19 +53,19 @@ class TestEmbargoIntoPurgeGap:
     @pytest.mark.parametrize(
         "fields",
         [
-            # Both lizyml versions refuse each of these before splitting; the
-            # sum must not turn them into a valid-looking config (DC1).
+            # lizyml refuses the first five; the sum must not turn them into
+            # a valid-looking config (DC1).
             {"purge_gap": 2, "embargo": None},
             {"purge_gap": 2, "embargo": -1},
             {"purge_gap": -3, "embargo": 5},
             {"purge_gap": 2, "embargo": 3, "gap": 1},
             {"purge_gap": 2, "embargo": 3, "embargo_pct": 0.1},
-            # purge_window is lizyml's alias for purge_gap; rewriting would
+            # Valid: lizyml renames purge_window to purge_gap. Rewriting would
             # leave it beside a new purge_gap, which both versions refuse.
             {"purge_window": 2, "embargo": 3},
         ],
     )
-    def test_configs_lizyml_refuses_are_left_as_they_are(
+    def test_configs_outside_the_plain_form_are_left_as_they_are(
         self, fields: dict[str, Any]
     ) -> None:
         config = self._split(**fields)

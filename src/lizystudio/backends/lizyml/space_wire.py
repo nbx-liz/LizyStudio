@@ -367,13 +367,16 @@ def merge_embargo_into_purge_gap(config: dict[str, Any]) -> dict[str, Any]:
     ``purge_gap``; the sum keeps the split identical on both.  A zero
     ``embargo`` is simply dropped.
 
-    Only a config both lizyml versions accept is rewritten: ``embargo`` and
-    ``purge_gap`` (when present) must be non-negative integers, and neither
-    legacy alias (``gap``, ``embargo_pct``) may be present.  Anything else —
-    a null or negative value, a non-integer, an alias beside ``embargo`` —
-    is returned unchanged for lizyml's schema to reject, so the sum never
-    turns a refused config into a valid-looking one (DC1).  The returned
-    config is a copy; *config* is not mutated.
+    Only the plain form is rewritten: ``embargo`` and ``purge_gap`` (when
+    present) must be non-negative integers, and no legacy alias (``gap``,
+    ``embargo_pct``, ``purge_window``) may be present.  Anything else is
+    returned unchanged.  A null, negative or non-integer value, or a ``gap``
+    or ``embargo_pct`` beside ``embargo``, is refused by lizyml's schema, and
+    summing must not turn it into a valid-looking config (DC1).  A
+    ``purge_window`` config is valid (lizyml renames it to ``purge_gap``),
+    but rewriting would leave it beside a new ``purge_gap``, which lizyml
+    refuses, so lizyml combines it itself.  The returned config is a copy;
+    *config* is not mutated.
     """
     split = config.get("split")
     if not isinstance(split, dict) or "embargo" not in split:
