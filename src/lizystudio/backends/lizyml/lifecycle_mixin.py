@@ -14,6 +14,7 @@ from lizystudio.backends.types import FitSummary, TuningSummary
 
 from .config_compat import parse_re_tune, strip_internal_keys
 from .serialization import serialize_tuning_result
+from .space_wire import to_wire_config
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ class LifecycleMixin:
     def create_model(self, config: dict[str, Any], dataframe: pd.DataFrame) -> Any:
         from lizyml import Model
 
-        clean = strip_internal_keys(config)
+        clean = to_wire_config(strip_internal_keys(config))
         return Model(clean, data=dataframe)
 
     def fit(

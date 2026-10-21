@@ -20,6 +20,7 @@ from lizystudio.backends.types import (
 )
 
 from .config_compat import strip_internal_keys, task_params_compat_errors
+from .space_wire import to_wire_entry
 
 # Regression metrics whose value is undefined / degenerate for certain target
 # distributions. The Service layer used to hardcode this watchlist (Issue #394);
@@ -376,8 +377,11 @@ class ConfigMixin:
                 and len(raw["choices"]) == 0
             ):
                 continue
+            # Judge the dim in the form lizyml will receive (P-0116 D1); the
+            # error path keeps the catalog key the UI shows.
+            wire_name, wire_entry = to_wire_entry(name, raw)
             try:
-                parse_space({name: raw})
+                parse_space({wire_name: wire_entry})
             except LizyMLError as exc:
                 # Only structural CONFIG_INVALID rejections belong on the
                 # run-gate envelope. Anything else propagates so the API
