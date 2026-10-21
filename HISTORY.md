@@ -4923,3 +4923,12 @@ lock を上げた時点で Tune がすべて失敗する。そのため、lock �
     - どの形でも、LizyML の `user_message` が次元の名前と理由を示す。そのため Studio は、文脈から次元の名前を読み、`user_message` を添えて job のエラーにする。LizyML の規則は写さない（DC3）。WS のコードは `SEARCH_SPACE_REFUSED` とする（子 PR 3a の `TUNING_FAILED` と同じ扱い）。
   - **`direction`（子 PR 5a の仕組み）:** PUT /config で受け取った `direction` が、指標から導いた向きと一致するなら捨てる。一致しないなら残し、LizyML に拒否させる（H-0099）。黙って捨てると、利用者が明示した値を失う（DC1）。
   - **inner_valid の印とチューニングで選んだ ratio:** picker で `true` にした設定でも、Tune が `validation_ratio` か `inner_valid` を選んだときは、autofit が印を `false` にする（受け入れ基準の「Tune が選んだ `validation_ratio`: `false`」）。このとき LizyML は、利用者が選んだ method を使わず、外側の split から inner split を決める。
+  - **子 PR 5b の merge（owner、2026-10-21、決定カード D-20261021-020）:** Codex の 3 round の上限で merge した（#731）。CV の strategy の変更が保存待ちかどうかは、サーバから読んだ設定の `split.method` と比べて決める。ただし、編集の順序に関する 3 件は解決していない（保存に失敗した strategy の変更の後の明示的な選択、保存中に元へ戻す変更、write funnel の queue の順序）。PR の Known limits に記録し、#732 で扱う。
+  - **子 PR 6 の決定（owner、2026-10-21、決定カード D-20261021-021）:**
+    - **D3 の判断の置き場所:** unpause は lizyml adapter の中で `lizyml.tuning.read_study_lineage` を読み、round の状態から分岐する。`BackendAdapter.tune` のシグネチャは変えない。`resume=True` と `storage` を組み合わせた呼び出しの意味を、docstring と本注記で次のように定める。保存済みの study を `tuning.re_tune` の計画まで続ける。trial を 1 件も実行せず、保存済みの結果を返すこともある。続けられない study には `CheckpointIncompatibleError` を出す。Proposal の改訂ではなく、本 Decision の注記として扱う。
+    - **`/resume` は子 PR 6 では確かめない:** D3 は「`/retune` と `/resume` はすでに `resume=True` を渡しているので、0.20 で動くことを E2E で確かめる」としていた。調べると、`/resume` が 0.20 で動かない場合が 2 つある。
+      - round 1 で失敗した親: checkpoint の study が無いので、`TUNING_FAILED` になる。
+      - round 2 以降の途中で止まった親: open な round に `n_trials` を渡すので、`CONFIG_INVALID` になる。
+      - どちらも #733 で扱う。#733 には、閉じた round（failed か completed）から再開すると計画に無い round が始まる場合も含めた。`/retune` は子 PR 4 の受け入れ（retune-flow の E2E）で確かめた。
+    - **`tuning.re_tune` が job に届かない（owner、2026-10-21、決定カード D-20261021-023）:** HTTP 経由の Tune では、`absorb_legacy_tuning` が `tuning` を `TuningOverrides` に移す。`TuningOverrides` には `re_tune` の欄が無い（`extra="forbid"`）。そのため、UI の Re-tune 設定が書いた `re_tune` は job まで届かない（以前からの DC4。#528 と同じ原因）。子 PR 6 はこのまま進め、round が複数ある unpause は integration テストだけで確かめる（E2E では作れない）。`re_tune` を保存できるようにする件は、共有型の変更なので別の Issue と Proposal で扱う。
+    - **`restore_tuning` の扱いの明確化:** D-20261021-012 が「やめたもの」に挙げたのは、D2 の 3 つの辞書の出どころとして `restore_tuning` を使うことだけである。D3 の「すべての round が済んでいる」場合には `Model.restore_tuning` を使う。理由は、step の格子に合わせた値、複数 round の履歴、目的の同一性の検査が得られるからである。今の Optuna の `study.best_params` は、step のある次元では学習に使った値と一致しない。
