@@ -52,6 +52,7 @@ _JOIN_TIMEOUT = 30  # seconds — generous to allow subprocess cleanup
 from lizystudio.backends.exceptions import (  # noqa: E402, F401
     CancelledError,
     PausedError,
+    TuningFailedError,
 )
 
 
@@ -239,7 +240,13 @@ def _apply_job_outcome(
         job.completed_at = datetime.now(timezone.utc).isoformat()
         job_store.update(job)
         if broadcaster is not None:
-            broadcaster.send_error(job.job_id, f"{type(exc).__name__}: {exc}")
+            # P-0116 D5 (#691): a tune whose trials all failed keeps its
+            # own code, so the UI does not show it as a generic error.
+            message = f"{type(exc).__name__}: {exc}"
+            if isinstance(exc, TuningFailedError):
+                broadcaster.send_error(job.job_id, message, code="TUNING_FAILED")
+            else:
+                broadcaster.send_error(job.job_id, message)
 
 
 def _persist_job_log(job_store: JobStore, job_id: str, captured: str) -> None:

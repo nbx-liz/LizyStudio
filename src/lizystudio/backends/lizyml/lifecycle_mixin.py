@@ -10,6 +10,7 @@ from typing import Any
 import pandas as pd
 
 from lizystudio.backends.base import ProgressCallback
+from lizystudio.backends.exceptions import TuningFailedError
 from lizystudio.backends.types import FitSummary, TuningSummary
 
 from .config_compat import parse_re_tune, strip_internal_keys
@@ -17,6 +18,27 @@ from .serialization import serialize_tuning_result
 from .space_wire import to_wire_config
 
 logger = logging.getLogger(__name__)
+
+
+def _run_tune_round(model: Any, **kwargs: Any) -> Any:
+    """Run one ``model.tune`` round, reporting ``TUNING_FAILED`` as its own error.
+
+    lizyml raises ``TUNING_FAILED`` when every trial of a round fails; the
+    job then shows it under that code instead of as a generic backend error
+    (P-0116 D5, #691).  Every other error propagates unchanged.
+    """
+    from lizyml.core.exceptions import LizyMLError
+
+    try:
+        return model.tune(**kwargs)
+    except LizyMLError as exc:
+        if getattr(exc.code, "value", None) != "TUNING_FAILED":
+            raise
+        message = exc.user_message
+        first_error = (exc.context or {}).get("first_error")
+        if first_error:
+            message = f"{message} First trial error: {first_error}"
+        raise TuningFailedError(message) from exc
 
 
 class LifecycleMixin:
@@ -175,7 +197,8 @@ class LifecycleMixin:
         if resume:
             first_round_kwargs["resume"] = True
             first_round_kwargs.update(extra_kwargs)
-        tune_result = model.tune(
+        tune_result = _run_tune_round(
+            model,
             progress_callback=lizyml_callback,
             **storage_kwargs,
             **first_round_kwargs,
@@ -190,7 +213,8 @@ class LifecycleMixin:
                     round=round_idx,
                     total_rounds=n_rounds,
                 )
-            tune_result = model.tune(
+            tune_result = _run_tune_round(
+                model,
                 progress_callback=lizyml_callback,
                 resume=True,
                 **storage_kwargs,

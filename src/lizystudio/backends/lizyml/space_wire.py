@@ -359,6 +359,39 @@ def _section_ok(parent: Any, name: str) -> bool:
     return name not in parent or isinstance(parent[name], dict)
 
 
+def merge_embargo_into_purge_gap(config: dict[str, Any]) -> dict[str, Any]:
+    """Fold a ``purged_time_series`` ``embargo`` into ``purge_gap`` (P-0116 D5).
+
+    lizyml 0.15's splitter leaves a dead zone of ``purge_gap + embargo``
+    before each test fold, and 0.20 deprecates ``embargo`` by adding it to
+    ``purge_gap``; the sum keeps the split identical on both.  A zero or null
+    ``embargo`` is dropped.  A non-integer one (``True``, a string) is left for
+    lizyml's schema to reject rather than being summed into a valid-looking
+    value.  The returned config is a copy; *config* is not mutated.
+    """
+    split = config.get("split")
+    if not isinstance(split, dict) or "embargo" not in split:
+        return config
+    if split.get("method") != "purged_time_series":
+        return config
+    embargo = split["embargo"]
+    purge_gap = split.get("purge_gap", 0)
+    if embargo is None or (_is_int(embargo) and embargo == 0):
+        out = copy.deepcopy(config)
+        out["split"].pop("embargo")
+        return out
+    if not _is_int(embargo) or not _is_int(purge_gap):
+        return config
+    out = copy.deepcopy(config)
+    out["split"].pop("embargo")
+    out["split"]["purge_gap"] = purge_gap + embargo
+    return out
+
+
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def to_wire_config(config: dict[str, Any]) -> dict[str, Any]:
     """Return *config* in the form lizyml reads (P-0116 D1, D2).
 
@@ -366,7 +399,7 @@ def to_wire_config(config: dict[str, Any]) -> dict[str, Any]:
     non-empty ``tuning.optuna.space`` into wire form.  A config that needs
     neither is returned as is.
     """
-    out = route_model_params(config)
+    out = merge_embargo_into_purge_gap(route_model_params(config))
     tuning = out.get("tuning")
     optuna = tuning.get("optuna") if isinstance(tuning, dict) else None
     space = optuna.get("space") if isinstance(optuna, dict) else None
