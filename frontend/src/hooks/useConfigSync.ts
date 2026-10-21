@@ -61,7 +61,6 @@ export function useConfigSync({
   // flushing, the funnel coalesces them into the latest snapshot, so
   // we no longer need to abort the first PUT mid-wire.
   const abortRef = useRef<AbortController | null>(null);
-  const prevCvStrategyRef = useRef<string>(cv.strategy);
   const skipNextSyncRef = useRef(false);
   const prevSyncKey = useRef("");
 
@@ -120,10 +119,16 @@ export function useConfigSync({
         (baseTraining.early_stopping as Record<string, unknown>) ?? {};
       const innerValid =
         (baseEarlyStopping.inner_valid as Record<string, unknown>) ?? {};
-      // The strategy counts as synced only once its PUT lands (below), so a
-      // failed save re-applies this re-derivation on the next sync instead
-      // of persisting a stale inner split or marker (P-0116 child 5b).
-      const strategyChanged = prevCvStrategyRef.current !== cv.strategy;
+      // A strategy change is pending while the persisted config (``base``,
+      // just read from the server) still has another split method.  Reading
+      // the server instead of a client-side ref means a failed, rejected
+      // (saved=false), aborted or coalesced save re-applies this
+      // re-derivation on the next sync, and a save that landed never
+      // re-applies it over the user's later explicit pick (P-0116 child 5b).
+      const baseSplit = (base as Record<string, unknown>).split as
+        | Record<string, unknown>
+        | undefined;
+      const strategyChanged = baseSplit?.method !== cv.strategy;
       if (strategyChanged) {
         const recommended = recommendedInnerValid(cv.strategy);
         // P-0092 follow-up (2026-04-30): prune inner_valid fields to
@@ -213,7 +218,6 @@ export function useConfigSync({
         toast.error("Config sync failed — changes may not be saved");
         return;
       }
-      if (strategyChanged) prevCvStrategyRef.current = cv.strategy;
       onDataChanged();
     } catch (err) {
       // GET-side failures (fetchConfig / fetchConfigDefaults) and

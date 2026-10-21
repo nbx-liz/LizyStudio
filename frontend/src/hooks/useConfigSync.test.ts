@@ -311,6 +311,76 @@ describe("useConfigSync", () => {
     expect(retried.split.n_splits).toBe(7);
   });
 
+  // Review r2: a validation rejection is an HTTP 200 with saved=false, so it
+  // must not count as the strategy having been persisted either.  The
+  // decision now reads the persisted base (GET), not a client-side ref.
+  it("a saved=false strategy change re-applies the automatic marker on the next sync", async () => {
+    mocks.fetchConfig.mockResolvedValue({
+      ...baseConfig,
+      training: {
+        early_stopping: {
+          enabled: true,
+          inner_valid_explicit: true,
+          inner_valid: { method: "holdout", ratio: 0.1 },
+        },
+      },
+    });
+    const { wrapper } = testWrapper;
+    const { rerender } = renderHook(
+      ({ cv }) => useConfigSync(defaultParams({ cv })),
+      { wrapper, initialProps: { cv: INITIAL_CV_STATE } },
+    );
+    await waitFor(() => expect(mocks.updateConfig).toHaveBeenCalledTimes(1));
+
+    mocks.updateConfig.mockResolvedValueOnce({
+      config: {},
+      errors: [{ path: "x" }],
+      saved: false,
+    });
+    const kfold = { ...INITIAL_CV_STATE, strategy: "kfold" };
+    rerender({ cv: kfold });
+    await waitFor(() => expect(mocks.updateConfig).toHaveBeenCalledTimes(2));
+
+    rerender({ cv: { ...kfold, folds: 7 } });
+    await waitFor(() => expect(mocks.updateConfig).toHaveBeenCalledTimes(3));
+
+    const [retried] = mocks.updateConfig.mock.calls[2];
+    expect(retried.training.early_stopping.inner_valid_explicit).toBe(false);
+  });
+
+  // Once the persisted config already has the current strategy, a later CV
+  // edit is not a strategy change: the user's explicit inner split stays.
+  it("keeps an explicit inner split when the persisted strategy already matches", async () => {
+    const kfold = { ...INITIAL_CV_STATE, strategy: "kfold" };
+    mocks.fetchConfig.mockResolvedValue({
+      ...baseConfig,
+      split: { method: "kfold", n_splits: 5 },
+      training: {
+        early_stopping: {
+          enabled: true,
+          inner_valid_explicit: true,
+          inner_valid: { method: "holdout", ratio: 0.2 },
+        },
+      },
+    });
+    const { wrapper } = testWrapper;
+    const { rerender } = renderHook(
+      ({ cv }) => useConfigSync(defaultParams({ cv })),
+      { wrapper, initialProps: { cv: kfold } },
+    );
+    await waitFor(() => expect(mocks.updateConfig).toHaveBeenCalledTimes(1));
+
+    rerender({ cv: { ...kfold, folds: 7 } });
+    await waitFor(() => expect(mocks.updateConfig).toHaveBeenCalledTimes(2));
+
+    const [payload] = mocks.updateConfig.mock.calls[1];
+    expect(payload.training.early_stopping.inner_valid_explicit).toBe(true);
+    expect(payload.training.early_stopping.inner_valid).toEqual({
+      method: "holdout",
+      ratio: 0.2,
+    });
+  });
+
   // -------------------------------------------------------------------------
   // P-0090 / Issue #278 residual: useConfigSync must update the TanStack
   // Query cache atomically with its successful PUT, not only invalidate via
