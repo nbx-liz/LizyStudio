@@ -380,7 +380,7 @@ def merge_embargo_into_purge_gap(config: dict[str, Any]) -> dict[str, Any]:
         return config
     if split.get("method") != "purged_time_series":
         return config
-    if "gap" in split or "embargo_pct" in split:
+    if any(alias in split for alias in ("gap", "embargo_pct", "purge_window")):
         return config
     embargo = split["embargo"]
     purge_gap = split.get("purge_gap", 0)

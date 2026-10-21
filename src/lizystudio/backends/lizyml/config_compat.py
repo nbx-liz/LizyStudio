@@ -235,18 +235,17 @@ _STRATIFIED_SPLIT_METHODS = frozenset({"stratified_kfold", "stratified_group_kfo
 
 
 def _inner_valid_in_effect(early_stopping: Any) -> bool:
-    """Whether lizyml uses the configured ``inner_valid`` as written.
+    """Whether the configured ``inner_valid`` is explicit, as lizyml reads it.
 
-    With early stopping off lizyml builds no inner split.  Otherwise it uses
-    the configured one only when it is explicit, and resolves its own from
-    the outer split when not: lizyml 0.20 reads the ``inner_valid_explicit``
+    lizyml uses an explicit inner split as written and resolves its own from
+    the outer split otherwise: lizyml 0.20 reads the ``inner_valid_explicit``
     marker, and without the marker both versions treat an ``inner_valid``
     written beside ``validation_ratio`` as not explicit.  lizyml 0.20 refuses
-    a regression ``stratify`` on the same condition.
+    a regression ``stratify`` on exactly this condition, whether or not early
+    stopping is enabled (``core/_model_factories.py:230-236``), so a disabled
+    early stopping does not exempt it here either.
     """
     if not isinstance(early_stopping, dict):
-        return False
-    if early_stopping.get("enabled", True) is False:
         return False
     marker = early_stopping.get("inner_valid_explicit")
     if isinstance(marker, bool):

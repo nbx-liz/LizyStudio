@@ -60,6 +60,9 @@ class TestEmbargoIntoPurgeGap:
             {"purge_gap": -3, "embargo": 5},
             {"purge_gap": 2, "embargo": 3, "gap": 1},
             {"purge_gap": 2, "embargo": 3, "embargo_pct": 0.1},
+            # purge_window is lizyml's alias for purge_gap; rewriting would
+            # leave it beside a new purge_gap, which both versions refuse.
+            {"purge_window": 2, "embargo": 3},
         ],
     )
     def test_configs_lizyml_refuses_are_left_as_they_are(
@@ -145,6 +148,17 @@ class TestRegressionStratify:
             ("training", "early_stopping", "inner_valid", "stratify")
         ]
 
+    def test_explicit_stratify_is_refused_even_with_early_stopping_off(self) -> None:
+        # lizyml 0.20 refuses it before looking at enabled
+        # (core/_model_factories.py:230-236); the 422 must come first.
+        training = {
+            "early_stopping": {
+                "enabled": False,
+                "inner_valid": {"method": "holdout", "stratify": True},
+            }
+        }
+        assert len(_stratify_errors(_regression(training=training))) == 1
+
     def test_inner_valid_stratify_with_a_true_marker_is_refused(self) -> None:
         training = {
             "early_stopping": {
@@ -158,11 +172,6 @@ class TestRegressionStratify:
     @pytest.mark.parametrize(
         "early_stopping",
         [
-            # Early stopping off: lizyml builds no inner split at all.
-            {
-                "enabled": False,
-                "inner_valid": {"method": "holdout", "stratify": True},
-            },
             # lizyml 0.15 reads inner_valid beside validation_ratio as not
             # explicit and resolves the inner split itself.
             {
