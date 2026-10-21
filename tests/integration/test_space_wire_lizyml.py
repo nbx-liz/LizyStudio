@@ -143,7 +143,7 @@ def test_space_refusal_is_its_own_error(
 ) -> None:
     """lizyml's pre-trial space refusals surface by dim (P-0116 D1).
 
-    Each of the five refusal shapes lizyml 0.20 raises reaches the job as
+    Each refusal shape in the table reaches the job as
     :class:`SearchSpaceRefusedError`, from ``tune`` (not ``create_model``),
     before any trial is reported.
     """
@@ -158,3 +158,27 @@ def test_space_refusal_is_its_own_error(
     assert excinfo.value.dims == dims
     assert not [r for r in reports if r.get("trial_results")]
     assert all(r["current"] == 0 for r in reports)
+
+
+@pytest.mark.integration
+def test_smart_dimension_collision_is_a_space_refusal() -> None:
+    """A fixed name a smart dim of the space manages is refused by space (P-0116 D1).
+
+    With ``model.params.max_leaves`` fixed and ``auto_num_leaves`` off, a
+    smart ``auto_num_leaves`` dim that can turn it on is refused before any
+    trial.  lizyml locates the space in ``space_surface``, not ``surface``.
+    """
+    df = pd.read_csv(FIXTURE / "data.csv")
+    config = _tune_config(
+        {"auto_num_leaves": {"type": "categorical", "choices": [True, False]}},
+        n_trials=1,
+    )
+    config["model"]["auto_num_leaves"] = False
+    config["model"]["params"]["max_leaves"] = 31
+    backend = LizyMLAdapter()
+    model = backend.create_model(config, df)
+
+    with pytest.raises(SearchSpaceRefusedError) as excinfo:
+        backend.tune(model)
+
+    assert excinfo.value.dims == ("auto_num_leaves",)

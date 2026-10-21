@@ -385,6 +385,27 @@ class TestSearchSpaceRefused:
                 id="any-list-key-parameter-only",
             ),
             pytest.param(
+                # lizyml 0.20 _smart_combinations: a fixed model.params name a
+                # smart dim of the space manages in some trials.  The entry's
+                # surface is model.params; the space is in space_surface.
+                {
+                    "managed": [
+                        {
+                            "surface": "model.params",
+                            "name": "max_leaves",
+                            "canonical": "num_leaves",
+                            "smart_param": "auto_num_leaves",
+                            "smart_dimensions": ["auto_num_leaves"],
+                            "space_surface": _SPACE,
+                        }
+                    ],
+                    "space_surface": _SPACE,
+                    "smart_values": {"auto_num_leaves": True},
+                },
+                ("auto_num_leaves",),
+                id="smart-dimension-collision",
+            ),
+            pytest.param(
                 {
                     "task": "binary",
                     "objective": "regression",
