@@ -355,8 +355,8 @@ def _section_ok(parent: Any, name: str) -> bool:
     """Whether ``parent[name]`` is a dict or absent, so routing may write into it."""
     if not isinstance(parent, dict):
         return False
-    value = parent.get(name)
-    return value is None or isinstance(value, dict)
+    # An explicit null is a malformed section, not an absent one.
+    return name not in parent or isinstance(parent[name], dict)
 
 
 def to_wire_config(config: dict[str, Any]) -> dict[str, Any]:

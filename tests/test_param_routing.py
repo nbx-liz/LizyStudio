@@ -167,6 +167,8 @@ class TestRouting:
         ("training", "where"),
         [
             ("not-a-dict", "training"),
+            (None, "training"),
+            ({"seed": 1, "early_stopping": None}, "early_stopping"),
             ({"seed": 1, "early_stopping": "not-a-dict"}, "early_stopping"),
         ],
     )
