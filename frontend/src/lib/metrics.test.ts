@@ -19,9 +19,12 @@ const REGRESSION_METRIC_NAMES = [
   "huber",
   "mae",
   "mape",
+  "mase",
   "r2",
   "rmse",
   "rmsle",
+  "smape",
+  "wape",
 ] as const;
 
 describe("pivotMetrics", () => {
@@ -214,7 +217,7 @@ describe("pivotMetrics with real fit_result fixtures", () => {
     expect(result.auc.oos).toBe(rawOofAuc);
   });
 
-  it("pivots a real regression fit — 6 metrics, finite values", () => {
+  it("pivots a real regression fit — 9 metrics, finite values", () => {
     const result = pivotMetrics(regressionFit.metrics);
     for (const name of REGRESSION_METRIC_NAMES) {
       expect(result[name], `metric ${name} missing`).toBeDefined();

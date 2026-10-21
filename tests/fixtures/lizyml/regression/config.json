@@ -15,22 +15,23 @@
     "auto_categorical": true,
     "categorical": [
       "category"
-    ]
+    ],
+    "unseen_policy": "mode"
   },
   "split": {
     "method": "kfold",
     "n_splits": 5,
-    "random_state": 42,
     "shuffle": true
   },
   "model": {
     "name": "lgbm",
     "params": {
+      "objective": "regression",
       "metric": [
         "huber",
+        "mae",
         "mape"
-      ],
-      "objective": "huber"
+      ]
     },
     "auto_num_leaves": true,
     "num_leaves_ratio": 1,
@@ -40,7 +41,7 @@
     "balanced": null
   },
   "training": {
-    "seed": 42,
+    "seed": 1120,
     "early_stopping": {
       "enabled": true,
       "rounds": 150,
@@ -50,18 +51,20 @@
         "stratify": false,
         "random_state": 42
       },
-      "validation_ratio": 0.1
+      "inner_valid_explicit": false
     }
   },
-  "tuning": null,
   "evaluation": {
     "metrics": [
       "rmse",
       "huber",
       "mae",
       "mape",
+      "mase",
       "r2",
-      "rmsle"
+      "rmsle",
+      "smape",
+      "wape"
     ]
   },
   "calibration": null,

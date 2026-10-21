@@ -29,5 +29,5 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src", "tests/e2e", ".storybook/preview.tsx"]
+  "include": ["src", "tests/e2e", "tests/fixture-capture", ".storybook/preview.tsx"]
 }
