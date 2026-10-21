@@ -1460,3 +1460,86 @@ describe("DataPanel — handleTaskChange and handleExcludeToggle", () => {
     });
   });
 });
+
+// P-0116 child 3b: the parent must pass `task` down to CvSection and
+// BlockedGroupKFoldEditor, otherwise the regression filtering is inert.
+describe("DataPanel — regression task reaches the CV section", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  async function renderWithTask(task: "binary" | "regression") {
+    mockFetchConfig.mockResolvedValue({
+      task: null,
+      data: {},
+      features: {},
+      training: {},
+    });
+    mockFetchConfigDefaults.mockResolvedValue({
+      task,
+      data: {},
+      features: {},
+      split: {},
+    });
+    mockUpdateConfig.mockResolvedValue({ config: {}, errors: [] });
+
+    render(<DataPanel onDataChanged={vi.fn()} onTaskChanged={vi.fn()} />);
+    await loadDataViaPath();
+
+    mockFetchColumns.mockClear();
+    mockFetchColumns.mockResolvedValue({
+      columns: COLUMNS_BINARY,
+      suggested_task: task,
+      target: "target",
+    });
+    await selectTarget("target");
+    await waitFor(() => {
+      expect(screen.getByRole("radio", { name: task })).toBeChecked();
+    });
+  }
+
+  it("hides the stratified strategies once the task is regression", async () => {
+    await renderWithTask("regression");
+
+    expect(
+      screen.queryByRole("radio", { name: "StratifiedKFold" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("radio", { name: "StratifiedGroup" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "KFold" })).toBeChecked();
+  });
+
+  it("keeps the stratified strategies for a binary task", async () => {
+    await renderWithTask("binary");
+
+    expect(
+      screen.getByRole("radio", { name: "StratifiedKFold" }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole("radio", { name: "StratifiedGroup" }),
+    ).toBeInTheDocument();
+  });
+
+  it("hides the blocked-group Stratify block for a regression task", async () => {
+    await renderWithTask("regression");
+
+    await userEvent.click(screen.getByRole("radio", { name: "BlockedGroup" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("blocked-group-kfold-editor")).toBeVisible();
+    });
+    expect(screen.queryByText("Stratify")).not.toBeInTheDocument();
+  });
+
+  it("shows the blocked-group Stratify block for a binary task", async () => {
+    await renderWithTask("binary");
+
+    await userEvent.click(screen.getByRole("radio", { name: "BlockedGroup" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Stratify")).toBeInTheDocument();
+    });
+  });
+});

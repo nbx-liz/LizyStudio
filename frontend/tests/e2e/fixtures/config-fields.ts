@@ -437,35 +437,6 @@ const splitPurgeGap: FixtureEntry = {
   },
 };
 
-const splitEmbargo: FixtureEntry = {
-  spec: {
-    name: "split.embargo (purged_time_series) via Embargo NumberInput",
-    configPath: "split.embargo",
-    // Same precondition as purge_gap; both fields land together
-    // when the strategy switches to purged_time_series.
-    defaultValue: 0,
-    testValue: 1,
-    uiLocator: (p): Locator =>
-      p
-        .locator('label:text-is("Embargo")')
-        .locator("..")
-        .getByRole("textbox"),
-    uiAction: async (locator, value) => {
-      await locator.fill(String(value));
-      await locator.blur();
-    },
-  } as ConfigFieldSpec<unknown>,
-  precondition: async (page) => {
-    await switchToCvStrategy(
-      page,
-      "PurgedTimeSeries",
-      "Embargo",
-      "purged_time_series",
-      "embargo",
-    );
-  },
-};
-
 const splitTrainSizeMax: FixtureEntry = {
   spec: {
     name: "split.train_size_max (time_series) via Train Size Max NumberInput",
@@ -679,7 +650,6 @@ export const CONFIG_FIELD_FIXTURES: FixtureEntry[] = [
   tuningTimeout,
   splitGap,
   splitPurgeGap,
-  splitEmbargo,
   splitTrainSizeMax,
   splitTestSizeMax,
   calibrationMethod,

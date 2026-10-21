@@ -336,6 +336,44 @@ describe("BlockedGroupKFoldEditor", () => {
     expect(screen.getByTestId("seg-off")).toBeInTheDocument();
   });
 
+  it.each([["binary"], ["multiclass"], [undefined]])(
+    "renders the Stratify block when task=%s",
+    (task) => {
+      render(
+        <BlockedGroupKFoldEditor
+          cv={makeCvState()}
+          onChange={mockOnChange}
+          blocked={INITIAL_BLOCKED_STATE}
+          onBlockedChange={mockOnBlockedChange}
+          nonExcludedCols={sampleCols}
+          task={task}
+        />,
+      );
+
+      expect(screen.getByText("Stratify")).toBeInTheDocument();
+      expect(screen.getByTestId("seg-on")).toBeInTheDocument();
+    },
+  );
+
+  it("hides the Stratify block entirely for a regression task", () => {
+    render(
+      <BlockedGroupKFoldEditor
+        cv={makeCvState()}
+        onChange={mockOnChange}
+        blocked={INITIAL_BLOCKED_STATE}
+        onBlockedChange={mockOnBlockedChange}
+        nonExcludedCols={sampleCols}
+        task="regression"
+      />,
+    );
+
+    expect(screen.queryByText("Stratify")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("seg-on")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("seg-off")).not.toBeInTheDocument();
+    // Neighbouring controls are untouched.
+    expect(screen.getByText("Shuffle")).toBeInTheDocument();
+  });
+
   it("calls onChange when shuffle is toggled", async () => {
     const user = userEvent.setup();
 

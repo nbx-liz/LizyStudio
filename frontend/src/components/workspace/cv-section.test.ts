@@ -12,6 +12,8 @@ import {
   recommendedInnerValid,
   resetCvState,
 } from "./CvSection";
+import { STRATIFIED_CV_STRATEGIES } from "./constants";
+import { FALLBACK_CV_STRATEGY_FIELDS, parseSplitToCv } from "./cv-state";
 
 // C-5b Part 2 (H-0076): `cv_strategy_fields` comes from the backend
 // UiSchema at runtime. The map below mirrors what
@@ -33,7 +35,6 @@ const CV_STRATEGY_FIELDS: Record<string, readonly string[]> = {
     "n_splits",
     "time_col",
     "purge_gap",
-    "embargo",
     "train_size_max",
     "test_size_max",
   ],
@@ -67,7 +68,8 @@ describe("resetCvState", () => {
     expect(result.timeCol).toBeNull();
     expect(result.gap).toBe(INITIAL_CV_STATE.gap);
     expect(result.purgeGap).toBe(INITIAL_CV_STATE.purgeGap);
-    expect(result.embargo).toBe(INITIAL_CV_STATE.embargo);
+    expect(result).not.toHaveProperty("embargo");
+    expect(result.mergedEmbargo).toBeUndefined();
     expect(result.trainSizeMax).toBeUndefined();
     expect(result.testSizeMax).toBeUndefined();
     expect(result.minTrainRows).toBeUndefined();
@@ -262,21 +264,20 @@ describe("buildSplitConfig", () => {
       expect(result).not.toHaveProperty("time_col");
     });
 
-    it("purged_time_series includes purge_gap, embargo", () => {
+    it("purged_time_series includes purge_gap and never emits embargo", () => {
       const cv: CvState = {
         ...INITIAL_CV_STATE,
         strategy: "purged_time_series",
         folds: 3,
         timeCol: "ts",
         purgeGap: 5,
-        embargo: 10,
         trainSizeMax: 500,
         testSizeMax: 100,
       };
       const result = buildSplitConfig(cv);
       expect(result.method).toBe("purged_time_series");
       expect(result.purge_gap).toBe(5);
-      expect(result.embargo).toBe(10);
+      expect(result).not.toHaveProperty("embargo");
       expect(result.train_size_max).toBe(500);
       expect(result.test_size_max).toBe(100);
       expect(result).not.toHaveProperty("gap");
@@ -549,19 +550,19 @@ describe("buildSplitConfig", () => {
     });
 
     it("skips fields that SSOT does not list even if CvState provides values", () => {
-      // SSOT says only n_splits; embargo value is discarded.
+      // SSOT says only n_splits; the purge_gap value is discarded.
       const cv: CvState = {
         ...INITIAL_CV_STATE,
         strategy: "purged_time_series",
         folds: 3,
-        embargo: 99,
+        purgeGap: 99,
       };
       const result = buildSplitConfig(cv, undefined, ["n_splits"]);
       expect(result).toEqual({
         method: "purged_time_series",
         n_splits: 3,
       });
-      expect(result).not.toHaveProperty("embargo");
+      expect(result).not.toHaveProperty("purge_gap");
     });
   });
 });
@@ -715,5 +716,104 @@ describe("applyCvDataFields", () => {
     };
     const result = applyCvDataFields(data, cv);
     expect(result).toEqual(data);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P-0116 child 3b: a legacy embargo is folded into purge_gap on read
+// ---------------------------------------------------------------------------
+describe("parseSplitToCv embargo folding", () => {
+  it("adds a legacy embargo to purge_gap (3 + 2 = 5)", () => {
+    const out = parseSplitToCv({
+      method: "purged_time_series",
+      purge_gap: 3,
+      embargo: 2,
+    });
+    expect(out.purgeGap).toBe(5);
+    expect(out.mergedEmbargo).toBe(2);
+    expect(out).not.toHaveProperty("embargo");
+  });
+
+  it("uses embargo alone as purge_gap when purge_gap is absent", () => {
+    const out = parseSplitToCv({ method: "purged_time_series", embargo: 2 });
+    expect(out.purgeGap).toBe(2);
+    expect(out.mergedEmbargo).toBe(2);
+  });
+
+  it("leaves purge_gap untouched when neither purge_gap nor embargo is a number", () => {
+    const out = parseSplitToCv({
+      method: "purged_time_series",
+      purge_gap: "3",
+      embargo: null,
+    });
+    expect(out).not.toHaveProperty("purgeGap");
+    expect(out).not.toHaveProperty("mergedEmbargo");
+  });
+
+  it("reads purge_gap as-is and sets no hint when there is no embargo", () => {
+    const out = parseSplitToCv({ method: "purged_time_series", purge_gap: 4 });
+    expect(out.purgeGap).toBe(4);
+    expect(out).not.toHaveProperty("mergedEmbargo");
+  });
+
+  it("sets no hint for a zero embargo but keeps purge_gap", () => {
+    const out = parseSplitToCv({ purge_gap: 4, embargo: 0 });
+    expect(out.purgeGap).toBe(4);
+    expect(out).not.toHaveProperty("mergedEmbargo");
+  });
+
+  it("is idempotent once the folded value has been written back without embargo", () => {
+    const first = parseSplitToCv({ purge_gap: 3, embargo: 2 });
+    const written = buildSplitConfig({
+      ...INITIAL_CV_STATE,
+      strategy: "purged_time_series",
+      ...first,
+    });
+    const second = parseSplitToCv(written);
+    expect(second.purgeGap).toBe(5);
+    expect(second).not.toHaveProperty("mergedEmbargo");
+  });
+
+  it("buildSplitConfig never emits embargo even when the schema lists it", () => {
+    const cv: CvState = {
+      ...INITIAL_CV_STATE,
+      strategy: "purged_time_series",
+      purgeGap: 5,
+      mergedEmbargo: 2,
+    };
+    const result = buildSplitConfig(cv, undefined, [
+      "n_splits",
+      "purge_gap",
+      "embargo",
+    ]);
+    expect(result).not.toHaveProperty("embargo");
+    expect(result.purge_gap).toBe(5);
+  });
+
+  it("resetCvState clears the transient merged-embargo hint", () => {
+    expect(resetCvState("purged_time_series").mergedEmbargo).toBeUndefined();
+  });
+
+  it("FALLBACK_CV_STRATEGY_FIELDS.purged_time_series no longer lists embargo", () => {
+    expect(FALLBACK_CV_STRATEGY_FIELDS.purged_time_series).not.toContain(
+      "embargo",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P-0116 child 3b: stratified strategies are an exact-member set
+// ---------------------------------------------------------------------------
+describe("STRATIFIED_CV_STRATEGIES", () => {
+  it("contains exactly stratified_kfold and stratified_group_kfold", () => {
+    expect([...STRATIFIED_CV_STRATEGIES].sort()).toEqual([
+      "stratified_group_kfold",
+      "stratified_kfold",
+    ]);
+  });
+
+  it("does not match by prefix", () => {
+    expect(STRATIFIED_CV_STRATEGIES.has("stratified_future_thing")).toBe(false);
+    expect(STRATIFIED_CV_STRATEGIES.has("kfold")).toBe(false);
   });
 });

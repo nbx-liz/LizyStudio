@@ -10,7 +10,10 @@ import { act, renderHook } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ColumnInfo, ColumnsResponse, UiSchema } from "@/api/types";
-import { INITIAL_BLOCKED_STATE } from "@/components/workspace/BlockedGroupKFoldEditor";
+import {
+  type BlockedGroupKFoldState,
+  INITIAL_BLOCKED_STATE,
+} from "@/components/workspace/BlockedGroupKFoldEditor";
 import {
   type CvState,
   INITIAL_CV_STATE,
@@ -77,9 +80,11 @@ function fn<A extends unknown[] = never[]>(): Fn<A> {
 
 interface HookDeps {
   uiSchema?: UiSchema;
+  blocked?: BlockedGroupKFoldState;
   setTarget: Fn<[string]>;
   setTask: Fn<[string]>;
   setCv: Fn<[CvState]>;
+  setBlocked: Fn<[BlockedGroupKFoldState]>;
   setColumns: Fn<[ColumnInfo[]]>;
   setOverrides: Fn<[Record<string, unknown>]>;
   setSyncSuppressed: Fn<[boolean]>;
@@ -93,6 +98,7 @@ function setupHook(overrides: Partial<HookDeps> = {}) {
     setTarget: fn(),
     setTask: fn(),
     setCv: fn(),
+    setBlocked: fn(),
     setColumns: fn(),
     setOverrides: fn(),
     setSyncSuppressed: fn(),
@@ -106,12 +112,13 @@ function setupHook(overrides: Partial<HookDeps> = {}) {
       useTargetSelection({
         task: null,
         cv: INITIAL_CV_STATE,
-        blocked: INITIAL_BLOCKED_STATE,
+        blocked: deps.blocked ?? INITIAL_BLOCKED_STATE,
         dataPath: "/data/x.csv",
         uiSchema: deps.uiSchema,
         setTarget: deps.setTarget,
         setTask: deps.setTask,
         setCv: deps.setCv,
+        setBlocked: deps.setBlocked,
         setColumns: deps.setColumns,
         setOverrides: deps.setOverrides,
         setSyncSuppressed: deps.setSyncSuppressed,
@@ -208,5 +215,63 @@ describe("useTargetSelection", () => {
 
     const setCvCall = deps.setCv.mock.calls.at(-1)?.[0];
     expect(setCvCall?.strategy).toBe("group_kfold");
+  });
+
+  describe("P-0116 child 3b: regression resets blocked.stratify", () => {
+    const DEFAULTS = {
+      config_version: 1,
+      task: "binary",
+      data: {},
+      features: {},
+      split: { method: "kfold", n_splits: 5 },
+      model: { name: "lgbm", params: {} },
+    };
+    const STRATIFY_ON = { ...INITIAL_BLOCKED_STATE, stratify: "on" } as const;
+
+    beforeEach(() => {
+      mocks.fetchConfigDefaults.mockResolvedValue(DEFAULTS);
+      mocks.updateConfig.mockResolvedValue(undefined);
+    });
+
+    it("resets stratify to auto when the suggested task is regression", async () => {
+      mocks.fetchColumns.mockResolvedValue({
+        ...COLS_OK,
+        suggested_task: "regression",
+      });
+      const { result, deps } = setupHook({ blocked: STRATIFY_ON });
+
+      await act(async () => {
+        await result.current.handleTargetChange("a");
+      });
+
+      expect(deps.setBlocked).toHaveBeenCalledTimes(1);
+      expect(deps.setBlocked.mock.calls[0][0].stratify).toBe("auto");
+      expect(deps.setCv.mock.calls.at(-1)?.[0].strategy).toBe("kfold");
+    });
+
+    it("leaves stratify alone when the suggested task is classification", async () => {
+      mocks.fetchColumns.mockResolvedValue(COLS_OK);
+      const { result, deps } = setupHook({ blocked: STRATIFY_ON });
+
+      await act(async () => {
+        await result.current.handleTargetChange("a");
+      });
+
+      expect(deps.setBlocked).not.toHaveBeenCalled();
+    });
+
+    it("does not touch blocked state that is already auto", async () => {
+      mocks.fetchColumns.mockResolvedValue({
+        ...COLS_OK,
+        suggested_task: "regression",
+      });
+      const { result, deps } = setupHook();
+
+      await act(async () => {
+        await result.current.handleTargetChange("a");
+      });
+
+      expect(deps.setBlocked).not.toHaveBeenCalled();
+    });
   });
 });

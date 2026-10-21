@@ -51,7 +51,6 @@ export const FALLBACK_CV_STRATEGY_FIELDS: Record<string, readonly string[]> = {
     "n_splits",
     "time_col",
     "purge_gap",
-    "embargo",
     "train_size_max",
     "test_size_max",
   ],
@@ -96,7 +95,6 @@ export const CV_FIELD_DEFAULTS = {
   shuffle: true,
   gap: 0,
   purge_gap: 0,
-  embargo: 0,
 } as const;
 
 export interface CvState {
@@ -108,7 +106,12 @@ export interface CvState {
   timeCol: string | null;
   gap: number | undefined;
   purgeGap: number | undefined;
-  embargo: number | undefined;
+  /**
+   * Transient: a legacy `embargo` value that `parseSplitToCv` folded into
+   * `purgeGap`. Drives a hint only and is never written back to the config.
+   * Cleared on a purge-gap edit and by `resetCvState`.
+   */
+  mergedEmbargo?: number;
   trainSizeMax: number | undefined;
   testSizeMax: number | undefined;
   minTrainRows: number | undefined;
@@ -124,7 +127,6 @@ export const INITIAL_CV_STATE: CvState = {
   timeCol: null,
   gap: CV_FIELD_DEFAULTS.gap,
   purgeGap: CV_FIELD_DEFAULTS.purge_gap,
-  embargo: CV_FIELD_DEFAULTS.embargo,
   trainSizeMax: undefined,
   testSizeMax: undefined,
   minTrainRows: undefined,
@@ -259,9 +261,6 @@ export function buildSplitConfig(
   if (active.includes("purge_gap") && cv.purgeGap !== undefined) {
     split.purge_gap = cv.purgeGap;
   }
-  if (active.includes("embargo") && cv.embargo !== undefined) {
-    split.embargo = cv.embargo;
-  }
   if (active.includes("train_size_max") && cv.trainSizeMax !== undefined) {
     split.train_size_max = cv.trainSizeMax;
   }
@@ -363,8 +362,19 @@ export function parseSplitToCv(
     out.randomState = split.random_state;
   if (typeof split.shuffle === "boolean") out.shuffle = split.shuffle;
   if (typeof split.gap === "number") out.gap = split.gap;
-  if (typeof split.purge_gap === "number") out.purgeGap = split.purge_gap;
-  if (typeof split.embargo === "number") out.embargo = split.embargo;
+  // P-0116 child 3b: lizyml dropped `embargo`. A legacy value is folded into
+  // purge_gap (the two were additive) and is never emitted again. purgeGap is
+  // left untouched when neither key holds a number.
+  const legacyPurgeGap =
+    typeof split.purge_gap === "number" ? split.purge_gap : undefined;
+  const legacyEmbargo =
+    typeof split.embargo === "number" ? split.embargo : undefined;
+  if (legacyPurgeGap !== undefined || legacyEmbargo !== undefined) {
+    out.purgeGap = (legacyPurgeGap ?? 0) + (legacyEmbargo ?? 0);
+    if (legacyEmbargo !== undefined && legacyEmbargo > 0) {
+      out.mergedEmbargo = legacyEmbargo;
+    }
+  }
   if (typeof split.train_size_max === "number")
     out.trainSizeMax = split.train_size_max;
   if (typeof split.test_size_max === "number")
