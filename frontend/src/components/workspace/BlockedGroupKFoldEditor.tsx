@@ -64,6 +64,11 @@ export interface BlockedGroupKFoldEditorProps {
    * elements and inherit the fieldset disabled attribute.
    */
   disabled?: boolean;
+  /**
+   * P-0116 child 3b: for a regression task the group-level Stratify block
+   * is not rendered (stratification needs a classification target).
+   */
+  task?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -77,6 +82,7 @@ export function BlockedGroupKFoldEditor({
   onBlockedChange,
   nonExcludedCols,
   disabled = false,
+  task,
 }: BlockedGroupKFoldEditorProps) {
   const [blockStats, setBlockStats] = useState<ColumnStatsResponse | null>(
     null,
@@ -379,20 +385,22 @@ export function BlockedGroupKFoldEditor({
           />
         </div>
 
-        {/* Stratify */}
-        <div className="space-y-1">
-          <Label className="text-xs font-medium text-muted-foreground">
-            Stratify
-          </Label>
-          <SegmentGroup
-            options={["auto", "on", "off"]}
-            value={blocked.stratify}
-            onChange={(v) =>
-              updateBlocked({ stratify: v as "auto" | "on" | "off" })
-            }
-            labels={{ auto: "Auto", on: "On", off: "Off" }}
-          />
-        </div>
+        {/* Stratify (hidden for regression; stratify stays "auto") */}
+        {task !== "regression" && (
+          <div className="space-y-1">
+            <Label className="text-xs font-medium text-muted-foreground">
+              Stratify
+            </Label>
+            <SegmentGroup
+              options={["auto", "on", "off"]}
+              value={blocked.stratify}
+              onChange={(v) =>
+                updateBlocked({ stratify: v as "auto" | "on" | "off" })
+              }
+              labels={{ auto: "Auto", on: "On", off: "Off" }}
+            />
+          </div>
+        )}
 
         {/* Shuffle */}
         <div className="flex items-center gap-2">

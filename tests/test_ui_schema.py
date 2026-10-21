@@ -586,7 +586,7 @@ class TestLizyMLAdapterUiSchema:
         conditional-field rendering. Every strategy enumerates **all**
         UI-visible inputs — generic (``n_splits``, ``random_state``,
         ``shuffle``) plus strategy-specific (``time_col``, ``group_col``,
-        ``gap``, ``purge_gap``, ``embargo``, ``train_size_max``,
+        ``gap``, ``purge_gap``, ``train_size_max``,
         ``test_size_max``, ``min_train_rows``, ``min_valid_rows``).
 
         Wire-format keys (``max_train_size`` etc.) must NOT leak into
@@ -624,7 +624,6 @@ class TestLizyMLAdapterUiSchema:
                 "n_splits",
                 "time_col",
                 "purge_gap",
-                "embargo",
                 "train_size_max",
                 "test_size_max",
             ],

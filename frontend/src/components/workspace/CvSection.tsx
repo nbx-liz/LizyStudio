@@ -17,7 +17,7 @@ import {
 
 export { type BlockedGroupKFoldState, INITIAL_BLOCKED_STATE };
 
-import { CV_STRATEGY_LABELS } from "./constants";
+import { CV_STRATEGY_LABELS, STRATIFIED_CV_STRATEGIES } from "./constants";
 import { NullableNumberField } from "./NullableNumberField";
 import { NumberInput } from "./NumberInput";
 import { SegmentGroup } from "./SegmentGroup";
@@ -65,6 +65,12 @@ interface CvSectionProps {
    * created with.
    */
   disabled?: boolean;
+  /**
+   * P-0116 child 3b: task type. For a regression task the stratified
+   * strategies are hidden (not disabled) and the blocked-group Stratify
+   * block is dropped. Undefined shows everything.
+   */
+  task?: string;
 }
 
 export function CvSection({
@@ -76,12 +82,21 @@ export function CvSection({
   onBlockedChange,
   nRows,
   disabled = false,
+  task,
 }: CvSectionProps) {
-  const availableStrategies = useMemo(
-    () =>
-      uiSchema?.capabilities?.cv_strategies ?? Object.keys(CV_STRATEGY_LABELS),
-    [uiSchema],
-  );
+  const isRegression = task === "regression";
+  const availableStrategies = useMemo(() => {
+    const all =
+      uiSchema?.capabilities?.cv_strategies ?? Object.keys(CV_STRATEGY_LABELS);
+    if (!isRegression) return all;
+    // Keep a currently selected stratified strategy (a loaded preset or an
+    // undo can pair regression with one) so the radiogroup stays checked.
+    return all.filter(
+      (s) => !STRATIFIED_CV_STRATEGIES.has(s) || s === cv.strategy,
+    );
+  }, [uiSchema, isRegression, cv.strategy]);
+  const stratifiedMismatch =
+    isRegression && STRATIFIED_CV_STRATEGIES.has(cv.strategy);
 
   const activeFields = useMemo(() => {
     const fromSchema =
@@ -121,6 +136,12 @@ export function CvSection({
           labels={CV_STRATEGY_LABELS}
           disabled={disabled}
         />
+        {stratifiedMismatch && (
+          <p role="alert" className="text-xs text-destructive">
+            Stratified strategies need a classification target. Pick another
+            strategy.
+          </p>
+        )}
       </div>
 
       {/* BlockedGroupKFold: dedicated 2-axis editor */}
@@ -132,6 +153,7 @@ export function CvSection({
           onBlockedChange={onBlockedChange}
           nonExcludedCols={nonExcludedCols}
           disabled={disabled}
+          task={task}
         />
       )}
 
@@ -248,19 +270,14 @@ export function CvSection({
         <NullableNumberField
           label="Purge Gap"
           value={cv.purgeGap}
-          onChange={(v) => update({ purgeGap: v })}
+          onChange={(v) => update({ purgeGap: v, mergedEmbargo: undefined })}
           placeholder="0"
           disabled={disabled}
-        />
-      )}
-
-      {cv.strategy !== "blocked_group_kfold" && has("embargo") && (
-        <NullableNumberField
-          label="Embargo"
-          value={cv.embargo}
-          onChange={(v) => update({ embargo: v })}
-          placeholder="0"
-          disabled={disabled}
+          hint={
+            cv.mergedEmbargo !== undefined
+              ? `Includes legacy embargo of ${cv.mergedEmbargo}, now merged into purge gap.`
+              : undefined
+          }
         />
       )}
 

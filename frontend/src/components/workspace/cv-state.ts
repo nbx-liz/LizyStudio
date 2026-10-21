@@ -51,7 +51,6 @@ export const FALLBACK_CV_STRATEGY_FIELDS: Record<string, readonly string[]> = {
     "n_splits",
     "time_col",
     "purge_gap",
-    "embargo",
     "train_size_max",
     "test_size_max",
   ],
@@ -96,7 +95,6 @@ export const CV_FIELD_DEFAULTS = {
   shuffle: true,
   gap: 0,
   purge_gap: 0,
-  embargo: 0,
 } as const;
 
 export interface CvState {
@@ -108,7 +106,21 @@ export interface CvState {
   timeCol: string | null;
   gap: number | undefined;
   purgeGap: number | undefined;
-  embargo: number | undefined;
+  /**
+   * Transient: a legacy `embargo` value that `parseSplitToCv` folded into
+   * `purgeGap`. Drives a hint only and is never written back to the config.
+   * Cleared on a purge-gap edit and by `resetCvState`.
+   */
+  mergedEmbargo?: number;
+  /**
+   * A legacy `embargo` outside the plain form that `parseSplitToCv` folds
+   * (an alias beside it, or a value that is not a non-negative integer).
+   * Its value is carried and written back for `purged_time_series`, so an
+   * embargo lizyml refuses is not turned into a valid purge gap. The rest
+   * of such a split is written as the editor represents it, as before
+   * P-0116: aliases are not written. No input edits it.
+   */
+  legacyEmbargo?: unknown;
   trainSizeMax: number | undefined;
   testSizeMax: number | undefined;
   minTrainRows: number | undefined;
@@ -124,7 +136,6 @@ export const INITIAL_CV_STATE: CvState = {
   timeCol: null,
   gap: CV_FIELD_DEFAULTS.gap,
   purgeGap: CV_FIELD_DEFAULTS.purge_gap,
-  embargo: CV_FIELD_DEFAULTS.embargo,
   trainSizeMax: undefined,
   testSizeMax: undefined,
   minTrainRows: undefined,
@@ -259,8 +270,8 @@ export function buildSplitConfig(
   if (active.includes("purge_gap") && cv.purgeGap !== undefined) {
     split.purge_gap = cv.purgeGap;
   }
-  if (active.includes("embargo") && cv.embargo !== undefined) {
-    split.embargo = cv.embargo;
+  if (cv.strategy === "purged_time_series" && cv.legacyEmbargo !== undefined) {
+    split.embargo = cv.legacyEmbargo;
   }
   if (active.includes("train_size_max") && cv.trainSizeMax !== undefined) {
     split.train_size_max = cv.trainSizeMax;
@@ -340,6 +351,24 @@ export function applyCvDataFields(
   return result;
 }
 
+const isCount = (v: unknown): boolean =>
+  typeof v === "number" && Number.isInteger(v) && v >= 0;
+
+/**
+ * The predicate of the backend's `merge_embargo_into_purge_gap` (child 3a):
+ * no legacy alias beside `embargo`, and `embargo` and `purge_gap` (absent
+ * counts as 0) are non-negative integers. Only this form is folded, so the
+ * purge gap the UI shows is the one lizyml runs with.
+ */
+function isPlainEmbargoForm(split: Record<string, unknown>): boolean {
+  if (["gap", "embargo_pct", "purge_window"].some((k) => k in split)) {
+    return false;
+  }
+  // Only an absent purge_gap counts as 0; an explicit null does not.
+  const purgeGap = "purge_gap" in split ? split.purge_gap : 0;
+  return isCount(split.embargo) && isCount(purgeGap);
+}
+
 /** Inverse of {@link buildSplitConfig} — read the CvState slice that an
  * external write has stored in the cached config back into local state.
  *
@@ -364,7 +393,21 @@ export function parseSplitToCv(
   if (typeof split.shuffle === "boolean") out.shuffle = split.shuffle;
   if (typeof split.gap === "number") out.gap = split.gap;
   if (typeof split.purge_gap === "number") out.purgeGap = split.purge_gap;
-  if (typeof split.embargo === "number") out.embargo = split.embargo;
+  // P-0116 child 3b: lizyml dropped `embargo`. The plain form is folded into
+  // purge_gap (the two were additive) and never emitted again; any other form
+  // is carried verbatim (see CvState.legacyEmbargo).
+  if (split.method === "purged_time_series") {
+    out.legacyEmbargo = undefined;
+    if ("embargo" in split) {
+      if (isPlainEmbargoForm(split)) {
+        const embargo = split.embargo as number;
+        out.purgeGap = ((split.purge_gap as number | undefined) ?? 0) + embargo;
+        if (embargo > 0) out.mergedEmbargo = embargo;
+      } else {
+        out.legacyEmbargo = split.embargo;
+      }
+    }
+  }
   if (typeof split.train_size_max === "number")
     out.trainSizeMax = split.train_size_max;
   if (typeof split.test_size_max === "number")

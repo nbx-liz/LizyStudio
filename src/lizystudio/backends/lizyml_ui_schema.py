@@ -603,8 +603,9 @@ def build_ui_schema() -> dict[str, Any]:
                 "purged_time_series": [
                     "n_splits",
                     "time_col",
+                    # P-0116 D5: ``embargo`` is not offered; the adapter
+                    # folds a legacy value into ``purge_gap``.
                     "purge_gap",
-                    "embargo",
                     "train_size_max",
                     "test_size_max",
                 ],
