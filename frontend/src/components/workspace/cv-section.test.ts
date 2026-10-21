@@ -843,8 +843,13 @@ describe("parseSplitToCv fold predicate mirrors the backend", () => {
     }
   });
 
+  // The carry keeps embargo's own value. The rest of the written split is
+  // what the editor can represent, exactly as before this PR: an alias
+  // (gap / embargo_pct / purge_window) is not written, and a purge_gap that
+  // is not a number is replaced by the editor's current value (here the
+  // initial 0). The whole split is pinned so that boundary stays visible.
   it.each(notFolded.filter(([, split]) => split.method === PURGED))(
-    "carries embargo verbatim for %s and writes it back unchanged",
+    "carries embargo's value for %s; the rest is what the editor represents",
     (_label, split) => {
       const out = parseSplitToCv(split);
       expect(out.legacyEmbargo).toBe(split.embargo);
@@ -853,9 +858,28 @@ describe("parseSplitToCv fold predicate mirrors the backend", () => {
         strategy: PURGED,
         ...out,
       });
-      expect(written.embargo).toBe(split.embargo);
+      expect(written).toEqual({
+        method: PURGED,
+        n_splits: INITIAL_CV_STATE.folds,
+        purge_gap:
+          typeof split.purge_gap === "number"
+            ? split.purge_gap
+            : INITIAL_CV_STATE.purgeGap,
+        embargo: split.embargo,
+      });
     },
   );
+
+  // JSON.parse cannot tell 3.0 from 3, so an integral float folds here while
+  // the backend's isinstance(int) check forwards it unfolded. lizyml's
+  // pydantic coerces 3.0 to 3, so the gap lizyml runs with is the same.
+  it("folds an integral float like an integer (same effective gap)", () => {
+    const out = parseSplitToCv(
+      JSON.parse('{"method":"purged_time_series","purge_gap":2,"embargo":3.0}'),
+    );
+    expect(out.purgeGap).toBe(5);
+    expect(out.legacyEmbargo).toBeUndefined();
+  });
 
   it("does not carry embargo for another method (unchanged from before)", () => {
     const out = parseSplitToCv({

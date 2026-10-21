@@ -115,9 +115,10 @@ export interface CvState {
   /**
    * A legacy `embargo` outside the plain form that `parseSplitToCv` folds
    * (an alias beside it, or a value that is not a non-negative integer).
-   * Carried verbatim and written back for `purged_time_series`, so the
-   * backend forwards to lizyml exactly what was stored (child 3a leaves
-   * these forms unchanged too). No input edits it.
+   * Its value is carried and written back for `purged_time_series`, so an
+   * embargo lizyml refuses is not turned into a valid purge gap. The rest
+   * of such a split is written as the editor represents it, as before
+   * P-0116: aliases are not written. No input edits it.
    */
   legacyEmbargo?: unknown;
   trainSizeMax: number | undefined;
