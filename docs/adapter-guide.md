@@ -148,6 +148,14 @@ def verify_checkpoint_compatibility(self, job_dir: Any) -> None:
     PICKLE_INCOMPATIBLE error instead of a deserialisation crash.
     """
 
+def verify_study_continuable(self, storage: str, study_name: str) -> None:
+    """Raise CheckpointIncompatibleError for a study tune(resume=True) refuses.
+
+    Issued by POST /jobs/{id}/unpause before the relaunch (P-0116 D4), so
+    a study the backend cannot continue is refused with
+    PICKLE_INCOMPATIBLE while the job stays paused.
+    """
+
 def preflight_checkpoint_dir(self, job_dir: Any) -> None:
     """Verify writability + picklable model state before tune starts.
 

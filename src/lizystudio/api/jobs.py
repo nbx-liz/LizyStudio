@@ -26,6 +26,8 @@ from lizystudio.api.errors import (
     PlotNotAvailableError,
     StudioError,
     WorkspaceNoDataError,
+    pickle_incompatible_from,
+    refit_required_from,
 )
 from lizystudio.api.models import (
     CancelJobResponse,
@@ -40,7 +42,13 @@ from lizystudio.api.models import (
     UnpauseJobResponse,
 )
 from lizystudio.backends.exceptions import (
+    CheckpointIncompatibleError,
+)
+from lizystudio.backends.exceptions import (
     PlotNotAvailableError as _BackendPlotNotAvailable,
+)
+from lizystudio.backends.exceptions import (
+    RefitRequiredError as _BackendRefitRequired,
 )
 from lizystudio.services.export import export_code_as_zip, export_model, export_report
 from lizystudio.services.jobs import (
@@ -55,7 +63,7 @@ from lizystudio.services.jobs import (
     get_metrics_table,
     get_split_summary,
 )
-from lizystudio.services.training import start_tune_async
+from lizystudio.services.training import start_tune_async, verify_unpause_study
 from lizystudio.services.workspace import WorkspaceState, get_workspace
 from lizystudio.ws.progress import ProgressBroadcaster
 
@@ -334,7 +342,10 @@ def unpause_job(
     from the stored study's rounds (P-0116 D3): it finishes an open
     round, runs the planned rounds that have not started, or restores
     the stored result without running a trial when every planned round
-    is done. A study it cannot continue fails the job. Slot
+    is done. A study it cannot continue (one lizyml 0.15 wrote, an
+    unreadable or an inconsistent one) is refused with 400
+    ``PICKLE_INCOMPATIBLE`` before the relaunch, and the job stays
+    paused (P-0116 D4). Slot
     ownership stays with the original job_id from paused into running
     (paused→running is a legal INV-3 transition), so the active-slot
     lock is never released across the round-trip.
@@ -362,6 +373,12 @@ def unpause_job(
     from lizystudio.api.workspace import require_relaunchable_config
 
     require_relaunchable_config(ws, job.config)
+    # P-0116 D4: a study the adapter cannot continue (e.g. one lizyml 0.15
+    # wrote) is refused here, with the job still paused, not by failing it.
+    try:
+        verify_unpause_study(backend=ws.backend, job_store=job_store, job=job)
+    except CheckpointIncompatibleError as exc:
+        raise pickle_incompatible_from(job_id, exc) from exc
 
     # Clear the pause flag BEFORE re-launching so the cb does not
     # immediately raise PausedError again on its first observation.
@@ -436,6 +453,8 @@ def get_job_importance_endpoint(
         result = get_importance(
             job, ws.backend, job_store.model_cache, kind=kind, top_n=top_n
         )
+    except _BackendRefitRequired as exc:
+        raise refit_required_from(exc) from exc
     except Exception as exc:
         raise BackendError(exc) from exc
 
@@ -566,6 +585,8 @@ def get_job_plot_endpoint(
         # Issue #355: 404 (client asked for an unsupported plot)
         # rather than 500 (genuine backend failure).
         raise PlotNotAvailableError(exc.plot_type, exc.available) from exc
+    except _BackendRefitRequired as exc:
+        raise refit_required_from(exc) from exc
     except Exception as exc:
         raise BackendError(exc) from exc
 
@@ -669,6 +690,8 @@ def export_code(
         raise JobNotCompletedError(job_id)
     try:
         zip_path = export_code_as_zip(job=job, backend=ws.backend)
+    except _BackendRefitRequired as exc:
+        raise refit_required_from(exc) from exc
     except Exception as exc:
         raise BackendError(exc) from exc
     # Schedule cleanup of the temporary ZIP file after the response is sent

@@ -641,7 +641,10 @@ export interface paths {
          *     from the stored study's rounds (P-0116 D3): it finishes an open
          *     round, runs the planned rounds that have not started, or restores
          *     the stored result without running a trial when every planned round
-         *     is done. A study it cannot continue fails the job. Slot
+         *     is done. A study it cannot continue (one lizyml 0.15 wrote, an
+         *     unreadable or an inconsistent one) is refused with 400
+         *     ``PICKLE_INCOMPATIBLE`` before the relaunch, and the job stays
+         *     paused (P-0116 D4). Slot
          *     ownership stays with the original job_id from paused into running
          *     (paused→running is a legal INV-3 transition), so the active-slot
          *     lock is never released across the round-trip.

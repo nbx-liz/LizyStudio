@@ -4930,5 +4930,14 @@ lock を上げた時点で Tune がすべて失敗する。そのため、lock �
       - round 1 で失敗した親: checkpoint の study が無いので、`TUNING_FAILED` になる。
       - round 2 以降の途中で止まった親: open な round に `n_trials` を渡すので、`CONFIG_INVALID` になる。
       - どちらも #733 で扱う。#733 には、閉じた round（failed か completed）から再開すると計画に無い round が始まる場合も含めた。`/retune` は子 PR 4 の受け入れ（retune-flow の E2E）で確かめた。
-    - **`tuning.re_tune` が job に届かない（owner、2026-10-21、決定カード D-20261021-023）:** HTTP 経由の Tune では、`absorb_legacy_tuning` が `tuning` を `TuningOverrides` に移す。`TuningOverrides` には `re_tune` の欄が無い（`extra="forbid"`）。そのため、UI の Re-tune 設定が書いた `re_tune` は job まで届かない（以前からの DC4。#528 と同じ原因）。子 PR 6 はこのまま進め、round が複数ある unpause は integration テストだけで確かめる（E2E では作れない）。`re_tune` を保存できるようにする件は、共有型の変更なので別の Issue と Proposal で扱う。
+    - **`tuning.re_tune` が job に届かない（owner、2026-10-21、決定カード D-20261021-023）:** PUT /config（Tune タブの保存）と、`/tune` と `/fit` の body の設定では、`absorb_legacy_tuning` が `tuning` を `TuningOverrides` に移す（`api/workspace.py` の PUT /config、`workspace_fit`、`workspace_tune`）。PATCH /config と POST /config/upload は `re_tune` を残す（子 PR 7 で訂正。当初は「HTTP 経由の Tune では」と広く書いていた）。`TuningOverrides` には `re_tune` の欄が無い（`extra="forbid"`）。そのため、UI の Re-tune 設定が書いた `re_tune` は job まで届かない（以前からの DC4。#528 と同じ原因）。子 PR 6 はこのまま進め、round が複数ある unpause は integration テストだけで確かめる（E2E では作れない）。`re_tune` を保存できるようにする件は、共有型の変更なので別の Issue と Proposal で扱う。
     - **`restore_tuning` の扱いの明確化:** D-20261021-012 が「やめたもの」に挙げたのは、D2 の 3 つの辞書の出どころとして `restore_tuning` を使うことだけである。D3 の「すべての round が済んでいる」場合には `Model.restore_tuning` を使う。理由は、step の格子に合わせた値、複数 round の履歴、目的の同一性の検査が得られるからである。今の Optuna の `study.best_params` は、step のある次元では学習に使った値と一致しない。
+  - **子 PR 7 の決定（owner、2026-10-21、決定カード D-20261021-025）:** D4 の受理文は応答の形だけを決めていたので、次の 4 点を本 Decision の注記として加える。
+    - **unpause の拒否の置き場所:** `BackendCore` に `verify_study_continuable(storage, study_name)` を加える（`BackendAdapter` Protocol の追加）。unpause の route が job を起動する前に呼び、`CheckpointIncompatibleError` を `PICKLE_INCOMPATIBLE`（400）にする。job は paused のまま残る。
+      - pickle の版で判定する既存の `verify_checkpoint_compatibility` は使わない。D4 の条件（LizyML の記録が無い study）ではなく、次の lizyml の minor の更新で続けられる job まで拒否するからである。
+      - `optuna.db` が無い job は判定しない。`read_study_lineage` がファイルを作ってしまうため。
+    - **起動前に拒否する状態:** worker と同じ集合（`legacy`、`unreadable`、`inconsistent`、それと round 番号の無い `open`）。`study_continuation.require_continuable` を worker の `plan_continuation` と共有し、両者がずれないようにする。実測したのは `legacy` だけである（1/1。0.15 の study を 2 回読んでも `legacy` のままで、ファイルも変わらない）。
+    - **fixture:** Phase 1 で 0.15 のサーバが作った実物の job 3 件（Fit、Tune 済み、一時停止中の Tune。約 2.8 MB、log を除く）を `tests/fixtures/lizyml015/jobs/` に commit する。
+    - **エラーコード:** SHAP と export-code の拒否には、新しいコード `REFIT_REQUIRED`（400）を使う。`details` は `kind`、`names`、`recovery_hint`。
+      - export-code の判定は、保存されたモデルの設定（`config_normalized` の `model.params`）を読む。export 用の params は `seed` を常に持つので使わない（DC2）。判定の名前は D1 の対応表（`space_wire.names_routed_outside_model_params`）から取り、`route_model_params` と共有する。
+      - 判定を実装した後の firing rate: 0.15 の Tune 21/21、0.15 の Fit 0/123、0.20 の Fit 0/1、0.20 の Tune 0/29（この machine の全 job の `model/metadata.json` で再生、2026-10-21）。

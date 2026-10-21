@@ -25,6 +25,7 @@ from lizystudio.api.errors import (
     JobNotFoundError,
     PathNotFoundError,
     PlotNotAvailableError,
+    refit_required_from,
 )
 from lizystudio.api.models import (
     ComparisonStatsResponse,
@@ -37,6 +38,9 @@ from lizystudio.api.models import (
 )
 from lizystudio.backends.exceptions import (
     PlotNotAvailableError as _BackendPlotNotAvailable,
+)
+from lizystudio.backends.exceptions import (
+    RefitRequiredError as _BackendRefitRequired,
 )
 from lizystudio.security import read_upload_checked, validate_path_within
 from lizystudio.services.inference import (
@@ -249,6 +253,9 @@ def inference_plot(
         # Issue #355: 404 (client asked for an unsupported plot)
         # rather than 500 (genuine backend failure).
         raise PlotNotAvailableError(exc.plot_type, exc.available) from exc
+    except _BackendRefitRequired as exc:
+        # P-0116 D4: SHAP on a parent model lizyml 0.15 wrote.
+        raise refit_required_from(exc) from exc
     except Exception as exc:
         raise BackendError(exc) from exc
 

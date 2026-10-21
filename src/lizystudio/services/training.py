@@ -257,6 +257,27 @@ def _build_optuna_study_name(job_id: str) -> str:
     return f"studio-tune-{job_id}"
 
 
+def verify_unpause_study(
+    *, backend: BackendAdapter, job_store: JobStore, job: Job
+) -> None:
+    """Refuse an unpause whose stored study cannot be continued (P-0116 D4).
+
+    Runs before ``POST /jobs/{id}/unpause`` relaunches the job, through the
+    adapter's :meth:`verify_study_continuable`.  A job that never wrote its
+    ``optuna.db`` has no study to judge, and the read would create the file,
+    so it is skipped; the worker then starts the study as before.
+
+    Raises:
+        CheckpointIncompatibleError: from the adapter.
+    """
+    job_dir = job_store.job_dir(job.job_id)
+    if not (job_dir / "optuna.db").is_file():
+        return
+    backend.verify_study_continuable(
+        _build_optuna_storage_url(job_dir), _build_optuna_study_name(job.job_id)
+    )
+
+
 def run_tune(
     *,
     job: Job,

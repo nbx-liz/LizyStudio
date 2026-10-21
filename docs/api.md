@@ -140,7 +140,8 @@ When the server is running, visit:
 | `JOB_CONFLICT` | Another job already holds the active slot | 409 |
 | `JOB_CANCELLED` | Job was cancelled (terminal status; reported via WS error envelope) | — |
 | `PARENT_LOCKED` | A re-tune / resume child is already running for this parent (H-0062) | 409 |
-| `PICKLE_INCOMPATIBLE` | Re-tune / resume rejected because pickle schema or library major version differs (H-0062) | 400 |
+| `PICKLE_INCOMPATIBLE` | Re-tune / resume rejected because pickle schema or library major version differs (H-0062); unpause rejected before the relaunch because the stored study cannot be continued, e.g. one lizyml 0.15 wrote (`details.kind` `study_not_resumable`, P-0116 D4) | 400 |
+| `REFIT_REQUIRED` | The stored model was written by an older backend version and lacks what the operation needs; fit again (P-0116 D4). `details.kind` is `shap_per_fold_state_missing` (SHAP importance and plots) or `export_param_names` (export-code of a Tuned job; `details.names` lists the names) | 400 |
 | `VALIDATION_ERROR` | Config validation failed | 422 |
 | `FILE_INVALID` | File read error | 400 |
 | `PATH_NOT_FOUND` | Path does not exist | 400 |

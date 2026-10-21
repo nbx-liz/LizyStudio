@@ -335,6 +335,19 @@ class BackendCore(Protocol):
         """
         ...
 
+    def verify_study_continuable(self, storage: str, study_name: str) -> None:
+        """Refuse a stored tuning study that cannot be continued (P-0116 D4).
+
+        Called by ``POST /jobs/{id}/unpause`` before the job is relaunched,
+        so a study the backend would refuse in :meth:`tune` with
+        ``resume=True`` is refused up front instead of failing the job.
+        Raise :class:`~lizystudio.backends.exceptions.CheckpointIncompatibleError`
+        for exactly the studies ``tune`` would refuse, and return otherwise.
+        The study at *storage* must exist; the caller does not call this
+        when the job never wrote its storage.
+        """
+        ...
+
     def preflight_checkpoint_dir(self, job_dir: Any) -> None:
         """Fail fast before tune if *job_dir* cannot host a checkpoint (H-0068).
 

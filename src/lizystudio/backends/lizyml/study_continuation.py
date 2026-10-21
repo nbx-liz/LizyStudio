@@ -60,6 +60,44 @@ class Continuation:
     open_round: int | None
 
 
+def require_continuable(lineage: StudyLineage) -> None:
+    """Refuse a study no unpause can continue, whatever the plan.
+
+    The one refusal rule: :func:`plan_continuation` applies it when the job
+    runs, and :func:`verify_continuable` before the job starts (P-0116 D4),
+    so the two cannot disagree.
+
+    Raises:
+        StudyNotResumableError: for a ``legacy``, ``unreadable`` or
+            ``inconsistent`` study, and for an ``open`` study without an
+            open round.
+    """
+    state = lineage.state
+    if state in _NOT_RESUMABLE:
+        raise StudyNotResumableError(
+            f"The stored study cannot be continued (lizyml state {state!r}).",
+            state=state,
+        )
+    if state == "open" and lineage.open_round is None:
+        raise StudyNotResumableError(
+            "The stored study has an open round lizyml did not number.",
+            state=state,
+        )
+
+
+def verify_continuable(storage: str, study_name: str) -> None:
+    """Read the stored study's lineage and refuse it if no unpause can continue it.
+
+    Errors from reading the study propagate (DC1).  ``read_study_lineage``
+    creates a missing SQLite file, so the caller checks that the storage
+    exists first.
+
+    Raises:
+        StudyNotResumableError: see :func:`require_continuable`.
+    """
+    require_continuable(read_study_lineage(storage, study_name))
+
+
 def plan_continuation(lineage: StudyLineage, planned_rounds: int) -> Continuation:
     """Map a study's lineage and the planned round count to a continuation.
 
@@ -73,19 +111,11 @@ def plan_continuation(lineage: StudyLineage, planned_rounds: int) -> Continuatio
     """
     if planned_rounds < 1:
         raise ValueError(f"planned_rounds must be >= 1, got {planned_rounds}")
+    require_continuable(lineage)
     state = lineage.state
-    if state in _NOT_RESUMABLE:
-        raise StudyNotResumableError(
-            f"The stored study cannot be continued (lizyml state {state!r}).",
-            state=state,
-        )
     if state == "open":
         open_round = lineage.open_round
-        if open_round is None:
-            raise StudyNotResumableError(
-                "The stored study has an open round lizyml did not number.",
-                state=state,
-            )
+        assert open_round is not None  # require_continuable refused it
         return Continuation(
             kind="run",
             first_round=open_round,
