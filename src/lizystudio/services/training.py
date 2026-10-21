@@ -289,7 +289,6 @@ def _build_resume_tuning_summary(
     study_name: str,
     *,
     metric_name: str,
-    direction: str,
 ) -> TuningSummary | None:
     """Reconstruct a :class:`TuningSummary` from a persisted Optuna study.
 
@@ -298,6 +297,10 @@ def _build_resume_tuning_summary(
     ``backend.tune`` and rebuild the summary directly from the on-disk
     study so the auto-fit phase still has ``best_params`` and the
     final job record carries trial history for the UI.
+
+    The direction is the study's own: job configs carry one only when the
+    user set it, and the backend derives it from the metric otherwise
+    (P-0116 D5).
 
     Returns ``None`` when the study cannot be loaded or has no
     completed trials; the caller falls through to a normal tune call
@@ -333,7 +336,7 @@ def _build_resume_tuning_summary(
         best_score=best_score,
         trials=trials,
         metric_name=metric_name,
-        direction=direction,
+        direction=study.direction.name.lower(),
     )
 
 
@@ -405,10 +408,6 @@ def run_tune(
             # Previous tune phase reached the configured budget. Skip
             # backend.tune so lizyml does not append a fresh N trials,
             # and reconstruct the summary from the persisted study.
-            optuna_params = (
-                tune_config.get("tuning", {}).get("optuna", {}).get("params", {})
-            )
-            direction = str(optuna_params.get("direction") or "minimize")
             metric_name = str(
                 (tune_config.get("evaluation") or {}).get("metrics", ["score"])[0]
             )
@@ -416,7 +415,6 @@ def run_tune(
                 storage_url,
                 study_name,
                 metric_name=metric_name,
-                direction=direction,
             )
             skip_tune_call = prebuilt_tune_result is not None
         elif remaining > 0 and existing > 0:

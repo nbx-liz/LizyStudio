@@ -173,6 +173,23 @@ class TuningFailedError(Exception):
     """
 
 
+class SearchSpaceRefusedError(Exception):
+    """Raised when the backend refuses the search space before any trial (P-0116 D1).
+
+    lizyml 0.20 judges the space when a tune starts and refuses it with
+    ``CONFIG_INVALID`` (a bound off its step grid, two dims for one
+    parameter, a dim a training setting or smart parameter owns, a choice
+    the task cannot train on).  The adapter re-raises it as this type so the
+    job reports the cause under its own code.  ``dims`` names the refused
+    dims by catalog key when the backend reported them, and is empty
+    otherwise.
+    """
+
+    def __init__(self, message: str, *, dims: tuple[str, ...] = ()) -> None:
+        super().__init__(message)
+        self.dims = dims
+
+
 __all__ = [
     "CancelledError",
     "CheckpointIncompatibleError",
@@ -181,5 +198,6 @@ __all__ = [
     "LegacyFormatProtectionError",
     "PausedError",
     "PlotNotAvailableError",
+    "SearchSpaceRefusedError",
     "TuningFailedError",
 ]

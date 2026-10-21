@@ -163,8 +163,15 @@ def to_wire_entry(key: str, raw: dict[str, Any]) -> tuple[str, dict[str, Any]]:
 
     Owner rules need the whole space and config, so they are not applied
     here; :func:`to_wire_space` applies them.
+
+    A log range (``log`` is ``True``) is sent without ``step``, for every
+    name (#688, D-20261021-017 option 2): lizyml 0.20 searches a stepped dim
+    on the multiples of its step, and the UI ``step_map`` step does not fit a
+    log range's low bound.  The persisted catalog form keeps the step.
     """
     entry = copy.deepcopy(raw)
+    if entry.get("log") is True:
+        entry.pop("step", None)
     row = WIRE_TABLE.get(key)
     if row is None:
         return key, entry
@@ -205,6 +212,20 @@ def to_wire_space(space: dict[str, Any], config: dict[str, Any]) -> dict[str, An
         sources[wire_name] = key
         out[wire_name] = entry
     return out
+
+
+_CATALOG_KEY_BY_WIRE_NAME: dict[str, str] = {
+    row.wire_name: key for key, row in WIRE_TABLE.items() if row.wire_name != key
+}
+
+
+def catalog_key_for_wire_name(name: str) -> str:
+    """The catalog key the UI shows for a lizyml dim name.
+
+    ``early_stopping_rounds`` maps back to ``early_stopping.rounds``; every
+    other name is its own key.
+    """
+    return _CATALOG_KEY_BY_WIRE_NAME.get(name, name)
 
 
 def find_wire_name_collisions(space: dict[str, Any]) -> list[WireNameCollisionError]:
@@ -255,13 +276,15 @@ def route_model_params(config: dict[str, Any]) -> dict[str, Any]:
     ``early_stopping.rounds`` whatever the dict order, and the dropped value is
     logged.
 
-    Explicitness of the inner split is not decided here.  The ``inner_valid``
-    method is carried, and ``validation_ratio`` is kept beside it, so lizyml
-    0.15 keeps resolving the inner split by the outer one: the Tune tab writes
-    ``inner_valid`` both for a user pick and for its automatic CV
-    recommendation, and the name cannot tell them apart (D-20261020-008
-    option A).  A lizyml 0.20 ``inner_valid_explicit`` marker in the config is
-    left as it is.
+    A routed ``inner_valid`` method or ``validation_ratio`` is written as
+    ``training.early_stopping.inner_valid`` (a ratio alone as a ``holdout``)
+    together with lizyml 0.20's ``inner_valid_explicit`` marker, and any
+    ``validation_ratio`` there is removed: the marker, not the deprecated
+    ratio key, decides explicitness (D-20261020-008 option A).  An existing
+    bool marker is kept, since the UI marks a user pick ``true``; otherwise
+    the marker is ``false``, because the Tune tab writes ``inner_valid`` both
+    for a user pick and for its automatic CV recommendation and the name
+    cannot tell them apart.
 
     Training destinations are routed only when ``training`` and
     ``training.early_stopping`` are dicts or absent; a malformed section is
@@ -315,16 +338,22 @@ def route_model_params(config: dict[str, Any]) -> dict[str, Any]:
         else:
             early_stopping[dest.removeprefix("training.early_stopping.")] = value
 
+    if picker is None and ratio is None:
+        return out
     if picker is not None:
         if ratio is None:
             ratio = _inner_ratio(early_stopping)
         early_stopping["inner_valid"] = {"method": picker, "ratio": ratio}
-    elif ratio is not None:
+    else:
         inner = early_stopping.get("inner_valid")
-        if isinstance(inner, dict):
-            early_stopping["inner_valid"] = {**inner, "ratio": ratio}
-    if ratio is not None:
-        early_stopping["validation_ratio"] = ratio
+        base = inner if isinstance(inner, dict) else {"method": "holdout"}
+        early_stopping["inner_valid"] = {**base, "ratio": ratio}
+    # The marker, never the deprecated validation_ratio, says whether the
+    # split is the user's pick (D-20261020-008 option A); a stale ratio would
+    # also contradict the one just written.
+    early_stopping.pop("validation_ratio", None)
+    if not isinstance(early_stopping.get("inner_valid_explicit"), bool):
+        early_stopping["inner_valid_explicit"] = False
     return out
 
 

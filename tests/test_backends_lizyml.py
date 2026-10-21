@@ -1190,6 +1190,37 @@ def test_get_default_config_training_seed_overrides_library_default() -> None:
         )
 
 
+@pytest.mark.parametrize("task", ["binary", "regression", "multiclass"])
+def test_default_config_marks_the_inner_split_automatic(task: str) -> None:
+    """P-0116 child 5: defaults carry the marker ``false`` and no ``validation_ratio``.
+
+    D-20261020-008 option A: only a user pick is explicit, and the marker,
+    not the deprecated ``validation_ratio`` key, says so.
+    """
+    from lizyml.config.schema import LizyMLConfig
+
+    config = LizyMLAdapter().get_default_config(task=task, target="y")
+    es = config["training"]["early_stopping"]
+    assert "validation_ratio" not in es
+    assert es["inner_valid_explicit"] is False
+    assert es["inner_valid"]["ratio"] == 0.1
+    parsed = LizyMLConfig.model_validate(config)
+    assert parsed.training.early_stopping.inner_valid_explicit is False
+
+
+@pytest.mark.parametrize("task", ["binary", "regression", "multiclass"])
+def test_default_config_has_no_split_random_state(task: str) -> None:
+    """D-20261020-008: the default split carries no seed of its own.
+
+    lizyml 0.20 lets the split inherit ``training.seed`` when
+    ``split.random_state`` is absent; the dumped ``null`` is dropped so the
+    key is absent rather than set.
+    """
+    config = LizyMLAdapter().get_default_config(task=task, target="y")
+    assert "random_state" not in config["split"]
+    assert config["training"]["seed"] == 1120
+
+
 # --- validate_config success path ---
 
 

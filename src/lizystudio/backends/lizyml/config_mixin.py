@@ -251,7 +251,20 @@ class ConfigMixin:
             "training": {"seed": 1120},
         }
         validated = LizyMLConfig.model_validate(minimal)
-        return validated.model_dump(mode="json")
+        dumped: dict[str, Any] = validated.model_dump(mode="json")
+        # D-20261020-008: the split inherits ``training.seed`` when it has no
+        # seed of its own, so the dumped ``null`` is left out, not written.
+        split = dumped["split"]
+        if split.get("random_state") is None:
+            split.pop("random_state", None)
+        # P-0116 child 5 (D-20261020-008 option A): the default inner split is
+        # automatic, and the marker says so.  The dumped ``validation_ratio``
+        # is the deprecated spelling of ``inner_valid.ratio``; lizyml 1.0
+        # drops it.
+        early_stopping = dumped["training"]["early_stopping"]
+        early_stopping.pop("validation_ratio", None)
+        early_stopping["inner_valid_explicit"] = False
+        return dumped
 
     def validate_config(self, config: dict[str, Any]) -> list[dict[str, Any]]:
         from lizyml.config.schema import LizyMLConfig
@@ -403,7 +416,9 @@ class ConfigMixin:
                         "path": f"tuning.optuna.space.{name}",
                         "message": exc.user_message,
                         "severity": "error",
-                        "suggested_fix": _suggested_fix_for_space_error(name, raw),
+                        "suggested_fix": _suggested_fix_for_space_error(
+                            name, raw, exc.context
+                        ),
                     }
                 )
         for collision in find_wire_name_collisions(space):
@@ -442,12 +457,27 @@ class ConfigMixin:
         return data
 
 
-def _suggested_fix_for_space_error(name: str, raw: dict[str, Any]) -> str:
-    """Concrete remediation text for the two structural errors we surface.
+def _suggested_fix_for_space_error(
+    name: str, raw: dict[str, Any], context: dict[str, Any] | None = None
+) -> str:
+    """Concrete remediation text for the structural errors we surface.
 
     Lives at module scope so the prose stays out of ``ConfigMixin`` and
     a second backend (or a future helper) can reuse the strings.
+
+    *context* is lizyml's error context.  For a bound off its step grid
+    (``reason: bound_off_grid``, lizyml 0.20) lizyml reports the on-grid
+    range inside the declared one, and the fix suggests it.
     """
+    if context and context.get("reason") == "bound_off_grid":
+        grid_low = context.get("grid_low")
+        grid_high = context.get("grid_high")
+        if grid_low is not None and grid_high is not None:
+            return (
+                f"Move '{name}' onto its step grid: set Min={grid_low} and "
+                f"Max={grid_high}, or change the step. Both bounds must be "
+                f"multiples of the step."
+            )
     log = bool(raw.get("log"))
     low = raw.get("low")
     high = raw.get("high")

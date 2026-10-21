@@ -77,6 +77,24 @@ def test_autofit_routes_tuned_values(tmp_path: Path) -> None:
     es = exported["training"]["early_stopping"]
     assert es["rounds"] == best["early_stopping_rounds"]
     assert es["inner_valid"]["ratio"] == pytest.approx(best["validation_ratio"])
+    # A tuned ratio is not a user pick (D-20261020-008 option A).
+    assert es["inner_valid_explicit"] is False
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("marker", [True, False])
+def test_the_inner_valid_marker_reaches_lizyml(tmp_path: Path, marker: bool) -> None:
+    # The UI marks a user pick true (child 5b); routing keeps that bool.
+    config = _base_config()
+    config.pop("tuning")
+    config["model"]["params"]["inner_valid"] = "holdout"
+    config["training"]["early_stopping"]["inner_valid_explicit"] = marker
+
+    exported = _exported_config(config, tmp_path)
+
+    es = exported["training"]["early_stopping"]
+    assert es["inner_valid_explicit"] is marker
+    assert es["inner_valid"]["method"] == "holdout"
 
 
 @pytest.mark.integration

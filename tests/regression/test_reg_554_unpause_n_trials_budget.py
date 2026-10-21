@@ -274,6 +274,51 @@ def test_unpause_skips_tune_when_existing_equals_target(job_store: JobStore) -> 
     )
 
 
+def test_skip_path_summary_uses_study_direction(job_store: JobStore) -> None:
+    """P-0116 D5: the rebuilt summary takes its direction from the study.
+
+    Job configs no longer carry a derived direction (lizyml derives it from
+    the metric), so the summary must not fall back to ``minimize`` for a
+    maximize study.
+    """
+    target_n_trials = 4
+    config = _tune_config(target_n_trials)
+    del config["tuning"]["optuna"]["params"]["direction"]
+    config["task"] = "binary"
+    config["evaluation"] = {"metrics": ["auc"]}
+    backend = _StubBackend()
+    job = job_store.create_and_claim_active(
+        backend_name="stub",
+        config=config,
+        data_ref=_make_data_ref(),
+        job_type="tune",
+    )
+    assert job is not None
+    storage_url = _build_optuna_storage_url(job_store.job_dir(job.job_id))
+    study_name = _build_optuna_study_name(job.job_id)
+    _seed_optuna_study(
+        storage_url=storage_url,
+        study_name=study_name,
+        n_trials=target_n_trials,
+        direction="maximize",
+    )
+
+    done = run_tune(
+        job=job,
+        job_store=job_store,
+        backend=backend,
+        config=config,
+        dataframe=object(),
+        resume_from_existing_study=True,
+    )
+
+    assert len(backend.tune_calls) == 0
+    assert done.tune_result is not None
+    assert done.tune_result.direction == "maximize"
+    # The seeded scores rise with the trial number, so maximize picks the last.
+    assert done.tune_result.best_score == pytest.approx(0.75)
+
+
 # --- INV-4 regression: partial budget spent --------------------------------
 
 

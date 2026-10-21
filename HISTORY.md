@@ -4910,3 +4910,16 @@ lock を上げた時点で Tune がすべて失敗する。そのため、lock �
   - **0.20 より前に入れてはいけないもの:**
     - `direction` の省略。0.15 は省略すると `minimize` になり（lizyml 0.15 `config/schema.py:433-437`）、maximize の指標を逆向きに最適化してしまう。
     - `step` のテスト。0.15 は `step` を黙って無視する（DC1）。0.15 の次元の型には `step` の欄が無く（lizyml 0.15 `core/types/search_dim.py:20-64`）、`parse_space` も `step` を読まない（`tuning/search_space.py:116-171`）。`step` が加わったのは 0.20 である（lizyml 0.20 `core/types/search_dim.py:20-59`）。そのため、0.15 ではテストが通っても何も確かめていない。
+  - **子 PR 5 の決定（owner、2026-10-21、決定カード D-20261021-017）:**
+    - **`step`（#688）は案 2:** log の範囲には `step` を送らない。線形の範囲には送り、格子から外れた利用者の範囲は、LizyML の拒否の理由を job のエラーとして示す。
+      - 実測: catalog の既定値のうち `step` を持つ 12 件中 10 件が格子の規則を通る。拒否されるのは log の `learning_rate` と `lambda_l2` である。保存済みの Tune 空間 41 件に、`step` を持つ次元は 0 件だった。
+      - 0.20 に上げた統合ブランチでは、UI で `learning_rate` か `lambda_l2` を Range に切り替えると、Tune が拒否される。子 PR 5 で直す。
+    - **子 PR 5 を 5a（backend）と 5b（frontend、UI のパイプライン）に分ける。** seed、`direction`、inner_valid の印は、どれも backend と frontend の両方に書き手がある。5a と 5b は、それぞれ単独で緑にする。
+    - **seed の CHANGELOG** は、seed の変更と同じ PR に入れる。結果が実際に変わるのは frontend が書く `42`（`cv-state.ts`）なので、5b に入れる。
+  - **受け付け時のエラーの文脈（D1 の訂正、子 PR 5a）:** D1 が挙げた構造化された文脈（`surface`、`reason`、`dim`、`key`）を持つのは、形式の拒否（格子から外れた範囲など）だけである。objective の拒否は `reason` を持たない。ほかの拒否は別の形をとる。
+    - alias の重複: `conflicts[].{surface, parameter, dimensions}`
+    - training が持つ model の次元: `conflicts[].{surface, name, config_path}`
+    - `auto_num_leaves` のときの `num_leaves`: `managed[].{surface, name, smart_param}`
+    - どの形でも、LizyML の `user_message` が次元の名前と理由を示す。そのため Studio は、文脈から次元の名前を読み、`user_message` を添えて job のエラーにする。LizyML の規則は写さない（DC3）。WS のコードは `SEARCH_SPACE_REFUSED` とする（子 PR 3a の `TUNING_FAILED` と同じ扱い）。
+  - **`direction`（子 PR 5a の仕組み）:** PUT /config で受け取った `direction` が、指標から導いた向きと一致するなら捨てる。一致しないなら残し、LizyML に拒否させる（H-0099）。黙って捨てると、利用者が明示した値を失う（DC1）。
+  - **inner_valid の印とチューニングで選んだ ratio:** picker で `true` にした設定でも、Tune が `validation_ratio` か `inner_valid` を選んだときは、autofit が印を `false` にする（受け入れ基準の「Tune が選んだ `validation_ratio`: `false`」）。このとき LizyML は、利用者が選んだ method を使わず、外側の split から inner split を決める。
