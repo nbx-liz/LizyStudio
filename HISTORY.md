@@ -4888,6 +4888,12 @@ lock を上げた時点で Tune がすべて失敗する。そのため、lock �
     | 7 | 0.20 | D4（0.15 の job の明確な拒否） |
     | 8 | 0.20 | production の fixture の採り直し、`PAST_VERSIONS` を 0.17 / 0.18 / 0.19 にする |
 
+  - **受け入れ基準の書き直し（子 PR 1 の設計、2026-10-21、決定カード D-20261021-010）:**
+    - **wire の形に変える場所（owner の決定）:** UI と workspace の設定は、空間を catalog の key で引く（`TuneTab.tsx:67-91`）。そのため、0.20 の名前と `category` への変換は、adapter の `create_model` で LizyML に渡す時だけ行う（`backends/lizyml/space_wire.py`）。job に保存する設定は catalog の形のまま残し、Protocol は変えない。
+      - 基準「保存された job の設定は、空間の全次元に対応表どおりの名前と `category` を持つ」は、「`create_model` が LizyML に渡す設定がそれらを持つ（テスト）」に置き換える。lock を上げた後は、`space_snapshot` でも確かめる。
+    - **`first_metric_only` と `metric`:** Studio から足す必要はない。利用者の空間が空でなければ、0.15 も 0.20 の `replace` も、固定値を足さない（lizyml 0.15 `core/model.py:619-630`、0.20 `core/_tuning_space.py:78-101`）。そのため、trial は Fit の既定値で学習する。既定値は、`metric` が task の既定（0.15 `estimators/lgbm/adapter.py:384`、0.20 `:468-470`）、`first_metric_only` が `False`（0.15 `defaults.py:86`、0.20 `defaults.py:89`）である。
+      - D1 の「値は今の Fit と同じものにする」は、何もしなくても満たされる。足すと LizyML の語彙を Studio に写すことになる（DC3）。
+      - 基準「`first_metric_only` と `metric` が固定値として `model.params` に入る」は外す。
   - **0.20 より前に入れてはいけないもの:**
     - `direction` の省略。0.15 は省略すると `minimize` になり（lizyml 0.15 `config/schema.py:433-437`）、maximize の指標を逆向きに最適化してしまう。
     - `step` のテスト。0.15 は `step` を黙って無視する（DC1）。0.15 の次元の型には `step` の欄が無く（lizyml 0.15 `core/types/search_dim.py:20-64`）、`parse_space` も `step` を読まない（`tuning/search_space.py:116-171`）。`step` が加わったのは 0.20 である（lizyml 0.20 `core/types/search_dim.py:20-59`）。そのため、0.15 ではテストが通っても何も確かめていない。
