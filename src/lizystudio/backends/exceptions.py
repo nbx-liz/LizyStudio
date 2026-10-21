@@ -78,6 +78,24 @@ class CheckpointIncompatibleError(Exception):
         self.suggested_fix = suggested_fix
 
 
+class StudyNotResumableError(CheckpointIncompatibleError):
+    """Raised when an unpause finds a stored study it cannot continue (P-0116 D3).
+
+    The study's lizyml record is missing (``legacy``: written before lizyml
+    0.19), cannot be read (``unreadable``), or contradicts itself
+    (``inconsistent``).  ``state`` carries lizyml's study state so a caller
+    can tell them apart; the recovery is the same for each, a new Tune.
+    """
+
+    def __init__(self, message: str, *, state: str) -> None:
+        super().__init__(
+            message,
+            kind="study_not_resumable",
+            recovery_hint="Start a new Tune",
+        )
+        self.state = state
+
+
 class CheckpointPreflightError(Exception):
     """Raised when the target directory cannot host a checkpoint.
 
@@ -199,5 +217,6 @@ __all__ = [
     "PausedError",
     "PlotNotAvailableError",
     "SearchSpaceRefusedError",
+    "StudyNotResumableError",
     "TuningFailedError",
 ]

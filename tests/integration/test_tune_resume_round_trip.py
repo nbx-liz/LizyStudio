@@ -8,7 +8,10 @@ the original ``[0..N-1]`` trials.
 
 Since lizyml 0.20 (P-0116 child 4) re-attaching takes ``resume=True``;
 ``resume=False`` onto an existing study is refused with
-``CONFIG_INVALID``. The config carries a Studio-style catalog space, so
+``CONFIG_INVALID``. Since P-0116 child 6 the adapter reads the study's
+rounds on such a re-attach and runs only the rounds ``re_tune`` planned
+beyond the closed ones, so the second run plans 2 rounds (round 1 is
+already closed). The config carries a Studio-style catalog space, so
 lizyml runs it with ``space_mode: replace`` and, with no default space in
 play, does not widen any boundary on the resumed round.
 
@@ -69,7 +72,8 @@ def test_tune_storage_passthrough_round_trip(tmp_path: Path) -> None:
     3. Re-attach with ``resume=False``: lizyml 0.20 refuses it with
        ``CONFIG_INVALID`` and runs no trial.
     4. Run a second tune with the SAME storage + study_name,
-       ``resume=True`` and ``n_trials=2`` more (the /unpause re-attach).
+       ``resume=True`` and ``re_tune`` planning 2 rounds of 2 trials
+       (the /unpause re-attach): round 1 is closed, so round 2 runs.
     5. Verify the SQLite now has exactly 4 trials, the original 2 were
        NOT re-executed, and the new 2 picked up from trial number 2.
     """
@@ -121,10 +125,10 @@ def test_tune_storage_passthrough_round_trip(tmp_path: Path) -> None:
     # --- Second run: re-attach with resume=True + 2 more trials --------------
     config2 = _trim_n_trials(base_config, 2)
     model2 = backend.create_model(config2, df)
-    backend.tune(
+    summary = backend.tune(
         model2,
         on_progress=None,
-        re_tune=None,
+        re_tune={"n_rounds": 2, "n_trials": 2},
         checkpoint_dir=tmp_path,
         resume=True,
         storage=storage_url,
@@ -149,6 +153,8 @@ def test_tune_storage_passthrough_round_trip(tmp_path: Path) -> None:
         f"INV-4: trial numbers must be monotonic (0,1,2,3), got {trial_numbers}. "
         f"A duplicate or reset would surface here as e.g. [0,1,0,1]."
     )
+    assert summary.rounds is not None
+    assert [r["round"] for r in summary.rounds] == [1, 2]
 
 
 @pytest.mark.integration
