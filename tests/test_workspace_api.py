@@ -723,3 +723,26 @@ def test_reset_clears_workspace(client: TestClient, tmp_path: Path) -> None:
     assert status_after["has_data"] is False
     assert status_after["has_config"] is False
     assert status_after["has_result"] is False
+
+
+def test_fit_rejects_stratified_split_on_regression(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """P-0116 D5: regression with stratification is a 422, not a job failure."""
+    csv_path = _create_csv(tmp_path)
+    r = client.post("/api/workspace/data/path", json={"path": csv_path})
+    assert r.status_code == 200, r.text
+    res = client.get("/api/workspace/config/defaults?task=regression&target=age")
+    assert res.status_code == 200, res.text
+    config = res.json()
+    config["split"] = {"method": "stratified_kfold", "n_splits": 3}
+
+    with patch("lizystudio.api.workspace.start_fit_async") as mock_start:
+        res = client.post("/api/workspace/fit", json={"config": config})
+
+    assert res.status_code == 422, res.text
+    body = res.json()
+    assert body["error"]["code"] == "VALIDATION_ERROR"
+    paths = {err["path"] for err in body["error"]["details"]["errors"]}
+    assert "split.method" in paths
+    mock_start.assert_not_called()
