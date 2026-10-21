@@ -4941,3 +4941,14 @@ lock を上げた時点で Tune がすべて失敗する。そのため、lock �
     - **エラーコード:** SHAP と export-code の拒否には、新しいコード `REFIT_REQUIRED`（400）を使う。`details` は `kind`、`names`、`recovery_hint`。
       - export-code の判定は、保存されたモデルの設定（`config_normalized` の `model.params`）を読む。export 用の params は `seed` を常に持つので使わない（DC2）。判定の名前は D1 の対応表（`space_wire.names_routed_outside_model_params`）から取り、`route_model_params` と共有する。
       - 判定を実装した後の firing rate: 0.15 の Tune 21/21、0.15 の Fit 0/123、0.20 の Fit 0/1、0.20 の Tune 0/29（この machine の全 job の `model/metadata.json` で再生、2026-10-21）。
+  - **子 PR 8 の決定（owner、2026-10-22、決定カード D-20261022-005）:**
+    - **fixture の採り直しは GUI を通す:** Playwright が本物の SPA と backend を操作して job を作る。job の設定の一部（評価指標の一覧、seed を書かないこと、inner_valid の印、`direction` を書かないこと）は frontend が書くので、API だけで作った job は本番の job と形が違う。
+      - 操作のスクリプト（`frontend/tests/fixture-capture/`）と、job を fixture に書き出すスクリプト（`scripts/export_lizyml_fixtures.py`）は commit する。CI の対象外に置く。
+      - 学習から外す列は、0.9.1 で採ったときと同じにする。ほかは UI の既定のまま。
+    - **fixture の鮮度を PR の CI で検査する（`tests/test_lizyml_fixture_freshness.py`）:** 次のどれかが崩れると失敗する。そのため、lizyml の minor を上げる PR は、同じ PR で fixture を採り直し、`PAST_VERSIONS` を動かす。
+      - README、各 `metadata.json`、導入済みの lizyml の major.minor が一致する。
+      - 各 `config.json` が今の UI の書く形をしている（split の `random_state` が無い、`inner_valid_explicit` がある、`validation_ratio` と `embargo` が無い、Tune の `direction` が無い、評価指標がその task の選択肢と一致する）。
+      - frontend 側の複製が backend 側と JSON として一致する。
+      - matrix の script、nightly、bench test の 3 か所の過去の版が一致し、導入済みの minor の直前 3 つである。
+    - **実測:** 0.20.0 での採り直しの job は binary_no_cal `job_bfca7941`、binary_isotonic `job_27682903`、regression `job_c499144c`、tune `job_866aa15e`。pickle の matrix を 0.17.0 / 0.18.0 / 0.19.0 で手元で一度実行し、3 つとも `lizyml_version_mismatch` で拒否された（この machine には Python 3.11 が無いので `MATRIX_PYTHON=3.12`。CI は 3.11 のまま）。
+    - **見つけた既存の不具合（本 Proposal の範囲外）:** `lizystudio` の CLI は `--jobs-dir` の既定値で `LIZYSTUDIO_JOBS_DIR` を上書きする（`cli.py:46`）。そのため、E2E の Playwright 設定の `LIZYSTUDIO_JOBS_DIR=/tmp/e2e_jobs` は効いておらず、E2E の job は `.lizystudio/jobs` に入る。採取のスクリプトは `--jobs-dir` を渡す。別の Issue で扱う。
