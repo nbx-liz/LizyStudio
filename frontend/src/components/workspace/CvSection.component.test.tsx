@@ -406,12 +406,78 @@ describe("CvSection", () => {
       />,
     );
 
-    const randomStateInput = screen.getByTestId("number-input-42");
+    const randomStateInput = screen.getByLabelText("Random State");
+    expect(randomStateInput).toHaveValue(42);
     fireEvent.change(randomStateInput, { target: { value: "99" } });
 
+    expect(mockOnChange).toHaveBeenCalledTimes(1);
     expect(mockOnChange).toHaveBeenCalledWith(
       expect.objectContaining({ randomState: 99 }),
     );
+  });
+
+  it("shows the training-seed placeholder and hint while Random State is unset (P-0116 child 5b)", () => {
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "kfold", randomState: undefined })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    const input = screen.getByLabelText("Random State");
+    expect(input).toHaveValue(null);
+    expect(input).toHaveAttribute("placeholder", "Auto (training seed)");
+    expect(
+      screen.getByText("Empty follows the training seed."),
+    ).toBeInTheDocument();
+  });
+
+  it("hides the Random State hint once a seed is set (P-0116 child 5b)", () => {
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "kfold", randomState: 7 })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    expect(
+      screen.queryByText("Empty follows the training seed."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("typing a seed emits one onChange with randomState and clearing emits one with undefined (P-0116 child 5b)", () => {
+    const { rerender } = render(
+      <CvSection
+        cv={makeCvState({ strategy: "kfold", randomState: undefined })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Random State"), {
+      target: { value: "7" },
+    });
+    expect(mockOnChange).toHaveBeenCalledTimes(1);
+    expect(mockOnChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ randomState: 7 }),
+    );
+
+    mockOnChange.mockClear();
+    rerender(
+      <CvSection
+        cv={makeCvState({ strategy: "kfold", randomState: 7 })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Random State"), {
+      target: { value: "" },
+    });
+    expect(mockOnChange).toHaveBeenCalledTimes(1);
+    const arg = mockOnChange.mock.calls[0][0] as CvState;
+    expect(arg.randomState).toBeUndefined();
   });
 
   it("calls onChange with updated gap value for time_series strategy", async () => {

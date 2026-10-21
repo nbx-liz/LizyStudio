@@ -81,6 +81,22 @@ describe("buildSyncedConfig", () => {
     expect(base).toEqual(BASE);
   });
 
+  it("drops a stale split.random_state when the cv seed is unset (P-0116 child 5b)", () => {
+    const out = buildSyncedConfig({
+      base: {
+        ...BASE,
+        split: { method: "kfold", n_splits: 5, random_state: 7 },
+      },
+      dataPath: "",
+      target: "y",
+      task: "binary",
+      overrides: {},
+      cv: { ...INITIAL_CV_STATE, strategy: "kfold" },
+      blocked: INITIAL_BLOCKED_STATE,
+    });
+    expect(out.split).not.toHaveProperty("random_state");
+  });
+
   it("emits a split section based on cv state", () => {
     const out = buildSyncedConfig({
       base: BASE,

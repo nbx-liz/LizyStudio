@@ -685,6 +685,82 @@ describe("SearchSpaceTable", () => {
         "inner_valid",
         "time_holdout",
       );
+      expect(onModelParamChange).toHaveBeenCalledTimes(1);
+    });
+
+    // P-0116 child 5b — cue under the inner_valid picker
+    function renderPicker(innerValidExplicit?: boolean) {
+      return render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{ inner_valid: "holdout" }}
+          onChange={vi.fn()}
+          catalog={innerValidCatalog}
+          task="binary"
+          onModelParamChange={vi.fn()}
+          specialSearchSpaceFields={{ inner_valid: "inner_valid_picker" }}
+          cvStrategy="kfold"
+          innerValidOptions={["holdout", "group_holdout", "time_holdout"]}
+          innerValidExplicit={innerValidExplicit}
+        />,
+      );
+    }
+
+    it("shows the 'Your choice' cue when the inner split is explicit", () => {
+      renderPicker(true);
+      expect(
+        screen.getByText("Your choice. Used for every trial's inner split."),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText("Automatic. Follows the CV split."),
+      ).not.toBeInTheDocument();
+    });
+
+    it.each([false, undefined])(
+      "shows the 'Automatic' cue when the marker is %s",
+      (marker) => {
+        renderPicker(marker);
+        expect(
+          screen.getByText("Automatic. Follows the CV split."),
+        ).toBeInTheDocument();
+      },
+    );
+
+    it("links the cue to the picker with aria-describedby", () => {
+      renderPicker(true);
+      const cue = screen.getByText(
+        "Your choice. Used for every trial's inner split.",
+      );
+      expect(cue.id).not.toBe("");
+      const picker = screen
+        .getByRole("radio", { name: "holdout" })
+        .closest('[role="radiogroup"]');
+      expect(picker).toHaveAttribute("aria-describedby", cue.id);
+    });
+
+    it("renders no cue on rows that are not the inner_valid picker", () => {
+      render(
+        <SearchSpaceTable
+          space={{}}
+          modelParams={{}}
+          onChange={vi.fn()}
+          catalog={[
+            {
+              key: "learning_rate",
+              title: "Learning Rate",
+              paramType: "number",
+              modes: ["fixed"],
+              group: "model_params",
+              default: 0.1,
+            },
+          ]}
+          task="binary"
+          onModelParamChange={vi.fn()}
+          innerValidExplicit
+        />,
+      );
+      expect(screen.queryByText(/Your choice\./)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Automatic\./)).not.toBeInTheDocument();
     });
   });
 

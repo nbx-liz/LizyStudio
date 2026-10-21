@@ -181,18 +181,18 @@ export function CvSection({
       )}
 
       {cv.strategy !== "blocked_group_kfold" && has("random_state") && (
-        <div className="space-y-1">
-          <Label className="text-xs font-medium text-muted-foreground">
-            Random State
-          </Label>
-          <NumberInput
-            value={cv.randomState}
-            onChange={(v) => update({ randomState: v })}
-            step={1}
-            placeholder="42"
-            disabled={disabled}
-          />
-        </div>
+        <NullableNumberField
+          label="Random State"
+          value={cv.randomState}
+          onChange={(v) => update({ randomState: v })}
+          placeholder="Auto (training seed)"
+          hint={
+            cv.randomState === undefined
+              ? "Empty follows the training seed."
+              : undefined
+          }
+          disabled={disabled}
+        />
       )}
 
       {cv.strategy !== "blocked_group_kfold" && has("shuffle") && (

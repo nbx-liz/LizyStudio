@@ -196,6 +196,89 @@ describe("coalesceByReason", () => {
     ]);
   });
 
+  // P-0116 child 5b: ConfigForm's inner_valid auto-reset now enqueues a
+  // `patch-many` (method + inner_valid_explicit) that co-fires with the
+  // objective / metric auto-reset `patch` ops on the same render. Pin that an
+  // INCOMING patch-many never drops a queued path.
+  it("an incoming patch-many keeps a queued patch at a different path", () => {
+    const queued: WriteOp = {
+      kind: "patch",
+      path: ["model", "params", "objective"],
+      value: "binary",
+      reason: "auto-reset",
+    };
+    const next: WriteOp = {
+      kind: "patch-many",
+      patches: [
+        {
+          path: ["training", "early_stopping", "inner_valid", "method"],
+          value: "holdout",
+        },
+        {
+          path: ["training", "early_stopping", "inner_valid_explicit"],
+          value: false,
+        },
+      ],
+      reason: "auto-reset",
+    };
+    const merged = coalesceByReason(queued, next);
+    expect(merged.kind).toBe("patch-many");
+    if (merged.kind !== "patch-many") throw new Error("expected patch-many op");
+    expect(merged.patches).toEqual([
+      { path: ["model", "params", "objective"], value: "binary" },
+      {
+        path: ["training", "early_stopping", "inner_valid", "method"],
+        value: "holdout",
+      },
+      {
+        path: ["training", "early_stopping", "inner_valid_explicit"],
+        value: false,
+      },
+    ]);
+  });
+
+  it("two patch-many ops merge; the later one wins on a shared path", () => {
+    const queued: WriteOp = {
+      kind: "patch-many",
+      patches: [
+        { path: ["model", "params", "objective"], value: "binary" },
+        {
+          path: ["training", "early_stopping", "inner_valid_explicit"],
+          value: true,
+        },
+      ],
+      reason: "auto-reset",
+    };
+    const next: WriteOp = {
+      kind: "patch-many",
+      patches: [
+        {
+          path: ["training", "early_stopping", "inner_valid", "method"],
+          value: "holdout",
+        },
+        {
+          path: ["training", "early_stopping", "inner_valid_explicit"],
+          value: false,
+        },
+      ],
+      reason: "auto-reset",
+    };
+    const merged = coalesceByReason(queued, next);
+    expect(merged.kind).toBe("patch-many");
+    if (merged.kind !== "patch-many") throw new Error("expected patch-many op");
+    expect(merged.patches).toEqual([
+      { path: ["model", "params", "objective"], value: "binary" },
+      {
+        path: ["training", "early_stopping", "inner_valid", "method"],
+        value: "holdout",
+      },
+      {
+        path: ["training", "early_stopping", "inner_valid_explicit"],
+        value: false,
+      },
+    ]);
+  });
+
   it("a replace op coalesced after a patch wins outright (replace carries authoritative body)", () => {
     const a: WriteOp = {
       kind: "patch",
@@ -376,6 +459,55 @@ describe("useConfigWriteFunnel", () => {
     expect(putConfig).toHaveBeenCalledTimes(1);
     expect(putConfig.mock.calls[0][0]).toEqual({
       split: { method: "time_series" },
+    });
+  });
+
+  it("a synchronous auto-reset patch followed by an auto-reset patch-many lands as ONE PUT carrying every path (P-0116 child 5b)", async () => {
+    const putConfig = vi
+      .fn()
+      .mockImplementation((body: ConfigSnapshot) => Promise.resolve(body));
+    const { result } = renderHook(() =>
+      useConfigWriteFunnel({
+        getCachedConfig: () => ({
+          model: { name: "lgbm", params: {} },
+          training: { early_stopping: { enabled: true } },
+        }),
+        putConfig,
+      }),
+    );
+
+    const p1 = result.current.enqueueWrite({
+      kind: "patch",
+      path: ["model", "params", "objective"],
+      value: "binary",
+      reason: "auto-reset",
+    });
+    const p2 = result.current.enqueueWrite({
+      kind: "patch-many",
+      patches: [
+        {
+          path: ["training", "early_stopping", "inner_valid", "method"],
+          value: "holdout",
+        },
+        {
+          path: ["training", "early_stopping", "inner_valid_explicit"],
+          value: false,
+        },
+      ],
+      reason: "auto-reset",
+    });
+    await Promise.all([p1, p2]);
+
+    expect(putConfig).toHaveBeenCalledTimes(1);
+    expect(putConfig.mock.calls[0][0]).toEqual({
+      model: { name: "lgbm", params: { objective: "binary" } },
+      training: {
+        early_stopping: {
+          enabled: true,
+          inner_valid: { method: "holdout" },
+          inner_valid_explicit: false,
+        },
+      },
     });
   });
 
@@ -615,6 +747,40 @@ describe("useConfigWriteFunnel", () => {
         data: { target: "y" },
       });
     }
+  });
+
+  // P-0116 child 5b: PUT /workspace/config replaces the config wholesale, so a
+  // key a writer deleted (Tune `direction`, split `random_state`) must reach
+  // the wire as absent and must not be merged back from the cache.
+  it("a replace op that deleted direction and random_state sends them as absent, even when the cache still holds them", async () => {
+    const cached: ConfigSnapshot = {
+      split: { method: "kfold", n_splits: 5, random_state: 7 },
+      tuning: { optuna: { params: { n_trials: 30, direction: "maximize" } } },
+    };
+    const putConfig = vi
+      .fn()
+      .mockImplementation((body: ConfigSnapshot) => Promise.resolve(body));
+    const { result } = renderHook(() =>
+      useConfigWriteFunnel({ getCachedConfig: () => cached, putConfig }),
+    );
+
+    await result.current.enqueueWrite({
+      kind: "replace",
+      config: {
+        split: { method: "kfold", n_splits: 5 },
+        tuning: { optuna: { params: { n_trials: 30 } } },
+      },
+      reason: "config-form-edit",
+    });
+
+    expect(putConfig).toHaveBeenCalledTimes(1);
+    const body = putConfig.mock.calls[0][0] as {
+      split: Record<string, unknown>;
+      tuning: { optuna: { params: Record<string, unknown> } };
+    };
+    expect(body.split).not.toHaveProperty("random_state");
+    expect(body.tuning.optuna.params).not.toHaveProperty("direction");
+    expect(body.tuning.optuna.params.n_trials).toBe(30);
   });
 
   // ----------------------------------------------------------------------

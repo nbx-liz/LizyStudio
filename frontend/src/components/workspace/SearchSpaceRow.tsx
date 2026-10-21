@@ -1,4 +1,5 @@
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { useId } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import {
@@ -38,6 +39,7 @@ export function SearchSpaceRow({
   fevalMetrics,
   cvStrategy,
   innerValidOptions,
+  innerValidExplicit = false,
   bounds,
   onModelParamChange,
   specialSearchSpaceFields,
@@ -56,6 +58,15 @@ export function SearchSpaceRow({
   const isExpandable = isRange || isChoice;
   const isInteger = param.type === "integer";
   const availableModes = param.modes ?? ["fixed", "range"];
+
+  // P-0116 child 5b: cue under the Fixed-mode inner_valid picker saying
+  // whether the split is the user's choice or follows the CV split.
+  const cueId = useId();
+  const showsInnerValidCue =
+    !!onModelParamChange &&
+    specialSearchSpaceFields?.[param.key] === "inner_valid_picker" &&
+    !(isRange && entry) &&
+    !(isChoice && entry?.choices);
 
   const handleSummaryActivate = () => {
     if (isExpandable) onToggleExpand(param.key);
@@ -221,6 +232,7 @@ export function SearchSpaceRow({
                   options={filtered}
                   value={display}
                   onChange={(v) => onModelParamChange(param.key, v)}
+                  ariaDescribedBy={cueId}
                 />
               );
             })()
@@ -253,6 +265,17 @@ export function SearchSpaceRow({
           )}
         </span>
       </div>
+
+      {showsInnerValidCue && (
+        <p
+          id={cueId}
+          className="px-6 pb-1.5 text-[10px] text-muted-foreground text-right"
+        >
+          {innerValidExplicit
+            ? "Your choice. Used for every trial's inner split."
+            : "Automatic. Follows the CV split."}
+        </p>
+      )}
 
       {/* Range detail */}
       {isRange && isExpanded && entry && (

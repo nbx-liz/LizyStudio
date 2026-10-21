@@ -91,7 +91,9 @@ function resolveFields(
 /** Default values for CV fields, reset when strategy changes. */
 export const CV_FIELD_DEFAULTS = {
   folds: 5,
-  random_state: 42,
+  // P-0116 child 5b: unset by default so the split inherits `training.seed`
+  // (lizyml 0.20, H-0080). Typing a number sets an explicit seed.
+  random_state: undefined,
   shuffle: true,
   gap: 0,
   purge_gap: 0,
@@ -388,8 +390,14 @@ export function parseSplitToCv(
   const out: Partial<CvState> = {};
   if (typeof split.method === "string") out.strategy = split.method;
   if (typeof split.n_splits === "number") out.folds = split.n_splits;
-  if (typeof split.random_state === "number")
+  if (typeof split.random_state === "number") {
     out.randomState = split.random_state;
+  } else if (typeof split.method === "string") {
+    // P-0116 child 5b: a split without a seed means "inherit training.seed".
+    // Clear the field explicitly so a preset load or an undo does not leave
+    // a stale seed in the input (same pattern as `legacyEmbargo` below).
+    out.randomState = undefined;
+  }
   if (typeof split.shuffle === "boolean") out.shuffle = split.shuffle;
   if (typeof split.gap === "number") out.gap = split.gap;
   if (typeof split.purge_gap === "number") out.purgeGap = split.purge_gap;

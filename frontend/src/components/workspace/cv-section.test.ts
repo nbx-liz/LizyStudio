@@ -932,3 +932,47 @@ describe("STRATIFIED_CV_STRATEGIES", () => {
     expect(STRATIFIED_CV_STRATEGIES.has("kfold")).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// P-0116 child 5b: split.random_state is unset by default
+// ---------------------------------------------------------------------------
+describe("random_state seed default (P-0116 child 5b)", () => {
+  it("has no randomState in the initial CV state", () => {
+    expect(INITIAL_CV_STATE.randomState).toBeUndefined();
+    expect(resetCvState("kfold").randomState).toBeUndefined();
+  });
+
+  it.each(["kfold", "stratified_kfold"])(
+    "buildSplitConfig writes no random_state by default for %s",
+    (strategy) => {
+      const cv = resetCvState(strategy);
+      const result = buildSplitConfig(
+        cv,
+        undefined,
+        CV_STRATEGY_FIELDS[strategy],
+      );
+      expect(result).not.toHaveProperty("random_state");
+    },
+  );
+
+  it("buildSplitConfig writes random_state 7 once it is set", () => {
+    const cv: CvState = { ...resetCvState("kfold"), randomState: 7 };
+    const result = buildSplitConfig(cv, undefined, CV_STRATEGY_FIELDS.kfold);
+    expect(result.random_state).toBe(7);
+  });
+
+  it("parseSplitToCv clears randomState when the split has a method but no seed", () => {
+    const out = parseSplitToCv({ method: "kfold", n_splits: 5 });
+    expect(out).toHaveProperty("randomState", undefined);
+  });
+
+  it("parseSplitToCv reads an explicit seed", () => {
+    const out = parseSplitToCv({ method: "kfold", random_state: 7 });
+    expect(out.randomState).toBe(7);
+  });
+
+  it("parseSplitToCv leaves randomState alone when the split has no method", () => {
+    const out = parseSplitToCv({ n_splits: 5 });
+    expect(out).not.toHaveProperty("randomState");
+  });
+});

@@ -1346,6 +1346,152 @@ describe("ConfigForm — inner_valid_options (Inner Validation select)", () => {
       (nextConfig.training as Record<string, unknown>)?.inner_valid,
     ).toBeUndefined();
   });
+
+  // P-0116 child 5b: `training.early_stopping.inner_valid_explicit` tells the
+  // backend whether the user chose the inner split.
+  const explicitConfig = (marker?: boolean) => ({
+    config_version: 1,
+    model: { name: "lgbm", params: {} },
+    training: {
+      early_stopping: {
+        enabled: true,
+        ...(marker === undefined ? {} : { inner_valid_explicit: marker }),
+        inner_valid: { method: "holdout", ratio: 0.2 },
+      },
+    },
+  });
+
+  function earlyStoppingOf(config: unknown): Record<string, unknown> {
+    return (config as { training: { early_stopping: Record<string, unknown> } })
+      .training.early_stopping;
+  }
+
+  it("the Inner Validation method pick writes the method and marker true in one onChange", () => {
+    const onChange = vi.fn();
+    renderConfigForm({
+      schema: schemaWithTraining,
+      config: explicitConfig(false),
+      onChange,
+      uiSchema: {
+        inner_valid_options: ["holdout", "cv"],
+      } as unknown as UiSchema,
+    });
+
+    fireEvent.keyDown(screen.getByLabelText("Inner validation method"), {
+      key: "Enter",
+    });
+    fireEvent.click(screen.getByRole("option", { name: "cv" }));
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const es = earlyStoppingOf(onChange.mock.calls[0][0]);
+    expect((es.inner_valid as Record<string, unknown>).method).toBe("cv");
+    expect(es.inner_valid_explicit).toBe(true);
+  });
+
+  it("the Inner Valid Ratio edit writes the ratio and marker true in one onChange", () => {
+    const onChange = vi.fn();
+    renderConfigForm({
+      schema: schemaWithTraining,
+      config: explicitConfig(),
+      onChange,
+      uiSchema: {
+        inner_valid_options: ["holdout", "cv"],
+      } as unknown as UiSchema,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Increment" }));
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const es = earlyStoppingOf(onChange.mock.calls[0][0]);
+    expect((es.inner_valid as Record<string, unknown>).ratio).toBeCloseTo(0.25);
+    expect(es.inner_valid_explicit).toBe(true);
+  });
+
+  it("auto-reset of an invalid method writes holdout and marker false in one onChange (no funnel)", () => {
+    const onChange = vi.fn();
+    renderConfigForm({
+      schema: schemaWithTraining,
+      config: {
+        ...explicitConfig(true),
+        training: {
+          early_stopping: {
+            enabled: true,
+            inner_valid_explicit: true,
+            inner_valid: { method: "cv", ratio: 0.2 },
+          },
+        },
+      },
+      onChange,
+      uiSchema: {
+        inner_valid_options: ["holdout", "group_holdout", "time_holdout"],
+      } as unknown as UiSchema,
+    });
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const es = earlyStoppingOf(onChange.mock.calls[0][0]);
+    expect((es.inner_valid as Record<string, unknown>).method).toBe("holdout");
+    expect(es.inner_valid_explicit).toBe(false);
+  });
+
+  it("auto-reset through the funnel enqueues ONE auto-reset patch-many carrying method and marker false", async () => {
+    const enqueued: Array<Parameters<ConfigWriteFunnel["enqueueWrite"]>[0]> =
+      [];
+    const funnel: ConfigWriteFunnel = {
+      enqueueWrite: vi.fn(async (op) => {
+        enqueued.push(op);
+        return { ok: true as const, saved: {} as Record<string, unknown> };
+      }) as ConfigWriteFunnel["enqueueWrite"],
+      isFlushing: () => false,
+    };
+
+    render(
+      <TooltipProvider>
+        <ConfigWriteFunnelProvider funnel={funnel}>
+          <ConfigForm
+            schema={schemaWithTraining}
+            config={{
+              config_version: 1,
+              model: { name: "lgbm", params: {} },
+              training: {
+                early_stopping: {
+                  enabled: true,
+                  inner_valid_explicit: true,
+                  inner_valid: { method: "cv", ratio: 0.2 },
+                },
+              },
+            }}
+            onChange={vi.fn()}
+            uiSchema={
+              {
+                inner_valid_options: [
+                  "holdout",
+                  "group_holdout",
+                  "time_holdout",
+                ],
+              } as unknown as UiSchema
+            }
+          />
+        </ConfigWriteFunnelProvider>
+      </TooltipProvider>,
+    );
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(enqueued).toHaveLength(1);
+    const op = enqueued[0];
+    expect(op.reason).toBe("auto-reset");
+    expect(op.kind).toBe("patch-many");
+    if (op.kind !== "patch-many") throw new Error("unreachable");
+    expect(op.patches).toEqual([
+      {
+        path: ["training", "early_stopping", "inner_valid", "method"],
+        value: "holdout",
+      },
+      {
+        path: ["training", "early_stopping", "inner_valid_explicit"],
+        value: false,
+      },
+    ]);
+  });
 });
 
 describe("ConfigForm — Calibration section edge cases", () => {
