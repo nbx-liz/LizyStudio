@@ -17,6 +17,7 @@ Every reader fails on a missing file or an unmatched pattern (DC1).
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 from importlib.metadata import version
@@ -165,13 +166,39 @@ def _nightly_past_versions() -> list[str]:
 
 def _bench_past_versions() -> list[str]:
     bench = ROOT / "tests" / "bench" / "test_bench_pickle_compat.py"
-    found = _match(r"^PAST_MINORS = \(([^)]*)\)$", bench.read_text(), bench)
-    return re.findall(r'"([0-9.]+)"', found.group(1))
+    found = _match(r"^PAST_MINORS = (\([^)]*\))$", bench.read_text(), bench)
+    # A literal tuple of strings only: a name or an expression in it raises
+    # instead of being dropped from the comparison.
+    members = ast.literal_eval(found.group(1))
+    assert isinstance(members, tuple)
+    assert all(isinstance(m, str) for m in members), members
+    return list(members)
 
 
 def test_past_versions_are_the_three_minors_below_the_installed_one() -> None:
     major, minor = _installed()
+    assert minor >= 3, (
+        f"lizyml {major}.{minor}: there are not three earlier minors of major "
+        f"{major}, so 'the three minors below' is undefined. Decide which past "
+        "versions the pickle matrix checks across the major bump, then update "
+        "PAST_VERSIONS and this test."
+    )
     expected = [f"{major}.{minor - k}.0" for k in (3, 2, 1)]
     assert _script_past_versions() == expected
     assert _nightly_past_versions() == expected
     assert _bench_past_versions() == expected
+
+
+def test_a_mirror_only_change_runs_this_test_in_pr_ci() -> None:
+    # This file runs in the backend job, which CI gates on a path filter.
+    # Without the mirror path there, a PR that edits only a frontend mirror
+    # would skip the equality check above.
+    workflow = ROOT / ".github" / "workflows" / "ci.yml"
+    data = yaml.safe_load(workflow.read_text())
+    filters = [
+        yaml.safe_load(step["with"]["filters"])
+        for step in data["jobs"]["changes"]["steps"]
+        if step.get("id") == "filter"
+    ]
+    assert len(filters) == 1, f"{workflow}: expected one paths filter step"
+    assert "frontend/src/__fixtures__/**" in filters[0]["backend"]
