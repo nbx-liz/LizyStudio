@@ -326,6 +326,9 @@ def test_unpause_runs_only_remaining_trials(job_store: JobStore) -> None:
         f"existing {existing}). Pre-fix this was {target_n_trials}, doubling "
         "the budget."
     )
+    # P-0116 child 4: lizyml 0.20 refuses resume=False onto an existing
+    # study (CONFIG_INVALID), so the re-attach must say resume=True.
+    assert backend.tune_calls[0]["resume"] is True
 
 
 # --- Baseline: non-resume path is unchanged --------------------------------

@@ -381,6 +381,10 @@ def run_tune(
     # Issue #554 (R-1.4 INV-4): unpause budget reconciliation.
     skip_tune_call = False
     prebuilt_tune_result: TuningSummary | None = None
+    # P-0116 child 4: lizyml 0.20 refuses resume=False onto an existing study
+    # (CONFIG_INVALID), so the partial-budget re-attach below says resume=True.
+    # Reading the study's rounds (read_study_lineage) is P-0116 D3 (child 6).
+    reattach = False
     if resume_from_existing_study:
         target_n_trials = int(
             tune_config.get("tuning", {})
@@ -423,6 +427,7 @@ def run_tune(
             tune_config.setdefault("tuning", {}).setdefault("optuna", {}).setdefault(
                 "params", {}
             )["n_trials"] = remaining
+            reattach = True
 
     # P-0109 PR-6b (Issue #527 re-enablement, ships with #554): warn-only
     # INV-T3 drift assertion. The forward path through
@@ -444,6 +449,7 @@ def run_tune(
                 on_progress=cb,
                 re_tune=re_tune,
                 checkpoint_dir=checkpoint_dir,
+                resume=reattach,
                 storage=storage_url,
                 study_name=study_name,
             )

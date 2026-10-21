@@ -46,7 +46,7 @@ def _tiny_tuning_config() -> dict[str, Any]:
         "split": {"method": "stratified_kfold", "n_splits": 3},
         "tuning": {
             "optuna": {
-                "params": {"n_trials": 2, "direction": "maximize"},
+                "params": {"n_trials": 2, "direction": "minimize"},
             }
         },
     }

@@ -243,6 +243,14 @@ class TestToWireConfig:
         assert out["model"] == config["model"]
         assert config["tuning"]["optuna"]["space"] == space
 
+    def test_a_non_empty_space_replaces_the_provider_defaults(self) -> None:
+        # P-0116 D1 / child 4: Studio's catalog space is the whole space, so
+        # lizyml 0.20 must not merge its default space (or fixed params) in.
+        config = _config({"learning_rate": {"type": "float", "low": 0.01, "high": 0.1}})
+        out = to_wire_config(config)
+        assert out["tuning"]["optuna"]["space_mode"] == "replace"
+        assert "space_mode" not in config["tuning"]["optuna"]
+
     @pytest.mark.parametrize(
         "config",
         [
@@ -255,6 +263,8 @@ class TestToWireConfig:
     def test_configs_without_a_space_are_returned_unchanged(
         self, config: dict[str, Any]
     ) -> None:
+        # No space_mode either: an empty space must keep lizyml's merge
+        # default, because replace with no dims would declare an empty space.
         assert to_wire_config(config) == config
 
 

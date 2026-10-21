@@ -69,7 +69,7 @@ def valid_tune_config(valid_config: dict[str, Any]) -> dict[str, Any]:
         **valid_config,
         "tuning": {
             "optuna": {
-                "params": {"direction": "minimize", "n_trials": 2},
+                "params": {"direction": "maximize", "n_trials": 2},
             },
         },
     }

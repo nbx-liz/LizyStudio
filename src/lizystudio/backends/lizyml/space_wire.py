@@ -405,8 +405,11 @@ def to_wire_config(config: dict[str, Any]) -> dict[str, Any]:
     """Return *config* in the form lizyml reads (P-0116 D1, D2).
 
     Routes ``model.params`` names to their Fit-config place, and translates a
-    non-empty ``tuning.optuna.space`` into wire form.  A config that needs
-    neither is returned as is.
+    non-empty ``tuning.optuna.space`` into wire form with ``space_mode:
+    replace``: Studio's catalog space is the whole space, so lizyml must not
+    merge its default space or fixed params in (P-0116 D1).  An empty space
+    keeps lizyml's ``merge`` default, which falls back to the provider's
+    space.  A config that needs neither is returned as is.
     """
     out = merge_embargo_into_purge_gap(route_model_params(config))
     tuning = out.get("tuning")
@@ -417,4 +420,5 @@ def to_wire_config(config: dict[str, Any]) -> dict[str, Any]:
     if out is config:
         out = copy.deepcopy(config)
     out["tuning"]["optuna"]["space"] = to_wire_space(space, out)
+    out["tuning"]["optuna"]["space_mode"] = "replace"
     return out
