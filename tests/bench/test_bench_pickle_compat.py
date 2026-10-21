@@ -95,14 +95,12 @@ def test_pickle_compat_rejects_schema_mismatch(tmp_path: Path) -> None:
     assert err.suggested_fix
 
 
-@pytest.mark.parametrize(
-    "past_minor",
-    [
-        "0.12.0",  # N-3
-        "0.13.0",  # N-2
-        "0.14.0",  # N-1
-    ],
-)
+# N-3, N-2, N-1 below the installed lizyml minor; kept equal to the matrix
+# script and the nightly workflow by tests/test_lizyml_fixture_freshness.py.
+PAST_MINORS = ("0.17.0", "0.18.0", "0.19.0")
+
+
+@pytest.mark.parametrize("past_minor", PAST_MINORS)
 def test_pickle_compat_rejects_past_n_minors(tmp_path: Path, past_minor: str) -> None:
     """The user-facing DoD for v3-26: artefacts produced by the
     previous three lizyml minor releases must be rejected with a

@@ -422,9 +422,12 @@ const REGRESSION_METRIC_NAMES = [
   "huber",
   "mae",
   "mape",
+  "mase",
   "r2",
   "rmse",
   "rmsle",
+  "smape",
+  "wape",
 ] as const;
 
 function jobWithFixture(fixture: unknown): JobDetail {
@@ -477,7 +480,7 @@ describe("useJobResultData with real fit_result fixtures", () => {
     expect(metrics.auc.is).toBe(binaryIsotonicFit.metrics.raw.if_mean.auc);
   });
 
-  it("derives 6 finite regression metrics from a real regression fit", async () => {
+  it("derives 9 finite regression metrics from a real regression fit", async () => {
     const job = jobWithFixture(regressionFit);
     const { result } = renderHook(
       () => useJobResultData({ job, selectedPlot: "" }),

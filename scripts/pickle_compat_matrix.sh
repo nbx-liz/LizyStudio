@@ -22,7 +22,10 @@
 #
 # Local invocation::
 #
-#     PAST_VERSIONS="0.12.0 0.13.0 0.14.0" bash scripts/pickle_compat_matrix.sh
+#     PAST_VERSIONS="0.17.0 0.18.0 0.19.0" bash scripts/pickle_compat_matrix.sh
+#
+# ``MATRIX_PYTHON`` (default 3.11, the CI interpreter) picks the Python of the
+# throwaway venvs, for a machine without 3.11.
 #
 # Exit 0 — every past version was rejected with the expected envelope.
 # Exit 1 — at least one past version was silently loaded OR raised the
@@ -34,7 +37,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 ARTEFACT_DIR="${ARTEFACT_DIR:-/tmp/pickle_compat_matrix}"
-PAST_VERSIONS="${PAST_VERSIONS:-0.12.0 0.13.0 0.14.0}"
+MATRIX_PYTHON="${MATRIX_PYTHON:-3.11}"
+PAST_VERSIONS="${PAST_VERSIONS:-0.17.0 0.18.0 0.19.0}"
 
 # Resolve the runtime version so the matrix table prints a clear contrast
 # between "saved with X" and "verified against Y" in the CI log.
@@ -66,7 +70,7 @@ for V in $PAST_VERSIONS; do
     # we want the past minor to load cleanly even if its transitive
     # deps differ from the current runtime.
     VENV_DIR="${ARTEFACT_DIR}/.venv-${V}"
-    uv venv --python 3.11 "$VENV_DIR" >/dev/null
+    uv venv --python "$MATRIX_PYTHON" "$VENV_DIR" >/dev/null
     # ``uv pip install`` in the local venv keeps the host project env clean.
     VIRTUAL_ENV="$VENV_DIR" uv pip install --quiet \
         "lizyml==${V}" cloudpickle >/dev/null

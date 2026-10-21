@@ -49,6 +49,9 @@ jobs:
               # nightly-streak-monitor.yml, so a change there must reach the
               # backend suite that runs it.
               - '.github/workflows/**'
+              # The frontend fixture mirrors are checked against their backend
+              # copies by tests/test_lizyml_fixture_freshness.py (P-0116 c8).
+              - 'frontend/src/__fixtures__/**'
             frontend:
               - 'frontend/**'
               - '!frontend/README.md'
