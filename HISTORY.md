@@ -4894,6 +4894,19 @@ lock を上げた時点で Tune がすべて失敗する。そのため、lock �
     - **`first_metric_only` と `metric`:** Studio から足す必要はない。利用者の空間が空でなければ、0.15 も 0.20 の `replace` も、固定値を足さない（lizyml 0.15 `core/model.py:619-630`、0.20 `core/_tuning_space.py:78-101`）。そのため、trial は Fit の既定値で学習する。既定値は、`metric` が task の既定（0.15 `estimators/lgbm/adapter.py:384`、0.20 `:468-470`）、`first_metric_only` が `False`（0.15 `defaults.py:86`、0.20 `defaults.py:89`）である。
       - D1 の「値は今の Fit と同じものにする」は、何もしなくても満たされる。足すと LizyML の語彙を Studio に写すことになる（DC3）。
       - 基準「`first_metric_only` と `metric` が固定値として `model.params` に入る」は外す。
+  - **D2 の仕組みの変更（owner、2026-10-21、決定カード D-20261021-012）:** 分配は、`create_model` で `model.params` の名前ごとに行う（`space_wire.route_model_params`）。
+    - **振り分け方:** 子 PR 1 の対応表の Fit 側の行き先（`fit_dest`）を使い、smart / training / 固定値だけの名前を、LizyML が読む場所へ移す。
+    - **理由:** 5 か所の書き手（autofit、retune、unpause の skip 経路、Apply to Fit、Fixed モード）は、どれも最後に `create_model` を通る。そのため 1 か所で足り、Protocol・API・フロントエンドを変えずに済む。保存する設定は今の形のまま残す（D-20261021-010 と同じ考え方）。
+    - **名前で決めて正確な理由:** LizyML の smart と training の名前は閉じた集合で、すべて対応表にある。
+    - **やめたもの:** D2 (A) の「`tune_result` に 3 つの辞書を足す」と「unpause の skip 経路で `restore_tuning` を使う」。受け入れ基準の「5 か所それぞれの Fit の設定の全体を期待値と比べる」は、`create_model` が LizyML に渡す設定で確かめる。
+    - **inner_valid の印（A 案の解釈）:**
+      - 振り分けでは、明示かどうかを決めない。`inner_valid` の method は運ぶが、`validation_ratio` を横に残す。そのため lizyml 0.15 は、外側の split に合わせた自動の解決を続ける。0.20 の `inner_valid_explicit` の印が設定にあれば、そのまま残す。
+      - 理由は 2 つある。
+        - Tune タブは、利用者が選んだときだけでなく、CV に合わせた自動の推奨でも `model.params.inner_valid` を書く（`TuneTab.tsx:212-220`）。名前からはどちらか区別できない。A 案では、自動の推奨は明示ではない。
+        - `validation_ratio` も、Tune が選んだ値か Fixed モードの固定値かを名前から区別できない。また、ratio は method の選択ではない。
+      - 利用者が選んだことを UI から伝え、印を `true` にするのは、子 PR 5（印は 0.20 にしかない）で行う。
+      - これは D2 (A) の「Fixed モードの `inner_valid` と `validation_ratio` の固定値は `true`」を、子 PR 5 まで延ばしたものである。受け入れ基準の該当行は、子 PR 5 で確かめる。
+      - 当初のカード D-20261021-012 の「picker の値は明示」は、D-20261021-013 で置き換えた。
   - **0.20 より前に入れてはいけないもの:**
     - `direction` の省略。0.15 は省略すると `minimize` になり（lizyml 0.15 `config/schema.py:433-437`）、maximize の指標を逆向きに最適化してしまう。
     - `step` のテスト。0.15 は `step` を黙って無視する（DC1）。0.15 の次元の型には `step` の欄が無く（lizyml 0.15 `core/types/search_dim.py:20-64`）、`parse_space` も `step` を読まない（`tuning/search_space.py:116-171`）。`step` が加わったのは 0.20 である（lizyml 0.20 `core/types/search_dim.py:20-59`）。そのため、0.15 ではテストが通っても何も確かめていない。
