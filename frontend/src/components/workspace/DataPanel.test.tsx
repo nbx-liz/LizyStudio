@@ -1,6 +1,17 @@
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render as rtlRender,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { createRef } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { queryKeys } from "@/api/queryKeys";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { renderWithQuery as render } from "@/test/helpers";
 
 const mockLoadDataFromPath = vi.fn();
@@ -41,7 +52,7 @@ vi.mock("./FileBrowser", () => ({
   FileBrowser: () => <div data-testid="file-browser" />,
 }));
 
-import { DataPanel } from "./DataPanel";
+import { DataPanel, type DataPanelHandle } from "./DataPanel";
 
 describe("DataPanel", () => {
   afterEach(() => {
@@ -1541,5 +1552,59 @@ describe("DataPanel — regression task reaches the CV section", () => {
     await waitFor(() => {
       expect(screen.getByText("Stratify")).toBeInTheDocument();
     });
+  });
+
+  // Review r1 (DC4): the mismatch alert is reachable through a reload,
+  // where hydrateFromServer restores a stored regression task and the
+  // cache reconcile restores a stored stratified strategy.
+  it("shows the mismatch alert after rehydrating a stored regression + stratified config", async () => {
+    mockFetchPreview.mockResolvedValue({ columns: [], data: [] });
+    mockFetchColumns.mockResolvedValue({
+      columns: COLUMNS_BINARY,
+      suggested_task: null,
+      target: null,
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData(queryKeys.config(), {
+      config_version: 1,
+      task: "regression",
+      data: { path: "/data.csv", target: "target" },
+      split: { method: "stratified_kfold", n_splits: 5, random_state: 42 },
+    });
+    const ref = createRef<DataPanelHandle>();
+    rtlRender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <DataPanel
+            ref={ref}
+            onDataChanged={vi.fn()}
+            onTaskChanged={vi.fn()}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+
+    await act(async () => {
+      await ref.current?.hydrateFromServer({
+        path: "/data.csv",
+        shape: [100, COLUMNS_BINARY.length],
+        target: "target",
+        task: "regression",
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Stratified strategies need a classification target.",
+      );
+    });
+    expect(
+      screen.getByRole("radio", { name: "StratifiedKFold" }),
+    ).toBeChecked();
+    expect(
+      screen.queryByRole("radio", { name: "StratifiedGroup" }),
+    ).not.toBeInTheDocument();
   });
 });

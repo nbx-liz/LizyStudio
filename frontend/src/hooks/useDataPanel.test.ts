@@ -549,6 +549,71 @@ describe("useDataPanel", () => {
       expect(result.current.cv.mergedEmbargo).toBeUndefined();
     });
 
+    // P-0116 child 3b (review r1): the merged-embargo hint is display-only,
+    // so neither clearing it nor a stale cache event re-setting it may fire a
+    // sync PUT. Sync is live here (a target is selected).
+    it("never PUTs for a change of the merged-embargo hint alone", async () => {
+      mocks.fetchColumns.mockResolvedValue(COLS_OK);
+      mocks.fetchConfigDefaults.mockResolvedValue({
+        config_version: 1,
+        task: "binary",
+        data: { path: null, target: null },
+        features: { categorical: [], exclude: [] },
+        split: { method: "kfold", n_splits: 5 },
+        model: { name: "lgbm", params: {} },
+      });
+      const { wrapper, queryClient } = createWrapper();
+      const { result } = renderHook(
+        () => useDataPanel({ onDataChanged: vi.fn(), onTaskChanged: vi.fn() }),
+        { wrapper },
+      );
+      await act(async () => {
+        await result.current.handleTargetChange("a");
+      });
+      expect(mocks.updateConfig).toHaveBeenCalledTimes(1);
+
+      const legacy = {
+        config_version: 1,
+        task: "binary",
+        data: { path: null, target: "a" },
+        split: {
+          method: "purged_time_series",
+          n_splits: 4,
+          purge_gap: 3,
+          embargo: 2,
+        },
+      };
+      act(() => {
+        queryClient.setQueryData(queryKeys.config(), legacy);
+      });
+      await waitFor(() => expect(result.current.cv.mergedEmbargo).toBe(2));
+      // 2 calls: target selection + the folded purge gap written back once.
+      await waitFor(() => expect(mocks.updateConfig).toHaveBeenCalledTimes(2));
+      const written = mocks.updateConfig.mock.calls[1]?.[0] as {
+        split: Record<string, unknown>;
+      };
+      expect(written.split.purge_gap).toBe(5);
+      expect(written.split).not.toHaveProperty("embargo");
+
+      // The user keeps the folded value; only the hint is cleared.
+      act(() => {
+        result.current.setCvFromUser({
+          ...result.current.cv,
+          mergedEmbargo: undefined,
+        });
+      });
+      // A stale cache event re-sets the hint without changing the gap.
+      act(() => {
+        queryClient.setQueryData(queryKeys.config(), { ...legacy });
+      });
+      await waitFor(() => expect(result.current.cv.mergedEmbargo).toBe(2));
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 50));
+      });
+      expect(result.current.cv.purgeGap).toBe(5);
+      expect(mocks.updateConfig).toHaveBeenCalledTimes(2);
+    });
+
     it("updates cv.strategy when external config switches the CV method", async () => {
       const { wrapper, queryClient } = createWrapper();
       const { result } = renderHook(

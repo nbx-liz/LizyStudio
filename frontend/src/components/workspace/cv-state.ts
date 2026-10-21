@@ -112,6 +112,14 @@ export interface CvState {
    * Cleared on a purge-gap edit and by `resetCvState`.
    */
   mergedEmbargo?: number;
+  /**
+   * A legacy `embargo` outside the plain form that `parseSplitToCv` folds
+   * (an alias beside it, or a value that is not a non-negative integer).
+   * Carried verbatim and written back for `purged_time_series`, so the
+   * backend forwards to lizyml exactly what was stored (child 3a leaves
+   * these forms unchanged too). No input edits it.
+   */
+  legacyEmbargo?: unknown;
   trainSizeMax: number | undefined;
   testSizeMax: number | undefined;
   minTrainRows: number | undefined;
@@ -261,6 +269,9 @@ export function buildSplitConfig(
   if (active.includes("purge_gap") && cv.purgeGap !== undefined) {
     split.purge_gap = cv.purgeGap;
   }
+  if (cv.strategy === "purged_time_series" && cv.legacyEmbargo !== undefined) {
+    split.embargo = cv.legacyEmbargo;
+  }
   if (active.includes("train_size_max") && cv.trainSizeMax !== undefined) {
     split.train_size_max = cv.trainSizeMax;
   }
@@ -339,6 +350,24 @@ export function applyCvDataFields(
   return result;
 }
 
+const isCount = (v: unknown): boolean =>
+  typeof v === "number" && Number.isInteger(v) && v >= 0;
+
+/**
+ * The predicate of the backend's `merge_embargo_into_purge_gap` (child 3a):
+ * no legacy alias beside `embargo`, and `embargo` and `purge_gap` (absent
+ * counts as 0) are non-negative integers. Only this form is folded, so the
+ * purge gap the UI shows is the one lizyml runs with.
+ */
+function isPlainEmbargoForm(split: Record<string, unknown>): boolean {
+  if (["gap", "embargo_pct", "purge_window"].some((k) => k in split)) {
+    return false;
+  }
+  // Only an absent purge_gap counts as 0; an explicit null does not.
+  const purgeGap = "purge_gap" in split ? split.purge_gap : 0;
+  return isCount(split.embargo) && isCount(purgeGap);
+}
+
 /** Inverse of {@link buildSplitConfig} — read the CvState slice that an
  * external write has stored in the cached config back into local state.
  *
@@ -362,17 +391,20 @@ export function parseSplitToCv(
     out.randomState = split.random_state;
   if (typeof split.shuffle === "boolean") out.shuffle = split.shuffle;
   if (typeof split.gap === "number") out.gap = split.gap;
-  // P-0116 child 3b: lizyml dropped `embargo`. A legacy value is folded into
-  // purge_gap (the two were additive) and is never emitted again. purgeGap is
-  // left untouched when neither key holds a number.
-  const legacyPurgeGap =
-    typeof split.purge_gap === "number" ? split.purge_gap : undefined;
-  const legacyEmbargo =
-    typeof split.embargo === "number" ? split.embargo : undefined;
-  if (legacyPurgeGap !== undefined || legacyEmbargo !== undefined) {
-    out.purgeGap = (legacyPurgeGap ?? 0) + (legacyEmbargo ?? 0);
-    if (legacyEmbargo !== undefined && legacyEmbargo > 0) {
-      out.mergedEmbargo = legacyEmbargo;
+  if (typeof split.purge_gap === "number") out.purgeGap = split.purge_gap;
+  // P-0116 child 3b: lizyml dropped `embargo`. The plain form is folded into
+  // purge_gap (the two were additive) and never emitted again; any other form
+  // is carried verbatim (see CvState.legacyEmbargo).
+  if (split.method === "purged_time_series") {
+    out.legacyEmbargo = undefined;
+    if ("embargo" in split) {
+      if (isPlainEmbargoForm(split)) {
+        const embargo = split.embargo as number;
+        out.purgeGap = ((split.purge_gap as number | undefined) ?? 0) + embargo;
+        if (embargo > 0) out.mergedEmbargo = embargo;
+      } else {
+        out.legacyEmbargo = split.embargo;
+      }
     }
   }
   if (typeof split.train_size_max === "number")

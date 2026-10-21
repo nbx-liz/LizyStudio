@@ -102,5 +102,11 @@ export function buildSyncKey(
   cv: unknown,
   blocked: unknown,
 ): string {
-  return JSON.stringify({ target, task, overrides, cv, blocked });
+  // P-0116 child 3b: `mergedEmbargo` only drives a hint, so a change of it
+  // alone must not fire a sync PUT. JSON.stringify drops undefined values.
+  const syncedCv =
+    cv !== null && typeof cv === "object" && "mergedEmbargo" in cv
+      ? { ...cv, mergedEmbargo: undefined }
+      : cv;
+  return JSON.stringify({ target, task, overrides, cv: syncedCv, blocked });
 }

@@ -757,13 +757,22 @@ describe("parseSplitToCv embargo folding", () => {
   });
 
   it("sets no hint for a zero embargo but keeps purge_gap", () => {
-    const out = parseSplitToCv({ purge_gap: 4, embargo: 0 });
+    const out = parseSplitToCv({
+      method: "purged_time_series",
+      purge_gap: 4,
+      embargo: 0,
+    });
     expect(out.purgeGap).toBe(4);
     expect(out).not.toHaveProperty("mergedEmbargo");
+    expect(out.legacyEmbargo).toBeUndefined();
   });
 
   it("is idempotent once the folded value has been written back without embargo", () => {
-    const first = parseSplitToCv({ purge_gap: 3, embargo: 2 });
+    const first = parseSplitToCv({
+      method: "purged_time_series",
+      purge_gap: 3,
+      embargo: 2,
+    });
     const written = buildSplitConfig({
       ...INITIAL_CV_STATE,
       strategy: "purged_time_series",
@@ -798,6 +807,88 @@ describe("parseSplitToCv embargo folding", () => {
     expect(FALLBACK_CV_STRATEGY_FIELDS.purged_time_series).not.toContain(
       "embargo",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P-0116 child 3b: the fold predicate is child 3a's merge_embargo_into_purge_gap
+// predicate (tests/test_p0116_d5_backend.py), so the UI shows the gap lizyml
+// runs with. A form outside it carries `embargo` verbatim, never folded and
+// never dropped, so a config lizyml refuses stays refused (DC1).
+// ---------------------------------------------------------------------------
+describe("parseSplitToCv fold predicate mirrors the backend", () => {
+  const PURGED = "purged_time_series";
+  const notFolded: Array<[string, Record<string, unknown>]> = [
+    ["another method", { method: "time_series", purge_gap: 2, embargo: 3 }],
+    ["a gap alias", { method: PURGED, gap: 1, purge_gap: 2, embargo: 3 }],
+    ["an embargo_pct alias", { method: PURGED, embargo_pct: 0.1, embargo: 3 }],
+    ["a purge_window alias", { method: PURGED, purge_window: 2, embargo: 3 }],
+    ["a null embargo", { method: PURGED, purge_gap: 2, embargo: null }],
+    ["a negative embargo", { method: PURGED, purge_gap: 2, embargo: -1 }],
+    ["a fractional embargo", { method: PURGED, purge_gap: 2, embargo: 1.5 }],
+    ["a boolean embargo", { method: PURGED, purge_gap: 2, embargo: true }],
+    ["a string embargo", { method: PURGED, purge_gap: 2, embargo: "3" }],
+    ["a negative purge_gap", { method: PURGED, purge_gap: -2, embargo: 3 }],
+    ["a fractional purge_gap", { method: PURGED, purge_gap: 2.5, embargo: 3 }],
+    ["a null purge_gap", { method: PURGED, purge_gap: null, embargo: 3 }],
+  ];
+
+  it.each(notFolded)("does not fold %s", (_label, split) => {
+    const out = parseSplitToCv(split);
+    expect(out).not.toHaveProperty("mergedEmbargo");
+    if (typeof split.purge_gap === "number") {
+      expect(out.purgeGap).toBe(split.purge_gap);
+    } else {
+      expect(out).not.toHaveProperty("purgeGap");
+    }
+  });
+
+  it.each(notFolded.filter(([, split]) => split.method === PURGED))(
+    "carries embargo verbatim for %s and writes it back unchanged",
+    (_label, split) => {
+      const out = parseSplitToCv(split);
+      expect(out.legacyEmbargo).toBe(split.embargo);
+      const written = buildSplitConfig({
+        ...INITIAL_CV_STATE,
+        strategy: PURGED,
+        ...out,
+      });
+      expect(written.embargo).toBe(split.embargo);
+    },
+  );
+
+  it("does not carry embargo for another method (unchanged from before)", () => {
+    const out = parseSplitToCv({
+      method: "time_series",
+      purge_gap: 2,
+      embargo: 3,
+    });
+    expect(out).not.toHaveProperty("legacyEmbargo");
+  });
+
+  it("folds the plain form with purge_gap absent (counts as 0)", () => {
+    const out = parseSplitToCv({ method: PURGED, embargo: 3 });
+    expect(out.purgeGap).toBe(3);
+    expect(out.mergedEmbargo).toBe(3);
+    expect(out.legacyEmbargo).toBeUndefined();
+  });
+
+  it("clears a carried embargo when the cache no longer holds one", () => {
+    const out = parseSplitToCv({ method: PURGED, purge_gap: 2 });
+    expect(out).toHaveProperty("legacyEmbargo", undefined);
+  });
+
+  it("emits a carried embargo only for purged_time_series", () => {
+    const written = buildSplitConfig({
+      ...INITIAL_CV_STATE,
+      strategy: "time_series",
+      legacyEmbargo: -1,
+    });
+    expect(written).not.toHaveProperty("embargo");
+  });
+
+  it("resetCvState drops a carried embargo", () => {
+    expect(resetCvState(PURGED).legacyEmbargo).toBeUndefined();
   });
 });
 
