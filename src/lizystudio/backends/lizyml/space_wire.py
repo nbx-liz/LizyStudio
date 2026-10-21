@@ -218,16 +218,110 @@ def find_wire_name_collisions(space: dict[str, Any]) -> list[WireNameCollisionEr
     return found
 
 
-def to_wire_config(config: dict[str, Any]) -> dict[str, Any]:
-    """Return a copy of *config* whose ``tuning.optuna.space`` is in wire form.
+_ROW_BY_WIRE_NAME: dict[str, WireRow] = {
+    row.wire_name: row for row in WIRE_TABLE.values()
+}
+_DEFAULT_INNER_RATIO = 0.1
 
-    A config without a non-empty space (every Fit job) is returned as is.
+
+def _row_for_param(name: str) -> WireRow | None:
+    """The table row a ``model.params`` name belongs to.
+
+    Writers use both spellings: Fixed mode writes catalog keys
+    (``early_stopping.rounds``), tune results carry wire names
+    (``early_stopping_rounds``).
     """
-    tuning = config.get("tuning")
+    return WIRE_TABLE.get(name) or _ROW_BY_WIRE_NAME.get(name)
+
+
+def _inner_ratio(early_stopping: dict[str, Any]) -> Any:
+    inner = early_stopping.get("inner_valid")
+    if isinstance(inner, dict) and "ratio" in inner:
+        return inner["ratio"]
+    return early_stopping.get("validation_ratio", _DEFAULT_INNER_RATIO)
+
+
+def route_model_params(config: dict[str, Any]) -> dict[str, Any]:
+    """Move ``model.params`` names lizyml reads elsewhere to their Fit-config place.
+
+    Native LightGBM names, including unknown ones, stay in ``model.params``.
+    A routed value wins over the value already at its destination: autofit
+    merges tuned values into ``model.params`` on top of the Fit tab's.
+
+    ``validation_ratio`` keeps lizyml's split-aware inner-split resolution
+    (it is written beside ``inner_valid``, which lizyml reads as not
+    explicit), whether it was tuned or fixed; a ratio is not a method choice.
+    The ``inner_valid`` picker value is the explicit choice: it becomes the
+    ``inner_valid`` method and drops ``validation_ratio`` (D-20261020-008
+    option A).  The returned config is a copy; *config* is not mutated.
+    """
+    model = config.get("model")
+    params = model.get("params") if isinstance(model, dict) else None
+    if not isinstance(params, dict) or not any(
+        (row := _row_for_param(name)) is not None
+        and not row.fit_dest.startswith("model.params.")
+        for name in params
+    ):
+        return config
+
+    out = copy.deepcopy(config)
+    out_model = out["model"]
+    training = out.setdefault("training", {})
+    if not isinstance(training, dict):
+        training = out["training"] = {}
+    early_stopping = training.setdefault("early_stopping", {})
+    if not isinstance(early_stopping, dict):
+        early_stopping = training["early_stopping"] = {}
+
+    kept: dict[str, Any] = {}
+    picker: Any = None
+    ratio: Any = None
+    for name, value in out_model["params"].items():
+        row = _row_for_param(name)
+        if row is None or row.fit_dest.startswith("model.params."):
+            kept[name] = value
+        elif row.fit_dest.startswith("model."):
+            out_model[row.fit_dest.removeprefix("model.")] = value
+        elif row.wire_name == "inner_valid":
+            picker = value
+        elif row.wire_name == "validation_ratio":
+            ratio = value
+        elif row.fit_dest == "training.seed":
+            training["seed"] = value
+        else:
+            early_stopping[row.fit_dest.removeprefix("training.early_stopping.")] = (
+                value
+            )
+    out_model["params"] = kept
+
+    if ratio is not None:
+        inner = early_stopping.get("inner_valid")
+        if isinstance(inner, dict):
+            early_stopping["inner_valid"] = {**inner, "ratio": ratio}
+        early_stopping["validation_ratio"] = ratio
+    if picker is not None:
+        early_stopping["inner_valid"] = {
+            "method": picker,
+            "ratio": ratio if ratio is not None else _inner_ratio(early_stopping),
+        }
+        early_stopping.pop("validation_ratio", None)
+    return out
+
+
+def to_wire_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Return *config* in the form lizyml reads (P-0116 D1, D2).
+
+    Routes ``model.params`` names to their Fit-config place, and translates a
+    non-empty ``tuning.optuna.space`` into wire form.  A config that needs
+    neither is returned as is.
+    """
+    out = route_model_params(config)
+    tuning = out.get("tuning")
     optuna = tuning.get("optuna") if isinstance(tuning, dict) else None
     space = optuna.get("space") if isinstance(optuna, dict) else None
     if not isinstance(space, dict) or not space:
-        return config
-    out = copy.deepcopy(config)
-    out["tuning"]["optuna"]["space"] = to_wire_space(space, config)
+        return out
+    if out is config:
+        out = copy.deepcopy(config)
+    out["tuning"]["optuna"]["space"] = to_wire_space(space, out)
     return out
