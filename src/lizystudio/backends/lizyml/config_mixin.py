@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any, Literal
 
@@ -19,7 +20,11 @@ from lizystudio.backends.types import (
     TuningOverrides,
 )
 
-from .config_compat import strip_internal_keys, task_params_compat_errors
+from .config_compat import (
+    regression_stratify_errors,
+    strip_internal_keys,
+    task_params_compat_errors,
+)
 from .space_wire import find_wire_name_collisions, to_wire_entry
 
 # Regression metrics whose value is undefined / degenerate for certain target
@@ -255,11 +260,15 @@ class ConfigMixin:
         clean = self._strip_internal_keys(config)
         errors: list[dict[str, Any]] = []
         try:
-            LizyMLConfig.model_validate(clean)
+            # A copy: lizyml's before-validators pop keys from the input dict
+            # (0.15's EarlyStoppingConfig pops ``validation_ratio``), and the
+            # checks below must see the config as written.
+            LizyMLConfig.model_validate(copy.deepcopy(clean))
         except ValidationError as exc:
             errors.extend(exc.errors())  # type: ignore[arg-type]
 
         errors.extend(task_params_compat_errors(clean))
+        errors.extend(regression_stratify_errors(clean))
         return errors
 
     def get_incompatible_metrics(

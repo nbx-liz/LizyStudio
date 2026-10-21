@@ -229,3 +229,83 @@ def task_params_compat_errors(config: dict[str, Any]) -> list[dict[str, Any]]:
         )
 
     return errors
+
+
+_STRATIFIED_SPLIT_METHODS = frozenset({"stratified_kfold", "stratified_group_kfold"})
+
+
+def _inner_valid_in_effect(early_stopping: Any) -> bool:
+    """Whether the configured ``inner_valid`` is explicit, as lizyml reads it.
+
+    lizyml uses an explicit inner split as written and resolves its own from
+    the outer split otherwise: lizyml 0.20 reads the ``inner_valid_explicit``
+    marker, and without the marker both versions treat an ``inner_valid``
+    written beside ``validation_ratio`` as not explicit.  lizyml 0.20 refuses
+    a regression ``stratify`` on exactly this condition, whether or not early
+    stopping is enabled (``core/_model_factories.py:230-236``), so a disabled
+    early stopping does not exempt it here either.
+    """
+    if not isinstance(early_stopping, dict):
+        return False
+    marker = early_stopping.get("inner_valid_explicit")
+    if isinstance(marker, bool):
+        return marker
+    return "validation_ratio" not in early_stopping
+
+
+def regression_stratify_errors(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Refuse stratification on a regression task (P-0116 D5).
+
+    A continuous target has no classes to stratify by.  lizyml 0.15 fails
+    such a fit with a bare sklearn ``ValueError`` and 0.20 with
+    ``CONFIG_INVALID`` only once the splitter is built, so neither reaches
+    the user as a clear message before a job starts.  Three settings ask for
+    it: a stratified ``split.method``, ``split.groups.stratify: true``
+    (blocked_group_kfold) and ``training.early_stopping.inner_valid.stratify:
+    true``.  ``groups.stratify: "auto"`` resolves to False for regression and
+    passes.  Malformed sections are left to the schema validation.
+    """
+    if not isinstance(config, dict) or config.get("task") != "regression":
+        return []
+    errors: list[dict[str, Any]] = []
+
+    def refuse(loc: tuple[str, ...], what: str, value: Any) -> None:
+        errors.append(
+            {
+                "type": "regression_stratify",
+                "loc": loc,
+                "msg": (
+                    f"{what} cannot be used with task='regression': a continuous "
+                    "target has no classes to stratify by."
+                ),
+                "input": value,
+            }
+        )
+
+    split = config.get("split")
+    if isinstance(split, dict):
+        method = split.get("method")
+        if isinstance(method, str) and method in _STRATIFIED_SPLIT_METHODS:
+            refuse(("split", "method"), f"split.method={method!r}", method)
+        groups = split.get("groups")
+        if isinstance(groups, dict) and groups.get("stratify") is True:
+            refuse(("split", "groups", "stratify"), "split.groups.stratify=true", True)
+
+    training = config.get("training")
+    early_stopping = (
+        training.get("early_stopping") if isinstance(training, dict) else None
+    )
+    inner = (
+        early_stopping.get("inner_valid") if isinstance(early_stopping, dict) else None
+    )
+    if (
+        isinstance(inner, dict)
+        and inner.get("stratify") is True
+        and _inner_valid_in_effect(early_stopping)
+    ):
+        refuse(
+            ("training", "early_stopping", "inner_valid", "stratify"),
+            "training.early_stopping.inner_valid.stratify=true",
+            True,
+        )
+    return errors

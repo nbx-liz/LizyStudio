@@ -162,6 +162,17 @@ class PlotNotAvailableError(Exception):
         self.available = available
 
 
+class TuningFailedError(Exception):
+    """Raised when a tune ends without a usable trial (P-0116 D5, #691).
+
+    lizyml raises ``TUNING_FAILED`` when every trial of a round fails.  The
+    adapter re-raises it as this type so the job reports the cause under its
+    own code instead of as a generic backend error.  The message is lizyml's
+    user message, followed by the first trial error when lizyml reports one
+    (lizyml 0.19+).
+    """
+
+
 __all__ = [
     "CancelledError",
     "CheckpointIncompatibleError",
@@ -170,4 +181,5 @@ __all__ = [
     "LegacyFormatProtectionError",
     "PausedError",
     "PlotNotAvailableError",
+    "TuningFailedError",
 ]

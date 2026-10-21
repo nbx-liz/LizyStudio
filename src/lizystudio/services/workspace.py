@@ -283,6 +283,30 @@ def validate_config(ws: WorkspaceState, config: dict[str, Any]) -> list[dict[str
     return normalized
 
 
+# Backend validation rules added after stored jobs may have been created.
+# A relaunch (``/retune``, ``/resume``, ``/unpause``) starts a job from a
+# stored config that already passed the full gate when its job was created,
+# so only these newer rules are re-checked there (P-0116 D5).
+_RELAUNCH_RULE_TYPES = frozenset({"regression_stratify"})
+
+
+def relaunch_rule_errors(
+    ws: WorkspaceState, config: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Errors a relaunch must refuse: the newer rules only, normalized like
+    :func:`validate_config`'s output."""
+    return [
+        {
+            "path": ".".join(str(p) for p in err.get("loc", ())),
+            "message": err.get("msg", ""),
+            "severity": "error",
+            "suggested_fix": None,
+        }
+        for err in ws.backend.validate_config(config)
+        if err.get("type") in _RELAUNCH_RULE_TYPES
+    ]
+
+
 def validate_search_space_for_tune(
     ws: WorkspaceState, config: dict[str, Any]
 ) -> list[dict[str, Any]]:
