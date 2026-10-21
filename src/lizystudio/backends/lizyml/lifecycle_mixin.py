@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from pickle import PicklingError
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
@@ -16,6 +16,9 @@ from lizystudio.backends.types import FitSummary, TuningSummary
 from .config_compat import parse_re_tune, strip_internal_keys
 from .serialization import serialize_tuning_result
 from .space_wire import catalog_key_for_wire_name, to_wire_config
+
+if TYPE_CHECKING:
+    from .study_continuation import Continuation
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +121,30 @@ def _strings(entry: dict[str, Any], *keys: str) -> list[str]:
     return out
 
 
+def _read_unpause_continuation(
+    storage: str, study_name: str | None, planned_rounds: int
+) -> Continuation:
+    """Read how an unpause continues the stored study, and log it (P-0116 D3).
+
+    Imported here, not at module load, so importing the adapter does not
+    import lizyml and Optuna.
+    """
+    from .study_continuation import read_continuation
+
+    continuation = read_continuation(storage, study_name, planned_rounds)
+    logger.info(
+        "event='tune.unpause.lineage' study=%s state=%s closed=%d planned=%d "
+        "open=%s branch=%s",
+        study_name,
+        continuation.state,
+        continuation.closed,
+        planned_rounds,
+        continuation.open_round,
+        continuation.kind,
+    )
+    return continuation
+
+
 class LifecycleMixin:
     """Model creation, fitting, and tuning.
 
@@ -170,6 +197,15 @@ class LifecycleMixin:
         ``None`` (default), the legacy in-memory study path is used,
         so existing callers and re-tune flows continue to behave
         exactly as before.
+
+        ``resume=True`` together with ``storage`` is the unpause call
+        (P-0116 D3): the stored study's rounds are read first
+        (:mod:`.study_continuation`) and the study is continued up to
+        ``re_tune``'s plan.  When every planned round already closed, no
+        trial runs and ``Model.restore_tuning`` returns the stored result;
+        an open round is finished with its recorded budget; a study lizyml
+        cannot continue raises
+        :class:`~lizystudio.backends.exceptions.StudyNotResumableError`.
         """
         n_rounds, extra_kwargs = parse_re_tune(re_tune)
         # P-0099 v3-20b: storage / study_name are pass-through kwargs
@@ -186,9 +222,28 @@ class LifecycleMixin:
             storage_kwargs["storage"] = storage
             storage_kwargs["study_name"] = study_name
 
+        # P-0116 D3: only unpause passes resume=True with a storage. The
+        # initial tune passes resume=False and /retune passes no storage.
+        continuation = (
+            _read_unpause_continuation(storage, study_name, n_rounds)
+            if resume and storage is not None
+            else None
+        )
+        first_round = 1 if continuation is None else continuation.first_round
+        total_rounds = n_rounds if continuation is None else continuation.last_round
+
+        def _round_kwargs(round_idx: int) -> dict[str, Any]:
+            if continuation is not None:
+                from .study_continuation import round_kwargs
+
+                return round_kwargs(continuation, round_idx, extra_kwargs)
+            if round_idx == 1 and not resume:
+                return {}
+            return {"resume": True, **extra_kwargs}
+
         lizyml_callback: Any = None
         accumulated_trials: list[dict[str, Any]] = []
-        current_round = 1
+        current_round = first_round
 
         if resume:
             prior_result = getattr(model, "_tuning_result", None)
@@ -234,7 +289,7 @@ class LifecycleMixin:
                 if on_progress is None:
                     return
 
-                msg = f"Round {current_round}/{n_rounds} · "
+                msg = f"Round {current_round}/{total_rounds} · "
                 msg += f"Trial {info.current_trial}/{info.total_trials}"
                 if info.best_score is not None:
                     msg += f" | Best: {info.best_score:.4f}"
@@ -259,7 +314,7 @@ class LifecycleMixin:
                         total=info.total_trials,
                         message=msg,
                         round=current_round,
-                        total_rounds=n_rounds,
+                        total_rounds=total_rounds,
                         trial_results=list(accumulated_trials),
                     )
                 except CancelledError:
@@ -270,33 +325,32 @@ class LifecycleMixin:
         if on_progress is not None:
             on_progress(current=0, total=0, message="Starting tuning...")
 
-        first_round_kwargs: dict[str, Any] = {}
-        if resume:
-            first_round_kwargs["resume"] = True
-            first_round_kwargs.update(extra_kwargs)
-        tune_result = _run_tune_round(
-            model,
-            progress_callback=lizyml_callback,
-            **storage_kwargs,
-            **first_round_kwargs,
-        )
-        for round_idx in range(2, n_rounds + 1):
-            current_round = round_idx
-            if on_progress is not None:
-                on_progress(
-                    current=0,
-                    total=0,
-                    message=f"Starting round {round_idx}/{n_rounds}...",
-                    round=round_idx,
-                    total_rounds=n_rounds,
-                )
+        if continuation is not None and continuation.kind == "restore":
+            # Every planned round closed before the pause: no trial runs.
+            tune_result = model.restore_tuning(storage, study_name)
+        else:
             tune_result = _run_tune_round(
                 model,
                 progress_callback=lizyml_callback,
-                resume=True,
                 **storage_kwargs,
-                **extra_kwargs,
+                **_round_kwargs(first_round),
             )
+            for round_idx in range(first_round + 1, total_rounds + 1):
+                current_round = round_idx
+                if on_progress is not None:
+                    on_progress(
+                        current=0,
+                        total=0,
+                        message=f"Starting round {round_idx}/{total_rounds}...",
+                        round=round_idx,
+                        total_rounds=total_rounds,
+                    )
+                tune_result = _run_tune_round(
+                    model,
+                    progress_callback=lizyml_callback,
+                    **storage_kwargs,
+                    **_round_kwargs(round_idx),
+                )
 
         if checkpoint_dir is not None:
             try:

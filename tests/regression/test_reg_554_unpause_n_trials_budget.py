@@ -1,63 +1,48 @@
 """Regression test for Issue #554 — unpause must preserve the original n_trials budget.
 
 R-1.4 (Tune resumability) INV-4: after a pause → unpause round-trip, the
-Optuna study attached to the same ``job_id`` MUST end up with exactly
-``n_trials`` completed trials, regardless of which phase observed the
-PAUSE flag.
+Optuna study attached to the same ``job_id`` MUST end up with the budget the
+Tune planned, never a second copy of it, regardless of which phase observed
+the PAUSE flag.
 
 Pre-fix bug
 -----------
 ``POST /jobs/{id}/unpause`` (P-0099 v3-20d) called ``start_tune_async``
-which re-entered ``run_tune`` from the top. ``run_tune`` constructed a
-fresh model from the original config and called
-``backend.tune(..., storage=..., study_name=...)``. lizyml attaches to
-the persisted study via ``load_if_exists=True`` and then runs
-``study.optimize(n_trials=original_n_trials)`` — which under Optuna
-semantics **appends** ``original_n_trials`` MORE trials, totalling
-``2 * n_trials`` whenever the pause arrived after the tune loop
-completed (CI 16, expected 8).
+which re-entered ``run_tune`` from the top and ran the configured
+``n_trials`` again onto the persisted study (CI 16, expected 8).
 
-Fix shape
----------
-``run_tune`` learns an opt-in ``resume_from_existing_study`` flag.
-When ``True`` (only the unpause path sets it):
+Fix history
+-----------
+The #554 fix counted the persisted Optuna trials in the service and either
+skipped ``backend.tune`` or rewrote ``n_trials`` to the remainder. lizyml
+0.20 counts budgets per round and records its rounds in the study, so
+P-0116 D3 (child 6) moved the decision into the lizyml adapter: the service
+passes ``resume=True`` with the job's storage, and the adapter reads the
+study's rounds (``read_study_lineage``) and either restores the stored result
+(every planned round closed: no trial runs), finishes an open round with its
+recorded budget, or runs the remaining planned rounds.
 
-1. Inspect the persisted Optuna study at ``storage_url`` / ``study_name``
-2. ``remaining = max(0, target - existing)``
-3. If ``remaining > 0`` — mutate ``tune_config[...n_trials...]`` so the
-   subsequent ``backend.tune(...)`` only runs ``remaining`` more trials.
-4. If ``remaining == 0`` — skip ``backend.tune(...)`` entirely. The
-   previous tune phase already populated the study to capacity; the
-   unpause job proceeds straight to the auto-fit phase using the
-   persisted best_params.
-
-Both branches enforce INV-4: ``len(study.trials) == n_trials`` after
-unpause completion, never ``2 * n_trials``.
-
-Working pattern reference
--------------------------
-``training_retune.py:104`` already passes ``resume=True`` to
-``backend.tune`` from the H-0062 retune path; the fix here is to mirror
-that resume-aware behaviour for the unpause flow but with the additional
-``remaining`` math (lizyml's ``model.tune(resume=True, n_trials=N)`` does
-NOT cap at N total — see lizyml ``tuner.py::Tuner.tune`` which calls
-``study.optimize(n_trials=N)`` unconditionally).
-
-The tests below pin both:
-- INV-4 holds when the pre-existing study is already at capacity
-  (``existing == target``) — the fix must SKIP ``backend.tune``.
-- INV-4 holds when the pre-existing study is partially filled
-  (``existing < target``) — the fix must run only ``remaining`` trials.
+The tests below pin:
+- the service hands the unpause to the backend once, with ``resume=True``,
+  the job's storage and study name, and the config's ``re_tune``;
+- a study the backend cannot continue fails the job (no new transition);
+- INV-4 at the adapter: a study whose planned rounds all closed runs no
+  trial, and an open round is finished without a fresh budget;
+- the initial tune path is unchanged.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import optuna
 import pytest
+from lizyml.tuning import RoundRecord, StudyLineage
 
+from lizystudio.backends.exceptions import StudyNotResumableError
+from lizystudio.backends.lizyml import LizyMLAdapter, study_continuation
 from lizystudio.backends.types import DataRef, FitSummary, TuningSummary
 from lizystudio.services.jobs import JobStore
 from lizystudio.services.training import (
@@ -72,29 +57,6 @@ pytestmark = pytest.mark.unit
 # --- Helpers ----------------------------------------------------------------
 
 
-def _seed_optuna_study(
-    *,
-    storage_url: str,
-    study_name: str,
-    n_trials: int,
-    direction: str = "minimize",
-) -> None:
-    """Pre-populate a persisted Optuna study with N completed trials.
-
-    Mirrors lizyml's storage shape so the SUT can re-attach via
-    ``load_if_exists=True``. Trials use a single ``x`` FloatDistribution
-    over [0, 1]; the values are deterministic so the test does not
-    depend on TPE sampler entropy.
-    """
-    study = optuna.create_study(
-        storage=storage_url, study_name=study_name, direction=direction
-    )
-    space = {"x": optuna.distributions.FloatDistribution(0.0, 1.0)}
-    for i in range(n_trials):
-        trial = study.ask(space)
-        study.tell(trial, float(i) / max(1, n_trials))
-
-
 def _count_study_trials(storage_url: str, study_name: str) -> int:
     study = optuna.load_study(storage=storage_url, study_name=study_name)
     return len(study.trials)
@@ -103,24 +65,26 @@ def _count_study_trials(storage_url: str, study_name: str) -> int:
 class _StubBackend:
     """Minimal :class:`BackendAdapter` stub for exercising ``run_tune``.
 
-    ``tune`` simulates lizyml's behaviour: it loads the persisted study
-    via ``load_if_exists=True`` and ``study.optimize(n_trials=N)`` runs
-    N MORE trials. Recorded on ``tune_n_trials_seen`` so the test can
-    assert how many trials the SUT requested.
+    ``tune`` records its arguments. On the initial (non-resume) path it
+    simulates lizyml by appending the configured ``n_trials`` to the
+    persisted study, so the baseline test can count them. ``tune_error``
+    makes ``tune`` raise instead.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, tune_error: Exception | None = None) -> None:
         self.tune_calls: list[dict[str, Any]] = []
         self.fit_calls: list[Any] = []
-        self.load_checkpoint_calls: list[Path] = []
+        self.tune_error = tune_error
 
     def preflight_checkpoint_dir(self, _job_dir: Path) -> None:
         return None
 
     def create_model(self, config: dict[str, Any], _dataframe: Any) -> Any:
-        # Stash the config for later inspection (the fix mutates n_trials here)
         self._last_create_config = config
         return object()
+
+    def compute_effective_tuning(self, task: str, overrides: Any) -> Any:
+        raise NotImplementedError  # INV-T3 check logs and returns
 
     def tune(
         self,
@@ -133,7 +97,6 @@ class _StubBackend:
         storage: str | None = None,
         study_name: str | None = None,
     ) -> TuningSummary:
-        # Read n_trials from the model's config (what lizyml reads).
         cfg = self._last_create_config
         n_trials = (
             cfg.get("tuning", {}).get("optuna", {}).get("params", {}).get("n_trials", 0)
@@ -147,19 +110,11 @@ class _StubBackend:
                 "re_tune": re_tune,
             }
         )
-        # Simulate lizyml: optuna.create_study(load_if_exists=True) +
-        # study.optimize(n_trials=N) appends N MORE trials to whatever
-        # is already persisted. The SUT either:
-        #   - mutates cfg n_trials to `remaining` and calls us once OR
-        #   - skips this method entirely.
-        # Either way, we append exactly the n_trials-many trials the
-        # caller requested into the persisted study.
-        if storage is not None and study_name is not None and n_trials > 0:
+        if self.tune_error is not None:
+            raise self.tune_error
+        if not resume and storage is not None and study_name is not None:
             study = optuna.create_study(
-                storage=storage,
-                study_name=study_name,
-                direction="minimize",
-                load_if_exists=True,
+                storage=storage, study_name=study_name, direction="minimize"
             )
             space = {"x": optuna.distributions.FloatDistribution(0.0, 1.0)}
             for _ in range(n_trials):
@@ -184,16 +139,10 @@ class _StubBackend:
         return path
 
     def plot(self, _model: Any, _kind: str) -> Any:
-        # Return a stub PlotData-shaped object; _save_tuning_plot
-        # swallows exceptions so even returning None would be fine.
         class _P:
             plotly_json = "{}"
 
         return _P()
-
-    def load_checkpoint(self, path: Path, *, allowed_root: Path | None = None) -> Any:
-        self.load_checkpoint_calls.append(path)
-        return object()
 
 
 def _make_data_ref() -> DataRef:
@@ -222,71 +171,7 @@ def job_store(tmp_path: Path) -> JobStore:
     return JobStore(tmp_path / "jobs")
 
 
-# --- INV-4 regression: full budget already spent ---------------------------
-
-
-def test_unpause_skips_tune_when_existing_equals_target(job_store: JobStore) -> None:
-    """Pause arrived AFTER the tune loop completed: existing == target.
-
-    INV-4: the persisted study MUST still have exactly ``target_n_trials``
-    after unpause completes. Pre-fix, ``backend.tune`` was invoked and
-    Optuna appended ``target_n_trials`` MORE trials (total ``2N``).
-    """
-    target_n_trials = 8
-    backend = _StubBackend()
-    job = job_store.create_and_claim_active(
-        backend_name="stub",
-        config=_tune_config(target_n_trials),
-        data_ref=_make_data_ref(),
-        job_type="tune",
-    )
-    assert job is not None
-
-    storage_url = _build_optuna_storage_url(job_store.job_dir(job.job_id))
-    study_name = _build_optuna_study_name(job.job_id)
-    _seed_optuna_study(
-        storage_url=storage_url,
-        study_name=study_name,
-        n_trials=target_n_trials,
-    )
-
-    run_tune(
-        job=job,
-        job_store=job_store,
-        backend=backend,
-        config=_tune_config(target_n_trials),
-        dataframe=object(),
-        resume_from_existing_study=True,
-    )
-
-    assert _count_study_trials(storage_url, study_name) == target_n_trials, (
-        f"INV-4 violated: study has {_count_study_trials(storage_url, study_name)} "
-        f"trials after unpause, expected {target_n_trials}"
-    )
-    assert len(backend.tune_calls) == 0, (
-        "backend.tune MUST be skipped when the study already holds the "
-        "full n_trials budget (existing == target); calling it would "
-        f"append {target_n_trials} more trials. Got: {backend.tune_calls}"
-    )
-    assert len(backend.fit_calls) == 1, (
-        "Auto-fit phase MUST still run after unpause (best_params from "
-        f"the persisted study). Got fit_calls={backend.fit_calls!r}"
-    )
-
-
-def test_skip_path_summary_uses_study_direction(job_store: JobStore) -> None:
-    """P-0116 D5: the rebuilt summary takes its direction from the study.
-
-    Job configs no longer carry a derived direction (lizyml derives it from
-    the metric), so the summary must not fall back to ``minimize`` for a
-    maximize study.
-    """
-    target_n_trials = 4
-    config = _tune_config(target_n_trials)
-    del config["tuning"]["optuna"]["params"]["direction"]
-    config["task"] = "binary"
-    config["evaluation"] = {"metrics": ["auc"]}
-    backend = _StubBackend()
+def _claim(job_store: JobStore, config: dict[str, Any]) -> Any:
     job = job_store.create_and_claim_active(
         backend_name="stub",
         config=config,
@@ -294,14 +179,20 @@ def test_skip_path_summary_uses_study_direction(job_store: JobStore) -> None:
         job_type="tune",
     )
     assert job is not None
-    storage_url = _build_optuna_storage_url(job_store.job_dir(job.job_id))
-    study_name = _build_optuna_study_name(job.job_id)
-    _seed_optuna_study(
-        storage_url=storage_url,
-        study_name=study_name,
-        n_trials=target_n_trials,
-        direction="maximize",
-    )
+    return job
+
+
+# --- Service: unpause hands the decision to the backend ---------------------
+
+
+def test_unpause_calls_tune_once_with_resume_and_the_jobs_study(
+    job_store: JobStore,
+) -> None:
+    """The service no longer counts trials or rewrites ``n_trials``."""
+    config = _tune_config(8)
+    config["tuning"]["re_tune"] = {"n_rounds": 3, "n_trials": 2}
+    backend = _StubBackend()
+    job = _claim(job_store, config)
 
     done = run_tune(
         job=job,
@@ -312,68 +203,137 @@ def test_skip_path_summary_uses_study_direction(job_store: JobStore) -> None:
         resume_from_existing_study=True,
     )
 
-    assert len(backend.tune_calls) == 0
-    assert done.tune_result is not None
-    assert done.tune_result.direction == "maximize"
-    # The seeded scores rise with the trial number, so maximize picks the last.
-    assert done.tune_result.best_score == pytest.approx(0.75)
+    assert done.status == "completed"
+    assert backend.tune_calls == [
+        {
+            "n_trials": 8,
+            "resume": True,
+            "storage": _build_optuna_storage_url(job_store.job_dir(job.job_id)),
+            "study_name": _build_optuna_study_name(job.job_id),
+            "re_tune": {"n_rounds": 3, "n_trials": 2},
+        }
+    ]
+    assert len(backend.fit_calls) == 1
 
 
-# --- INV-4 regression: partial budget spent --------------------------------
-
-
-def test_unpause_runs_only_remaining_trials(job_store: JobStore) -> None:
-    """Pause arrived mid-tune: existing < target.
-
-    INV-4: backend.tune MUST be called with ``n_trials = target - existing``,
-    not ``n_trials = target``. Pre-fix the full ``target`` was forwarded
-    and the final study had ``existing + target = 13`` trials instead of 8.
-    """
-    target_n_trials = 8
-    existing = 5
-    expected_remaining = target_n_trials - existing
-    backend = _StubBackend()
-    job = job_store.create_and_claim_active(
-        backend_name="stub",
-        config=_tune_config(target_n_trials),
-        data_ref=_make_data_ref(),
-        job_type="tune",
+def test_unpause_of_a_study_the_backend_cannot_continue_fails_the_job(
+    job_store: JobStore,
+) -> None:
+    """A refused study fails through the existing transitions (P-0116 D3)."""
+    backend = _StubBackend(
+        tune_error=StudyNotResumableError("legacy study", state="legacy")
     )
-    assert job is not None
+    job = _claim(job_store, _tune_config(4))
 
-    storage_url = _build_optuna_storage_url(job_store.job_dir(job.job_id))
-    study_name = _build_optuna_study_name(job.job_id)
-    _seed_optuna_study(
-        storage_url=storage_url, study_name=study_name, n_trials=existing
-    )
-
-    run_tune(
+    done = run_tune(
         job=job,
         job_store=job_store,
         backend=backend,
-        config=_tune_config(target_n_trials),
+        config=_tune_config(4),
         dataframe=object(),
         resume_from_existing_study=True,
     )
 
-    assert _count_study_trials(storage_url, study_name) == target_n_trials, (
-        "INV-4 violated: study has "
-        f"{_count_study_trials(storage_url, study_name)} trials after "
-        f"unpause, expected {target_n_trials}"
+    assert done.status == "failed"
+    assert done.error is not None
+    assert "StudyNotResumableError" in done.error
+    assert len(backend.tune_calls) == 1
+    assert len(backend.fit_calls) == 0
+    assert job_store.active_job_id is None
+
+
+# --- INV-4 at the adapter: the budget is not spent twice --------------------
+
+
+class _FakeModel:
+    def __init__(self) -> None:
+        self._tuning_result = None
+        self.tune_calls: list[dict[str, Any]] = []
+        self.restore_calls = 0
+
+    def _result(self) -> SimpleNamespace:
+        return SimpleNamespace(
+            best_params={"x": 0.5},
+            best_score=0.1,
+            trials=[],
+            metric_name="rmse",
+            direction="minimize",
+            rounds=None,
+            boundary_report=None,
+        )
+
+    def tune(self, **kwargs: Any) -> SimpleNamespace:
+        kwargs.pop("progress_callback", None)
+        self.tune_calls.append(kwargs)
+        return self._result()
+
+    def restore_tuning(self, storage: Any, study_name: Any) -> SimpleNamespace:
+        self.restore_calls += 1
+        return self._result()
+
+
+def _record(k: int, status: Any) -> RoundRecord:
+    return RoundRecord(
+        round=k,
+        status=status,
+        n_trials=8,
+        n_finished=8 if status == "completed" else 5,
+        best_score_before=None,
+        best_score_after=0.1 if status == "completed" else None,
     )
-    assert len(backend.tune_calls) == 1, (
-        f"backend.tune must run exactly once when remaining > 0. "
-        f"Got: {backend.tune_calls}"
+
+
+def _adapter_unpause(
+    monkeypatch: pytest.MonkeyPatch, lineage: StudyLineage, model: _FakeModel
+) -> None:
+    monkeypatch.setattr(
+        study_continuation, "read_study_lineage", lambda storage, name: lineage
     )
-    assert backend.tune_calls[0]["n_trials"] == expected_remaining, (
-        f"backend.tune received n_trials={backend.tune_calls[0]['n_trials']}, "
-        f"expected {expected_remaining} (= target {target_n_trials} - "
-        f"existing {existing}). Pre-fix this was {target_n_trials}, doubling "
-        "the budget."
+    LizyMLAdapter().tune(
+        model,
+        re_tune=None,
+        resume=True,
+        storage="sqlite:///unused.db",
+        study_name="studio-tune-554",
     )
-    # P-0116 child 4: lizyml 0.20 refuses resume=False onto an existing
-    # study (CONFIG_INVALID), so the re-attach must say resume=True.
-    assert backend.tune_calls[0]["resume"] is True
+
+
+def test_unpause_after_the_budget_was_spent_runs_no_trial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pause arrived AFTER the tune loop completed: the round is closed.
+
+    Pre-fix, the configured ``n_trials`` ran again (total ``2N``).
+    """
+    model = _FakeModel()
+    lineage = StudyLineage(state="completed", rounds=(_record(1, "completed"),))
+
+    _adapter_unpause(monkeypatch, lineage, model)
+
+    assert len(model.tune_calls) == 0
+    assert model.restore_calls == 1
+
+
+def test_unpause_of_an_open_round_runs_only_its_remaining_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pause arrived mid-round: lizyml finishes the round's recorded budget.
+
+    The adapter must not pass ``n_trials`` (pre-fix it passed the full
+    budget; the #554 fix passed the remainder, which lizyml 0.20 refuses).
+    """
+    model = _FakeModel()
+    lineage = StudyLineage(state="open", rounds=(_record(1, "open"),), open_round=1)
+
+    _adapter_unpause(monkeypatch, lineage, model)
+
+    assert model.restore_calls == 0
+    assert len(model.tune_calls) == 1
+    assert model.tune_calls[0] == {
+        "storage": "sqlite:///unused.db",
+        "study_name": "studio-tune-554",
+        "resume": True,
+    }
 
 
 # --- Baseline: non-resume path is unchanged --------------------------------
@@ -385,13 +345,7 @@ def test_initial_tune_path_unchanged_without_resume_flag(job_store: JobStore) ->
     flip that would break initial Tune jobs."""
     target_n_trials = 4
     backend = _StubBackend()
-    job = job_store.create_and_claim_active(
-        backend_name="stub",
-        config=_tune_config(target_n_trials),
-        data_ref=_make_data_ref(),
-        job_type="tune",
-    )
-    assert job is not None
+    job = _claim(job_store, _tune_config(target_n_trials))
 
     run_tune(
         job=job,
@@ -407,6 +361,7 @@ def test_initial_tune_path_unchanged_without_resume_flag(job_store: JobStore) ->
         "Initial tune path must forward the full configured n_trials. "
         f"Got: {backend.tune_calls[0]}"
     )
+    assert backend.tune_calls[0]["resume"] is False
 
     # Study should have exactly target_n_trials after the stub's simulation.
     storage_url = _build_optuna_storage_url(job_store.job_dir(job.job_id))

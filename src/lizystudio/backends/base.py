@@ -285,6 +285,19 @@ class BackendCore(Protocol):
         document the limitation in their adapter README. The lizyml
         adapter accepts any URL form supported by Optuna 0.12.0+
         (e.g. ``"sqlite:///path/to.db"``).
+
+        ``resume=True`` together with a non-None *storage* (the unpause
+        call, P-0116 D3) means: continue the study stored under
+        *storage* / *study_name* up to the plan of *re_tune* (its
+        ``n_rounds``, default 1).  The adapter decides from what the study
+        recorded: it may run no trial at all and return the stored result
+        when every planned round already closed, it finishes an
+        interrupted round with that round's recorded budget, and it runs
+        the planned rounds not yet started.  When the stored study cannot
+        be continued it raises
+        :class:`~lizystudio.backends.exceptions.CheckpointIncompatibleError`
+        (the lizyml adapter raises its subclass
+        :class:`~lizystudio.backends.exceptions.StudyNotResumableError`).
         """
         ...
 

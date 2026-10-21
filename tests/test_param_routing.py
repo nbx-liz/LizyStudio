@@ -321,8 +321,9 @@ class TestFiveWriters:
         self._check(to_wire_config(_prepare_autofit_config(self._base(), self.TUNED)))
 
     def test_unpause_skip_path(self) -> None:
-        # The skip path rebuilds best_params from Optuna, whose trial params
-        # carry the wire names, and merges them through the same helper.
+        # An unpause whose planned rounds all closed runs no trial: it takes
+        # best_params from Model.restore_tuning (P-0116 D3), which reports
+        # the wire names, and merges them through the same helper.
         from lizystudio.services._training_core import _prepare_autofit_config
 
         rebuilt = dict(self.TUNED)
