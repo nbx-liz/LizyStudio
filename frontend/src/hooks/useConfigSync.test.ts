@@ -276,6 +276,41 @@ describe("useConfigSync", () => {
     expect(es.inner_valid.method).toBe("group_holdout");
   });
 
+  // Review r1: the strategy is recorded as synced only once its PUT lands.
+  // If the strategy-change PUT fails, the next sync (here a folds edit) must
+  // apply the automatic re-derivation again instead of saving the stale
+  // ``true`` marker from the still-persisted base.
+  it("a failed strategy-change PUT re-applies the automatic marker on the next sync", async () => {
+    mocks.fetchConfig.mockResolvedValue({
+      ...baseConfig,
+      training: {
+        early_stopping: {
+          enabled: true,
+          inner_valid_explicit: true,
+          inner_valid: { method: "holdout", ratio: 0.1 },
+        },
+      },
+    });
+    const { wrapper } = testWrapper;
+    const { rerender } = renderHook(
+      ({ cv }) => useConfigSync(defaultParams({ cv })),
+      { wrapper, initialProps: { cv: INITIAL_CV_STATE } },
+    );
+    await waitFor(() => expect(mocks.updateConfig).toHaveBeenCalledTimes(1));
+
+    mocks.updateConfig.mockRejectedValueOnce(new Error("network down"));
+    const kfold = { ...INITIAL_CV_STATE, strategy: "kfold" };
+    rerender({ cv: kfold });
+    await waitFor(() => expect(mocks.updateConfig).toHaveBeenCalledTimes(2));
+
+    rerender({ cv: { ...kfold, folds: 7 } });
+    await waitFor(() => expect(mocks.updateConfig).toHaveBeenCalledTimes(3));
+
+    const [retried] = mocks.updateConfig.mock.calls[2];
+    expect(retried.training.early_stopping.inner_valid_explicit).toBe(false);
+    expect(retried.split.n_splits).toBe(7);
+  });
+
   // -------------------------------------------------------------------------
   // P-0090 / Issue #278 residual: useConfigSync must update the TanStack
   // Query cache atomically with its successful PUT, not only invalidate via
