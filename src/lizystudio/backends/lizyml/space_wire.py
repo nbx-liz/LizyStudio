@@ -33,6 +33,24 @@ from lizystudio.backends.lizyml_ui_schema import _SEARCH_SPACE_CATALOG
 Category = Literal["model", "smart", "training"]
 
 
+class WireNameCollisionError(ValueError):
+    """Two space entries name the same lizyml parameter.
+
+    For example the catalog key ``early_stopping.rounds`` and a hand-written
+    ``early_stopping_rounds``.  Keeping either one would silently drop the
+    other, so the space is refused instead.
+    """
+
+    def __init__(self, first_key: str, second_key: str, wire_name: str) -> None:
+        self.first_key = first_key
+        self.second_key = second_key
+        self.wire_name = wire_name
+        super().__init__(
+            f"'{first_key}' and '{second_key}' both set the lizyml parameter "
+            f"'{wire_name}'; keep only one of them."
+        )
+
+
 @dataclass(frozen=True)
 class WireRow:
     """How one catalog row reaches lizyml.
@@ -166,17 +184,38 @@ def to_wire_space(space: dict[str, Any], config: dict[str, Any]) -> dict[str, An
     es_on = _can_be_true(space, "early_stopping.enabled", early_stopping.get("enabled"))
 
     out: dict[str, Any] = {}
+    sources: dict[str, str] = {}
     for key, raw in space.items():
         if not isinstance(raw, dict):
-            out[key] = copy.deepcopy(raw)
+            wire_name, entry = key, copy.deepcopy(raw)
+        elif (
+            key in _AUTO_NUM_LEAVES_DIMS
+            and not auto_on
+            or key in _EARLY_STOPPING_DIMS
+            and not es_on
+        ):
             continue
-        if key in _AUTO_NUM_LEAVES_DIMS and not auto_on:
-            continue
-        if key in _EARLY_STOPPING_DIMS and not es_on:
-            continue
-        wire_name, entry = to_wire_entry(key, raw)
+        else:
+            wire_name, entry = to_wire_entry(key, raw)
+        if wire_name in sources:
+            raise WireNameCollisionError(sources[wire_name], key, wire_name)
+        sources[wire_name] = key
         out[wire_name] = entry
     return out
+
+
+def find_wire_name_collisions(space: dict[str, Any]) -> list[WireNameCollisionError]:
+    """Every entry of *space* whose wire name an earlier entry already took."""
+    sources: dict[str, str] = {}
+    found: list[WireNameCollisionError] = []
+    for key in space:
+        row = WIRE_TABLE.get(key)
+        wire_name = row.wire_name if row is not None else key
+        if wire_name in sources:
+            found.append(WireNameCollisionError(sources[wire_name], key, wire_name))
+        else:
+            sources[wire_name] = key
+    return found
 
 
 def to_wire_config(config: dict[str, Any]) -> dict[str, Any]:

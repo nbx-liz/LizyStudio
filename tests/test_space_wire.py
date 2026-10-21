@@ -16,6 +16,7 @@ import pytest
 
 from lizystudio.backends.lizyml.space_wire import (
     WIRE_TABLE,
+    WireNameCollisionError,
     to_wire_config,
     to_wire_space,
 )
@@ -276,3 +277,37 @@ class TestRunGate:
         errors = LizyMLAdapter().validate_search_space(space)
         paths = [e["path"] for e in errors]
         assert paths == ["tuning.optuna.space.early_stopping.rounds"]
+
+
+class TestWireNameCollisions:
+    """Two entries that name one lizyml parameter must not silently collapse."""
+
+    @pytest.mark.parametrize(
+        "order",
+        [
+            ("early_stopping.rounds", "early_stopping_rounds"),
+            ("early_stopping_rounds", "early_stopping.rounds"),
+        ],
+    )
+    def test_to_wire_space_refuses_a_collision(self, order: tuple[str, str]) -> None:
+        entry = {"type": "int", "low": 50, "high": 200}
+        space = {key: dict(entry) for key in order}
+        with pytest.raises(WireNameCollisionError) as excinfo:
+            to_wire_space(space, _config(space))
+        assert "early_stopping_rounds" in str(excinfo.value)
+
+    @pytest.mark.parametrize(
+        "order",
+        [
+            ("early_stopping.rounds", "early_stopping_rounds"),
+            ("early_stopping_rounds", "early_stopping.rounds"),
+        ],
+    )
+    def test_run_gate_reports_a_collision(self, order: tuple[str, str]) -> None:
+        from lizystudio.backends.lizyml import LizyMLAdapter
+
+        entry = {"type": "int", "low": 50, "high": 200}
+        space = {key: dict(entry) for key in order}
+        errors = LizyMLAdapter().validate_search_space(space)
+        assert [e["path"] for e in errors] == [f"tuning.optuna.space.{order[1]}"]
+        assert "early_stopping_rounds" in errors[0]["message"]

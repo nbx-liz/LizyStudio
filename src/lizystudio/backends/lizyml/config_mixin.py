@@ -20,7 +20,7 @@ from lizystudio.backends.types import (
 )
 
 from .config_compat import strip_internal_keys, task_params_compat_errors
-from .space_wire import to_wire_entry
+from .space_wire import find_wire_name_collisions, to_wire_entry
 
 # Regression metrics whose value is undefined / degenerate for certain target
 # distributions. The Service layer used to hardcode this watchlist (Issue #394);
@@ -397,6 +397,16 @@ class ConfigMixin:
                         "suggested_fix": _suggested_fix_for_space_error(name, raw),
                     }
                 )
+        for collision in find_wire_name_collisions(space):
+            out.append(
+                {
+                    "path": f"tuning.optuna.space.{collision.second_key}",
+                    "message": str(collision),
+                    "severity": "error",
+                    "suggested_fix": f"Remove '{collision.second_key}' or "
+                    f"'{collision.first_key}'.",
+                }
+            )
         return out
 
     @staticmethod
