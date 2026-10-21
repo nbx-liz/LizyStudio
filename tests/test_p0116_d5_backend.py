@@ -46,10 +46,27 @@ class TestEmbargoIntoPurgeGap:
         out = to_wire_config(self._split(embargo=4))
         assert out["split"] == {"method": "purged_time_series", "purge_gap": 4}
 
-    @pytest.mark.parametrize("embargo", [0, None])
-    def test_zero_or_null_embargo_is_dropped(self, embargo: Any) -> None:
-        out = to_wire_config(self._split(purge_gap=2, embargo=embargo))
+    def test_zero_embargo_is_dropped(self) -> None:
+        out = to_wire_config(self._split(purge_gap=2, embargo=0))
         assert out["split"] == {"method": "purged_time_series", "purge_gap": 2}
+
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            # Both lizyml versions refuse each of these before splitting; the
+            # sum must not turn them into a valid-looking config (DC1).
+            {"purge_gap": 2, "embargo": None},
+            {"purge_gap": 2, "embargo": -1},
+            {"purge_gap": -3, "embargo": 5},
+            {"purge_gap": 2, "embargo": 3, "gap": 1},
+            {"purge_gap": 2, "embargo": 3, "embargo_pct": 0.1},
+        ],
+    )
+    def test_configs_lizyml_refuses_are_left_as_they_are(
+        self, fields: dict[str, Any]
+    ) -> None:
+        config = self._split(**fields)
+        assert to_wire_config(config) is config
 
     def test_config_without_embargo_is_unchanged(self) -> None:
         config = self._split(purge_gap=2)
@@ -127,6 +144,43 @@ class TestRegressionStratify:
         assert [e["loc"] for e in errors] == [
             ("training", "early_stopping", "inner_valid", "stratify")
         ]
+
+    def test_inner_valid_stratify_with_a_true_marker_is_refused(self) -> None:
+        training = {
+            "early_stopping": {
+                "inner_valid": {"method": "holdout", "ratio": 0.1, "stratify": True},
+                "validation_ratio": 0.1,
+                "inner_valid_explicit": True,
+            }
+        }
+        assert len(_stratify_errors(_regression(training=training))) == 1
+
+    @pytest.mark.parametrize(
+        "early_stopping",
+        [
+            # Early stopping off: lizyml builds no inner split at all.
+            {
+                "enabled": False,
+                "inner_valid": {"method": "holdout", "stratify": True},
+            },
+            # lizyml 0.15 reads inner_valid beside validation_ratio as not
+            # explicit and resolves the inner split itself.
+            {
+                "inner_valid": {"method": "holdout", "ratio": 0.1, "stratify": True},
+                "validation_ratio": 0.1,
+            },
+            # lizyml 0.20's marker says not explicit: same resolution.
+            {
+                "inner_valid": {"method": "holdout", "ratio": 0.1, "stratify": True},
+                "inner_valid_explicit": False,
+            },
+        ],
+    )
+    def test_dormant_inner_valid_stratify_passes(
+        self, early_stopping: dict[str, Any]
+    ) -> None:
+        training = {"early_stopping": early_stopping}
+        assert _stratify_errors(_regression(training=training)) == []
 
     def test_all_three_are_reported_together(self) -> None:
         training = {
