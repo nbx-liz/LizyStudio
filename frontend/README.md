@@ -4,17 +4,22 @@ React + TypeScript + Vite UI for [LizyStudio](https://github.com/nbx-liz/LizyStu
 
 ## Prerequisites
 
-- **Node.js 20 or newer** — declared via `engines.node` in `package.json`. CI runs on Node 20. Older versions (including Node 18.x) have been observed to crash the production build (`pnpm build`) with a V8 fatal error under the current dependency graph, so 20 is the enforced floor rather than a recommendation.
+- **Node.js 24 or newer** — declared via `engines.node` in `package.json` and pinned in `.nvmrc`. CI and the publish build run on Node 24 (P-0112). On an older Node, pnpm prints `WARN Unsupported engine` and continues, so treat 24 as the required floor even though nothing refuses the install.
 - **pnpm 10 or newer** — the project pins `pnpm@10.31.0` via the `packageManager` field. Enable corepack once with `corepack enable` and pnpm will match automatically.
 - A running backend on `http://localhost:8501` for `pnpm dev` (the Vite dev server proxies API calls there).
 
-Run `node -v` to confirm. If you see anything below `v20`, install Node 20 via your version manager (`nvm install 20`, `fnm install 20`, `volta install node@20`, etc.) before continuing.
+Run `node -v` to confirm. If you see anything below `v24`, install Node 24 via your version manager (`nvm install 24`, `fnm install 24`, `volta install node@24`, etc.) before continuing.
 
 ## Install
 
+The full one-time setup (backend, git hooks, toolchain versions) is in
+[../CONTRIBUTING.md § Getting started](../CONTRIBUTING.md#getting-started).
+For the frontend alone:
+
 ```bash
 cd frontend
-pnpm install
+pnpm install --frozen-lockfile
+pnpm exec playwright install chromium   # browser for pnpm test:e2e
 ```
 
 ## Develop
@@ -71,4 +76,4 @@ pnpm check:api-types                  # Verify the generated file is up to date
 - Technical spec: [../BLUEPRINT.md](../BLUEPRINT.md)
 - Proposal history: [../HISTORY.md](../HISTORY.md)
 - Phased roadmap: [../PLAN.md](../PLAN.md)
-- Development rules: [../CLAUDE.md](../CLAUDE.md)
+- Contributing and setup: [../CONTRIBUTING.md](../CONTRIBUTING.md)

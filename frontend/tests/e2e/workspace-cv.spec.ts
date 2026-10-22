@@ -55,7 +55,6 @@ const ALLOWED_SPLIT_KEYS: Record<string, readonly string[]> = {
     "method",
     "n_splits",
     "purge_gap",
-    "embargo",
     "train_size_max",
     "test_size_max",
   ],

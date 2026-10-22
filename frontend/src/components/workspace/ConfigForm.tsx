@@ -52,6 +52,25 @@ interface ConfigFormProps {
 
 const HIDDEN = ["config_version", "tuning"];
 const DATA_PANEL_FIELDS = ["data", "features", "split", "task", "output_dir"];
+// P-0116 child 5b: write paths for the inner split + the "user chose it"
+// marker the backend reads (``inner_valid_explicit``).
+const INNER_VALID_METHOD_PATH = [
+  "training",
+  "early_stopping",
+  "inner_valid",
+  "method",
+] as const;
+const INNER_VALID_RATIO_PATH = [
+  "training",
+  "early_stopping",
+  "inner_valid",
+  "ratio",
+] as const;
+const INNER_VALID_EXPLICIT_PATH = [
+  "training",
+  "early_stopping",
+  "inner_valid_explicit",
+] as const;
 // validation_ratio is replaced by training.inner_valid.ratio rendered manually below
 const TRAINING_HIDDEN_FIELDS = ["validation_ratio", "inner_valid"];
 
@@ -76,6 +95,21 @@ export function ConfigForm({
   const handleFieldChange = useCallback(
     (path: string[], value: unknown) => {
       const updated = setNestedValue(configRef.current, path, value);
+      configRef.current = updated;
+      onChange(updated);
+    },
+    [onChange],
+  );
+
+  // P-0116 child 5b: apply several path writes against the freshest
+  // snapshot and emit ONE onChange (a user pick writes the value and the
+  // inner_valid_explicit marker together, so it is one PUT, not two).
+  const handleFieldsChange = useCallback(
+    (patches: ReadonlyArray<{ path: readonly string[]; value: unknown }>) => {
+      let updated = configRef.current;
+      for (const { path, value } of patches) {
+        updated = setNestedValue(updated, [...path], value);
+      }
       configRef.current = updated;
       onChange(updated);
     },
@@ -121,6 +155,23 @@ export function ConfigForm({
       });
     },
     [funnel, handleFieldChange],
+  );
+
+  // Multi-path variant of `enqueueAutoReset`: one funnel `patch-many` op
+  // (P-0116 child 5b), or one onChange when no funnel is mounted.
+  const enqueueAutoResetMany = useCallback(
+    (patches: ReadonlyArray<{ path: readonly string[]; value: unknown }>) => {
+      if (funnel === null) {
+        handleFieldsChange(patches);
+        return;
+      }
+      void funnel.enqueueWrite({
+        kind: "patch-many",
+        patches,
+        reason: "auto-reset",
+      });
+    },
+    [funnel, handleFieldsChange],
   );
 
   const defs = useMemo(
@@ -193,15 +244,18 @@ export function ConfigForm({
       // root cause. Keeping the corrected path here means a Phase
       // 2-only consumer (no funnel) and a funnel consumer write to
       // the same backend field.
-      enqueueAutoReset(
-        ["training", "early_stopping", "inner_valid", "method"],
-        "holdout",
-      );
+      //
+      // P-0116 child 5b: the reset is an automatic choice, so the
+      // ``inner_valid_explicit`` marker goes back to false in the same op.
+      enqueueAutoResetMany([
+        { path: INNER_VALID_METHOD_PATH, value: "holdout" },
+        { path: INNER_VALID_EXPLICIT_PATH, value: false },
+      ]);
     }
   }, [
     filteredInnerValidOptions,
     currentInnerValid,
-    enqueueAutoReset,
+    enqueueAutoResetMany,
     config.config_version,
   ]);
 
@@ -589,15 +643,10 @@ export function ConfigForm({
                         <Select
                           value={String(innerValid.method ?? "holdout")}
                           onValueChange={(v) =>
-                            handleFieldChange(
-                              [
-                                "training",
-                                "early_stopping",
-                                "inner_valid",
-                                "method",
-                              ],
-                              v,
-                            )
+                            handleFieldsChange([
+                              { path: INNER_VALID_METHOD_PATH, value: v },
+                              { path: INNER_VALID_EXPLICIT_PATH, value: true },
+                            ])
                           }
                         >
                           <SelectTrigger
@@ -626,15 +675,13 @@ export function ConfigForm({
                         <NumberInput
                           value={innerValidRatio}
                           onChange={(v) => {
-                            handleFieldChange(
-                              [
-                                "training",
-                                "early_stopping",
-                                "inner_valid",
-                                "ratio",
-                              ],
-                              v ?? 0.2,
-                            );
+                            handleFieldsChange([
+                              {
+                                path: INNER_VALID_RATIO_PATH,
+                                value: v ?? 0.2,
+                              },
+                              { path: INNER_VALID_EXPLICIT_PATH, value: true },
+                            ]);
                           }}
                           step={0.05}
                           min={0.01}

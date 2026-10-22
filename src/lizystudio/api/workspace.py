@@ -78,6 +78,7 @@ from lizystudio.services.workspace import (
     get_workspace,
     load_config_from_file,
     materialize_tuning_for_job,
+    relaunch_rule_errors,
     update_tuning_overrides,
     validate_config,
     validate_search_space_for_tune,
@@ -98,6 +99,18 @@ def _blocking_errors(errors: list[dict[str, Any]]) -> list[dict[str, Any]]:
     semantics.
     """
     return [e for e in errors if e.get("severity", "error") == "error"]
+
+
+def require_relaunchable_config(ws: WorkspaceState, config: dict[str, Any]) -> None:
+    """Raise :class:`ValidationError` if a newer rule refuses a stored config.
+
+    Without this, a stored regression config that asks for stratification
+    would start another job that fails asynchronously, instead of the 422
+    ``/fit`` and ``/tune`` give before a job starts (P-0116 D5).
+    """
+    blocking = relaunch_rule_errors(ws, config)
+    if blocking:
+        raise ValidationError(blocking)
 
 
 # --- Status / Reset ---

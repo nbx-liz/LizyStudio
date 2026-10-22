@@ -226,7 +226,10 @@ class TestInvT6JobSnapshotFreeze:
 
         snapshot = captured["job_config"]
         assert snapshot["tuning"]["optuna"]["params"]["n_trials"] == 50
-        assert snapshot["tuning"]["optuna"]["params"]["direction"] == "maximize"
+        # P-0116 D5: a metric-derived direction is not sent; lizyml derives
+        # it from evaluation.metrics[0] (auc -> maximize) itself.
+        assert "direction" not in snapshot["tuning"]["optuna"]["params"]
+        assert snapshot["tuning"]["evaluation"]["metrics"][0] == "auc"
         # Catalog space appears in the job snapshot.
         assert "learning_rate" in snapshot["tuning"]["optuna"]["space"]
 
@@ -254,8 +257,8 @@ class TestInvT6JobSnapshotFreeze:
         snapshot = captured["job_config"]
         # User intent survives.
         assert snapshot["tuning"]["optuna"]["params"]["n_trials"] == 200
-        # Catalog direction (auc → maximize) fills the unset field.
-        assert snapshot["tuning"]["optuna"]["params"]["direction"] == "maximize"
+        # P-0116 D5: the unset direction stays unset; lizyml derives it.
+        assert "direction" not in snapshot["tuning"]["optuna"]["params"]
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +307,60 @@ class TestAbsorbLegacyTuning:
         # Caller's dict survives unchanged — fresh copy returned.
         assert original == snap
 
+    @staticmethod
+    def _absorb(config: dict[str, Any], ws_task: str = "binary") -> TuningOverrides:
+        from lizystudio.backends.lizyml import LizyMLAdapter
+        from lizystudio.services.workspace import WorkspaceState
+
+        ws = WorkspaceState(backend=LizyMLAdapter())
+        ws.config = {"task": ws_task}
+        absorb_legacy_tuning(ws, config)
+        assert ws.tuning_overrides is not None
+        return ws.tuning_overrides
+
+    @staticmethod
+    def _legacy(task: str, direction: str, metrics: list[str]) -> dict[str, Any]:
+        return {
+            "task": task,
+            "tuning": {
+                "optuna": {"params": {"n_trials": 77, "direction": direction}},
+                "evaluation": {"metrics": metrics},
+            },
+        }
+
+    @pytest.mark.parametrize(
+        ("task", "direction", "metrics"),
+        [
+            ("binary", "maximize", ["auc"]),
+            ("binary", "minimize", ["logloss", "auc"]),
+            ("regression", "minimize", ["rmse"]),
+        ],
+    )
+    def test_absorbed_agreeing_direction_is_dropped(
+        self, task: str, direction: str, metrics: list[str]
+    ) -> None:
+        # P-0116 D5: the Tune tab writes the metric-derived direction on each
+        # metric change (TuneEvaluationSection); it is not a user choice, so
+        # it is not kept as one and lizyml derives it.
+        overrides = self._absorb(self._legacy(task, direction, metrics), task)
+        assert overrides.direction is None
+        assert "direction" not in overrides.model_fields_set
+        assert overrides.n_trials == 77
+        assert overrides.evaluation_metrics == metrics
+
+    def test_absorbed_contrary_direction_is_kept(self) -> None:
+        # A direction against the metric is kept so lizyml refuses it under
+        # H-0099, rather than Studio dropping it silently (DC1).
+        overrides = self._absorb(self._legacy("binary", "minimize", ["auc"]))
+        assert overrides.direction == "minimize"
+        assert "direction" in overrides.model_fields_set
+
+    def test_absorb_derives_from_the_incoming_task(self) -> None:
+        # The PUT body may change the task: rmse minimizes for regression.
+        config = self._legacy("regression", "minimize", ["rmse"])
+        overrides = self._absorb(config, ws_task="binary")
+        assert overrides.direction is None
+
 
 class TestGetLegacyConfigView:
     def test_no_overrides_returns_config_as_is(self) -> None:
@@ -340,6 +397,32 @@ class TestMaterializeTuningForJob:
         # block at job start regardless of the workspace's intent state.
         assert "tuning" in out
         assert out["tuning"]["optuna"]["params"]["n_trials"] == 50
+        assert "direction" not in out["tuning"]["optuna"]["params"]
+
+    def test_job_config_omits_derived_direction(self) -> None:
+        # P-0116 D5: lizyml 0.20 derives the direction from the metric; Studio
+        # sends one only when the user set it.  An inherited legacy value is
+        # dropped too.
+        from lizystudio.backends.lizyml import LizyMLAdapter
+        from lizystudio.services.workspace import WorkspaceState
+
+        ws = WorkspaceState(backend=LizyMLAdapter())
+        ws.config = {
+            "task": "binary",
+            "tuning": {"optuna": {"params": {"direction": "minimize"}}},
+        }
+        ws.tuning_overrides = TuningOverrides(evaluation_metrics=["logloss"])
+        out = materialize_tuning_for_job(ws)
+        assert "direction" not in out["tuning"]["optuna"]["params"]
+
+    def test_explicit_override_direction_is_sent(self) -> None:
+        from lizystudio.backends.lizyml import LizyMLAdapter
+        from lizystudio.services.workspace import WorkspaceState
+
+        ws = WorkspaceState(backend=LizyMLAdapter())
+        ws.config = {"task": "binary"}
+        ws.tuning_overrides = TuningOverrides(direction="maximize")
+        out = materialize_tuning_for_job(ws)
         assert out["tuning"]["optuna"]["params"]["direction"] == "maximize"
 
     def test_overrides_win_per_field(self) -> None:

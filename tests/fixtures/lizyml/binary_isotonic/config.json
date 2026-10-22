@@ -10,32 +10,33 @@
   "features": {
     "exclude": [
       "PassengerId",
-      "Name",
-      "Sex"
+      "Sex",
+      "Name"
     ],
     "auto_categorical": true,
     "categorical": [
       "Pclass",
       "SibSp",
       "Parch",
+      "Embarked",
+      "CabinDeck",
       "Ticket",
-      "Cabin",
-      "Embarked"
-    ]
+      "Cabin"
+    ],
+    "unseen_policy": "mode"
   },
   "split": {
     "method": "stratified_kfold",
-    "n_splits": 5,
-    "random_state": 42
+    "n_splits": 5
   },
   "model": {
     "name": "lgbm",
     "params": {
+      "objective": "binary",
       "metric": [
         "auc",
         "binary_logloss"
-      ],
-      "objective": "binary"
+      ]
     },
     "auto_num_leaves": true,
     "num_leaves_ratio": 1,
@@ -45,7 +46,7 @@
     "balanced": null
   },
   "training": {
-    "seed": 42,
+    "seed": 1120,
     "early_stopping": {
       "enabled": true,
       "rounds": 150,
@@ -55,10 +56,9 @@
         "stratify": false,
         "random_state": 42
       },
-      "validation_ratio": 0.1
+      "inner_valid_explicit": false
     }
   },
-  "tuning": null,
   "evaluation": {
     "metrics": [
       "auc",

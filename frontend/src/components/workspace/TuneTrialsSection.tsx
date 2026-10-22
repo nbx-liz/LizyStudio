@@ -16,7 +16,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { getModelParams, getModelSection } from "@/lib/job-config";
+import {
+  getConfigSection,
+  getModelParams,
+  getModelSection,
+} from "@/lib/job-config";
 import { formatNum } from "@/lib/utils";
 import { PlotlyChart } from "./PlotlyChart";
 
@@ -40,8 +44,17 @@ function buildFitConfig(
   const { tuning: _stripped, ...baseWithoutTuning } = job.config ?? {};
   const baseModel = getModelSection(job);
   const baseParams = getModelParams(job);
+  // P-0116 child 5b: Apply to Fit hands the Tune result to a plain fit, whose
+  // inner split is automatic again — never the Tune tab's user pick.
+  const baseTraining = getConfigSection(job, "training") ?? {};
+  const baseEarlyStopping =
+    (baseTraining.early_stopping as Record<string, unknown> | undefined) ?? {};
   return {
     ...baseWithoutTuning,
+    training: {
+      ...baseTraining,
+      early_stopping: { ...baseEarlyStopping, inner_valid_explicit: false },
+    },
     model: {
       ...baseModel,
       params: {

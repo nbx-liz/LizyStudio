@@ -118,6 +118,9 @@ export interface SearchSpaceRowProps {
   /** Full list of inner_valid options from ``uiSchema.inner_valid_options``;
    * filtered per ``cvStrategy`` at render time. */
   innerValidOptions?: string[];
+  /** P-0116 child 5b: ``training.early_stopping.inner_valid_explicit`` —
+   * drives the "Your choice / Automatic" cue under the inner_valid picker. */
+  innerValidExplicit?: boolean;
   /** P-0104 Wave 3.1a / Issue #461: hyper-parameter bounds for this row's
    * param, resolved from ``uiSchema.parameter_bounds[task][param.key]``
    * (with the dotted ``early_stopping.rounds`` key mapped to the

@@ -10,8 +10,9 @@ shape that production writes when calibration is enabled. PR #344 shipped
 that bug to GUI because no test used a real `fit_result.json`. Issue #346
 introduced this fixture tree to close the gap.
 
-See `lizyml/README.md` for the canonical capture metadata; the JSON files in
-this directory are byte-identical copies of what backend tests consume.
+See `tests/fixtures/lizyml/README.md` (repository root) for the canonical
+capture metadata; the JSON files in this directory are JSON-equal,
+Biome-formatted copies of the backend fixtures.
 
 ## Layout
 
@@ -32,6 +33,7 @@ it("pivots a real calibrated fit_result.json", () => {
 ## Source of truth
 
 The backend copy at `tests/fixtures/lizyml/<scenario>/fit_result.json` is
-authoritative. When re-capturing, update the backend copies first, then
-re-run `python /tmp/scrub_fixtures.py` (or equivalent) to refresh this
-mirror.
+authoritative. `scripts/export_lizyml_fixtures.py` writes both copies from
+one capture (procedure in `tests/fixtures/lizyml/README.md`), and
+`tests/test_lizyml_fixture_freshness.py` fails in PR CI when a mirror stops
+being JSON-equal to its backend copy.

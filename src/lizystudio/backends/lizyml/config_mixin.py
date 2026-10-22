@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any, Literal
 
@@ -19,7 +20,12 @@ from lizystudio.backends.types import (
     TuningOverrides,
 )
 
-from .config_compat import strip_internal_keys, task_params_compat_errors
+from .config_compat import (
+    regression_stratify_errors,
+    strip_internal_keys,
+    task_params_compat_errors,
+)
+from .space_wire import find_wire_name_collisions, to_wire_entry
 
 # Regression metrics whose value is undefined / degenerate for certain target
 # distributions. The Service layer used to hardcode this watchlist (Issue #394);
@@ -245,7 +251,20 @@ class ConfigMixin:
             "training": {"seed": 1120},
         }
         validated = LizyMLConfig.model_validate(minimal)
-        return validated.model_dump(mode="json")
+        dumped: dict[str, Any] = validated.model_dump(mode="json")
+        # D-20261020-008: the split inherits ``training.seed`` when it has no
+        # seed of its own, so the dumped ``null`` is left out, not written.
+        split = dumped["split"]
+        if split.get("random_state") is None:
+            split.pop("random_state", None)
+        # P-0116 child 5 (D-20261020-008 option A): the default inner split is
+        # automatic, and the marker says so.  The dumped ``validation_ratio``
+        # is the deprecated spelling of ``inner_valid.ratio``; lizyml 1.0
+        # drops it.
+        early_stopping = dumped["training"]["early_stopping"]
+        early_stopping.pop("validation_ratio", None)
+        early_stopping["inner_valid_explicit"] = False
+        return dumped
 
     def validate_config(self, config: dict[str, Any]) -> list[dict[str, Any]]:
         from lizyml.config.schema import LizyMLConfig
@@ -254,11 +273,15 @@ class ConfigMixin:
         clean = self._strip_internal_keys(config)
         errors: list[dict[str, Any]] = []
         try:
-            LizyMLConfig.model_validate(clean)
+            # A copy: lizyml's before-validators pop keys from the input dict
+            # (0.15's EarlyStoppingConfig pops ``validation_ratio``), and the
+            # checks below must see the config as written.
+            LizyMLConfig.model_validate(copy.deepcopy(clean))
         except ValidationError as exc:
             errors.extend(exc.errors())  # type: ignore[arg-type]
 
         errors.extend(task_params_compat_errors(clean))
+        errors.extend(regression_stratify_errors(clean))
         return errors
 
     def get_incompatible_metrics(
@@ -376,8 +399,11 @@ class ConfigMixin:
                 and len(raw["choices"]) == 0
             ):
                 continue
+            # Judge the dim in the form lizyml will receive (P-0116 D1); the
+            # error path keeps the catalog key the UI shows.
+            wire_name, wire_entry = to_wire_entry(name, raw)
             try:
-                parse_space({name: raw})
+                parse_space({wire_name: wire_entry})
             except LizyMLError as exc:
                 # Only structural CONFIG_INVALID rejections belong on the
                 # run-gate envelope. Anything else propagates so the API
@@ -390,9 +416,21 @@ class ConfigMixin:
                         "path": f"tuning.optuna.space.{name}",
                         "message": exc.user_message,
                         "severity": "error",
-                        "suggested_fix": _suggested_fix_for_space_error(name, raw),
+                        "suggested_fix": _suggested_fix_for_space_error(
+                            name, raw, exc.context
+                        ),
                     }
                 )
+        for collision in find_wire_name_collisions(space):
+            out.append(
+                {
+                    "path": f"tuning.optuna.space.{collision.second_key}",
+                    "message": str(collision),
+                    "severity": "error",
+                    "suggested_fix": f"Remove '{collision.second_key}' or "
+                    f"'{collision.first_key}'.",
+                }
+            )
         return out
 
     @staticmethod
@@ -419,12 +457,27 @@ class ConfigMixin:
         return data
 
 
-def _suggested_fix_for_space_error(name: str, raw: dict[str, Any]) -> str:
-    """Concrete remediation text for the two structural errors we surface.
+def _suggested_fix_for_space_error(
+    name: str, raw: dict[str, Any], context: dict[str, Any] | None = None
+) -> str:
+    """Concrete remediation text for the structural errors we surface.
 
     Lives at module scope so the prose stays out of ``ConfigMixin`` and
     a second backend (or a future helper) can reuse the strings.
+
+    *context* is lizyml's error context.  For a bound off its step grid
+    (``reason: bound_off_grid``, lizyml 0.20) lizyml reports the on-grid
+    range inside the declared one, and the fix suggests it.
     """
+    if context and context.get("reason") == "bound_off_grid":
+        grid_low = context.get("grid_low")
+        grid_high = context.get("grid_high")
+        if grid_low is not None and grid_high is not None:
+            return (
+                f"Move '{name}' onto its step grid: set Min={grid_low} and "
+                f"Max={grid_high}, or change the step. Both bounds must be "
+                f"multiples of the step."
+            )
     log = bool(raw.get("log"))
     low = raw.get("low")
     high = raw.get("high")

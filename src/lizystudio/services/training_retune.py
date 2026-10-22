@@ -128,6 +128,7 @@ def _mark_retune_child_failed(
     broadcaster: ProgressBroadcaster | None,
     child_job: Job,
     message: str,
+    epoch: int,
 ) -> None:
     """Mark *child_job* as failed and wire the workspace to surface it.
 
@@ -143,7 +144,7 @@ def _mark_retune_child_failed(
     child_job.error = message
     child_job.completed_at = datetime.now(timezone.utc).isoformat()
     job_store.update(child_job)
-    ws.note_current_job(child_job.job_id)
+    ws.note_current_job(child_job.job_id, epoch=epoch)
     if broadcaster is not None:
         broadcaster.send_error(child_job.job_id, message)
     job_store.record_job_terminal(child_job.job_type, "failed")
@@ -159,6 +160,7 @@ def _run_retune_subprocess(
     n_trials: int,
     expand_boundary: bool | None,
     boundary_threshold: float | None,
+    epoch: int,
 ) -> Job:
     """Execute a Re-tune child job in a subprocess (H-0062).
 
@@ -178,6 +180,7 @@ def _run_retune_subprocess(
                 "subprocess retune requires a file-backed dataset "
                 "(ws.data_ref.path is empty)"
             ),
+            epoch=epoch,
         )
 
     return _run_subprocess_job(
@@ -191,6 +194,7 @@ def _run_retune_subprocess(
         retune_expand_boundary=expand_boundary,
         retune_boundary_threshold=boundary_threshold,
         on_data_missing=_on_data_missing,
+        epoch=epoch,
     )
 
 
@@ -222,6 +226,10 @@ def start_retune_async(
     """
     from lizystudio.services.openmp_detect import should_use_subprocess
 
+    # P-0114: capture the reset generation before the join; every workspace
+    # write below (inline failure, worker start, completion, thread
+    # registration) is fenced by it.
+    epoch = ws.current_epoch()
     _join_previous_thread(ws)
 
     use_subprocess = should_use_subprocess()
@@ -237,6 +245,7 @@ def start_retune_async(
             broadcaster=broadcaster,
             child_job=child_job,
             message=message,
+            epoch=epoch,
         )
         job_store.release_parent_lock(parent_job.job_id)
         return child_job.job_id
@@ -262,7 +271,7 @@ def start_retune_async(
         # H-0062: always point the workspace at the child so a failed /
         # cancelled / crashed retune still surfaces through the Workspace
         # Results Panel instead of leaving the selection on the parent.
-        ws.note_current_job(child_job.job_id)
+        ws.note_current_job(child_job.job_id, epoch=epoch)
         try:
             if use_subprocess:
                 _run_retune_subprocess(
@@ -274,6 +283,7 @@ def start_retune_async(
                     n_trials=n_trials,
                     expand_boundary=expand_boundary,
                     boundary_threshold=boundary_threshold,
+                    epoch=epoch,
                 )
             else:
                 finished = run_retune(
@@ -291,6 +301,7 @@ def start_retune_async(
                     fit_result=finished.fit_result,
                     tune_result=finished.tune_result,
                     job_id=finished.job_id,
+                    epoch=epoch,
                 )
         except Exception as exc:  # noqa: BLE001
             # H-0062 Bugfix 2026-04-14 (6): any unexpected exception
@@ -314,6 +325,7 @@ def start_retune_async(
                     broadcaster=broadcaster,
                     child_job=child_job,
                     message=f"retune worker crashed: {exc}",
+                    epoch=epoch,
                 )
         finally:
             # Always release the per-parent lock, even when run_retune
@@ -328,5 +340,5 @@ def start_retune_async(
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
-    ws.register_job_thread(t)
+    ws.register_job_thread(t, epoch=epoch, job_id=child_job.job_id)
     return child_job.job_id

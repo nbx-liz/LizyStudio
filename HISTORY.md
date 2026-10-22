@@ -4430,3 +4430,544 @@ Option B は v0.7+ で `STUDIO_FORMAT_VERSION` 2 → 3 bump タイミングで�
   - **Q2 → 1 つの effect で gate**: row-mode toggle 末端で「両 mutation が `onSettled` 完了」を一括カウントし、その後に 1 回だけ `useTuningSnapshot.invalidate()` を trigger。badge は flicker しない。`useConfigWriteFunnel` 側に `onAllSettled` (両 reason の queue が drain した時点で 1 度発火) フックを追加する。両 mutation の `onSettled` 個別 invalidate は採用しない（同 frame で 2 度走ると stale state が一瞬見える）。
   - **Q3 → 別 reason として並列に enqueue**: `useConfigWriteFunnel.coalesceByReason` の key 集合に `legacy_config` / `tuning_overrides` を追加し、同 funnel 内で 2 本の queue を並走させる。flush タイミングは両者共通 (同 frame バッチ)。既存 funnel の `isFlushing` gate ロジック + v0.6.2 で導入した `kind: "patch-many"` merge を reuse 可能。別 funnel instance は採用しない（flush タイミング同期 + cache invalidation 順序保証の追加コストが大きい）。
 - 実装 PR は `refactor(frontend): route Tune-tab tuning-field writes through PUT /config/tuning-overrides (P-0111)` で起票し、acceptance criteria に従って TDD 実装。実装着手の優先度は v0.6.x patch サイクル後の v0.7 準備期間、または v0.7.0 (P-0110 RFC 9457) と同一 release window で同時着地候補。
+
+### P-0112: 開発・CI・配布ビルドの Node baseline を 20 → 24 に引き上げる（Change Gate: ビルド・配布方式の変更）
+
+- **Date:** 2026-10-19 起票、同日 accepted
+- **Issue:** なし（post-migration 環境整備 plan v4 の step 5）
+- **Related:** `.nvmrc`、`frontend/package.json` `engines` / `devDependencies.@types/node`、`.github/workflows/{ci,nightly,publish}.yml` の `actions/setup-node`、`README.md`、`CONTRIBUTING.md`、`frontend/README.md`
+
+#### Motivation
+
+- Node 20 は 2026-04 に EOL になった。それでも repo の baseline は 20 のまま残っている。該当箇所は `.nvmrc` の `20`、`engines.node` の `>=20`、workflow の `node-version: "20"` の 7 か所（ci.yml の 3 か所、nightly.yml の 3 か所、publish.yml の 1 か所）、文書の 4 行（3 ファイル。README は「Node.js 20+ / pnpm v9」と書いており、pnpm の版も実際と違う）。
+- 開発機の既定は Node 24 である。Codex CLI は Node 24 の global npm にしか入っておらず、`fnm default 20` にすると `codex` が PATH から消え、lizy-reviewer の run が `capability_unverified` で拒否された（2026-10-19、lizy-harness#174）。repo の baseline を開発機に合わせないと、手元と CI の Node が恒常的に食い違う。
+- wheel と sdist には build 済みの frontend が同梱される（`pyproject.toml` の `artifacts = ["src/lizystudio/static/**"]`）。そのため Node は利用者の実行時要件ではない。影響を受けるのは開発者と、publish 時の frontend build だけである。
+
+#### Purpose
+
+開発・CI・publish build の Node を 24 に揃え、宣言（`engines`）と実際に使う版を一致させる。
+
+#### Scope
+
+1. `.nvmrc` を `24` にする。
+2. `actions/setup-node` の `node-version` を 7 か所すべて `"24"` にする。
+3. `engines.node` を `">=24"` にする（owner 決定 O2）。
+4. `@types/node` を `^24` 系に揃え、`pnpm-lock.yaml` を再生成する。現在の `^26.6.2` のままだと、Node 24 にない API が型の上では通ってしまう。
+5. Node と pnpm に関する記述を直す: `README.md:133`（pnpm v9 → 10 も含む）、`CONTRIBUTING.md:11`、`frontend/README.md:7,11`。
+
+同じ PR に Python 側の CI 修正も含める。内容は、すべての `uv sync` を `--locked` にすること、matrix の `python-version` を `setup-uv` に渡すこと、matrix 以外の job で 3.12 を固定すること、nightly に 3.12/3.13 の leg を足すこと。これは宣言済みの内容を CI が実際に検証するようにする修正で、本 Proposal の Change Gate の対象には含めない（plan v4 D1）。commit は分ける。
+
+#### Compatibility
+
+- **利用者:** 影響なし。wheel は build 済みの frontend を含み、Node を要求しない。
+- **開発者:** 破壊的。Node 20〜23 では `engines` の宣言に合わない。実測（2026-10-19、pnpm 10.31.0 / Node v20.20.2）では、`pnpm install` は `WARN Unsupported engine: wanted: {"node":">=24"}` を出すだけで成功した（exit 0）。拒否されるのは `engine-strict=true` を付けた場合だけである。repo に `.npmrc` はなく、`engine-strict` は既定で無効なので、`engines` は警告による下限の宣言にとどまる。強制にするかどうかは別途判断する（Dependabot の npm updater が使う Node の版を確かめてからにする）。
+- **publish:** frontend build の Node が 24 になる。static の出力が変わらないことを、実装 PR で build の比較により確認する。
+- **`packageManager` (`pnpm@10.31.0`):** 変更しない。
+
+#### Alternatives
+
+- (a) **開発と CI だけを 24 にし、`engines` は `>=20` のまま残す**: 却下（O2）。宣言は 20 なのに、20 で build できることを誰も検証しない状態が残る。
+- (b) **Node 22 (LTS) にする**: 開発機の 24 と食い違ううえ、22 の EOL は 2027-04 で寿命が短い。
+- (c) **現状維持（20）**: EOL の版の上で CI を続けることになり、手元との食い違いも解消しない。
+
+#### Acceptance Criteria
+
+- [x] repo 内で Node の版を宣言する箇所（`.nvmrc`、`engines.node`、全 workflow の `node-version`、上記の文書）がすべて 24 を指し、20 を指す記述が残っていない（grep で確認する）。
+- [x] `@types/node` が `^24` 系になり、`pnpm install --frozen-lockfile` と `pnpm build`、`tsc -b` が Node 24 で通る。
+- [x] **static build の同一性:** base（develop を Node 20 で build）と head（本 PR を Node 24 で build）を、別々の `git worktree` で `pnpm install --frozen-lockfile && pnpm build` する。Vite は `../src/lizystudio/static` に出力し、`emptyOutDir` で前回の出力を消すため、worktree を分けて出力が混ざらないようにする。比較するのは両者の `src/lizystudio/static/` 配下で、ファイル一覧と内容が byte 単位で一致することを合格条件とする（`diff -r`）。一致しなかった場合は不合格とし、原因を調べて owner の判断を仰ぐ。
+- [x] **Node 20 での挙動:** head を Node 20 で `pnpm install` すると、`engines` を理由に `WARN Unsupported engine` が出る（2026-10-19 に実測。当初の「拒否される」という見込みは誤りで、DC7 にあたる）。実際の出力を PR に記録する。
+- [x] **publish のリハーサル**（publish.yml は `v*` の tag push でしか起動しないため、手元で行う）: Node 24 で `pnpm build` → `uv build` を実行する。wheel と sdist の両方に `lizystudio/static/index.html` と `assets/` が含まれることを、archive の一覧で確かめる。新しい venv に wheel を install して server を起動し、`GET /` が `index.html` を返すことも確かめる。
+- [x] PR の CI（frontend、e2e の 4 shard、api-types-drift、backend、integration）がすべて Node 24 で緑になる。
+
+#### Decision
+
+- **2026-10-19 accepted**（owner）: Scope 1〜5 をそのまま採用する。`engines.node` は `>=24` とする（Alternatives (a) は採らない）。Python の CI 修正は同じ PR の別 commit とし、本 Proposal の gate の対象外とする。実装 PR では、Acceptance Criteria の実測結果を PR 本文に記録する。
+- **2026-10-19 shipped**: PR #703（develop `be17fe6`）。Acceptance Criteria の実測結果はすべて PR 本文に記録した（static は Node 20/24 で `diff -r` 一致・4 ファイル、publish のリハーサルは wheel/sdist に static が入り `GET /` が 200、CI は 3.10/3.11 とも 1673 件通過）。pnpm は `engines` 違反で警告するだけで、install は拒否しない。owner は engine-strict を**強制しない**と決定した（2026-10-19。Dependabot の npm updater が使う Node の版に左右されないようにするため）。
+
+
+### P-0113: Python と uv の toolchain の約束（Change Gate: 配布メタデータと開発 toolchain）
+
+- **Date:** 2026-10-19 起票、同日 accepted
+- **Issue:** なし（post-migration 環境整備 plan v5 の E2/E3）
+- **Related:** P-0112（Node 24）、`pyproject.toml`（`requires-python`、classifiers、`[tool.uv]`）、`.python-version`、`.github/workflows/{ci,nightly}.yml`、`CONTRIBUTING.md` § Getting started
+
+#### Motivation
+
+- `requires-python = ">=3.10"` には上限がない。classifiers は 3.13 まで、`uv.lock` は 3.14 以降も解決し、手元の `.venv` は uv が選んだ 3.14 で全テストが通っていた。対応範囲が、どこにも一貫して書かれていなかった。
+- `.python-version` がないため、開発で使う版が、その機械に入っている Python で決まっていた。
+- `uv sync --locked` が固定するのは依存関係だけで、uv 本体の版は固定されない。
+
+#### Decision（owner、2026-10-19）
+
+- **対応範囲 = テストしている版:** 3.10〜3.14。`requires-python` に上限は付けない。classifiers に 3.14 を足し、nightly の backend matrix を 3.10〜3.14 にする。PR の必須 check は、従来どおり 3.10 と 3.11 を実際の版で実行する。
+- **開発で使う版:** `.python-version` = 3.12。matrix 以外の CI job と同じ版である。
+- **uv:** `[tool.uv] required-version = ">=0.13"`。下限だけを固定し、新しい版への追従は妨げない。
+- **下限の 3.10:** 維持する。3.10 は 2026-10 に EOL になるので、下限を上げるかどうかは、後で別の議題として扱う。
+
+#### Acceptance Criteria
+
+- [ ] classifiers が nightly の matrix と一致する（3.10〜3.14）。
+- [ ] `.python-version` があり、`uv sync --locked` が 3.12 で `.venv` を作る。
+- [ ] uv 0.13 未満では、`required-version` を理由にはっきりしたエラーになる。
+- [ ] `CONTRIBUTING.md` § Getting started が、この約束を唯一の正本として説明する。README と frontend/README は、そこへのリンクにする。
+
+
+### P-0114: workspace の reset を、それより前に起動した worker の書き込みから守る（Change Gate: 共有状態の不変条件、Issue #701）
+
+- **Date:** 2026-10-19 起票、同日 accepted
+- **Issue:** #701
+- **Related:** `services/workspace.py`（`WorkspaceState.reset` / `record_completion` / `note_current_job`）、`api/workspace.py`（`workspace_reset`、`_teardown_active_job`）、`services/training.py`（`start_fit_async` / `start_tune_async`）、`services/training_retune.py`、`services/_training_core.py`（`_run_subprocess_job`）、`frontend/src/pages/WorkspacePage.tsx`（`current_job_id` からの再接続）、Epic #635（同じ種類の、古い書き手の問題）
+
+#### Motivation
+
+以下の行番号は、修正前の develop 52c89e1 のものである。
+
+worker が job を終えると、launcher の thread は次の順に処理する。
+
+1. job の終端の状態を JobStore に保存する（`completed` は `_training_core.py:208-215`、`cancelled` は `:230-235`、`failed` は `:236-242`）。
+2. そのあとで `ws.record_completion(...)` を呼び、workspace の `current_job_id` と fit/tune の要約を書く。呼び出し箇所は `training.py:504`、`:558`、`training_retune.py:290`、subprocess mode では `_training_core.py:453` である。
+
+`note_current_job` の呼び出しは 3 か所あり、性質がそれぞれ違う。
+- `_training_core.py:427` と `training_retune.py:146` は、JobStore に失敗を保存したあとで呼ぶ。
+- `training_retune.py:265` は、成否にかかわらず worker の開始時に呼ぶ。
+
+もう 1 つ、workspace に書き込む箇所がある。どの launcher も `t.start()` のあとで `ws.register_job_thread(t)` を呼ぶ（`training.py:510` など）。`reset()` は `_job_thread` を `None` にする（`workspace.py:66`）ので、`t.start()` と `register_job_thread` の間に reset が入ると、reset より前の thread がまた登録される。すると次の `_join_previous_thread` はその古い thread を待ち、強制解放の経路では最大 30 秒の待ちや `PreviousJobStillRunningError` につながる。
+
+ほかの workspace の項目（`model`、`config`、`data_ref`、`dataframe`、`tuning_overrides`、temp files）を書き換えるのは、`WorkspaceState` 自身のメソッドと API のリクエスト処理だけである。worker からは書き込まない。
+
+`POST /api/workspace/reset` は、active な job を止めて slot の解放を待ち（`_teardown_active_job`）、それから `ws.reset()` で `current_job_id` と要約を消す（`workspace.py:55-65`）。ところが reset には、それより前に起動した worker がこの後で書き込むのを止める仕組みがない。そのため、次の 2 つの経路で古い job が workspace に戻ってくる。
+
+- **完了の直後の reset（実測）。** job が `completed` になった直後に reset すると、約 0.35〜0.53 秒後に `current_job_id` が元の job に戻った。ローカルの backend（develop be17fe6）で 10 回試して 10 回とも起きた。#701 の e2e の flake の原因であり、CI の trace とも一致する。
+- **実行中の reset（code からの推定）。** reset が実行中の job に cancel を要求すると、worker は `cancelled` で終わって slot を解放する。reset はその解放を待ってから `ws.reset()` を行う。しかし launcher は、終わった job の status にかかわらず `record_completion(job_id=...)` を呼ぶ（`training.py:496-508`）。そのため、reset の後で、cancel された job が workspace に戻る可能性がある。
+
+利用者への影響: reset した直後に、消したはずの job の結果が workspace に再び現れ、UI もその job に再接続する（`WorkspacePage.tsx:75-77`）。
+
+#### Purpose
+
+reset が成功した後は、その reset より前に始まった launcher の呼び出しやその worker が、workspace の状態（`current_job_id`、`workspace_fit_result`、`workspace_tune_result`、job thread の登録）を書き換えられないようにする。job そのものの lifecycle（status、cancel flag、slot）は対象外とし、#613 / #697（Epic #635）で扱う。
+
+#### Options
+
+##### (A) reset の世代番号（epoch）で古い書き込みを弾く（推奨）
+
+- `WorkspaceState` に世代番号を持たせ、`reset()` のたびに lock の下で 1 つ進める。
+- 世代番号は、launcher の呼び出しごとに入口で取得する。取得するのは `_join_previous_thread` より前である。job の作成時に取得するのではない。`/unpause` は同じ job id で `start_tune_async` をもう一度呼ぶので、呼び出しのたびに新しく取得する必要がある。
+- 取得した世代番号を worker に渡す。
+- `record_completion`、`note_current_job`、`register_job_thread` の 3 つは、世代番号を受け取り、lock の下で現在の値と比べる。一致しないときは書かずに捨て、ログに残す。
+- 影響範囲は `WorkspaceState`、fit / tune / retune の launcher、subprocess の launcher である。API と保存形式は変わらない。
+
+##### (B) reset が worker の thread の終了を待つ
+
+- reset が `_job_thread` を join してから `ws.reset()` を行う。
+- 欠点: `t.start()` と `register_job_thread` の間に reset が入ると、reset からは thread が見えず、待つことができない。thread が終わらない場合は reset が止まる。reset は 12 秒で強制解放に進む作りなので、待ち時間の上限とも整合しない。
+
+##### (C) `record_completion` を終端の状態の保存より前に行う
+
+- thread mode では、終端の状態の保存と slot の解放より前に workspace へ書くので、完了直後の reset と、通常の cancel 経路の reset の両方が閉じる。
+- 欠点: subprocess mode には同じ並べ替えを適用できない。親が結果を受け取るのは、子が終端の状態を保存した後だからである（`_training_core.py:453`）。強制解放の経路と `register_job_thread` の窓も残る。そのため、どの mode にも一様には効かない。
+
+#### Compatibility
+
+- **API:** 変更なし。
+- **状態:** reset の後は、その前に起動した job の要約を workspace が持たなくなる（意図した変化）。job そのもの（JobStore の記録、Jobs の一覧、`/jobs/{id}` の結果）には影響しない。
+- **保存形式:** 変更なし。
+
+#### Acceptance Criteria
+
+- [x] **起動の途中の reset:** launcher が世代番号を取得したあと、worker の処理が始まる前（`_join_previous_thread` の待ちの間、および `t.start()` と `register_job_thread` の間）を barrier で止め、その間に reset する。その launcher と worker は、`current_job_id`、要約、job thread の登録のどれも書き戻さない。reset の後の `previous_job_thread()` は `None` のまま。（`tests/regression/test_reg_0701_reset_fences_late_workspace_writes.py` の `test_reset_during_launch_join_is_not_undone`（fit / tune）と `test_reset_between_thread_start_and_registration_is_not_undone`（fit / tune / retune）。retune の起動時の書き込みは `test_retune_worker_start_note_after_reset_is_fenced`）
+- [x] **unpause:** `/unpause` で同じ job id を再開した場合も、世代番号を呼び出しのたびに取得していることを、unpause の前後に reset を挟むテストで確かめる。（`test_relaunching_the_same_job_after_reset_records_again`）
+- [x] **完了の直後の reset:** job が `completed` になってから `record_completion` が呼ばれるまでの間を barrier で止め、その間に reset する。barrier を外したあとも、`current_job_id`、`workspace_fit_result`、`workspace_tune_result` は空のまま。現行コードで失敗する regression test を付ける。（`test_reset_after_terminal_status_is_not_undone` の completed の 6 件。fence を無効にすると落ちる）
+- [x] **実行中の reset:** 実行中の job に reset が cancel を要求した場合も、reset の後に workspace の状態が戻らない。（`test_api_reset_cancelling_a_running_job_is_not_undone`、fit / tune × thread / subprocess の 4 件。本物の `workspace_reset` が cancel を要求し、slot の解放を待ってから reset する。subprocess mode の親は `record_completion` の後で slot を解放するが、子が `cancelled` を保存した時点で reset の待ちが `force_release_active_if` で slot を回収するので、どちらの mode でも reset が先に走りうる）
+- [x] **reset の後に起動した job:** reset の後に起動した fit / tune / retune は、従来どおり `current_job_id` と要約を記録する。（`test_launch_after_reset_records_normally`、fit / tune / retune × thread / subprocess の 6 件）
+- [x] **全経路を覆う:** thread mode と subprocess mode の両方で、fit / tune / retune の完了（completed / cancelled / failed）、失敗を保存したあとの `note_current_job`（`_training_core.py:427`、`training_retune.py:146`）、worker 開始時の `note_current_job`（`training_retune.py:265`）の各経路を確かめる。（`test_reset_after_terminal_status_is_not_undone`、fit / tune / retune × thread / subprocess × completed / failed / cancelled の 18 件。失敗時の `note_current_job` は `test_early_failure_note_after_reset_is_fenced` と `test_reset_during_retune_launch_fences_the_failure_note`、worker 開始時の `note_current_job` は `test_retune_worker_start_note_after_reset_is_fenced`。fence を無効にすると 38 件中 32 件が落ち、通る 6 件は reset の後の起動の確認だけ）
+- [x] **#701 の e2e:** `workspace-fit.spec.ts` を CI と同じ shard の構成で繰り返し実行し、retry なしで通る。（ローカルの chromium、spec 全体を `--repeat-each 10 --retries 0` で 98/98 passed。CI の e2e shard は実装 PR で確認する。live backend の probe は修正前 10/10 → 修正後 0/10 で、10 回とも `record_completion` が捨てられたことをログで確認）
+- [x] 捨てた書き込みはログに残る（job id と、起動時と現在の世代番号）。（`test_dropped_write_is_logged`。INFO の `workspace.stale_write_dropped`）
+
+#### Decision
+
+- **2026-10-19 accepted**（owner）: Option A（reset の世代番号）を採用する。
+- **2026-10-19 shipped**: PR #709（develop `113514a`）。Codex の head review は 4 round 目で APPROVE。指摘はすべて regression test と本節の記録に関するもので、`src/` の実装への指摘はなかった。CI は retry なしで緑。#701 は手動で close した。
+
+
+### P-0116: lizyml 0.20.0 に追従する（Change Gate: 外部依存・API の応答・保存する設定の形）
+
+- **Date:** 2026-10-21 起票、同日 accepted
+- **番号:** P-0115 は #711 のコメントで案として使っている。混同を避けるため、この Proposal は P-0116 とする。
+- **Issue:** #721。親 Epic は #638（adapter 境界と API 契約）。
+- **Related:**
+  - Epic #635（job lifecycle）、#623（optuna の生 API の置き換え）
+  - 子 Issue #688（step 格子）、#689（smart 次元の真偽値と範囲）、#690（`cross_entropy_lambda`）、#691（`TUNING_FAILED`）
+  - #528 / P-0111（Tune タブの書き込み経路）
+  - 方針の決定カード D-20261020-008（seed は LizyML に合わせる、旧 job は不可能な操作だけ拒否、inner_valid は A 案、下限は `>=0.20.0`）
+  - 一時停止が study を止めない件は #719 で扱い、本 Proposal の範囲外とする（D-20261021-004）。
+
+#### Motivation
+
+以下の行番号は develop `e5cc5d0` のものである。
+
+LizyStudio は lizyml 0.15.0 にロックしたまま、宣言上の範囲だけが `<0.19.0` まで広がっていた（#584 / #639 / #692）。0.16 以降は一度も実行で確かめていない。2026-10-20 に lizyml 0.20.0 が公開された。
+
+そこで、使い捨ての作業コピーで lizyml だけを 0.20.0 に上げ（`uv.lock` で動いた依存は lizyml のみ）、テストを実行した（Phase 1）。
+
+- **backend:** 8 件失敗、1703 件成功。
+  - UI schema の契約テスト 1 件: `purged_time_series` が `embargo` を宣言している。0.20 の受け付ける項目は `purge_gap`。
+  - retune の end-to-end 1 件: autofit が smart / training の名前を `model.params` に入れ、拒否された。
+  - テストの設定 6 件: 評価指標と逆の `direction` を明示しており、H-0099 で拒否された。
+- **integration:** 1 件失敗。既存の study に再び接続するには `resume=True` が要る（H-0122）。
+- **functional E2E:** 22 件失敗、128 件成功。
+  - 21 件は Tune を使うテストで、原因は下記の阻害要因 1 つである。E2E が残した失敗 job 8 件も、すべて同じ拒否による。
+  - 残る 1 件（`workspace-fit.spec.ts:521`）は #717 と同じ負荷時の flake である。単独で 2/2 通る。
+
+**阻害要因: 0.20 では、既定の探索空間を使う Tune がすべて trial 0 の前に失敗する。**
+- `config_mixin.py:47-76`（`_catalog_default_space`）は、catalog の 13 次元を `type/low/high/log/choices` だけで組み立てる。`group` を捨てるので、`category` が付かない。
+- この空間は `workspace.py:611` で job の設定に展開される。
+- 0.20 は Tune の受け付け時（`core/_tuning_admission.py:172-274`）に、`category` の無い `num_leaves_ratio` などを「LightGBM の知らない名前」として拒否する。`early_stopping.rounds` と `validation_ratio` も同様に拒否する。
+- 加えて 0.20 では、training の次元に使える名前は `early_stopping_rounds` と `validation_ratio` だけである（`core/_tuning_validation.py:26,79-92`）。点つきの名前は使えない。
+
+**0.15 で作った job（実物）を 0.20 のサーバで開いた結果。** 0.15 のサーバで HTTP API から Fit、Tune、一時停止中の Tune を作り、その job 保存先を 0.20 のサーバで開いた。
+- **問題なく動いた:** 一覧、詳細、指標、plot、split 重要度、lineage、log、推論（SHAP を含む）、モデルの export。
+- **すでに明示的に拒否される:** retune。400 `PICKLE_INCOMPATIBLE` になる。
+- **汎用の 500 `BACKEND_ERROR` になる:**
+  - SHAP 重要度。LizyML は `MODEL_NOT_FIT`（`pipeline_state_per_fold` が無い）を返している。
+  - Tune した job の export-code。0.15 のモデルの `model.params` に smart / training の名前があり、LizyML が `CONFIG_INVALID` を返している。
+- **再開すると job が失敗する:** 一時停止中の Tune の unpause。
+
+#### Purpose
+
+LizyStudio を lizyml `>=0.20.0,<0.21.0` で動かす。その上で、次の 3 つを満たす。
+
+1. Fit、Tune、retune、unpause、Apply to Fit が 0.20 の契約どおりの設定を送る。
+2. 0.15 で作った job は、行を残したまま、できない操作だけを明確なエラーで拒否する（D-20261020-008）。
+3. 0.20 への追従に必要なテストと fixture を、0.20 の挙動に合わせて作り直す。
+
+一時停止が study を止めない件（#719）は扱わない。
+
+#### 決めること
+
+##### D1. 探索空間の送り方
+
+0.20 の空間の形式（H-0123）は 2 通りある。
+- `{type, low, high, log?, step?, category?}`
+- `{type: categorical, choices, category?}`
+
+`category` は `model` / `smart` / `training` のどれかで、省略すると `model` になる。
+- `smart` に置ける名前は `auto_num_leaves`, `num_leaves_ratio`, `min_data_in_leaf_ratio`, `min_data_in_bin_ratio`, `feature_weights`, `balanced` に限られる（`estimators/lgbm/provider.py:50-57`）。
+- `training` に置ける名前は `early_stopping_rounds` と `validation_ratio` に限られる（`core/_tuning_validation.py:26,79-92`）。
+
+`space_mode` の既定は `merge` で、LizyML の既定の空間に利用者の次元を重ね、`first_metric_only` と `metric` を固定で加える。`replace` は利用者の次元だけを探索し、固定の値も加えない（`core/_tuning_space.py:78-130`、`estimators/lgbm/defaults.py:147-157`）。
+
+**UI の `group` は LizyML の `category` と一致しない。** たとえば `num_leaves` は UI では `smart_params` に置かれている（`lizyml_ui_schema.py:138-143`）が、LizyML では native の model の次元であり、`category: smart` で送ると拒否される。そのため `group` から `category` を機械的に作ることはしない。
+
+- **(A) Studio の catalog を正とし、送る形を明示した対応表で決める（推奨）**
+  - **対応表:** catalog の全 25 行について、送るときの名前と `category`（Tune の次元のとき）、または Fit の設定の行き先（固定値のとき）を、backend の 1 つの表で定める（D2 の表と共通にする）。UI の `group` からは独立させる。
+    - 表に無い名前は、LizyML の既定どおり `model` の次元として送る。その名前が正しいかどうかは LizyML の受け付け検査に任せる。
+      - たとえば `min_child_samples` のような LightGBM の正規の名前は、表に無くても正当な入力である。
+      - Studio の側で拒否する関門は設けない。保存済みの Tune の空間 22 件を表と照合した結果、表に無い名前は 0/22 だった。
+    - 表が catalog の全行を覆うことはテストで確かめる（DC3 の防止）。
+  - **既定の次元:** 既定で探索する 13 次元を、表の名前と `category` で送る。training の名前は `early_stopping.rounds` から `early_stopping_rounds` に変える。
+  - **`space_mode`:** 常に `replace` を明示する。
+    - こうすると、UI に表示した範囲がそのまま探索され、LizyML の既定の次元（`objective` など）が混ざらない。
+    - `replace` では `first_metric_only` と `metric` が入らないので、Studio が固定値として `model.params` に入れる。値は今の Fit と同じものにする。
+  - **持ち主が無効な smart の次元:** `num_leaves_ratio` は `auto_num_leaves=true` のときだけ意味を持つ。LizyML は、持ち主が無効なときに利用者が書いた `num_leaves_ratio` を拒否する（`_tuning_validation.py:301-351`）。Studio が展開した次元は、LizyML から見るとすべて利用者が書いたものになる。
+    - そのため Studio は、`auto_num_leaves` が固定で `false` のときは `num_leaves_ratio` を送らない。
+    - `auto_num_leaves` 自体を choice で探索するときは、`true` が選びうるので送る。
+  - **training の次元（Studio の方針）:** LizyML は、`training.early_stopping.enabled=false` でも `early_stopping_rounds` の次元を拒否しない。探索した値が early stopping を有効にする（`_model_factories.py:691-715`）。
+    - これは利用者が early stopping を無効にした意図に反する。そのため Studio の方針として、`early_stopping.enabled` が固定で `false` のときは `early_stopping_rounds` と `validation_ratio` を送らない。
+    - これは LizyML の要求ではなく Studio の決めごとであり、テストで固定する。
+  - **送る前の検査:** 0.20 の受け付け検査は、上記のほかに次の空間も拒否する（`core/_tuning_admission.py:172-274`）。`replace` にしても、この検査は避けられない。
+    - 同じ parameter を 2 つの綴りで書いたもの（alias を含む）
+    - training の設定が持つ model の次元（例: `seed`、early stopping が有効なときの `early_stopping_round`）
+    - 有効な smart の設定が管理する model の次元（例: `auto_num_leaves=true` のときの `num_leaves`）
+    - task に合わない `objective`
+
+    Studio はこれらの規則を写さない。LizyML の検査には公開の入口が無く（いずれも `core/_tuning_admission.py` の内部関数）、規則を写すと 2 つ目の規則の集まりができて食い違う（DC3）からである。
+    - Studio は自分で作る空間が対応表と持ち主の規則によって受け付けられるようにする。
+    - 利用者が書いた空間を LizyML が拒否した場合は、その拒否を trial 0 の前の job の失敗として返す。このとき、汎用の文言ではなく、LizyML の構造化された文脈（`surface`、`reason`、`dim`、`key`。`tuning/_space_format.py:103-138`）から次元の名前と理由を示す。
+    - 拒否は trial の前に起きるので、計算は無駄にならない。
+  - 長所: UI の表示と実際に探索する範囲が一致する。0.15 の時と同じ 13 次元を探索するので、結果の変化が小さい。
+  - 短所: LizyML が既定の空間を改善しても、Studio には自動では入らない。
+- **(B) 利用者が編集した次元だけを送り、残りは LizyML の既定に任せる（`merge`）**
+  - 長所: 送る量が少ない。LizyML の既定にそのまま追従する。
+  - 短所: catalog の既定の範囲と、実際に探索する範囲が食い違う。たとえば `learning_rate` は、Studio の catalog では 0.0001-0.01（`lizyml_ui_schema.py:225-232`）、LizyML の既定では 0.0001-0.1（`defaults.py:126-129`）である。UI の表示が実際と合わなくなる（DC3 の形）。
+
+真偽値の choices（#689）と step の格子（#688）は、この形式の変更と同じ経路なので、同じ PR 群で扱う。
+
+##### D2. Fit の設定への分配を 1 か所にまとめる
+
+0.20 の `TuningResult` は、`best_model_params`、`best_smart_params`、`best_training_params` を分けて持つ。`best_params` は平らにまとめた表示用の値であり、`model.params` に入れると拒否される。
+
+いま平らな値をそのまま `model.params` に入れている箇所は 5 つある。
+- autofit: `_training_core.py:337-347`
+- retune: `training_retune.py:109`
+- unpause の skip 経路: `training.py:287-337`。Optuna の `study.best_params` から作り直す。
+- フロントエンドの Apply to Fit: `TuneTrialsSection.tsx:32-53`
+- フロントエンドの Fixed モード: `TuneTab.tsx:184-190`。smart / training を含むすべての行を `model.params[key]` に書く。
+
+- **(A) backend に分配の処理を 1 つ作り、5 か所すべてをそこに通す（推奨）**
+  - 行き先は D1 と共通の対応表で決める。catalog の全 25 行の行き先は次のとおり。
+
+    | 行（catalog の key） | Fit の設定の行き先 |
+    |---|---|
+    | `n_estimators`, `learning_rate`, `max_depth`, `max_bin`, `feature_fraction`, `bagging_fraction`, `bagging_freq`, `lambda_l1`, `lambda_l2`, `objective`, `metric`, `first_metric_only`, `verbose`, `num_leaves` | `model.params.<key>` |
+    | `auto_num_leaves`, `num_leaves_ratio`, `min_data_in_leaf_ratio`, `min_data_in_bin_ratio`, `feature_weights`, `balanced` | `model.<key>`（LGBMConfig の項目） |
+    | `seed` | `training.seed` |
+    | `early_stopping.enabled` | `training.early_stopping.enabled` |
+    | `early_stopping.rounds`（Tune の結果では `early_stopping_rounds`） | `training.early_stopping.rounds` |
+    | `inner_valid` | `training.early_stopping.inner_valid` |
+    | `validation_ratio` | `training.early_stopping.inner_valid`（`method: holdout`, `ratio`） |
+
+  - **inner_valid の印（D-20261020-008 の A 案）:**
+    - 利用者が UI で選んだ値は `inner_valid_explicit: true` で書く。Fixed モードの `inner_valid` と `validation_ratio` の固定値がこれにあたる。
+    - Tune が選んだ `validation_ratio` は `inner_valid_explicit: false` で書き、LizyML の split に応じた自動解決を残す。
+  - **どこから値をとるか:**
+    - Tune の結果: LizyML が返す 3 つの辞書の分類をそのまま使う。
+    - unpause の skip 経路: Optuna の名前から推測しない。`Model.restore_tuning(storage, study_name)`（`core/_model_tuning.py:564`）で分類済みの `TuningResult` を得る。
+    - Fixed モード: 上の表で決める。表に無い名前は `model.params` に入れ、LizyML の検査に任せる（D1 と同じ扱い）。
+  - **API:** `tune_result` に 3 つの辞書を追加する（既存の `best_params` は残す）。Apply to Fit と Fixed モードは、分配済みの設定を backend から受け取る。
+- **(B) autofit と retune では、Tune したのと同じ Model の `fit()` を呼ぶ（LizyML が推奨する経路）**
+  - 長所: 設定を作り直さないので、分配の誤りが起きない。
+  - 短所: job に保存される設定と、実際に fit した設定が一致しなくなる。設定からの再現（export-code、Re-fit、Apply to Fit）が別の経路になり、結局は (A) の処理も必要になる。
+
+##### D3. unpause と再開の約束（H-0122）
+
+0.20 の `tune(resume=...)` の約束は次のとおりである。
+- `resume=False` のまま既存の study に接続すると `CONFIG_INVALID` になる。
+- `n_trials` は round ごとの数であり、合計ではない。
+- 途中で終わった（open な）round を再開すると、その round の残りだけを実行する。別の `n_trials` を指定すると拒否される（`_tuning_plan.py:217-218,353-354,415,470`）。
+- v0.19 より前の study は再開できない（`_tuning_resume.py:229-266`）。
+
+いまの `run_tune`（`training.py:442-449`）は `resume` を渡さない。代わりに、#554 の修正で `n_trials` を「元の数 − 済んだ数」に書き換えている（`training.py:415-420`）。この計算は、`tuning.re_tune` で round が複数ある場合と open な round の場合に、0.20 の約束と合わない。
+
+今の一時停止は、実行中の round の後の進捗の呼び出しで効く（#719）。そのため、一時停止した study は次の 2 つの状態のどちらかになる。
+- 予定した round がすべて済んでいる。
+- 一部の round が済み、残りの round がまだ始まっていない。round が複数の Tune で、最後でない round の最中に一時停止した場合である。
+
+- **提案:** unpause は `lizyml.tuning.read_study_lineage` で study の状態を読み、job を起動する前に分岐を決める。
+  - **すべての round が済んでいる:** Tune を実行せず、`restore_tuning` の結果から D2 の分配を通して Fit に進む。
+  - **済んだ round が予定より少なく、open な round は無い:** 残りの各 round を `resume=True` と round ごとの `n_trials` で実行する。
+    - この状態は、今の一時停止で実際に作れる。round が複数の Tune を 1 round 目の最中に一時停止すればよい。受け入れテストではこれを使う。
+  - **open な round がある:** 今は一時停止でこの状態を作れない（#719）。job の失敗からも、unpause には来ない。worker が強制終了された job は `failed` になり（`subprocess_runner.py:318-360`）、unpause は `paused` だけを受け付ける（`api/jobs.py:345-357`）からである。
+    - この場合も、`resume=True` で `n_trials` を渡さずに呼ぶ。こうすると LizyML は、その round に記録した予算の残りだけを実行する（`_tuning_plan.py:430-476`）。これは 0.20 の約束どおりの再開であり、専用の拒否は設けない。
+      - `n_trials` を明示して、それが記録した予算と異なる場合だけ、LizyML は拒否する（`:415-416`）。そのため、この分岐では `n_trials` を渡してはいけない。
+    - ただし、この分岐を unpause から end-to-end で確かめるテストは、#719 で一時停止が round の途中で止まるようになってから加える。本 Proposal の受け入れ基準には含めない。
+    - 保留メモ: #719 が直るまで、P-0099 INV-4（「unpause は trial N+1 から続ける」）のうち round の途中からの再開は、実際には起きない。
+  - **LizyML の記録が無い（v0.19 より前の）study:** D4 のとおり拒否する。
+- `/retune` と `/resume`（`training_retune.py:99-105`）は、すでに `resume=True` を渡している。0.20 で動くことを E2E で確かめる。
+
+##### D4. 0.15 で作った job の、できない操作を明確に拒否する
+
+| 操作 | 0.20 の挙動（実測） | 提案する応答 |
+|---|---|---|
+| unpause（0.15 の一時停止中の Tune） | 再開すると job が失敗する。0.15 の study は v0.19 より前なので再開できない | job の起動前に 400 で拒否する。既存の `CheckpointIncompatibleError` → `PICKLE_INCOMPATIBLE` と同じ形にし、`recovery_hint` は「新しい Tune を始める」とする |
+| SHAP 重要度、SHAP の plot | 汎用の 500。LizyML は `MODEL_NOT_FIT`、`context.missing == "pipeline_state_per_fold"`（`core/_model_tables.py:153-172`） | 専用の 4xx（例: `REFIT_REQUIRED`）と「再 Fit が必要」という案内 |
+| Tune した job の export-code | 汎用の 500。LizyML は `CONFIG_INVALID`、`model.params` に LightGBM の知らない名前がある（`_model_persistence.py:437-447`） | 同じく専用の 4xx と「再 Fit が必要」という案内 |
+
+- **判定の条件はそれぞれの症状だけに絞る。** `MODEL_NOT_FIT` と `CONFIG_INVALID` は、旧い artifact 以外でも使われる広いコードである。たとえば `MODEL_NOT_FIT` は学習データが無い場合にも出る。
+  - SHAP: `MODEL_NOT_FIT` で、`context.missing` が `pipeline_state_per_fold` のときだけ。
+  - export-code: 起動前の検査として、保存されたモデルの `model.params` の名前に、D1 の対応表で `model.params` 以外に行く名前（smart / training）が含まれるときだけ。それ以外の `CONFIG_INVALID` は、今と同じ扱いのまま変えない。
+  - unpause: study に LizyML の記録が無いとき（D3）。
+- **応答の形:** 既存の `PlotNotAvailableError` → 404（`api/jobs.py:560-563`）と同じく、adapter が専用の例外を出し、route が `BackendError` より先に変換する。
+- Firing rate: SHAP gate 144/144 and export-code gate 21/21 — invoked under a lizyml 0.20.0 server on every completed job persisted on this machine (main tree `.lizystudio/jobs` 149 + Phase 1 seed 3 = 152; 144 completed, of which 21 Tune): all 144 SHAP calls hit `MODEL_NOT_FIT` with `pipeline_state_per_fold` missing and all 21 export-code calls hit `CONFIG_INVALID` for non-LightGBM names in `model.params` (server log counts, 2026-10-21); the unpause gate fires on 1/1 paused Tune, whose study has no LizyML record (written by 0.15.0).
+
+##### D5. 機械的な変更（判断を要しない）
+
+- **依存:** `pyproject.toml` の範囲を `lizyml[...]>=0.20.0,<0.21.0` にする（下限は D-20261020-008）。`uv.lock` で動くのは lizyml だけである。
+- **seed（D-20261020-008: LizyML に合わせる）:** Studio は固定の `42` を書くのをやめる。今は CV の既定（`lizyml_ui_schema.py:616` の `cv_defaults.random_state`、フロントエンドの `cv-state.ts:95`）が書いている。0.20 では、split と isotonic が `training.seed` を受け継ぐ（H-0080）。利用者が値を明示したときだけ書く。結果が 0.15 と変わることを CHANGELOG に書く。
+- **`embargo` → `purge_gap`:** ui_schema（`lizyml_ui_schema.py:586-593`）と、フロントエンドの `cv-state.ts`（`:53-54`、`:98-99`、`:111`、`:126-127`、`:262-263`、`:367`）と `CvSection.tsx:257-261` を変える。0.20 は `embargo` を非推奨として受け付け、その値を `purge_gap` に足す。そのため、保存済みの設定の読み込みは壊れない。
+- **`direction`:** 利用者が明示したときだけ送る。
+  - 今は `workspace.py:605` が常に書いている。フロントエンドも、指標を変えるたびに `TuneEvaluationSection.tsx:149-154` で書いている。
+  - 0.20 では省略すると指標から決まり、矛盾した値を明示すると拒否される（H-0099）。
+  - テストの設定 6 件も同じ方針で直す。
+- **inner_valid（A 案、D-20261020-008）:** UI で選んだときだけ `inner_valid_explicit: true` にし、既定と自動の推奨では `false` を書く。印は常に書き、`validation_ratio` を落とす。
+- **回帰での stratify:** 0.20 は job を実行する時点で `CONFIG_INVALID` にする（`build_splitter`）。`/config/validate` では捕まらないので、UI（`CvSection`、inner_valid の picker）で回帰のときは選べないようにする。
+- **pickle 互換の matrix:** `scripts/pickle_compat_matrix.sh:37` と `nightly.yml` の `PAST_VERSIONS` を `0.17.0 0.18.0 0.19.0` にする。
+- **production の fixture:** lizyml 0.9.1 で採ったもの（`tests/fixtures/lizyml/README.md:36-38`）を 0.20.0 で採り直す。フロントエンドの複製（`frontend/src/__fixtures__/lizyml/`）も同時に更新する。
+- **#690:** `cross_entropy_lambda` を binary の objective から外す（`lizyml_ui_schema.py:63`）。0.20 では DESERIALIZATION_FAILED の原因にもなる。
+- **#691:** `TUNING_FAILED` を、汎用の 500 ではない、意味のあるエラーとして返す。
+
+##### D6. PR の進め方
+
+lock を上げた時点で Tune がすべて失敗する。そのため、lock だけを先に develop に入れることはできない（CI が緑にならない）。
+
+> **2026-10-21 改訂:** 下の (A) の「統合ブランチの中の順序」は、子 PR ごとに緑という関門を通れない（DC7）。そのため、Decision の「D6 の改訂」の 8 本の順序に置き換えた。統合ブランチを使うことは変えない。
+
+- **(A) 統合ブランチ `feat/lizyml-020` に PR を積み、全部が緑になってから develop へ 1 回で merge する（推奨）**
+  - 統合ブランチの中の順序:
+    1. lock の更新と D5
+    2. D1（探索空間）と D2（分配）
+    3. D3（unpause）と D4（旧 job の拒否）
+    4. fixture の採り直し
+  - 長所: 1 つの PR が小さく、レビューしやすい。develop はずっと緑のまま。
+  - 短所: 統合ブランチを develop に追従させる手間がある。
+- **(B) 1 つの大きな PR にする**
+  - 長所: 手間が少ない。
+  - 短所: backend とフロントエンドにまたがる大きな差分になり、Codex のレビューが長引きやすい。
+
+#### Compatibility
+
+- **外部依存:** lizyml の下限が 0.20.0 になる。lizyml 0.19 以下の環境には、この LizyStudio を入れられない。0.20 で保存したモデルは、古い lizyml では読めない（一方向）。
+- **API の応答:**
+  - `tune_result` に `best_model_params` / `best_smart_params` / `best_training_params` を追加する（追加のみ）。
+  - 0.15 の job に対する SHAP、export-code、unpause が、500 から 4xx の専用のエラーに変わる。
+- **保存する設定の形:** 新しい job の設定は、空間の `category`、`early_stopping_rounds`、`space_mode: replace`、`purge_gap` を持つ。`direction` は明示したときだけ持つ。0.15 の job の保存済みの設定は書き換えない。
+- **結果の変化（LizyML 側の変更による）:** seed の扱い（splitter と isotonic が `training.seed` を受け継ぐ）、`model.feature_weights` と `fit(params=)` が実際に効くようになったこと（H-0094）、Platt の再定義、SHAP が fold ごとになったこと。同じ設定でも 0.15 と数値が変わりうる。CHANGELOG に書く。
+- **format_version:** LizyStudio 自身の保存形式は変えない。
+
+#### 採らなかった案
+
+- **lizyml 0.16〜0.19 を経由して段階的に上げる:** D-20261020-008 で 0.20.0 に直接上げると決めた。
+- **0.15 の job を 0.20 の形に変換する:** D-20261020-008（旧 job は行を残し、できない操作だけ拒否）に反する。0.15 の study は LizyML 側でも再開できない。
+
+#### Acceptance Criteria
+
+- [x] lizyml 0.20.0 のロックで、backend・integration・functional E2E が retry なしで緑になる。
+  - 証拠: #722 の CI（`3916edf`、run 39696123840）で backend・integration・functional E2E が緑、rerun と flaky は 0 件。各子 PR の `scripts/dev_acceptance.sh`（retry なし）は 21/21。以前から `@ci-flaky` の spec 3 本は除外されている。
+- [x] **探索空間（D1）:**
+  - 既定の空間による Tune が完了する。
+  - 保存された job の設定は、空間の全次元に対応表どおりの名前と `category` を持ち、`space_mode: replace` を持つ。
+  - 実際の探索次元は、送った次元と一致する。`objective` などの LizyML の既定の次元は含まない。確かめるには、Tune の結果の `TuningResult.rounds[].space_snapshot`（`core/types/tuning_result.py:68-86`）を使う。
+  - `first_metric_only` と `metric` が固定値として `model.params` に入る。
+  - 証拠: #723・#728。`tests/integration/test_space_wire_lizyml.py::test_default_catalog_space_is_routed_by_category`（0.20 で既定の空間の実 Tune）、`tests/test_space_wire.py::TestToWireConfig::test_a_non_empty_space_replaces_the_provider_defaults`、`tests/integration/test_tune_resume_round_trip.py::test_catalog_space_reaches_lizyml_in_replace_mode`（`space_snapshot` の一致）。2 つ目の項目は D-20261021-010 により「保存された設定」ではなく「`create_model` が LizyML に渡す設定」で確かめる。4 つ目の項目（`first_metric_only` と `metric`）は D-20261021-010 で基準から外した。
+- [x] **対応表（D1・D2）:** catalog の全 25 行が対応表に載っていることをテストで確かめる。表に無い LightGBM の正規の名前（例: `min_sum_hessian_in_leaf`）は、`model` の次元として受け付けられる。
+  - 例の差し替え（owner、2026-10-22、決定カード D-20261022-008）: 当初の例 `min_child_samples` は `min_data_in_leaf` の別名で、Studio の既定が置く `min_data_in_leaf_ratio` から LizyML 0.20 が決める名前である。そのため LizyML が名前を挙げて拒否し、それが正しい挙動である。
+  - 証拠: #723、`tests/test_space_wire.py::TestTable::test_table_covers_exactly_the_catalog`。`tests/integration/test_space_wire_lizyml.py::test_a_lightgbm_name_outside_the_table_is_tuned_as_a_model_dim` と `::test_an_alias_of_a_smart_managed_name_is_refused_by_lizyml`（どちらも実 lizyml、リリース準備の PR で追加）。
+- [x] **持ち主の状態（D1）:**
+  - `auto_num_leaves` の固定 `true` / 固定 `false` / choice の 3 通りと、`early_stopping.enabled` の `true` / `false` を組み合わせたテストで、次を確かめる。
+    - 送る次元が D1 の規則どおりになる。
+    - Tune が LizyML に受け付けられる。
+  - `num_leaves` は model の次元として送られる。
+  - 証拠: #723、`tests/test_space_wire.py::TestOwnerRules::test_owner_matrix`（送る次元）と `tests/integration/test_space_wire_lizyml.py::test_every_owner_state_is_accepted_by_lizyml`（4 × 2 の全組み合わせを実 lizyml で Tune、リリース準備の PR で追加）。`num_leaves` は `::TestToWireSpace::test_client_category_is_overridden_for_catalog_names`。
+- [x] **LizyML が拒否した空間（D1）:** 次の空間で Tune を始めると、job は trial 0 の前に失敗する。job の error は汎用の文言ではなく、問題の次元の名前と理由を示す。
+  - alias の重複（例: `lambda_l2` と `reg_lambda`）
+  - training が持つ model の次元（例: `seed`）
+  - `auto_num_leaves=true` のときの `num_leaves`
+  - task に合わない `objective`
+  - 証拠: #730、`tests/integration/test_space_wire_lizyml.py::test_space_refusal_is_its_own_error`（4 例、実 lizyml で trial 0 件のまま拒否され、次元の名前を返す）、`tests/test_p0116_d5_backend.py::TestSearchSpaceRefused::test_job_reports_the_space_refused_code`（job の error と WS の `SEARCH_SPACE_REFUSED`）。
+- [x] **分配（D2）:** 5 か所それぞれについて、できあがった Fit の設定の全体を期待値と比べるテストを置く。
+  - 5 か所: autofit、retune、unpause の skip 経路、Apply to Fit、Fixed モード
+  - 期待値に含めるもの: `model.params`、`model` の smart の項目、`training.seed`、`training.early_stopping` の全体、inner_valid の印
+  - smart / training の名前が `model.params` に入らないことだけを確かめるテストでは足りない。
+  - 証拠: #724・#730、`tests/test_param_routing.py::TestFiveWriters`（D-20261021-012 により `create_model` の出力の全体で比較）。unpause の skip 経路は #735 で restore に置き換わり、`tests/integration/test_unpause_study_continuation.py::test_unpause_after_the_only_round_closed_restores_without_a_trial` が確かめる。
+- [x] **inner_valid の印（D-20261020-008 の A 案）:** 次の書き手すべてで、印が値つきで必ず書かれ、`validation_ratio` が書かれないことをテストで確かめる。
+  - 既定の設定（Fit タブ、Tune タブ）: `false`
+  - CV の変更による自動の推奨: `false`
+  - UI の picker で選んだ値: `true`
+  - Fixed モードの固定値: `true`
+  - Tune が選んだ `validation_ratio`: `false`
+  - 証拠: #730・#731。既定は `tests/test_backends_lizyml.py::test_default_config_marks_the_inner_split_automatic` と `tests/test_lizyml_fixture_freshness.py::test_config_has_the_shape_the_ui_writes`、自動の推奨は `TuneTab.test.tsx` と `useConfigSync.test.ts`、picker は `ConfigForm.test.tsx`、Fixed は `TuneTab.test.tsx`、Tune が選んだ値は `tests/test_param_routing.py::TestAutofitMarker`。Fixed モードは保存する設定の `model.params` に `validation_ratio` を書く（catalog の形、D-20261021-010）。「書かれない」は LizyML に渡す段で確かめる（`tests/test_param_routing.py` の routing のテスト）。
+- [x] **unpause（D3）:**
+  - 全 round が済んだ study は、Tune を実行せずに Fit に進む。
+  - round が複数の Tune を最初の round の最中に一時停止すると、unpause は残りの round を `resume=True` で実行する。最終的な round 数と trial 数が、当初の計画と一致する。
+  - 証拠: #735、`tests/integration/test_unpause_study_continuation.py`（restore と、[3, 2, 2] で 7 trial の複数 round）。複数 round の分岐は、`re_tune` が Tune タブから job に届かない（#734）ため、integration テストだけで確かめる（D-20261021-023）。
+- [x] **0.15 で作った job（D4）:** Phase 1 で 0.15 のサーバが作った実物を fixture にして、次を確かめる。
+  - unpause は job の起動前に 400 で拒否され、「新しい Tune を始める」という案内を返す。
+  - SHAP と、Tune した job の export-code は、500 ではなく専用の 4xx を返す。
+  - 一覧、詳細、推論、split 重要度は従来どおり動く。
+  - 判定が広すぎないことも確かめる。0.20 で作った job で起きる別の `MODEL_NOT_FIT`（学習データが無い場合）と別の `CONFIG_INVALID` は、専用の 4xx に変換されない。
+  - 証拠: #736、`tests/integration/test_p0116_legacy_015_jobs.py`（実物の 0.15 の job 3 件）と `tests/test_p0116_refit_required.py`。0.20 の job での別の `MODEL_NOT_FIT` は実物で、別の `CONFIG_INVALID` は stub で確かめる。
+- [x] **`direction`:** 利用者が明示した場合だけ job の設定に入る。指標を変えただけでは入らない。
+  - 証拠: #730・#731、`tests/test_p0109_pr4b_storage_rename.py::test_job_config_omits_derived_direction`、`TuneTab.test.tsx`、`tests/test_lizyml_fixture_freshness.py::test_tune_config_omits_a_derived_direction`。
+- [x] **seed:** 新しい job の設定は、利用者が明示しない限り、split の `random_state` を持たない。split と isotonic は `training.seed` を受け継ぐ。CHANGELOG に結果の変化を書く。
+  - 証拠: #730・#731、`tests/test_backends_lizyml.py::test_default_config_has_no_split_random_state`、`buildSyncedConfig.test.ts`、CHANGELOG 0.7.0。split と isotonic が `training.seed` を受け継ぐのは LizyML の挙動（H-0080）で、Studio のテストでは確かめていない。
+- [x] **`embargo`:** `embargo` を持つ保存済みの設定を読んでも job が動く。新しく書く設定は `purge_gap` だけを持つ。
+  - 証拠: #725・#726、`tests/test_p0116_d5_backend.py` の embargo のテストと `cv-section.test.ts`。確かめているのは LizyML に渡す変換の段までで、保存済みの embargo の設定から実際に Fit を走らせるテストは無い。
+- [x] **回帰での stratify:** UI で選べない。API から送られた場合は、job の失敗ではなく、意味のあるエラーで拒否される。対象は stratified な CV、`groups.stratify`、inner_valid の `stratify`。
+  - 証拠: #725・#726、`tests/test_p0116_d5_backend.py::TestRegressionStratify`、`tests/test_workspace_api.py::test_fit_rejects_stratified_split_on_regression`、`tests/test_p0116_relaunch_gate.py`、`CvSection.component.test.tsx`。
+- [x] **#690:** binary の objective の選択肢に `cross_entropy_lambda` が無い。
+  - 証拠: #725・#728、`tests/test_p0116_d5_backend.py`、`tests/contract/test_lizyml_objective_drift.py`。
+- [x] **#691:** `TUNING_FAILED` は、汎用の 500 ではなく専用のエラーとして返る。
+  - 証拠: #725、`tests/test_p0116_d5_backend.py::TestTuningFailed`。HTTP の応答ではなく、job の error と WS のコード `TUNING_FAILED` として返る。
+- [x] **`PAST_VERSIONS`:** 0.17 / 0.18 / 0.19 を検査する。
+  - 証拠: #738、`tests/test_lizyml_fixture_freshness.py::test_past_versions_are_the_three_minors_below_the_installed_one`。matrix は手元で 1 回実行した（`MATRIX_PYTHON=3.12`）。nightly では develop に入ってから走る。
+- [x] **production の fixture:** lizyml 0.20.0 で採り直し、README の記録を更新する。
+  - 証拠: #738、`tests/fixtures/lizyml/README.md`、`tests/test_lizyml_fixture_freshness.py`。
+
+#### Decision
+
+- **2026-10-21 accepted**（owner）: すべての推奨案を採用する（D1 (A)、D2 (A)、D3、D4、D5、D6 (A)）。Codex の critique は 3 round 目で APPROVE（指摘は 7 → 2 → 0）。決定カードは D-20261021-005。
+- **進め方（owner、2026-10-21）:**
+  - 統合ブランチ `feat/lizyml-020` に向けた子 PR は、Codex の APPROVE と、手元での受け入れ確認の全テストが通ったら、確認なしで merge する。
+  - CI は develop / main に向けた PR でしか走らない。そのため、`feat/lizyml-020` → develop の draft PR を最初に開く。子 PR を merge したら、その draft PR の CI が緑になってから次の子 PR に進む。`ci.yml` は変えない（D-20261021-006）。
+  - develop への最後の merge は、owner に確認してから行う。
+- **D6 の改訂（owner、2026-10-21）:** 統合ブランチの中の順序を、0.15 と 0.20 の両方で動く部分を先に入れ、lock を後で上げる 8 本に改める。merge の条件（Codex の APPROVE、手元の全テスト、draft PR の CI）は変えない。決定カードは D-20261021-008。
+  - **理由:** 受諾時の順序では、lock を上げた子 PR 1 に D1・D2・D3 が無いので、Tune の E2E 21 件、retune、integration が失敗したまま残る。そのため、子 PR ごとに緑という関門を通れない（DC7）。Codex の検討で、次の 2 点を確かめた。
+    - 0.15 も、利用者の空間が空でなければ既定の空間を置き換え、固定値を足さない（lizyml 0.15 `core/model.py:619-630`）。これは 0.20 の `replace` と同じである。
+    - そのため、D1 と D2 の大部分は 0.15 のままで入れられる。
+  - **子 PR の順序:**
+
+    | # | lizyml | 内容 |
+    |---|---|---|
+    | 1 | 0.15 | D1 のうち両方のバージョンで動く部分（対応表、`category`、`early_stopping_rounds` の名前、持ち主の規則、`metric` / `first_metric_only` の固定値、真偽値の choices（#689））。`space_mode` と `step` はまだ送らない |
+    | 2 | 0.15 | D2（分配の処理、`tune_result` の 3 つの辞書）。Tune が選んだ ratio は、印が使えるようになるまで `validation_ratio` で渡し、自動解決を残す |
+    | 3 | 0.15 | D5 のうち両方のバージョンで動く部分（`embargo` を `purge_gap` に合算する、回帰の stratify の拒否、#690、#691） |
+    | 4 | 0.20 に上げる | 最小の切り替え: lock の更新、`space_mode: replace`、保存済みの study への `resume=True` での再接続、`direction` が指標と逆のテスト 6 件の修正 |
+    | 5 | 0.20 | `step`（#688）、受け付け時のエラーの文脈、`direction` の省略、seed、inner_valid の印 |
+    | 6 | 0.20 | D3（`read_study_lineage` と `restore_tuning`） |
+    | 7 | 0.20 | D4（0.15 の job の明確な拒否） |
+    | 8 | 0.20 | production の fixture の採り直し、`PAST_VERSIONS` を 0.17 / 0.18 / 0.19 にする |
+
+  - **受け入れ基準の書き直し（子 PR 1 の設計、2026-10-21、決定カード D-20261021-010）:**
+    - **wire の形に変える場所（owner の決定）:** UI と workspace の設定は、空間を catalog の key で引く（`TuneTab.tsx:67-91`）。そのため、0.20 の名前と `category` への変換は、adapter の `create_model` で LizyML に渡す時だけ行う（`backends/lizyml/space_wire.py`）。job に保存する設定は catalog の形のまま残し、Protocol は変えない。
+      - 基準「保存された job の設定は、空間の全次元に対応表どおりの名前と `category` を持つ」は、「`create_model` が LizyML に渡す設定がそれらを持つ（テスト）」に置き換える。lock を上げた後は、`space_snapshot` でも確かめる。
+    - **`first_metric_only` と `metric`:** Studio から足す必要はない。利用者の空間が空でなければ、0.15 も 0.20 の `replace` も、固定値を足さない（lizyml 0.15 `core/model.py:619-630`、0.20 `core/_tuning_space.py:78-101`）。そのため、trial は Fit の既定値で学習する。既定値は、`metric` が task の既定（0.15 `estimators/lgbm/adapter.py:384`、0.20 `:468-470`）、`first_metric_only` が `False`（0.15 `defaults.py:86`、0.20 `defaults.py:89`）である。
+      - D1 の「値は今の Fit と同じものにする」は、何もしなくても満たされる。足すと LizyML の語彙を Studio に写すことになる（DC3）。
+      - 基準「`first_metric_only` と `metric` が固定値として `model.params` に入る」は外す。
+  - **D2 の仕組みの変更（owner、2026-10-21、決定カード D-20261021-012）:** 分配は、`create_model` で `model.params` の名前ごとに行う（`space_wire.route_model_params`）。
+    - **振り分け方:** 子 PR 1 の対応表の Fit 側の行き先（`fit_dest`）を使い、smart / training / 固定値だけの名前を、LizyML が読む場所へ移す。
+    - **理由:** 5 か所の書き手（autofit、retune、unpause の skip 経路、Apply to Fit、Fixed モード）は、どれも最後に `create_model` を通る。そのため 1 か所で足り、Protocol・API・フロントエンドを変えずに済む。保存する設定は今の形のまま残す（D-20261021-010 と同じ考え方）。
+    - **名前で決めて正確な理由:** LizyML の smart と training の名前は閉じた集合で、すべて対応表にある。
+    - **やめたもの:** D2 (A) の「`tune_result` に 3 つの辞書を足す」と「unpause の skip 経路で `restore_tuning` を使う」。受け入れ基準の「5 か所それぞれの Fit の設定の全体を期待値と比べる」は、`create_model` が LizyML に渡す設定で確かめる。
+    - **inner_valid の印（A 案の解釈）:**
+      - 振り分けでは、明示かどうかを決めない。`inner_valid` の method は運ぶが、`validation_ratio` を横に残す。そのため lizyml 0.15 は、外側の split に合わせた自動の解決を続ける。0.20 の `inner_valid_explicit` の印が設定にあれば、そのまま残す。
+      - 理由は 2 つある。
+        - Tune タブは、利用者が選んだときだけでなく、CV に合わせた自動の推奨でも `model.params.inner_valid` を書く（`TuneTab.tsx:212-220`）。名前からはどちらか区別できない。A 案では、自動の推奨は明示ではない。
+        - `validation_ratio` も、Tune が選んだ値か Fixed モードの固定値かを名前から区別できない。また、ratio は method の選択ではない。
+      - 利用者が選んだことを UI から伝え、印を `true` にするのは、子 PR 5（印は 0.20 にしかない）で行う。
+      - これは D2 (A) の「Fixed モードの `inner_valid` と `validation_ratio` の固定値は `true`」を、子 PR 5 まで延ばしたものである。受け入れ基準の該当行は、子 PR 5 で確かめる。
+      - 当初のカード D-20261021-012 の「picker の値は明示」は、D-20261021-013 で置き換えた。
+  - **0.20 より前に入れてはいけないもの:**
+    - `direction` の省略。0.15 は省略すると `minimize` になり（lizyml 0.15 `config/schema.py:433-437`）、maximize の指標を逆向きに最適化してしまう。
+    - `step` のテスト。0.15 は `step` を黙って無視する（DC1）。0.15 の次元の型には `step` の欄が無く（lizyml 0.15 `core/types/search_dim.py:20-64`）、`parse_space` も `step` を読まない（`tuning/search_space.py:116-171`）。`step` が加わったのは 0.20 である（lizyml 0.20 `core/types/search_dim.py:20-59`）。そのため、0.15 ではテストが通っても何も確かめていない。
+  - **子 PR 5 の決定（owner、2026-10-21、決定カード D-20261021-017）:**
+    - **`step`（#688）は案 2:** log の範囲には `step` を送らない。線形の範囲には送り、格子から外れた利用者の範囲は、LizyML の拒否の理由を job のエラーとして示す。
+      - 実測: catalog の既定値のうち `step` を持つ 12 件中 10 件が格子の規則を通る。拒否されるのは log の `learning_rate` と `lambda_l2` である。保存済みの Tune 空間 41 件に、`step` を持つ次元は 0 件だった。
+      - 0.20 に上げた統合ブランチでは、UI で `learning_rate` か `lambda_l2` を Range に切り替えると、Tune が拒否される。子 PR 5 で直す。
+    - **子 PR 5 を 5a（backend）と 5b（frontend、UI のパイプライン）に分ける。** seed、`direction`、inner_valid の印は、どれも backend と frontend の両方に書き手がある。5a と 5b は、それぞれ単独で緑にする。
+    - **seed の CHANGELOG** は、seed の変更と同じ PR に入れる。結果が実際に変わるのは frontend が書く `42`（`cv-state.ts`）なので、5b に入れる。
+  - **受け付け時のエラーの文脈（D1 の訂正、子 PR 5a）:** D1 が挙げた構造化された文脈（`surface`、`reason`、`dim`、`key`）を持つのは、形式の拒否（格子から外れた範囲など）だけである。objective の拒否は `reason` を持たない。ほかの拒否は別の形をとる。
+    - alias の重複: `conflicts[].{surface, parameter, dimensions}`
+    - training が持つ model の次元: `conflicts[].{surface, name, config_path}`
+    - `auto_num_leaves` のときの `num_leaves`: `managed[].{surface, name, smart_param}`
+    - どの形でも、LizyML の `user_message` が次元の名前と理由を示す。そのため Studio は、文脈から次元の名前を読み、`user_message` を添えて job のエラーにする。LizyML の規則は写さない（DC3）。WS のコードは `SEARCH_SPACE_REFUSED` とする（子 PR 3a の `TUNING_FAILED` と同じ扱い）。
+  - **`direction`（子 PR 5a の仕組み）:** PUT /config で受け取った `direction` が、指標から導いた向きと一致するなら捨てる。一致しないなら残し、LizyML に拒否させる（H-0099）。黙って捨てると、利用者が明示した値を失う（DC1）。
+  - **inner_valid の印とチューニングで選んだ ratio:** picker で `true` にした設定でも、Tune が `validation_ratio` か `inner_valid` を選んだときは、autofit が印を `false` にする（受け入れ基準の「Tune が選んだ `validation_ratio`: `false`」）。このとき LizyML は、利用者が選んだ method を使わず、外側の split から inner split を決める。
+  - **子 PR 5b の merge（owner、2026-10-21、決定カード D-20261021-020）:** Codex の 3 round の上限で merge した（#731）。CV の strategy の変更が保存待ちかどうかは、サーバから読んだ設定の `split.method` と比べて決める。ただし、編集の順序に関する 3 件は解決していない（保存に失敗した strategy の変更の後の明示的な選択、保存中に元へ戻す変更、write funnel の queue の順序）。PR の Known limits に記録し、#732 で扱う。
+  - **子 PR 6 の決定（owner、2026-10-21、決定カード D-20261021-021）:**
+    - **D3 の判断の置き場所:** unpause は lizyml adapter の中で `lizyml.tuning.read_study_lineage` を読み、round の状態から分岐する。`BackendAdapter.tune` のシグネチャは変えない。`resume=True` と `storage` を組み合わせた呼び出しの意味を、docstring と本注記で次のように定める。保存済みの study を `tuning.re_tune` の計画まで続ける。trial を 1 件も実行せず、保存済みの結果を返すこともある。続けられない study には `CheckpointIncompatibleError` を出す。Proposal の改訂ではなく、本 Decision の注記として扱う。
+    - **`/resume` は子 PR 6 では確かめない:** D3 は「`/retune` と `/resume` はすでに `resume=True` を渡しているので、0.20 で動くことを E2E で確かめる」としていた。調べると、`/resume` が 0.20 で動かない場合が 2 つある。
+      - round 1 で失敗した親: checkpoint の study が無いので、`TUNING_FAILED` になる。
+      - round 2 以降の途中で止まった親: open な round に `n_trials` を渡すので、`CONFIG_INVALID` になる。
+      - どちらも #733 で扱う。#733 には、閉じた round（failed か completed）から再開すると計画に無い round が始まる場合も含めた。`/retune` は子 PR 4 の受け入れ（retune-flow の E2E）で確かめた。
+    - **`tuning.re_tune` が job に届かない（owner、2026-10-21、決定カード D-20261021-023）:** PUT /config（Tune タブの保存）と、`/tune` と `/fit` の body の設定では、`absorb_legacy_tuning` が `tuning` を `TuningOverrides` に移す（`api/workspace.py` の PUT /config、`workspace_fit`、`workspace_tune`）。PATCH /config と POST /config/upload は `re_tune` を残す（子 PR 7 で訂正。当初は「HTTP 経由の Tune では」と広く書いていた）。`TuningOverrides` には `re_tune` の欄が無い（`extra="forbid"`）。そのため、UI の Re-tune 設定が書いた `re_tune` は job まで届かない（以前からの DC4。#528 と同じ原因）。子 PR 6 はこのまま進め、round が複数ある unpause は integration テストだけで確かめる（E2E では作れない）。`re_tune` を保存できるようにする件は、共有型の変更なので別の Issue と Proposal で扱う。
+    - **`restore_tuning` の扱いの明確化:** D-20261021-012 が「やめたもの」に挙げたのは、D2 の 3 つの辞書の出どころとして `restore_tuning` を使うことだけである。D3 の「すべての round が済んでいる」場合には `Model.restore_tuning` を使う。理由は、step の格子に合わせた値、複数 round の履歴、目的の同一性の検査が得られるからである。今の Optuna の `study.best_params` は、step のある次元では学習に使った値と一致しない。
+  - **子 PR 7 の決定（owner、2026-10-21、決定カード D-20261021-025）:** D4 の受理文は応答の形だけを決めていたので、次の 4 点を本 Decision の注記として加える。
+    - **unpause の拒否の置き場所:** `BackendCore` に `verify_study_continuable(storage, study_name)` を加える（`BackendAdapter` Protocol の追加）。unpause の route が job を起動する前に呼び、`CheckpointIncompatibleError` を `PICKLE_INCOMPATIBLE`（400）にする。job は paused のまま残る。
+      - pickle の版で判定する既存の `verify_checkpoint_compatibility` は使わない。D4 の条件（LizyML の記録が無い study）ではなく、次の lizyml の minor の更新で続けられる job まで拒否するからである。
+      - `optuna.db` が無い job は判定しない。`read_study_lineage` がファイルを作ってしまうため。
+    - **起動前に拒否する状態:** worker と同じ集合（`legacy`、`unreadable`、`inconsistent`、それと round 番号の無い `open`）。`study_continuation.require_continuable` を worker の `plan_continuation` と共有し、両者がずれないようにする。実測したのは `legacy` だけである（1/1。0.15 の study を 2 回読んでも `legacy` のままで、ファイルも変わらない）。
+    - **fixture:** Phase 1 で 0.15 のサーバが作った実物の job 3 件（Fit、Tune 済み、一時停止中の Tune。約 2.8 MB、log を除く）を `tests/fixtures/lizyml015/jobs/` に commit する。
+    - **エラーコード:** SHAP と export-code の拒否には、新しいコード `REFIT_REQUIRED`（400）を使う。`details` は `kind`、`names`、`recovery_hint`。
+      - export-code の判定は、保存されたモデルの設定（`config_normalized` の `model.params`）を読む。export 用の params は `seed` を常に持つので使わない（DC2）。判定の名前は D1 の対応表（`space_wire.names_routed_outside_model_params`）から取り、`route_model_params` と共有する。
+      - 判定を実装した後の firing rate: 0.15 の Tune 21/21、0.15 の Fit 0/123、0.20 の Fit 0/1、0.20 の Tune 0/29（この machine の全 job の `model/metadata.json` で再生、2026-10-21）。
+  - **子 PR 8 の決定（owner、2026-10-22、決定カード D-20261022-005）:**
+    - **fixture の採り直しは GUI を通す:** Playwright が本物の SPA と backend を操作して job を作る。job の設定の一部（評価指標の一覧、seed を書かないこと、inner_valid の印、`direction` を書かないこと）は frontend が書くので、API だけで作った job は本番の job と形が違う。
+      - 操作のスクリプト（`frontend/tests/fixture-capture/`）と、job を fixture に書き出すスクリプト（`scripts/export_lizyml_fixtures.py`）は commit する。CI の対象外に置く。
+      - 学習から外す列は、0.9.1 で採ったときと同じにする。ほかは UI の既定のまま。
+    - **fixture の鮮度を PR の CI で検査する（`tests/test_lizyml_fixture_freshness.py`）:** 次のどれかが崩れると失敗する。そのため、lizyml の minor を上げる PR は、同じ PR で fixture を採り直し、`PAST_VERSIONS` を動かす。
+      - README、各 `metadata.json`、導入済みの lizyml の major.minor が一致する。
+      - 各 `config.json` が今の UI の書く形をしている（split の `random_state` が無い、`inner_valid_explicit` がある、`validation_ratio` と `embargo` が無い、Tune の `direction` が無い、評価指標がその task の選択肢と一致する）。
+      - frontend 側の複製が backend 側と JSON として一致する。
+      - matrix の script、nightly、bench test の 3 か所の過去の版が一致し、導入済みの minor の直前 3 つである。
+    - **実測:** 0.20.0 での採り直しの job は binary_no_cal `job_bfca7941`、binary_isotonic `job_27682903`、regression `job_c499144c`、tune `job_866aa15e`。pickle の matrix を 0.17.0 / 0.18.0 / 0.19.0 で手元で一度実行し、3 つとも `lizyml_version_mismatch` で拒否された（この machine には Python 3.11 が無いので `MATRIX_PYTHON=3.12`。CI は 3.11 のまま）。
+    - **見つけた既存の不具合（本 Proposal の範囲外）:** `lizystudio` の CLI は `--jobs-dir` の既定値で `LIZYSTUDIO_JOBS_DIR` を上書きする（`cli.py:46`）。そのため、E2E の Playwright 設定の `LIZYSTUDIO_JOBS_DIR=/tmp/e2e_jobs` は効いておらず、E2E の job は `.lizystudio/jobs` に入る。採取のスクリプトは `--jobs-dir` を渡す。#737 で扱う。
+  - **リリース（owner、2026-10-22、決定カード D-20261022-008）:** #722 を develop に merge し、0.7.0 としてリリースする。版番号は過去の基準による（挙動・API の変更や lizyml の SSOT の更新を含むリリースは minor を上げる。0.5.0 と 0.6.0 と同じ）。ROADMAP で v0.7.0 に予定していた P-0110 + P-0111 の枠は v0.8.0 に移す。受け入れ基準の「対応表」の例は `min_child_samples` から `min_sum_hessian_in_leaf` に差し替えた（理由は基準の注記）。リリース準備の PR で、持ち主の状態の全 8 通りと表に無い名前の 2 通りを実 lizyml で確かめるテストを加えた。

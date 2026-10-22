@@ -13,8 +13,10 @@ import {
 // --- Mock child components ---
 
 vi.mock("./BlockedGroupKFoldEditor", () => ({
-  BlockedGroupKFoldEditor: () => (
-    <div data-testid="blocked-group-kfold-editor">BlockedGroupKFoldEditor</div>
+  BlockedGroupKFoldEditor: ({ task }: { task?: string }) => (
+    <div data-testid="blocked-group-kfold-editor" data-task={task ?? ""}>
+      BlockedGroupKFoldEditor
+    </div>
   ),
   INITIAL_BLOCKED_STATE: {
     cutoffs: [],
@@ -85,12 +87,14 @@ vi.mock("./NullableNumberField", () => ({
     value,
     onChange,
     placeholder,
+    hint,
   }: {
     label: string;
     value: number | undefined;
     onChange: (v: number | undefined) => void;
     placeholder?: string;
     autoHint?: boolean;
+    hint?: string;
   }) => {
     const labelId = `nullable-label-${label.toLowerCase().replace(/\s+/g, "-")}`;
     return (
@@ -103,6 +107,7 @@ vi.mock("./NullableNumberField", () => ({
           // Preserve number-input-{placeholder} testid for existing test compatibility
           data-testid={`number-input-${placeholder ?? "auto"}`}
           aria-labelledby={labelId}
+          aria-describedby={hint ? `${labelId}-hint` : undefined}
           type="number"
           value={value ?? ""}
           placeholder={placeholder ?? "Auto"}
@@ -112,6 +117,7 @@ vi.mock("./NullableNumberField", () => ({
             onChange(v);
           }}
         />
+        {hint && <p id={`${labelId}-hint`}>{hint}</p>}
       </div>
     );
   },
@@ -286,7 +292,7 @@ describe("CvSection", () => {
     expect(screen.queryByText("Time column")).not.toBeInTheDocument();
   });
 
-  it("shows Purge Gap and Embargo fields for purged_time_series strategy", () => {
+  it("shows Purge Gap but no Embargo field for purged_time_series strategy", () => {
     render(
       <CvSection
         cv={makeCvState({ strategy: "purged_time_series" })}
@@ -296,7 +302,7 @@ describe("CvSection", () => {
     );
     expect(screen.getByText("Time column")).toBeInTheDocument();
     expect(screen.getByText("Purge Gap")).toBeInTheDocument();
-    expect(screen.getByText("Embargo")).toBeInTheDocument();
+    expect(screen.queryByText("Embargo")).not.toBeInTheDocument();
     expect(screen.getByText("Train Size Max")).toBeInTheDocument();
     expect(screen.getByText("Test Size Max")).toBeInTheDocument();
     expect(screen.queryByText("Gap")).not.toBeInTheDocument();
@@ -400,12 +406,78 @@ describe("CvSection", () => {
       />,
     );
 
-    const randomStateInput = screen.getByTestId("number-input-42");
+    const randomStateInput = screen.getByLabelText("Random State");
+    expect(randomStateInput).toHaveValue(42);
     fireEvent.change(randomStateInput, { target: { value: "99" } });
 
+    expect(mockOnChange).toHaveBeenCalledTimes(1);
     expect(mockOnChange).toHaveBeenCalledWith(
       expect.objectContaining({ randomState: 99 }),
     );
+  });
+
+  it("shows the training-seed placeholder and hint while Random State is unset (P-0116 child 5b)", () => {
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "kfold", randomState: undefined })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    const input = screen.getByLabelText("Random State");
+    expect(input).toHaveValue(null);
+    expect(input).toHaveAttribute("placeholder", "Auto (training seed)");
+    expect(
+      screen.getByText("Empty follows the training seed."),
+    ).toBeInTheDocument();
+  });
+
+  it("hides the Random State hint once a seed is set (P-0116 child 5b)", () => {
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "kfold", randomState: 7 })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    expect(
+      screen.queryByText("Empty follows the training seed."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("typing a seed emits one onChange with randomState and clearing emits one with undefined (P-0116 child 5b)", () => {
+    const { rerender } = render(
+      <CvSection
+        cv={makeCvState({ strategy: "kfold", randomState: undefined })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Random State"), {
+      target: { value: "7" },
+    });
+    expect(mockOnChange).toHaveBeenCalledTimes(1);
+    expect(mockOnChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ randomState: 7 }),
+    );
+
+    mockOnChange.mockClear();
+    rerender(
+      <CvSection
+        cv={makeCvState({ strategy: "kfold", randomState: 7 })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Random State"), {
+      target: { value: "" },
+    });
+    expect(mockOnChange).toHaveBeenCalledTimes(1);
+    const arg = mockOnChange.mock.calls[0][0] as CvState;
+    expect(arg.randomState).toBeUndefined();
   });
 
   it("calls onChange with updated gap value for time_series strategy", async () => {
@@ -498,7 +570,7 @@ describe("CvSection", () => {
   // Coverage: NullableNumberField onChange callbacks (lines 213-258)
   // NullableNumberField mock uses data-testid="number-input-{placeholder}".
   // Use getByRole("spinbutton", { name: /label/i }) to disambiguate same-
-  // placeholder inputs rendered together (e.g. both "Purge Gap" and "Embargo"
+  // placeholder inputs rendered together (e.g. both "Gap" and "Purge Gap"
   // have placeholder "0").
   // -------------------------------------------------------------------------
 
@@ -520,21 +592,79 @@ describe("CvSection", () => {
     );
   });
 
-  it("calls onChange with updated embargo value for purged_time_series", () => {
+  it("never renders an Embargo field even when the schema still lists it", () => {
     render(
       <CvSection
-        cv={makeCvState({ strategy: "purged_time_series", embargo: 0 })}
+        cv={makeCvState({ strategy: "purged_time_series" })}
+        onChange={mockOnChange}
+        uiSchema={
+          {
+            capabilities: {
+              cv_strategies: ["purged_time_series"],
+              cv_strategy_fields: {
+                purged_time_series: ["n_splits", "purge_gap", "embargo"],
+              },
+            },
+          } as never
+        }
+        nonExcludedCols={sampleCols}
+      />,
+    );
+    expect(screen.getByText("Purge Gap")).toBeInTheDocument();
+    expect(screen.queryByText("Embargo")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("spinbutton", { name: /embargo/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the merged-embargo hint tied to Purge Gap only after a merge", () => {
+    const { rerender } = render(
+      <CvSection
+        cv={makeCvState({ strategy: "purged_time_series", purgeGap: 5 })}
         onChange={mockOnChange}
         nonExcludedCols={sampleCols}
       />,
     );
+    expect(screen.queryByText(/legacy embargo/i)).not.toBeInTheDocument();
 
-    const input = screen.getByRole("spinbutton", { name: /embargo/i });
-    fireEvent.change(input, { target: { value: "2" } });
-
-    expect(mockOnChange).toHaveBeenCalledWith(
-      expect.objectContaining({ embargo: 2 }),
+    rerender(
+      <CvSection
+        cv={makeCvState({
+          strategy: "purged_time_series",
+          purgeGap: 5,
+          mergedEmbargo: 2,
+        })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
     );
+    const hint = screen.getByText(
+      "Includes legacy embargo of 2, now merged into purge gap.",
+    );
+    expect(
+      screen.getByRole("spinbutton", { name: /purge gap/i }),
+    ).toHaveAttribute("aria-describedby", hint.id);
+  });
+
+  it("clears mergedEmbargo and keeps the user value when the purge gap is edited", () => {
+    render(
+      <CvSection
+        cv={makeCvState({
+          strategy: "purged_time_series",
+          purgeGap: 5,
+          mergedEmbargo: 2,
+        })}
+        onChange={mockOnChange}
+        nonExcludedCols={sampleCols}
+      />,
+    );
+    fireEvent.change(screen.getByRole("spinbutton", { name: /purge gap/i }), {
+      target: { value: "7" },
+    });
+    expect(mockOnChange).toHaveBeenCalledTimes(1);
+    const next = mockOnChange.mock.calls[0][0] as CvState;
+    expect(next.purgeGap).toBe(7);
+    expect(next.mergedEmbargo).toBeUndefined();
   });
 
   it("calls onChange with updated trainSizeMax value for time_series", () => {
@@ -700,5 +830,96 @@ describe("CvSection", () => {
       const folds = screen.getByTestId("number-input-5");
       expect(folds.getAttribute("max")).toBeNull();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P-0116 child 3b: regression hides the stratified CV strategies
+// ---------------------------------------------------------------------------
+describe("CvSection task-aware strategy list", () => {
+  const onChange = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  const STRATIFIED = ["stratified_kfold", "stratified_group_kfold"];
+
+  it("excludes both stratified strategies for a regression task", () => {
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "kfold" })}
+        onChange={onChange}
+        nonExcludedCols={sampleCols}
+        task="regression"
+      />,
+    );
+    for (const s of STRATIFIED) {
+      expect(screen.queryByTestId(`strategy-${s}`)).not.toBeInTheDocument();
+    }
+    expect(screen.getByTestId("strategy-kfold")).toBeInTheDocument();
+    expect(screen.getByTestId("strategy-group_kfold")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it.each([["binary"], ["multiclass"], [undefined]])(
+    "shows every strategy for task=%s",
+    (task) => {
+      render(
+        <CvSection
+          cv={makeCvState({ strategy: "kfold" })}
+          onChange={onChange}
+          nonExcludedCols={sampleCols}
+          task={task}
+        />,
+      );
+      for (const s of STRATIFIED) {
+        expect(screen.getByTestId(`strategy-${s}`)).toBeInTheDocument();
+      }
+      expect(screen.getAllByTestId(/^strategy-/)).toHaveLength(8);
+    },
+  );
+
+  it("keeps the selected stratified strategy and shows an alert on a regression mismatch", () => {
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "stratified_kfold" })}
+        onChange={onChange}
+        nonExcludedCols={sampleCols}
+        task="regression"
+      />,
+    );
+    const selected = screen.getByTestId("strategy-stratified_kfold");
+    expect(selected).toHaveAttribute("data-selected", "true");
+    // The other stratified strategy stays hidden.
+    expect(
+      screen.queryByTestId("strategy-stratified_group_kfold"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Stratified strategies need a classification target. Pick another strategy.",
+    );
+    // The config is never mutated by rendering the mismatch.
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("forwards the task prop to BlockedGroupKFoldEditor", () => {
+    render(
+      <CvSection
+        cv={makeCvState({ strategy: "blocked_group_kfold" })}
+        onChange={onChange}
+        nonExcludedCols={sampleCols}
+        blocked={{ ...INITIAL_BLOCKED_STATE }}
+        onBlockedChange={vi.fn()}
+        task="regression"
+      />,
+    );
+    expect(screen.getByTestId("blocked-group-kfold-editor")).toHaveAttribute(
+      "data-task",
+      "regression",
+    );
   });
 });

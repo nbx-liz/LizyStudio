@@ -22,6 +22,8 @@ interface NumberInputProps {
    * via `getByRole("textbox", { name: ... })`.
    */
   ariaLabel?: string;
+  /** Id of an element that describes the input (hint text). */
+  ariaDescribedBy?: string;
   /**
    * P-0104 Wave 2.4 / Issue #460: when "integer", the input rejects
    * decimal characters during typing, rounds parsed values on blur via
@@ -44,6 +46,7 @@ export function NumberInput({
   className,
   id,
   ariaLabel,
+  ariaDescribedBy,
   paramType = "number",
 }: NumberInputProps) {
   const isInteger = paramType === "integer";
@@ -164,6 +167,7 @@ export function NumberInput({
           placeholder={placeholder}
           disabled={disabled}
           aria-label={ariaLabel}
+          aria-describedby={ariaDescribedBy}
           aria-invalid={hasIntegerViolation || undefined}
           className={cn(
             "h-7 w-20 text-center text-xs tabular-nums [appearance:textfield]",

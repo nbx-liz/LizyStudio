@@ -179,10 +179,25 @@ class TestMaterializeOverridesIntoLegacyTuning:
         out = materialize_overrides_into_legacy_tuning(self._make_effective())
         assert out["optuna"]["params"]["n_trials"] == 50
         assert out["optuna"]["params"]["timeout"] is None
-        assert out["optuna"]["params"]["direction"] == "maximize"
+        # P-0116 D5: the effective direction is derived from the metric, and
+        # lizyml derives it itself, so only an explicit one is written.
+        assert "direction" not in out["optuna"]["params"]
         assert out["optuna"]["space"] == {}
         # No evaluation block for empty metric list (caller can decide).
         # Empty input → empty output preserves PUT semantics.
+
+    def test_explicit_direction_is_materialized(self) -> None:
+        out = materialize_overrides_into_legacy_tuning(
+            self._make_effective(direction="maximize"), explicit_direction="minimize"
+        )
+        assert out["optuna"]["params"]["direction"] == "minimize"
+
+    def test_inherited_direction_is_dropped_without_an_explicit_one(self) -> None:
+        current = {"optuna": {"params": {"direction": "minimize", "n_trials": 3}}}
+        out = materialize_overrides_into_legacy_tuning(
+            self._make_effective(), current_tuning=current
+        )
+        assert "direction" not in out["optuna"]["params"]
 
     def test_space_is_materialized(self) -> None:
         out = materialize_overrides_into_legacy_tuning(

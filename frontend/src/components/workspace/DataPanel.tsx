@@ -261,6 +261,7 @@ export const DataPanel = forwardRef<DataPanelHandle, DataPanelProps>(
                     onBlockedChange={setBlocked}
                     nRows={shape ? shape[0] : undefined}
                     disabled={running}
+                    task={task ?? undefined}
                   />
                   <FoldPreview
                     enabled={!!target && !!task && shape !== null}

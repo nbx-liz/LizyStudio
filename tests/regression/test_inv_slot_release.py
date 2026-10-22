@@ -226,7 +226,9 @@ def test_inv1_path4_sigkill_subprocess_releases_slot_within_bounded_time(
 
     ws = _make_ws_mock_for_subprocess()
     start = time.monotonic()
-    training_module._run_subprocess_job(ws, job, job_store, broadcaster=MagicMock())
+    training_module._run_subprocess_job(
+        ws, job, job_store, broadcaster=MagicMock(), epoch=ws.current_epoch()
+    )
     elapsed = time.monotonic() - start
 
     assert elapsed < bounded_time_window_s, (

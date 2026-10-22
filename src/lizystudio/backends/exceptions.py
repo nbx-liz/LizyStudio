@@ -15,6 +15,7 @@ match the same class.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 
 class CancelledError(Exception):
@@ -76,6 +77,24 @@ class CheckpointIncompatibleError(Exception):
         self.kind = kind
         self.recovery_hint = recovery_hint
         self.suggested_fix = suggested_fix
+
+
+class StudyNotResumableError(CheckpointIncompatibleError):
+    """Raised when an unpause finds a stored study it cannot continue (P-0116 D3).
+
+    The study's lizyml record is missing (``legacy``: written before lizyml
+    0.19), cannot be read (``unreadable``), or contradicts itself
+    (``inconsistent``).  ``state`` carries lizyml's study state so a caller
+    can tell them apart; the recovery is the same for each, a new Tune.
+    """
+
+    def __init__(self, message: str, *, state: str) -> None:
+        super().__init__(
+            message,
+            kind="study_not_resumable",
+            recovery_hint="Start a new Tune",
+        )
+        self.state = state
 
 
 class CheckpointPreflightError(Exception):
@@ -162,6 +181,62 @@ class PlotNotAvailableError(Exception):
         self.available = available
 
 
+class RefitRequiredError(Exception):
+    """Raised when a stored model needs a new Fit before an operation (P-0116 D4).
+
+    Models written by an older backend version can lack what the current
+    one needs.  ``kind`` names the case:
+
+    * ``"shap_per_fold_state_missing"``: SHAP needs per-fold pipeline
+      states the artifact does not hold;
+    * ``"export_param_names"``: the stored ``model.params`` hold names the
+      current backend routes elsewhere, listed in ``names``.
+
+    The API layer translates this to HTTP 400 with code ``REFIT_REQUIRED``.
+    Each adapter raises it only for its exact symptom; other failures of the
+    same operation stay generic backend errors.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: Literal["shap_per_fold_state_missing", "export_param_names"],
+        names: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.names = names
+
+
+class TuningFailedError(Exception):
+    """Raised when a tune ends without a usable trial (P-0116 D5, #691).
+
+    lizyml raises ``TUNING_FAILED`` when every trial of a round fails.  The
+    adapter re-raises it as this type so the job reports the cause under its
+    own code instead of as a generic backend error.  The message is lizyml's
+    user message, followed by the first trial error when lizyml reports one
+    (lizyml 0.19+).
+    """
+
+
+class SearchSpaceRefusedError(Exception):
+    """Raised when the backend refuses the search space before any trial (P-0116 D1).
+
+    lizyml 0.20 judges the space when a tune starts and refuses it with
+    ``CONFIG_INVALID`` (a bound off its step grid, two dims for one
+    parameter, a dim a training setting or smart parameter owns, a choice
+    the task cannot train on).  The adapter re-raises it as this type so the
+    job reports the cause under its own code.  ``dims`` names the refused
+    dims by catalog key when the backend reported them, and is empty
+    otherwise.
+    """
+
+    def __init__(self, message: str, *, dims: tuple[str, ...] = ()) -> None:
+        super().__init__(message)
+        self.dims = dims
+
+
 __all__ = [
     "CancelledError",
     "CheckpointIncompatibleError",
@@ -170,4 +245,8 @@ __all__ = [
     "LegacyFormatProtectionError",
     "PausedError",
     "PlotNotAvailableError",
+    "RefitRequiredError",
+    "SearchSpaceRefusedError",
+    "StudyNotResumableError",
+    "TuningFailedError",
 ]

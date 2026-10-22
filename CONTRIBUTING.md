@@ -5,28 +5,106 @@ conventions, and quality gates you need to know.
 
 ## Getting started
 
-### Prerequisites
+This section is the one canonical setup guide. `README.md` and
+`frontend/README.md` link here instead of repeating it.
 
-- Python 3.10+
-- Node.js 20+ (pinned via `.nvmrc`; use [fnm](https://github.com/Schniz/fnm) or [nvm](https://github.com/nvm-sh/nvm) to auto-switch)
-- [uv](https://docs.astral.sh/uv/) (Python package manager)
-- [pnpm](https://pnpm.io/) (frontend package manager — activated via Node corepack from `packageManager` field)
+### Supported toolchain
 
-### Development setup
+| Tool | Version | Where it is pinned |
+|---|---|---|
+| Python | 3.10 – 3.14 are supported and tested; develop on **3.12** | `requires-python` and classifiers in `pyproject.toml`; `.python-version` selects 3.12; CI tests 3.10/3.11 on every PR and 3.10–3.14 nightly |
+| uv | 0.13 or newer | `[tool.uv] required-version` in `pyproject.toml` |
+| Node.js | **24** | `.nvmrc`, `engines.node` (pnpm only warns on an older Node) |
+| pnpm | **10.31.0** | `packageManager` in `frontend/package.json`, activated by corepack |
+
+Dependencies are locked: always install with `uv sync --locked` and
+`pnpm install --frozen-lockfile`, as CI does. A lockfile that no longer
+matches `pyproject.toml` or `package.json` then fails loudly, instead of
+being re-resolved silently.
+
+### One-time setup
 
 ```bash
 # Clone the repository
 git clone https://github.com/nbx-liz/LizyStudio.git
 cd LizyStudio
 
-# Backend
-uv sync                             # install Python dependencies
-uv run lizystudio --reload          # dev server on http://localhost:8501
+# Backend: Python dependencies
+uv sync --locked                    # creates .venv with the Python from .python-version
 
-# Frontend
+# Frontend: pnpm via corepack, dependencies, the E2E browser
+corepack enable                     # once per Node installation
 cd frontend
-pnpm install                        # install Node dependencies
-pnpm dev                            # Vite dev server on http://localhost:5173 (proxies to 8501)
+pnpm install --frozen-lockfile
+pnpm exec playwright install chromium
+cd ..
+
+# Git hooks, last: the biome hook runs `pnpm check`, which needs the
+# frontend dependencies above ("biome: not found" otherwise)
+uv run pre-commit install           # ruff, biome and the stray-artefact check on every commit
+```
+
+### Daily development
+
+```bash
+uv run lizystudio --reload          # backend dev server on http://localhost:8501
+
+cd frontend
+pnpm dev                            # Vite dev server on http://localhost:5173 (proxies /api to 8501)
+```
+
+Notes:
+
+- `pnpm generate:api` reads the OpenAPI schema from the running backend, so
+  start `uv run lizystudio` first.
+- `pnpm test:e2e` starts its own backend on port 8501 with
+  `LIZYSTUDIO_FILES_ROOT=/tmp`. Locally it reuses a server that already holds
+  the port, and its global setup then fails fast if that server is a plain
+  dev server (`frontend/tests/e2e/global-setup.ts`). Stop the dev server
+  before running E2E.
+
+### Checking a new machine
+
+`scripts/dev_acceptance.sh` checks that a machine, or an agent's sandbox, can
+develop LizyStudio. It makes a fresh clone of this repository at a revision,
+runs the one-time setup above in its order, and then runs the main checks
+locally. CI's guard jobs (for example `api-types-drift` and the grep
+guards) are not repeated. The checks are:
+
+- ruff, ruff format, mypy;
+- pytest, unit and integration;
+- pre-commit on all files;
+- biome, vitest, the build;
+- the functional E2E suite without retries.
+
+The setup includes `corepack enable`, but only when no `pnpm` is on `PATH`
+yet. The next step checks that the `pnpm` it finds is the pinned version.
+
+A last step checks that the earlier steps left no tracked change and no
+untracked file that Git does not ignore. Ignored output (`.venv`, tool
+caches) is expected and is not checked.
+
+Each step prints `STEP <name> PASS|FAIL <seconds>s`; its log is in
+`WORKDIR/logs/<name>.log`. The script exits 0 only when every step passed.
+
+Run `git fetch origin` first, outside any sandbox. The default revision is
+`origin/develop`. Stop any dev server on port 8501 before running the script.
+WORKDIR must not exist yet, and its parent must exist. The script never
+deletes anything, so each command below names a new directory per run.
+
+```bash
+# On the machine itself
+scripts/dev_acceptance.sh "/tmp/lizystudio-acceptance-$(date +%Y%m%d-%H%M%S)"
+
+# Inside the Claude Code Bash sandbox: have Claude Code run this through its
+# Bash tool without disabling the sandbox. WORKDIR must be sandbox-writable.
+scripts/dev_acceptance.sh "$TMPDIR/lizystudio-acceptance-$(date +%Y%m%d-%H%M%S)" origin/develop claude-sandbox
+
+# Inside the Codex sandbox (development profile). -C sets the sandbox's
+# writable working directory; WORKDIR must be inside it.
+mkdir -p /tmp/lizystudio-acceptance-codex
+codex sandbox -P development -C /tmp/lizystudio-acceptance-codex \
+  bash "$PWD/scripts/dev_acceptance.sh" "/tmp/lizystudio-acceptance-codex/run-$(date +%Y%m%d-%H%M%S)" origin/develop codex-sandbox
 ```
 
 ## Branch workflow

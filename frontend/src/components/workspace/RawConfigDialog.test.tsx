@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { RawConfigDialog } from "./RawConfigDialog";
 
 vi.mock("js-yaml", () => ({
-  default: { dump: (obj: unknown) => JSON.stringify(obj) },
+  dump: (obj: unknown) => JSON.stringify(obj),
 }));
 
 vi.mock("sonner", () => ({

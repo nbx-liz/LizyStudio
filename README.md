@@ -127,27 +127,11 @@ variables are unset.
 
 ## Development
 
-### Prerequisites
-
-- Python 3.10+ with [uv](https://docs.astral.sh/uv/)
-- Node.js 20+ with [pnpm](https://pnpm.io/) v9
-
-### Setup
-
-```bash
-# Clone
-git clone https://github.com/nbx-liz/LizyStudio.git
-cd LizyStudio
-
-# Backend
-uv sync
-uv run lizystudio --reload          # dev server on http://localhost:8501
-
-# Frontend (in a separate terminal)
-cd frontend
-pnpm install
-pnpm dev                            # Vite dev server on http://localhost:5173
-```
+Python 3.10–3.14 (develop on 3.12) with [uv](https://docs.astral.sh/uv/),
+and Node.js 24 with pnpm 10.31.0 via corepack. The supported toolchain, the
+one-time setup (locked installs, git hooks, the E2E browser) and the dev
+servers are described once, in
+[CONTRIBUTING.md § Getting started](CONTRIBUTING.md#getting-started).
 
 ### Commands
 

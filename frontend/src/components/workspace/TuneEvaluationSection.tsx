@@ -145,13 +145,11 @@ export function TuneEvaluationSection({
         ...evaluation,
         metrics: [buildEntry(metric), ...filtered],
       };
-      // Set direction in optuna params (no "metric" key — Widget conformance)
-      const dir = (() => {
-        if (!task || !metricDirection) return "minimize";
-        const taskDirs = metricDirection[task];
-        return taskDirs?.[metric] ?? "minimize";
-      })();
-      const newParams = { ...tuningParams, direction: dir };
+      // P-0116 child 5b: do not persist a derived direction. The backend
+      // resolves it from the metric at job start (INV-T6); drop any stale
+      // value so it cannot disagree with the new metric.
+      const { direction: _staleDirection, ...newParams } =
+        tuningParams as Record<string, unknown>;
       // Update both: tuning.evaluation and tuning.optuna.params
       const tuning = (config.tuning as Record<string, unknown>) ?? {};
       const optuna = (tuning.optuna as Record<string, unknown>) ?? {};
@@ -164,15 +162,7 @@ export function TuneEvaluationSection({
         },
       });
     },
-    [
-      evalMetrics,
-      evaluation,
-      config,
-      task,
-      metricDirection,
-      tuningParams,
-      onChange,
-    ],
+    [evalMetrics, evaluation, config, tuningParams, onChange],
   );
 
   const handleAdditionalMetricsChange = useCallback(

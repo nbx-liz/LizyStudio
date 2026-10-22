@@ -395,6 +395,9 @@ def test_tune_default_tuning_uses_auc_maximize_for_binary(
     whole ``POST /workspace/tune`` path so a future regression in
     either the materialization step OR ``_prepare_tune_config``'s
     auto-resolve is caught up front.
+
+    P-0116 D5: lizyml 0.20 derives the direction from the first metric, so
+    the job config carries AUC first and no direction at all.
     """
     _load_data_and_config(client, tmp_path)
     app = client.app  # type: ignore[attr-defined]
@@ -418,12 +421,15 @@ def test_tune_default_tuning_uses_auc_maximize_for_binary(
     assert res.status_code == 200, res.text
 
     prepared = captured["prepared"]
-    direction = prepared["tuning"]["optuna"]["params"].get("direction")
-    assert direction == "maximize", (
-        f"Default binary + AUC tune must run as maximize, got {direction!r}. "
-        "Likely cause: materialize_tuning_for_job emitted the wrong direction, "
-        "or _prepare_tune_config silently flipped it."
+    # P-0116 D5: Studio no longer sends the metric-derived direction; lizyml
+    # 0.20 derives it from evaluation.metrics[0], so AUC must lead the list
+    # and no contrary direction may ride along.
+    params = prepared["tuning"]["optuna"]["params"]
+    assert "direction" not in params, (
+        f"A derived direction must not be sent, got {params.get('direction')!r}. "
+        "Likely cause: materialize_tuning_for_job wrote the effective direction."
     )
+    assert prepared["evaluation"]["metrics"][0] == "auc"
 
 
 def test_tune_preserves_existing_tuning_config(
@@ -723,3 +729,26 @@ def test_reset_clears_workspace(client: TestClient, tmp_path: Path) -> None:
     assert status_after["has_data"] is False
     assert status_after["has_config"] is False
     assert status_after["has_result"] is False
+
+
+def test_fit_rejects_stratified_split_on_regression(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """P-0116 D5: regression with stratification is a 422, not a job failure."""
+    csv_path = _create_csv(tmp_path)
+    r = client.post("/api/workspace/data/path", json={"path": csv_path})
+    assert r.status_code == 200, r.text
+    res = client.get("/api/workspace/config/defaults?task=regression&target=age")
+    assert res.status_code == 200, res.text
+    config = res.json()
+    config["split"] = {"method": "stratified_kfold", "n_splits": 3}
+
+    with patch("lizystudio.api.workspace.start_fit_async") as mock_start:
+        res = client.post("/api/workspace/fit", json={"config": config})
+
+    assert res.status_code == 422, res.text
+    body = res.json()
+    assert body["error"]["code"] == "VALIDATION_ERROR"
+    paths = {err["path"] for err in body["error"]["details"]["errors"]}
+    assert "split.method" in paths
+    mock_start.assert_not_called()

@@ -1,6 +1,17 @@
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render as rtlRender,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { createRef } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { queryKeys } from "@/api/queryKeys";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { renderWithQuery as render } from "@/test/helpers";
 
 const mockLoadDataFromPath = vi.fn();
@@ -41,7 +52,7 @@ vi.mock("./FileBrowser", () => ({
   FileBrowser: () => <div data-testid="file-browser" />,
 }));
 
-import { DataPanel } from "./DataPanel";
+import { DataPanel, type DataPanelHandle } from "./DataPanel";
 
 describe("DataPanel", () => {
   afterEach(() => {
@@ -1458,5 +1469,142 @@ describe("DataPanel — handleTaskChange and handleExcludeToggle", () => {
       // called twice: initial mount config-sync + the exclude-toggle-driven sync
       expect(mockUpdateConfig).toHaveBeenCalledTimes(2);
     });
+  });
+});
+
+// P-0116 child 3b: the parent must pass `task` down to CvSection and
+// BlockedGroupKFoldEditor, otherwise the regression filtering is inert.
+describe("DataPanel — regression task reaches the CV section", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  async function renderWithTask(task: "binary" | "regression") {
+    mockFetchConfig.mockResolvedValue({
+      task: null,
+      data: {},
+      features: {},
+      training: {},
+    });
+    mockFetchConfigDefaults.mockResolvedValue({
+      task,
+      data: {},
+      features: {},
+      split: {},
+    });
+    mockUpdateConfig.mockResolvedValue({ config: {}, errors: [] });
+
+    render(<DataPanel onDataChanged={vi.fn()} onTaskChanged={vi.fn()} />);
+    await loadDataViaPath();
+
+    mockFetchColumns.mockClear();
+    mockFetchColumns.mockResolvedValue({
+      columns: COLUMNS_BINARY,
+      suggested_task: task,
+      target: "target",
+    });
+    await selectTarget("target");
+    await waitFor(() => {
+      expect(screen.getByRole("radio", { name: task })).toBeChecked();
+    });
+  }
+
+  it("hides the stratified strategies once the task is regression", async () => {
+    await renderWithTask("regression");
+
+    expect(
+      screen.queryByRole("radio", { name: "StratifiedKFold" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("radio", { name: "StratifiedGroup" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "KFold" })).toBeChecked();
+  });
+
+  it("keeps the stratified strategies for a binary task", async () => {
+    await renderWithTask("binary");
+
+    expect(
+      screen.getByRole("radio", { name: "StratifiedKFold" }),
+    ).toBeChecked();
+    expect(
+      screen.getByRole("radio", { name: "StratifiedGroup" }),
+    ).toBeInTheDocument();
+  });
+
+  it("hides the blocked-group Stratify block for a regression task", async () => {
+    await renderWithTask("regression");
+
+    await userEvent.click(screen.getByRole("radio", { name: "BlockedGroup" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("blocked-group-kfold-editor")).toBeVisible();
+    });
+    expect(screen.queryByText("Stratify")).not.toBeInTheDocument();
+  });
+
+  it("shows the blocked-group Stratify block for a binary task", async () => {
+    await renderWithTask("binary");
+
+    await userEvent.click(screen.getByRole("radio", { name: "BlockedGroup" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Stratify")).toBeInTheDocument();
+    });
+  });
+
+  // Review r1 (DC4): the mismatch alert is reachable through a reload,
+  // where hydrateFromServer restores a stored regression task and the
+  // cache reconcile restores a stored stratified strategy.
+  it("shows the mismatch alert after rehydrating a stored regression + stratified config", async () => {
+    mockFetchPreview.mockResolvedValue({ columns: [], data: [] });
+    mockFetchColumns.mockResolvedValue({
+      columns: COLUMNS_BINARY,
+      suggested_task: null,
+      target: null,
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData(queryKeys.config(), {
+      config_version: 1,
+      task: "regression",
+      data: { path: "/data.csv", target: "target" },
+      split: { method: "stratified_kfold", n_splits: 5, random_state: 42 },
+    });
+    const ref = createRef<DataPanelHandle>();
+    rtlRender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <DataPanel
+            ref={ref}
+            onDataChanged={vi.fn()}
+            onTaskChanged={vi.fn()}
+          />
+        </TooltipProvider>
+      </QueryClientProvider>,
+    );
+
+    await act(async () => {
+      await ref.current?.hydrateFromServer({
+        path: "/data.csv",
+        shape: [100, COLUMNS_BINARY.length],
+        target: "target",
+        task: "regression",
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "Stratified strategies need a classification target.",
+      );
+    });
+    expect(
+      screen.getByRole("radio", { name: "StratifiedKFold" }),
+    ).toBeChecked();
+    expect(
+      screen.queryByRole("radio", { name: "StratifiedGroup" }),
+    ).not.toBeInTheDocument();
   });
 });

@@ -106,6 +106,32 @@ describe("NullableNumberField", () => {
     expect(onChange).toHaveBeenCalledWith(0);
   });
 
+  it("renders the hint and links it to the input via aria-describedby", () => {
+    render(
+      <NullableNumberField
+        label="Purge Gap"
+        value={5}
+        onChange={vi.fn()}
+        hint="Includes legacy embargo of 2, now merged into purge gap."
+      />,
+    );
+    const hint = screen.getByText(
+      "Includes legacy embargo of 2, now merged into purge gap.",
+    );
+    expect(hint.id).not.toBe("");
+    expect(screen.getByRole("textbox")).toHaveAttribute(
+      "aria-describedby",
+      hint.id,
+    );
+  });
+
+  it("renders no hint and no aria-describedby by default", () => {
+    render(
+      <NullableNumberField label="Purge Gap" value={5} onChange={vi.fn()} />,
+    );
+    expect(screen.getByRole("textbox")).not.toHaveAttribute("aria-describedby");
+  });
+
   it("propagates onChange when the user types a value", () => {
     const onChange = vi.fn();
     render(

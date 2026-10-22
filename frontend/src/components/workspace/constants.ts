@@ -41,6 +41,16 @@ export const CV_STRATEGY_LABELS: Record<string, string> = {
   blocked_group_kfold: "BlockedGroup",
 };
 
+/**
+ * CV strategies that stratify on the target and therefore need a
+ * classification task (P-0116 child 3b). Matched by exact member, never by
+ * a `stratified` prefix, so a future strategy cannot be hidden by accident.
+ */
+export const STRATIFIED_CV_STRATEGIES: ReadonlySet<string> = new Set([
+  "stratified_kfold",
+  "stratified_group_kfold",
+]);
+
 /** Default CV strategy per task type. */
 export function getDefaultCvStrategy(task: string): string {
   return task === "binary" || task === "multiclass"

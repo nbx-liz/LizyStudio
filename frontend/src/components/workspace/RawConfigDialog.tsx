@@ -1,4 +1,4 @@
-import yaml from "js-yaml";
+import { dump } from "js-yaml";
 import { Copy } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,7 @@ interface RawConfigDialogProps {
 
 export function RawConfigDialog({ config, trigger }: RawConfigDialogProps) {
   const yamlText = config
-    ? yaml.dump(config, { flowLevel: 3, lineWidth: 80 })
+    ? dump(config, { flowLevel: 3, lineWidth: 80 })
     : "No config";
 
   const handleCopy = async () => {
