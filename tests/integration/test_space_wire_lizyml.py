@@ -19,7 +19,7 @@ import pytest
 from lizystudio.backends.exceptions import SearchSpaceRefusedError
 from lizystudio.backends.lizyml.adapter import LizyMLAdapter
 from lizystudio.backends.lizyml.config_mixin import _catalog_default_space
-from lizystudio.backends.lizyml.space_wire import WIRE_TABLE
+from lizystudio.backends.lizyml.space_wire import WIRE_TABLE, _row_for_param
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "lizyml" / "tune"
 
@@ -231,11 +231,14 @@ def test_every_owner_state_is_accepted_by_lizyml(
 
 @pytest.mark.integration
 def test_a_lightgbm_name_outside_the_table_is_tuned_as_a_model_dim() -> None:
-    space = {"min_sum_hessian_in_leaf": {"type": "float", "low": 1e-3, "high": 1.0}}
+    name = "min_sum_hessian_in_leaf"
+    # The case is the fallback for names the table does not know.
+    assert _row_for_param(name) is None
+    space = {name: {"type": "float", "low": 1e-3, "high": 1.0}}
 
     result = _tune(_tune_config(space, n_trials=1))
 
-    assert set(result.best_model_params) == {"min_sum_hessian_in_leaf"}
+    assert set(result.best_model_params) == {name}
 
 
 @pytest.mark.integration

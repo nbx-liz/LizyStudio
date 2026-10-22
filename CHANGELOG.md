@@ -50,6 +50,26 @@ still list, open, predict and show split importance.
 - **Unpausing a Tune continues the stored study from its rounds**: it
   finishes an open round, runs the planned rounds not yet started, or
   restores the stored result without a trial when every round is done.
+- **`GET /api/backends/ui-schema`: `capabilities.cv_defaults` no longer has
+  `random_state`** (it lists `n_splits`, `shuffle` and `gap`), following the
+  seed change above.
+
+### Results can differ from 0.6.x
+
+lizyml 0.20 changes how some results are computed, so the same config can
+give different numbers than on 0.6.x even with an explicit CV Random State:
+
+- **Isotonic calibration** takes the seed of its validation split from
+  `training.seed`, like the CV split.
+- **Platt calibration** is now fitted as Platt defined it (joint slope and
+  intercept by maximum likelihood with smoothed targets, no penalty); it was a
+  penalised logistic regression before (lizyml H-0100).
+- **Feature weights** (`model.feature_weights`) and parameters passed to a fit
+  now take effect; before, they could be silently ignored (lizyml H-0094).
+- **SHAP importance** explains each fold's model on rows encoded by that fold's
+  own pipeline (lizyml H-0114).
+
+Models saved by this release cannot be read by older lizyml versions.
 
 ### Added
 
