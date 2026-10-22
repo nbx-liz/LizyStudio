@@ -14,12 +14,12 @@
     "auto_categorical": true,
     "categorical": [
       "category"
-    ]
+    ],
+    "unseen_policy": "mode"
   },
   "split": {
     "method": "stratified_kfold",
-    "n_splits": 5,
-    "random_state": 42
+    "n_splits": 5
   },
   "model": {
     "name": "lgbm",
@@ -28,7 +28,8 @@
       "metric": [
         "auc",
         "binary_logloss"
-      ]
+      ],
+      "inner_valid": "holdout"
     },
     "auto_num_leaves": true,
     "num_leaves_ratio": 1,
@@ -38,7 +39,7 @@
     "balanced": null
   },
   "training": {
-    "seed": 42,
+    "seed": 1120,
     "early_stopping": {
       "enabled": true,
       "rounds": 150,
@@ -48,15 +49,7 @@
         "stratify": false,
         "random_state": 42
       },
-      "validation_ratio": 0.1
-    }
-  },
-  "tuning": {
-    "optuna": {
-      "params": {
-        "direction": "maximize",
-        "n_trials": 10
-      }
+      "inner_valid_explicit": false
     }
   },
   "evaluation": {
@@ -72,5 +65,105 @@
     ]
   },
   "calibration": null,
-  "output_dir": null
+  "output_dir": null,
+  "tuning": {
+    "optuna": {
+      "params": {
+        "n_trials": 10,
+        "timeout": null
+      },
+      "space": {
+        "num_leaves_ratio": {
+          "type": "float",
+          "low": 0.4,
+          "high": 1.0,
+          "log": false
+        },
+        "min_data_in_leaf_ratio": {
+          "type": "float",
+          "low": 0.01,
+          "high": 0.2,
+          "log": false
+        },
+        "min_data_in_bin_ratio": {
+          "type": "float",
+          "low": 0.01,
+          "high": 0.2,
+          "log": false
+        },
+        "n_estimators": {
+          "type": "int",
+          "low": 500,
+          "high": 2000,
+          "log": false
+        },
+        "learning_rate": {
+          "type": "float",
+          "low": 0.0001,
+          "high": 0.01,
+          "log": true
+        },
+        "max_depth": {
+          "type": "int",
+          "low": 3,
+          "high": 9,
+          "log": false
+        },
+        "max_bin": {
+          "type": "categorical",
+          "choices": [
+            15,
+            63,
+            127,
+            255,
+            511
+          ]
+        },
+        "feature_fraction": {
+          "type": "float",
+          "low": 0.5,
+          "high": 1.0,
+          "log": false
+        },
+        "bagging_fraction": {
+          "type": "float",
+          "low": 0.5,
+          "high": 1.0,
+          "log": false
+        },
+        "bagging_freq": {
+          "type": "int",
+          "low": 1,
+          "high": 10,
+          "log": false
+        },
+        "lambda_l2": {
+          "type": "float",
+          "low": 1e-06,
+          "high": 0.01,
+          "log": true
+        },
+        "early_stopping.rounds": {
+          "type": "int",
+          "low": 50,
+          "high": 200,
+          "log": false
+        },
+        "validation_ratio": {
+          "type": "float",
+          "low": 0.1,
+          "high": 0.3,
+          "log": false
+        }
+      }
+    },
+    "evaluation": {
+      "metrics": [
+        "auc",
+        "auc_pr",
+        "brier",
+        "logloss"
+      ]
+    }
+  }
 }

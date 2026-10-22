@@ -12,6 +12,8 @@ import {
   recommendedInnerValid,
   resetCvState,
 } from "./CvSection";
+import { STRATIFIED_CV_STRATEGIES } from "./constants";
+import { FALLBACK_CV_STRATEGY_FIELDS, parseSplitToCv } from "./cv-state";
 
 // C-5b Part 2 (H-0076): `cv_strategy_fields` comes from the backend
 // UiSchema at runtime. The map below mirrors what
@@ -33,7 +35,6 @@ const CV_STRATEGY_FIELDS: Record<string, readonly string[]> = {
     "n_splits",
     "time_col",
     "purge_gap",
-    "embargo",
     "train_size_max",
     "test_size_max",
   ],
@@ -67,7 +68,8 @@ describe("resetCvState", () => {
     expect(result.timeCol).toBeNull();
     expect(result.gap).toBe(INITIAL_CV_STATE.gap);
     expect(result.purgeGap).toBe(INITIAL_CV_STATE.purgeGap);
-    expect(result.embargo).toBe(INITIAL_CV_STATE.embargo);
+    expect(result).not.toHaveProperty("embargo");
+    expect(result.mergedEmbargo).toBeUndefined();
     expect(result.trainSizeMax).toBeUndefined();
     expect(result.testSizeMax).toBeUndefined();
     expect(result.minTrainRows).toBeUndefined();
@@ -262,21 +264,20 @@ describe("buildSplitConfig", () => {
       expect(result).not.toHaveProperty("time_col");
     });
 
-    it("purged_time_series includes purge_gap, embargo", () => {
+    it("purged_time_series includes purge_gap and never emits embargo", () => {
       const cv: CvState = {
         ...INITIAL_CV_STATE,
         strategy: "purged_time_series",
         folds: 3,
         timeCol: "ts",
         purgeGap: 5,
-        embargo: 10,
         trainSizeMax: 500,
         testSizeMax: 100,
       };
       const result = buildSplitConfig(cv);
       expect(result.method).toBe("purged_time_series");
       expect(result.purge_gap).toBe(5);
-      expect(result.embargo).toBe(10);
+      expect(result).not.toHaveProperty("embargo");
       expect(result.train_size_max).toBe(500);
       expect(result.test_size_max).toBe(100);
       expect(result).not.toHaveProperty("gap");
@@ -549,19 +550,19 @@ describe("buildSplitConfig", () => {
     });
 
     it("skips fields that SSOT does not list even if CvState provides values", () => {
-      // SSOT says only n_splits; embargo value is discarded.
+      // SSOT says only n_splits; the purge_gap value is discarded.
       const cv: CvState = {
         ...INITIAL_CV_STATE,
         strategy: "purged_time_series",
         folds: 3,
-        embargo: 99,
+        purgeGap: 99,
       };
       const result = buildSplitConfig(cv, undefined, ["n_splits"]);
       expect(result).toEqual({
         method: "purged_time_series",
         n_splits: 3,
       });
-      expect(result).not.toHaveProperty("embargo");
+      expect(result).not.toHaveProperty("purge_gap");
     });
   });
 });
@@ -715,5 +716,263 @@ describe("applyCvDataFields", () => {
     };
     const result = applyCvDataFields(data, cv);
     expect(result).toEqual(data);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P-0116 child 3b: a legacy embargo is folded into purge_gap on read
+// ---------------------------------------------------------------------------
+describe("parseSplitToCv embargo folding", () => {
+  it("adds a legacy embargo to purge_gap (3 + 2 = 5)", () => {
+    const out = parseSplitToCv({
+      method: "purged_time_series",
+      purge_gap: 3,
+      embargo: 2,
+    });
+    expect(out.purgeGap).toBe(5);
+    expect(out.mergedEmbargo).toBe(2);
+    expect(out).not.toHaveProperty("embargo");
+  });
+
+  it("uses embargo alone as purge_gap when purge_gap is absent", () => {
+    const out = parseSplitToCv({ method: "purged_time_series", embargo: 2 });
+    expect(out.purgeGap).toBe(2);
+    expect(out.mergedEmbargo).toBe(2);
+  });
+
+  it("leaves purge_gap untouched when neither purge_gap nor embargo is a number", () => {
+    const out = parseSplitToCv({
+      method: "purged_time_series",
+      purge_gap: "3",
+      embargo: null,
+    });
+    expect(out).not.toHaveProperty("purgeGap");
+    expect(out).not.toHaveProperty("mergedEmbargo");
+  });
+
+  it("reads purge_gap as-is and sets no hint when there is no embargo", () => {
+    const out = parseSplitToCv({ method: "purged_time_series", purge_gap: 4 });
+    expect(out.purgeGap).toBe(4);
+    expect(out).not.toHaveProperty("mergedEmbargo");
+  });
+
+  it("sets no hint for a zero embargo but keeps purge_gap", () => {
+    const out = parseSplitToCv({
+      method: "purged_time_series",
+      purge_gap: 4,
+      embargo: 0,
+    });
+    expect(out.purgeGap).toBe(4);
+    expect(out).not.toHaveProperty("mergedEmbargo");
+    expect(out.legacyEmbargo).toBeUndefined();
+  });
+
+  it("is idempotent once the folded value has been written back without embargo", () => {
+    const first = parseSplitToCv({
+      method: "purged_time_series",
+      purge_gap: 3,
+      embargo: 2,
+    });
+    const written = buildSplitConfig({
+      ...INITIAL_CV_STATE,
+      strategy: "purged_time_series",
+      ...first,
+    });
+    const second = parseSplitToCv(written);
+    expect(second.purgeGap).toBe(5);
+    expect(second).not.toHaveProperty("mergedEmbargo");
+  });
+
+  it("buildSplitConfig never emits embargo even when the schema lists it", () => {
+    const cv: CvState = {
+      ...INITIAL_CV_STATE,
+      strategy: "purged_time_series",
+      purgeGap: 5,
+      mergedEmbargo: 2,
+    };
+    const result = buildSplitConfig(cv, undefined, [
+      "n_splits",
+      "purge_gap",
+      "embargo",
+    ]);
+    expect(result).not.toHaveProperty("embargo");
+    expect(result.purge_gap).toBe(5);
+  });
+
+  it("resetCvState clears the transient merged-embargo hint", () => {
+    expect(resetCvState("purged_time_series").mergedEmbargo).toBeUndefined();
+  });
+
+  it("FALLBACK_CV_STRATEGY_FIELDS.purged_time_series no longer lists embargo", () => {
+    expect(FALLBACK_CV_STRATEGY_FIELDS.purged_time_series).not.toContain(
+      "embargo",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P-0116 child 3b: the fold predicate is child 3a's merge_embargo_into_purge_gap
+// predicate (tests/test_p0116_d5_backend.py), so the UI shows the gap lizyml
+// runs with. A form outside it carries `embargo` verbatim, never folded and
+// never dropped, so a config lizyml refuses stays refused (DC1).
+// ---------------------------------------------------------------------------
+describe("parseSplitToCv fold predicate mirrors the backend", () => {
+  const PURGED = "purged_time_series";
+  const notFolded: Array<[string, Record<string, unknown>]> = [
+    ["another method", { method: "time_series", purge_gap: 2, embargo: 3 }],
+    ["a gap alias", { method: PURGED, gap: 1, purge_gap: 2, embargo: 3 }],
+    ["an embargo_pct alias", { method: PURGED, embargo_pct: 0.1, embargo: 3 }],
+    ["a purge_window alias", { method: PURGED, purge_window: 2, embargo: 3 }],
+    ["a null embargo", { method: PURGED, purge_gap: 2, embargo: null }],
+    ["a negative embargo", { method: PURGED, purge_gap: 2, embargo: -1 }],
+    ["a fractional embargo", { method: PURGED, purge_gap: 2, embargo: 1.5 }],
+    ["a boolean embargo", { method: PURGED, purge_gap: 2, embargo: true }],
+    ["a string embargo", { method: PURGED, purge_gap: 2, embargo: "3" }],
+    ["a negative purge_gap", { method: PURGED, purge_gap: -2, embargo: 3 }],
+    ["a fractional purge_gap", { method: PURGED, purge_gap: 2.5, embargo: 3 }],
+    ["a null purge_gap", { method: PURGED, purge_gap: null, embargo: 3 }],
+  ];
+
+  it.each(notFolded)("does not fold %s", (_label, split) => {
+    const out = parseSplitToCv(split);
+    expect(out).not.toHaveProperty("mergedEmbargo");
+    if (typeof split.purge_gap === "number") {
+      expect(out.purgeGap).toBe(split.purge_gap);
+    } else {
+      expect(out).not.toHaveProperty("purgeGap");
+    }
+  });
+
+  // The carry keeps embargo's own value. The rest of the written split is
+  // what the editor can represent, exactly as before this PR: an alias
+  // (gap / embargo_pct / purge_window) is not written, and a purge_gap that
+  // is not a number is replaced by the editor's current value (here the
+  // initial 0). The whole split is pinned so that boundary stays visible.
+  it.each(notFolded.filter(([, split]) => split.method === PURGED))(
+    "carries embargo's value for %s; the rest is what the editor represents",
+    (_label, split) => {
+      const out = parseSplitToCv(split);
+      expect(out.legacyEmbargo).toBe(split.embargo);
+      const written = buildSplitConfig({
+        ...INITIAL_CV_STATE,
+        strategy: PURGED,
+        ...out,
+      });
+      expect(written).toEqual({
+        method: PURGED,
+        n_splits: INITIAL_CV_STATE.folds,
+        purge_gap:
+          typeof split.purge_gap === "number"
+            ? split.purge_gap
+            : INITIAL_CV_STATE.purgeGap,
+        embargo: split.embargo,
+      });
+    },
+  );
+
+  // JSON.parse cannot tell 3.0 from 3, so an integral float folds here while
+  // the backend's isinstance(int) check forwards it unfolded. lizyml's
+  // pydantic coerces 3.0 to 3, so the gap lizyml runs with is the same.
+  it("folds an integral float like an integer (same effective gap)", () => {
+    const out = parseSplitToCv(
+      JSON.parse('{"method":"purged_time_series","purge_gap":2,"embargo":3.0}'),
+    );
+    expect(out.purgeGap).toBe(5);
+    expect(out.legacyEmbargo).toBeUndefined();
+  });
+
+  it("does not carry embargo for another method (unchanged from before)", () => {
+    const out = parseSplitToCv({
+      method: "time_series",
+      purge_gap: 2,
+      embargo: 3,
+    });
+    expect(out).not.toHaveProperty("legacyEmbargo");
+  });
+
+  it("folds the plain form with purge_gap absent (counts as 0)", () => {
+    const out = parseSplitToCv({ method: PURGED, embargo: 3 });
+    expect(out.purgeGap).toBe(3);
+    expect(out.mergedEmbargo).toBe(3);
+    expect(out.legacyEmbargo).toBeUndefined();
+  });
+
+  it("clears a carried embargo when the cache no longer holds one", () => {
+    const out = parseSplitToCv({ method: PURGED, purge_gap: 2 });
+    expect(out).toHaveProperty("legacyEmbargo", undefined);
+  });
+
+  it("emits a carried embargo only for purged_time_series", () => {
+    const written = buildSplitConfig({
+      ...INITIAL_CV_STATE,
+      strategy: "time_series",
+      legacyEmbargo: -1,
+    });
+    expect(written).not.toHaveProperty("embargo");
+  });
+
+  it("resetCvState drops a carried embargo", () => {
+    expect(resetCvState(PURGED).legacyEmbargo).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P-0116 child 3b: stratified strategies are an exact-member set
+// ---------------------------------------------------------------------------
+describe("STRATIFIED_CV_STRATEGIES", () => {
+  it("contains exactly stratified_kfold and stratified_group_kfold", () => {
+    expect([...STRATIFIED_CV_STRATEGIES].sort()).toEqual([
+      "stratified_group_kfold",
+      "stratified_kfold",
+    ]);
+  });
+
+  it("does not match by prefix", () => {
+    expect(STRATIFIED_CV_STRATEGIES.has("stratified_future_thing")).toBe(false);
+    expect(STRATIFIED_CV_STRATEGIES.has("kfold")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P-0116 child 5b: split.random_state is unset by default
+// ---------------------------------------------------------------------------
+describe("random_state seed default (P-0116 child 5b)", () => {
+  it("has no randomState in the initial CV state", () => {
+    expect(INITIAL_CV_STATE.randomState).toBeUndefined();
+    expect(resetCvState("kfold").randomState).toBeUndefined();
+  });
+
+  it.each(["kfold", "stratified_kfold"])(
+    "buildSplitConfig writes no random_state by default for %s",
+    (strategy) => {
+      const cv = resetCvState(strategy);
+      const result = buildSplitConfig(
+        cv,
+        undefined,
+        CV_STRATEGY_FIELDS[strategy],
+      );
+      expect(result).not.toHaveProperty("random_state");
+    },
+  );
+
+  it("buildSplitConfig writes random_state 7 once it is set", () => {
+    const cv: CvState = { ...resetCvState("kfold"), randomState: 7 };
+    const result = buildSplitConfig(cv, undefined, CV_STRATEGY_FIELDS.kfold);
+    expect(result.random_state).toBe(7);
+  });
+
+  it("parseSplitToCv clears randomState when the split has a method but no seed", () => {
+    const out = parseSplitToCv({ method: "kfold", n_splits: 5 });
+    expect(out).toHaveProperty("randomState", undefined);
+  });
+
+  it("parseSplitToCv reads an explicit seed", () => {
+    const out = parseSplitToCv({ method: "kfold", random_state: 7 });
+    expect(out.randomState).toBe(7);
+  });
+
+  it("parseSplitToCv leaves randomState alone when the split has no method", () => {
+    const out = parseSplitToCv({ n_splits: 5 });
+    expect(out).not.toHaveProperty("randomState");
   });
 });

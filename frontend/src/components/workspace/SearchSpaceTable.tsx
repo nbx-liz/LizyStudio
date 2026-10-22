@@ -49,6 +49,9 @@ interface SearchSpaceTableProps {
   /** Full inner_valid options from ``uiSchema.inner_valid_options``;
    * filtered per ``cvStrategy`` inside SearchSpaceRow. */
   innerValidOptions?: string[];
+  /** P-0116 child 5b: ``training.early_stopping.inner_valid_explicit``;
+   * forwarded to the ``inner_valid_picker`` row for its cue. */
+  innerValidExplicit?: boolean;
   /** P-0104 Wave 3.1a / Issue #461: ``{paramName: {min, max}}`` for the
    * current task, resolved from ``uiSchema.parameter_bounds[task]``.
    * Forwarded per-row to clamp the Range Min/Max NumberInputs. */
@@ -85,6 +88,7 @@ export function SearchSpaceTable({
   columns,
   cvStrategy,
   innerValidOptions,
+  innerValidExplicit,
   parameterBounds,
   userSetSpaceKeys,
 }: SearchSpaceTableProps) {
@@ -317,6 +321,7 @@ export function SearchSpaceTable({
                 fevalMetrics={fevalMetrics}
                 cvStrategy={cvStrategy}
                 innerValidOptions={innerValidOptions}
+                innerValidExplicit={innerValidExplicit}
                 bounds={
                   // Catalog uses the dotted key ``early_stopping.rounds``;
                   // LizyML's parameter_bounds uses ``early_stopping_rounds``.

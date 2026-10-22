@@ -149,10 +149,11 @@ jobs:
             -q
       - name: Cross-minor lizyml matrix
         # Provisions ephemeral venvs with the N-1, N-2, N-3 lizyml
-        # minors, saves a checkpoint with each, then verifies the
+        # minors below the runtime (0.20; tests/test_lizyml_fixture_freshness.py
+        # keeps this list in step with the installed lizyml), saves a checkpoint with each, then verifies the
         # runtime rejects them with the structured envelope.
         env:
-          PAST_VERSIONS: "0.12.0 0.13.0 0.14.0"
+          PAST_VERSIONS: "0.17.0 0.18.0 0.19.0"
         run: bash scripts/pickle_compat_matrix.sh
 
   plotly-cdn:

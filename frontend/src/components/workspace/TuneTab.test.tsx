@@ -34,6 +34,22 @@ vi.mock("./SearchSpaceTable", () => ({
       >
         change model param
       </button>
+      <button
+        type="button"
+        data-testid="trigger-inner-valid-change"
+        onClick={() =>
+          props.onModelParamChange?.("inner_valid", "time_holdout")
+        }
+      >
+        change inner_valid
+      </button>
+      <button
+        type="button"
+        data-testid="trigger-validation-ratio-change"
+        onClick={() => props.onModelParamChange?.("validation_ratio", 0.2)}
+      >
+        change validation_ratio
+      </button>
     </div>
   ),
   groupToCategory: (group: string) => group,
@@ -343,8 +359,51 @@ describe("TuneTab", () => {
     const tuning = updated.tuning as Record<string, unknown>;
     const optuna = tuning.optuna as Record<string, unknown>;
     const params = optuna.params as Record<string, unknown>;
-    // direction should default to "minimize" when task not in metricDirection
-    expect(params.direction).toBe("minimize");
+    // P-0116 child 5b: the metric change no longer writes a derived
+    // direction; the backend resolves it at job start.
+    expect(params).not.toHaveProperty("direction");
+  });
+
+  it("removes a persisted direction on a metric change and keeps n_trials/timeout (P-0116 child 5b)", () => {
+    const onChange = vi.fn();
+    const config = {
+      model: { name: "lgbm", params: {} },
+      tuning: {
+        evaluation: { metrics: ["auc"] },
+        optuna: {
+          params: { n_trials: 30, timeout: 600, direction: "maximize" },
+          space: {},
+        },
+      },
+    };
+    render(
+      <TuneTab
+        config={config}
+        onChange={onChange}
+        task="binary"
+        uiSchema={
+          {
+            option_sets: { eval_metric: { binary: ["auc", "f1"] } },
+            metric_direction: { binary: { auc: "maximize", f1: "maximize" } },
+          } as unknown as UiSchema
+        }
+      />,
+    );
+
+    const f1Buttons = screen.getAllByText("f1");
+    fireEvent.click(f1Buttons[0].closest("button") ?? f1Buttons[0]);
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const updated = onChange.mock.calls[0][0] as {
+      tuning: {
+        evaluation: { metrics: unknown[] };
+        optuna: { params: Record<string, unknown> };
+      };
+    };
+    expect(updated.tuning.optuna.params).not.toHaveProperty("direction");
+    expect(updated.tuning.optuna.params.n_trials).toBe(30);
+    expect(updated.tuning.optuna.params.timeout).toBe(600);
+    expect(updated.tuning.evaluation.metrics[0]).toBe("f1");
   });
 
   it("shows precision_at_k k-value input when precision_at_k is in evalMetrics", () => {
@@ -758,6 +817,145 @@ describe("TuneTab", () => {
     const params = model.params as Record<string, unknown>;
     expect(params.max_depth).toBe(5);
     expect(params.existing).toBe(1);
+  });
+
+  describe("inner_valid_explicit marker (P-0116 child 5b)", () => {
+    const markerConfig = {
+      model: { name: "lgbm", params: { max_depth: 3 } },
+      training: {
+        early_stopping: { enabled: true, inner_valid_explicit: false },
+      },
+      tuning: { optuna: { params: { n_trials: 50 }, space: {} } },
+    };
+
+    function lastEarlyStopping(onChange: ReturnType<typeof vi.fn>) {
+      const updated = onChange.mock.calls[0][0] as {
+        training: { early_stopping: Record<string, unknown> };
+      };
+      return updated.training.early_stopping;
+    }
+
+    it("a Fixed inner_valid pick writes the value and marker true in one onChange", () => {
+      const onChange = vi.fn();
+      render(
+        <TuneTab config={markerConfig} onChange={onChange} task="binary" />,
+      );
+
+      fireEvent.click(screen.getByTestId("trigger-inner-valid-change"));
+
+      expect(onChange).toHaveBeenCalledTimes(1);
+      const updated = onChange.mock.calls[0][0] as {
+        model: { params: Record<string, unknown> };
+      };
+      expect(updated.model.params.inner_valid).toBe("time_holdout");
+      expect(updated.model.params.max_depth).toBe(3);
+      expect(lastEarlyStopping(onChange)).toEqual({
+        enabled: true,
+        inner_valid_explicit: true,
+      });
+    });
+
+    it("a Fixed validation_ratio edit writes the value and marker true in one onChange", () => {
+      const onChange = vi.fn();
+      render(
+        <TuneTab config={markerConfig} onChange={onChange} task="binary" />,
+      );
+
+      fireEvent.click(screen.getByTestId("trigger-validation-ratio-change"));
+
+      expect(onChange).toHaveBeenCalledTimes(1);
+      const updated = onChange.mock.calls[0][0] as {
+        model: { params: Record<string, unknown> };
+      };
+      expect(updated.model.params.validation_ratio).toBe(0.2);
+      expect(lastEarlyStopping(onChange).inner_valid_explicit).toBe(true);
+    });
+
+    it("a non-inner key leaves the marker untouched", () => {
+      const onChange = vi.fn();
+      render(
+        <TuneTab config={markerConfig} onChange={onChange} task="binary" />,
+      );
+
+      fireEvent.click(screen.getByTestId("trigger-model-param-change"));
+
+      expect(onChange).toHaveBeenCalledTimes(1);
+      const updated = onChange.mock.calls[0][0] as {
+        training?: unknown;
+      };
+      // The training section is passed through by reference, not rewritten.
+      expect(updated.training).toBe(markerConfig.training);
+    });
+
+    it("a non-inner key does not create a marker when training is absent", () => {
+      const onChange = vi.fn();
+      render(<TuneTab config={tuneConfig} onChange={onChange} task="binary" />);
+
+      fireEvent.click(screen.getByTestId("trigger-model-param-change"));
+
+      expect(onChange).toHaveBeenCalledTimes(1);
+      expect(onChange.mock.calls[0][0]).not.toHaveProperty("training");
+    });
+
+    it("a pick keeps the other early_stopping keys", () => {
+      const onChange = vi.fn();
+      const config = {
+        ...markerConfig,
+        training: {
+          seed: 1,
+          early_stopping: { enabled: true, rounds: 100 },
+        },
+      };
+      render(<TuneTab config={config} onChange={onChange} task="binary" />);
+
+      fireEvent.click(screen.getByTestId("trigger-inner-valid-change"));
+
+      expect(onChange).toHaveBeenCalledTimes(1);
+      const updated = onChange.mock.calls[0][0] as {
+        training: Record<string, unknown>;
+      };
+      expect(updated.training.seed).toBe(1);
+      expect(updated.training.early_stopping).toEqual({
+        enabled: true,
+        rounds: 100,
+        inner_valid_explicit: true,
+      });
+    });
+
+    it("the CV-change auto-recommend writes marker false in one onChange", () => {
+      const onChange = vi.fn();
+      const config = {
+        model: { name: "lgbm", params: { inner_valid: "group_holdout" } },
+        split: { method: "kfold" },
+        training: {
+          early_stopping: { enabled: true, inner_valid_explicit: true },
+        },
+        tuning: { optuna: { params: { n_trials: 50 }, space: {} } },
+      };
+      render(
+        <TuneTab
+          config={config}
+          onChange={onChange}
+          task="binary"
+          uiSchema={
+            {
+              inner_valid_options: ["holdout", "group_holdout", "time_holdout"],
+              option_sets: { eval_metric: { binary: ["auc"] } },
+            } as unknown as UiSchema
+          }
+        />,
+      );
+
+      expect(onChange).toHaveBeenCalledTimes(1);
+      const updated = onChange.mock.calls[0][0] as {
+        model: { params: Record<string, unknown> };
+      };
+      expect(updated.model.params.inner_valid).toBe("holdout");
+      expect(lastEarlyStopping(onChange)).toEqual({
+        enabled: true,
+        inner_valid_explicit: false,
+      });
+    });
   });
 
   it("handleOptimizationMetricChange filters out new optimization metric from additional metrics", () => {

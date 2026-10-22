@@ -9,7 +9,7 @@ import re
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 from fastapi import Request
@@ -281,6 +281,30 @@ def validate_config(ws: WorkspaceState, config: dict[str, Any]) -> list[dict[str
     # if they accept that lizyml will skip those metrics mid-fold.
     normalized.extend(_workspace_metric_compatibility_errors(ws, config))
     return normalized
+
+
+# Backend validation rules added after stored jobs may have been created.
+# A relaunch (``/retune``, ``/resume``, ``/unpause``) starts a job from a
+# stored config that already passed the full gate when its job was created,
+# so only these newer rules are re-checked there (P-0116 D5).
+_RELAUNCH_RULE_TYPES = frozenset({"regression_stratify"})
+
+
+def relaunch_rule_errors(
+    ws: WorkspaceState, config: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Errors a relaunch must refuse: the newer rules only, normalized like
+    :func:`validate_config`'s output."""
+    return [
+        {
+            "path": ".".join(str(p) for p in err.get("loc", ())),
+            "message": err.get("msg", ""),
+            "severity": "error",
+            "suggested_fix": None,
+        }
+        for err in ws.backend.validate_config(config)
+        if err.get("type") in _RELAUNCH_RULE_TYPES
+    ]
 
 
 def validate_search_space_for_tune(
@@ -576,6 +600,7 @@ def materialize_overrides_into_legacy_tuning(
     effective: TuningConfig,
     *,
     current_tuning: Any = None,
+    explicit_direction: Literal["maximize", "minimize"] | None = None,
 ) -> dict[str, Any]:
     """Materialize a :class:`TuningConfig` back into the legacy nested shape.
 
@@ -590,6 +615,11 @@ def materialize_overrides_into_legacy_tuning(
     ``n_trials`` / ``timeout`` / ``direction`` plus any extras the user
     had set (e.g. ``study_name``). Re-tune state
     (``tuning.re_tune``) is also preserved.
+
+    ``direction`` is written only when *explicit_direction* is given, the
+    user's own choice (P-0116 D5).  ``effective.direction`` is derived from
+    the first metric, and lizyml derives it the same way, so it is not
+    sent; an inherited ``direction`` in *current_tuning* is dropped too.
     """
     existing: dict[str, Any] = (
         copy.deepcopy(current_tuning) if isinstance(current_tuning, dict) else {}
@@ -602,7 +632,10 @@ def materialize_overrides_into_legacy_tuning(
     materialized_params: dict[str, Any] = dict(existing_params)
     materialized_params["n_trials"] = effective.n_trials
     materialized_params["timeout"] = effective.timeout
-    materialized_params["direction"] = effective.direction
+    if explicit_direction is not None:
+        materialized_params["direction"] = explicit_direction
+    else:
+        materialized_params.pop("direction", None)
 
     out: dict[str, Any] = dict(existing)
     out["optuna"] = {
@@ -759,13 +792,40 @@ def absorb_legacy_tuning(ws: WorkspaceState, config: dict[str, Any]) -> dict[str
     if "tuning" not in config:
         return dict(config)
     tuning = config["tuning"]
-    overrides = extract_overrides_from_legacy_tuning(tuning)
+    task = config.get("task") if "task" in config else _current_task(ws)
+    overrides = _drop_derived_direction(
+        ws, str(task or ""), extract_overrides_from_legacy_tuning(tuning)
+    )
     # Always store the absorbed overrides — even an empty intent is a
     # meaningful "user cleared tune state" signal. ``None`` is reserved
     # for "never touched" (post-reset, fresh workspace).
     ws.set_tuning_overrides(overrides)
     stripped = {k: v for k, v in config.items() if k != "tuning"}
     return stripped
+
+
+def _drop_derived_direction(
+    ws: WorkspaceState, task: str, overrides: TuningOverrides
+) -> TuningOverrides:
+    """Drop an absorbed ``direction`` that only repeats the metric's (P-0116 D5).
+
+    The Tune tab writes the metric-derived direction into the legacy
+    ``tuning`` block on every metric change, so it is not a user choice;
+    kept as an override it would be sent to lizyml as one.  A direction that
+    disagrees with the metric is kept, so lizyml refuses it (H-0099) rather
+    than Studio dropping it silently (DC1).
+    """
+    if overrides.direction is None:
+        return overrides
+    without = TuningOverrides.model_validate(
+        {
+            name: getattr(overrides, name)
+            for name in overrides.model_fields_set
+            if name != "direction"
+        }
+    )
+    derived = ws.backend.compute_effective_tuning(task, without).direction
+    return without if derived == overrides.direction else overrides
 
 
 def materialize_tuning_for_job(ws: WorkspaceState) -> dict[str, Any]:
@@ -793,6 +853,8 @@ def materialize_tuning_for_job(ws: WorkspaceState) -> dict[str, Any]:
     effective = ws.backend.compute_effective_tuning(_current_task(ws), overrides)
     out = dict(ws.config)
     out["tuning"] = materialize_overrides_into_legacy_tuning(
-        effective, current_tuning=ws.config.get("tuning")
+        effective,
+        current_tuning=ws.config.get("tuning"),
+        explicit_direction=overrides.direction,
     )
     return out

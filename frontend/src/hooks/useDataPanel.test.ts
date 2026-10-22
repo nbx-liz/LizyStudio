@@ -370,6 +370,100 @@ describe("useDataPanel", () => {
     expect(result.current.cv.strategy).toBe("time_series");
   });
 
+  // --- P-0116 child 3b: regression leaves no stratified state behind ---
+
+  it("handleTaskChange binary to regression switches stratified_kfold to kfold without a toast", () => {
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(
+      () => useDataPanel({ onDataChanged: vi.fn() }),
+      { wrapper },
+    );
+    expect(result.current.cv.strategy).toBe("stratified_kfold");
+
+    act(() => {
+      result.current.handleTaskChange("regression");
+    });
+
+    expect(result.current.cv.strategy).toBe("kfold");
+    expect(mocks.toastError).not.toHaveBeenCalled();
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it("handleTaskChange to regression resets blocked.stratify to auto", () => {
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(
+      () => useDataPanel({ onDataChanged: vi.fn() }),
+      { wrapper },
+    );
+    act(() => {
+      result.current.setBlocked({
+        ...result.current.blocked,
+        stratify: "on",
+      });
+    });
+    expect(result.current.blocked.stratify).toBe("on");
+
+    act(() => {
+      result.current.handleTaskChange("regression");
+    });
+
+    expect(result.current.blocked.stratify).toBe("auto");
+  });
+
+  it("handleTaskChange to a classification task keeps blocked.stratify", () => {
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(
+      () => useDataPanel({ onDataChanged: vi.fn() }),
+      { wrapper },
+    );
+    act(() => {
+      result.current.setBlocked({
+        ...result.current.blocked,
+        stratify: "off",
+      });
+    });
+
+    act(() => {
+      result.current.handleTaskChange("multiclass");
+    });
+
+    expect(result.current.blocked.stratify).toBe("off");
+  });
+
+  it("handleTargetChange with a regression suggestion resets cv to kfold and blocked.stratify to auto", async () => {
+    mocks.fetchColumns.mockResolvedValue({
+      ...COLS_OK,
+      suggested_task: "regression",
+    });
+    mocks.fetchConfigDefaults.mockResolvedValue({
+      config_version: 1,
+      task: "regression",
+      data: { path: null, target: null },
+      features: { categorical: [], exclude: [] },
+      split: { method: "kfold", n_splits: 5 },
+      model: { name: "lgbm", params: {} },
+    });
+
+    const { wrapper } = createWrapper();
+    const { result } = renderHook(
+      () => useDataPanel({ onDataChanged: vi.fn() }),
+      { wrapper },
+    );
+    act(() => {
+      result.current.setBlocked({
+        ...result.current.blocked,
+        stratify: "on",
+      });
+    });
+
+    await act(async () => {
+      await result.current.handleTargetChange("a");
+    });
+
+    expect(result.current.cv.strategy).toBe("kfold");
+    expect(result.current.blocked.stratify).toBe("auto");
+  });
+
   // -------------------------------------------------------------------------
   // P-0090 / Issue #278 residual: when an external write updates the cached
   // config (e.g. handleLoadPreset → setQueryData with n_splits=5), the
@@ -405,6 +499,119 @@ describe("useDataPanel", () => {
 
       await waitFor(() => expect(result.current.cv.folds).toBe(8));
       expect(result.current.cv.strategy).toBe("stratified_kfold");
+    });
+
+    // P-0116 child 3b: a legacy embargo in the cached config is folded
+    // into purge_gap; the cache echo of a user edit (PUT replaces `split`
+    // wholesale, so it carries no embargo) must keep the user's value.
+    it("folds a legacy embargo into purgeGap and keeps a later user edit", async () => {
+      const { wrapper, queryClient } = createWrapper();
+      const { result } = renderHook(
+        () => useDataPanel({ onDataChanged: vi.fn() }),
+        { wrapper },
+      );
+
+      act(() => {
+        queryClient.setQueryData(queryKeys.config(), {
+          config_version: 1,
+          task: "regression",
+          split: {
+            method: "purged_time_series",
+            n_splits: 4,
+            purge_gap: 3,
+            embargo: 2,
+          },
+        });
+      });
+
+      await waitFor(() => expect(result.current.cv.purgeGap).toBe(5));
+      expect(result.current.cv.mergedEmbargo).toBe(2);
+      expect(result.current.cv).not.toHaveProperty("embargo");
+
+      // The user edits Purge Gap; CvSection clears the hint in the same update.
+      act(() => {
+        result.current.setCvFromUser({
+          ...result.current.cv,
+          purgeGap: 7,
+          mergedEmbargo: undefined,
+        });
+      });
+      // The PUT replaced `split` wholesale, so the echoed cache has no embargo.
+      act(() => {
+        queryClient.setQueryData(queryKeys.config(), {
+          config_version: 1,
+          task: "regression",
+          split: { method: "purged_time_series", n_splits: 4, purge_gap: 7 },
+        });
+      });
+
+      await waitFor(() => expect(result.current.cv.purgeGap).toBe(7));
+      expect(result.current.cv.mergedEmbargo).toBeUndefined();
+    });
+
+    // P-0116 child 3b (review r1): the merged-embargo hint is display-only,
+    // so neither clearing it nor a stale cache event re-setting it may fire a
+    // sync PUT. Sync is live here (a target is selected).
+    it("never PUTs for a change of the merged-embargo hint alone", async () => {
+      mocks.fetchColumns.mockResolvedValue(COLS_OK);
+      mocks.fetchConfigDefaults.mockResolvedValue({
+        config_version: 1,
+        task: "binary",
+        data: { path: null, target: null },
+        features: { categorical: [], exclude: [] },
+        split: { method: "kfold", n_splits: 5 },
+        model: { name: "lgbm", params: {} },
+      });
+      const { wrapper, queryClient } = createWrapper();
+      const { result } = renderHook(
+        () => useDataPanel({ onDataChanged: vi.fn(), onTaskChanged: vi.fn() }),
+        { wrapper },
+      );
+      await act(async () => {
+        await result.current.handleTargetChange("a");
+      });
+      expect(mocks.updateConfig).toHaveBeenCalledTimes(1);
+
+      const legacy = {
+        config_version: 1,
+        task: "binary",
+        data: { path: null, target: "a" },
+        split: {
+          method: "purged_time_series",
+          n_splits: 4,
+          purge_gap: 3,
+          embargo: 2,
+        },
+      };
+      act(() => {
+        queryClient.setQueryData(queryKeys.config(), legacy);
+      });
+      await waitFor(() => expect(result.current.cv.mergedEmbargo).toBe(2));
+      // 2 calls: target selection + the folded purge gap written back once.
+      await waitFor(() => expect(mocks.updateConfig).toHaveBeenCalledTimes(2));
+      const written = mocks.updateConfig.mock.calls[1]?.[0] as {
+        split: Record<string, unknown>;
+      };
+      expect(written.split.purge_gap).toBe(5);
+      expect(written.split).not.toHaveProperty("embargo");
+
+      // The user keeps the folded value; only the hint is cleared.
+      act(() => {
+        result.current.setCvFromUser({
+          ...result.current.cv,
+          mergedEmbargo: undefined,
+        });
+      });
+      // A stale cache event re-sets the hint without changing the gap.
+      act(() => {
+        queryClient.setQueryData(queryKeys.config(), { ...legacy });
+      });
+      await waitFor(() => expect(result.current.cv.mergedEmbargo).toBe(2));
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 50));
+      });
+      expect(result.current.cv.purgeGap).toBe(5);
+      expect(mocks.updateConfig).toHaveBeenCalledTimes(2);
     });
 
     it("updates cv.strategy when external config switches the CV method", async () => {

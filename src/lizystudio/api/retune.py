@@ -20,9 +20,7 @@ from lizystudio.api.errors import (
     JobNotFoundError,
     ParentLockedError,
     StudioError,
-)
-from lizystudio.api.errors import (
-    PickleIncompatibleError as PickleIncompatibleApiError,
+    pickle_incompatible_from,
 )
 from lizystudio.api.jobs import _get_job_or_404, router
 from lizystudio.api.models import LineageResponse, RetuneJobResponse
@@ -129,16 +127,7 @@ def _require_tune_job_with_checkpoint(
     try:
         backend.verify_checkpoint_compatibility(parent_dir)
     except CheckpointIncompatibleError as exc:
-        # P-0107: forward the backend's structured classification through
-        # to the HTTP envelope so the frontend can render an actionable
-        # banner (kind-specific recovery hint + copyable suggested fix)
-        # instead of a raw "Checkpoint incompatible: ..." string.
-        raise PickleIncompatibleApiError(
-            f"{parent.job_id}: {exc}",
-            kind=exc.kind,
-            recovery_hint=exc.recovery_hint,
-            suggested_fix=exc.suggested_fix,
-        ) from exc
+        raise pickle_incompatible_from(parent.job_id, exc) from exc
 
 
 def _claim_retune_slot(parent_job_id: str, job_store: JobStore) -> str:
@@ -153,6 +142,13 @@ def _claim_retune_slot(parent_job_id: str, job_store: JobStore) -> str:
             parent_job_id, job_store.get_locked_child(parent_job_id)
         )
     return placeholder
+
+
+def _require_valid_parent_config(ws: WorkspaceState, parent: Job) -> None:
+    """Apply the /fit and /tune config gate to the stored parent config (P-0116 D5)."""
+    from lizystudio.api.workspace import require_relaunchable_config
+
+    require_relaunchable_config(ws, parent.config)
 
 
 @router.post("/{job_id}/retune", response_model=RetuneJobResponse)
@@ -170,6 +166,7 @@ def retune_job(
     if parent.status != "completed":
         raise JobNotCompletedError(job_id)
     _require_tune_job_with_checkpoint(parent, job_store, ws.backend)
+    _require_valid_parent_config(ws, parent)
     _validate_n_trials(body.n_trials)
     _validate_boundary_threshold(body.boundary_threshold)
 
@@ -239,6 +236,7 @@ def resume_job(
             f"Resume is only available on failed tune jobs (status={parent.status})",
         )
     _require_tune_job_with_checkpoint(parent, job_store, ws.backend)
+    _require_valid_parent_config(ws, parent)
 
     # Auto-compute remaining trials from original config when not provided.
     n_trials = body.n_trials

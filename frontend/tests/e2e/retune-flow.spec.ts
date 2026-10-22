@@ -61,7 +61,9 @@ async function setupTuneJob(
     ...defaults,
     tuning: {
       optuna: {
-        params: { n_trials, direction: "minimize", timeout: null },
+        // The tuning metric for these binary defaults is auc. lizyml 0.20
+        // refuses a direction contrary to it (P-0116 child 4).
+        params: { n_trials, direction: "maximize", timeout: null },
         space: {
           learning_rate: { type: "float", low: 0.01, high: 0.3, log: true },
         },
@@ -142,18 +144,18 @@ test.describe("Re-tune / Resume / Lineage flow (H-0062)", () => {
 
     const childDetail = await pollJobUntilDone(request, childId);
     const childBest = (childDetail.tune_result as { best_score: number }).best_score;
-    // The setupTuneJob fixture configures `direction: "minimize"`, so
-    // a continuing study can only push best_score down or keep it
+    // The setupTuneJob fixture configures `direction: "maximize"` (auc),
+    // so a continuing study can only push best_score up or keep it
     // equal — it must never be strictly worse than the parent's best.
     // The assertion is direction-aware; if setupTuneJob ever flips to
-    // maximize, change to `>=`.
+    // minimize, change to `<=`.
     //
     // Add a tiny epsilon for IEEE-754 rounding drift: parent and child
     // best_score values pass through JSON serialization and metric
     // re-aggregation, so an "equal" continuation can come back as
     // 0.9800000000000001 vs 0.98 (Issue #100). 1e-9 is far below any
     // metric precision we care about.
-    expect(childBest).toBeLessThanOrEqual(parentBest + 1e-9);
+    expect(childBest).toBeGreaterThanOrEqual(parentBest - 1e-9);
   });
 
   test("API: retune on a fit job returns 400 INVALID_PARAM", async ({

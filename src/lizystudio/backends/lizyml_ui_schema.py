@@ -57,10 +57,24 @@ def _get_lgbm_provider() -> LGBMProvider:
         return _provider_cache
 
 
+# Objectives Studio does not offer although an installed lizyml lists them.
+# Empty since the lizyml 0.20 bump: the one entry, binary
+# ``cross_entropy_lambda`` (Issue #690), is no longer a lizyml binary choice
+# (dropped in 0.19, H-0125), and the drift contract flags a stale entry.
+_REFUSED_OBJECTIVES: dict[str, frozenset[str]] = {}
+
+
 def _build_objective_option_sets() -> dict[str, list[str]]:
-    """``{task: [objective, ...]}`` straight from LizyML canonical list."""
+    """``{task: [objective, ...]}`` from LizyML's canonical list, minus refused ones."""
     provider = _get_lgbm_provider()
-    return {task: list(provider.objective_choices(task)) for task in _TASKS}
+    return {
+        task: [
+            objective
+            for objective in provider.objective_choices(task)
+            if objective not in _REFUSED_OBJECTIVES.get(task, frozenset())
+        ]
+        for task in _TASKS
+    }
 
 
 def _build_metric_option_sets() -> dict[str, dict[str, list[str]]]:
@@ -586,8 +600,9 @@ def build_ui_schema() -> dict[str, Any]:
                 "purged_time_series": [
                     "n_splits",
                     "time_col",
+                    # P-0116 D5: ``embargo`` is not offered; the adapter
+                    # folds a legacy value into ``purge_gap``.
                     "purge_gap",
-                    "embargo",
                     "train_size_max",
                     "test_size_max",
                 ],
@@ -610,10 +625,11 @@ def build_ui_schema() -> dict[str, Any]:
                     "min_valid_rows",
                 ],
             },
+            # No ``random_state``: the split inherits ``training.seed``
+            # (D-20261020-008, follow LizyML on the seed).
             "cv_defaults": {
                 "n_splits": 5,
                 "shuffle": True,
-                "random_state": 42,
                 "gap": 0,
             },
             "cv_default_strategy": {

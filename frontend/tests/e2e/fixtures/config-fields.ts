@@ -231,17 +231,16 @@ const splitRandomState: FixtureEntry = {
     // post-target useConfigSync run is skipped via preseedSyncKey.
     // The user's click on the Random State NumberInput is the FIRST
     // event that flushes split.random_state into the wire body.
-    // Local cv.randomState is 42 the whole time — that's the value
-    // the input shows — but the saved config has no key for it
-    // until the user types.
+    // Local cv.randomState is unset by default (P-0116 child 5b), so
+    // the input shows its placeholder and the saved config has no key
+    // for it until the user types.
     defaultValue: undefined,
     testValue: 7,
-    // CvSection.tsx:162 renders the Random State block as
+    // CvSection renders the Random State block as a NullableNumberField:
     // <div><Label>Random State</Label><NumberInput .../></div>.
     // The NumberInput has no aria-label (the surrounding Label is
-    // not htmlFor-wired because CvSection uses bare Label + control,
-    // not the schema-driven FormField). Anchor on the label and walk
-    // to the parent div's textbox descendant.
+    // not htmlFor-wired). Anchor on the label and walk to the parent
+    // div's textbox descendant.
     uiLocator: (p): Locator =>
       p
         .locator('label:text-is("Random State")')
@@ -258,9 +257,9 @@ const tuningNTrials: FixtureEntry = {
   spec: {
     name: "tuning.optuna.params.n_trials via N Trials preset 100",
     configPath: "tuning.optuna.params.n_trials",
-    // After the Tune tab precondition fires, the saved config has
-    // tuning = { optuna: { params: { direction: "maximize" } } }
-    // (probed via tests/e2e). n_trials is undefined until the
+    // After the Tune tab precondition fires, the saved config carries
+    // no derived direction (P-0116 child 5b: the backend resolves it at
+    // job start). n_trials is undefined until the
     // user clicks a preset; the SegmentedControl's local fallback
     // of 50 is the displayed default but does NOT land in the
     // saved config until a preset is selected.
@@ -433,35 +432,6 @@ const splitPurgeGap: FixtureEntry = {
       "Purge Gap",
       "purged_time_series",
       "purge_gap",
-    );
-  },
-};
-
-const splitEmbargo: FixtureEntry = {
-  spec: {
-    name: "split.embargo (purged_time_series) via Embargo NumberInput",
-    configPath: "split.embargo",
-    // Same precondition as purge_gap; both fields land together
-    // when the strategy switches to purged_time_series.
-    defaultValue: 0,
-    testValue: 1,
-    uiLocator: (p): Locator =>
-      p
-        .locator('label:text-is("Embargo")')
-        .locator("..")
-        .getByRole("textbox"),
-    uiAction: async (locator, value) => {
-      await locator.fill(String(value));
-      await locator.blur();
-    },
-  } as ConfigFieldSpec<unknown>,
-  precondition: async (page) => {
-    await switchToCvStrategy(
-      page,
-      "PurgedTimeSeries",
-      "Embargo",
-      "purged_time_series",
-      "embargo",
     );
   },
 };
@@ -679,7 +649,6 @@ export const CONFIG_FIELD_FIXTURES: FixtureEntry[] = [
   tuningTimeout,
   splitGap,
   splitPurgeGap,
-  splitEmbargo,
   splitTrainSizeMax,
   splitTestSizeMax,
   calibrationMethod,

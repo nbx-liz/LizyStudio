@@ -146,6 +146,7 @@ export function useDataPanel({
     // marked and any stale cache update during the in-flight PUT is
     // ignored.
     setCv: setCvFromUser,
+    setBlocked,
     setColumns,
     setOverrides: columnOverrides.setOverrides,
     setSyncSuppressed: configSync.setSyncSuppressed,
@@ -167,6 +168,14 @@ export function useDataPanel({
       setTask(newTask);
       onTaskChanged?.(newTask);
       setCvFromUser(resetCvState(getEffectiveCvStrategy(newTask, uiSchema)));
+      // P-0116 child 3b: stratification needs a classification target, so
+      // a regression task silently resets the blocked-group Stratify choice
+      // (same pattern as the calibration reset, #269). No toast.
+      if (newTask === "regression") {
+        setBlocked((prev) =>
+          prev.stratify === "auto" ? prev : { ...prev, stratify: "auto" },
+        );
+      }
     },
     [onTaskChanged, uiSchema, setCvFromUser],
   );

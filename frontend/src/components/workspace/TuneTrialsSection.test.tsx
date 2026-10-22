@@ -140,6 +140,48 @@ describe("TuneTrialsSection", () => {
         params: { learning_rate: 0.05, num_leaves: 64 },
       },
       cv: { folds: 5 },
+      // P-0116 child 5b: the applied config is automatic again.
+      training: { early_stopping: { inner_valid_explicit: false } },
+    });
+  });
+
+  it("Apply to Fit writes inner_valid_explicit=false and keeps the other training keys (P-0116 child 5b)", () => {
+    const onApplyToFit = vi.fn();
+    const job = makeJob({
+      config: {
+        model: { name: "lgbm", params: {} },
+        training: {
+          seed: 1120,
+          early_stopping: {
+            enabled: true,
+            rounds: 150,
+            inner_valid_explicit: true,
+            inner_valid: { method: "holdout", ratio: 0.2 },
+          },
+        },
+      },
+    });
+
+    render(
+      <TuneTrialsSection
+        tuneResult={makeTuneResult({ best_params: { learning_rate: 0.05 } })}
+        tuningPlot={undefined}
+        job={job}
+        onApplyToFit={onApplyToFit}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply to Fit" }));
+
+    expect(onApplyToFit).toHaveBeenCalledTimes(1);
+    expect(onApplyToFit.mock.calls[0][0].training).toEqual({
+      seed: 1120,
+      early_stopping: {
+        enabled: true,
+        rounds: 150,
+        inner_valid_explicit: false,
+        inner_valid: { method: "holdout", ratio: 0.2 },
+      },
     });
   });
 

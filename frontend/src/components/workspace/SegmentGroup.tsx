@@ -4,6 +4,8 @@ interface SegmentGroupProps {
   onChange: (v: string) => void;
   labels?: Record<string, string>;
   disabled?: boolean;
+  /** Id of an element that describes the group (e.g. a helper cue). */
+  ariaDescribedBy?: string;
 }
 
 export function SegmentGroup({
@@ -12,9 +14,14 @@ export function SegmentGroup({
   onChange,
   labels,
   disabled = false,
+  ariaDescribedBy,
 }: SegmentGroupProps) {
   return (
-    <div className="lzs-segment" role="radiogroup">
+    <div
+      className="lzs-segment"
+      role="radiogroup"
+      aria-describedby={ariaDescribedBy}
+    >
       {options.map((opt) => {
         const isActive = opt === value;
         return (

@@ -52,6 +52,8 @@ _JOIN_TIMEOUT = 30  # seconds — generous to allow subprocess cleanup
 from lizystudio.backends.exceptions import (  # noqa: E402, F401
     CancelledError,
     PausedError,
+    SearchSpaceRefusedError,
+    TuningFailedError,
 )
 
 
@@ -239,7 +241,16 @@ def _apply_job_outcome(
         job.completed_at = datetime.now(timezone.utc).isoformat()
         job_store.update(job)
         if broadcaster is not None:
-            broadcaster.send_error(job.job_id, f"{type(exc).__name__}: {exc}")
+            # P-0116 D5 (#691): a tune whose trials all failed keeps its
+            # own code, so the UI does not show it as a generic error; so
+            # does a search space lizyml refused (P-0116 D1).
+            message = f"{type(exc).__name__}: {exc}"
+            if isinstance(exc, TuningFailedError):
+                broadcaster.send_error(job.job_id, message, code="TUNING_FAILED")
+            elif isinstance(exc, SearchSpaceRefusedError):
+                broadcaster.send_error(job.job_id, message, code="SEARCH_SPACE_REFUSED")
+            else:
+                broadcaster.send_error(job.job_id, message)
 
 
 def _persist_job_log(job_store: JobStore, job_id: str, captured: str) -> None:
@@ -337,14 +348,37 @@ def _save_tuning_plot(
 def _prepare_autofit_config(
     config: dict[str, Any], best_params: dict[str, Any]
 ) -> dict[str, Any]:
-    """Build a fit-ready config from the original config + best_params."""
+    """Build a fit-ready config from the original config + best_params.
+
+    A tuned inner split (``validation_ratio`` or ``inner_valid`` in
+    *best_params*) is the tune's choice, not the user's, so the
+    ``inner_valid_explicit`` marker is forced ``false`` over a picker's
+    ``true`` (D-20261020-008 option A, P-0116 D2).  It is written only when
+    ``training`` and ``training.early_stopping`` are dicts or absent; a
+    malformed section is left for the backend's schema to reject.
+    """
     result = copy.deepcopy(config)
     model = dict(result.get("model", {}))
     existing_params = dict(model.get("params", {}))
     model["params"] = {**existing_params, **best_params}
     result["model"] = model
     result.pop("tuning", None)
+    if "validation_ratio" in best_params or "inner_valid" in best_params:
+        _mark_inner_split_automatic(result)
     return result
+
+
+def _mark_inner_split_automatic(config: dict[str, Any]) -> None:
+    training = config.get("training", {})
+    if not isinstance(training, dict):
+        return
+    early_stopping = training.get("early_stopping", {})
+    if not isinstance(early_stopping, dict):
+        return
+    config["training"] = {
+        **training,
+        "early_stopping": {**early_stopping, "inner_valid_explicit": False},
+    }
 
 
 def _run_pickle_preflight(backend: BackendAdapter, job_dir: Path) -> None:

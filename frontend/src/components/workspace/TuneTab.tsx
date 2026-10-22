@@ -24,6 +24,12 @@ import {
   updateOptunaField,
 } from "./tune-config-utils";
 
+/** Model params that make up the Tune-side inner split. */
+const INNER_SPLIT_KEYS: ReadonlySet<string> = new Set([
+  "inner_valid",
+  "validation_ratio",
+]);
+
 interface TuneTabProps {
   config: Record<string, unknown>;
   onChange: (config: Record<string, unknown>) => void;
@@ -181,11 +187,32 @@ export function TuneTab({
     onChange(updateOptunaField(config, "space", space));
   };
 
+  // P-0116 child 5b: a Tune-side split pick (``inner_valid`` /
+  // ``validation_ratio``) lives in ``model.params`` but the backend reads
+  // the "user chose it" marker from ``training.early_stopping``. Both paths
+  // are written in ONE ``onChange`` so the PUT budget stays at one write.
+  // ``source`` is "user" for picks and "auto" for the CV-change recommend.
   const handleModelParamChange = useCallback(
-    (key: string, value: unknown) => {
+    (key: string, value: unknown, source: "user" | "auto" = "user") => {
       const newParams = { ...modelParams, [key]: value };
       const model = (config.model as Record<string, unknown>) ?? {};
-      onChange({ ...config, model: { ...model, params: newParams } });
+      const next: Record<string, unknown> = {
+        ...config,
+        model: { ...model, params: newParams },
+      };
+      if (INNER_SPLIT_KEYS.has(key)) {
+        const training = (config.training as Record<string, unknown>) ?? {};
+        const earlyStopping =
+          (training.early_stopping as Record<string, unknown>) ?? {};
+        next.training = {
+          ...training,
+          early_stopping: {
+            ...earlyStopping,
+            inner_valid_explicit: source === "user",
+          },
+        };
+      }
+      onChange(next);
     },
     [config, modelParams, onChange],
   );
@@ -204,6 +231,14 @@ export function TuneTab({
     return typeof split.method === "string" ? split.method : "";
   }, [config.split]);
 
+  // Drives the "Your choice / Automatic" cue; read straight from config.
+  const innerValidExplicit = useMemo(() => {
+    const training = (config.training as Record<string, unknown>) ?? {};
+    const earlyStopping =
+      (training.early_stopping as Record<string, unknown>) ?? {};
+    return earlyStopping.inner_valid_explicit === true;
+  }, [config.training]);
+
   const innerValidOptions = useMemo(
     () => uiSchema?.inner_valid_options ?? [],
     [uiSchema],
@@ -216,7 +251,7 @@ export function TuneTab({
     if (typeof current === "string" && filtered.includes(current)) return;
     const recommended = recommendedInnerValid(cvStrategy);
     if (current === recommended) return;
-    handleModelParamChange("inner_valid", recommended);
+    handleModelParamChange("inner_valid", recommended, "auto");
   }, [cvStrategy, innerValidOptions, modelParams, handleModelParamChange]);
 
   return (
@@ -255,6 +290,7 @@ export function TuneTab({
               columns={columns}
               cvStrategy={cvStrategy}
               innerValidOptions={innerValidOptions}
+              innerValidExplicit={innerValidExplicit}
               parameterBounds={parameterBounds}
               userSetSpaceKeys={userSetSpaceKeys}
             />

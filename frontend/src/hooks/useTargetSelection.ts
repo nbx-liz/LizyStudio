@@ -38,6 +38,7 @@ interface UseTargetSelectionParams {
   setTarget: (value: string) => void;
   setTask: (task: TaskType) => void;
   setCv: (cv: CvState) => void;
+  setBlocked: (blocked: BlockedGroupKFoldState) => void;
   setColumns: (columns: ColumnInfo[]) => void;
   setOverrides: (overrides: Record<string, ColumnOverride>) => void;
   setSyncSuppressed: (flag: boolean) => void;
@@ -73,6 +74,7 @@ export function useTargetSelection({
   setTarget,
   setTask,
   setCv,
+  setBlocked,
   setColumns,
   setOverrides,
   setSyncSuppressed,
@@ -93,6 +95,7 @@ export function useTargetSelection({
         let detectedTask: TaskType | null = task;
         let detectedStrategy = cv.strategy;
         let nextCv = cv;
+        let nextBlocked = blocked;
         if (cols.suggested_task) {
           const t = cols.suggested_task as TaskType;
           detectedTask = t;
@@ -101,6 +104,12 @@ export function useTargetSelection({
           detectedStrategy = getEffectiveCvStrategy(t, uiSchema);
           nextCv = resetCvState(detectedStrategy);
           setCv(nextCv);
+          // P-0116 child 3b: regression has no Stratify control, so reset
+          // a stale choice to "auto" (the only value the backend accepts).
+          if (t === "regression" && blocked.stratify !== "auto") {
+            nextBlocked = { ...blocked, stratify: "auto" };
+            setBlocked(nextBlocked);
+          }
         }
 
         const newOverrides = buildOverridesFromColumns(cols.columns);
@@ -154,7 +163,13 @@ export function useTargetSelection({
             );
           }
           preseedSyncKey(
-            buildSyncKey(value, detectedTask, newOverrides, nextCv, blocked),
+            buildSyncKey(
+              value,
+              detectedTask,
+              newOverrides,
+              nextCv,
+              nextBlocked,
+            ),
           );
           onDataChanged();
         }
@@ -184,6 +199,7 @@ export function useTargetSelection({
       setTarget,
       setTask,
       setCv,
+      setBlocked,
       setColumns,
       setOverrides,
       setSyncSuppressed,

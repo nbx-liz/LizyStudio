@@ -20,6 +20,7 @@ from __future__ import annotations
 import pytest
 
 from lizystudio.backends.lizyml_ui_schema import (
+    _REFUSED_OBJECTIVES,
     _TASKS,
     build_ui_schema,
     get_eval_metrics_by_task,
@@ -39,12 +40,33 @@ def _provider():
 
 
 def test_option_sets_objective_matches_lizyml_canonical() -> None:
+    """The objective list is LizyML's, minus Studio's conscious refusals.
+
+    ``_REFUSED_OBJECTIVES`` is the only allowed divergence (empty since the
+    lizyml 0.20 bump, Issue #690); everything else must follow the provider.
+    """
     schema = _ui_schema()
     provider = _provider()
     for task in _TASKS:
-        assert tuple(schema["option_sets"]["objective"][task]) == tuple(
-            provider.objective_choices(task)
-        ), f"objective drift for task={task!r}"
+        refused = _REFUSED_OBJECTIVES.get(task, frozenset())
+        expected = tuple(
+            o for o in provider.objective_choices(task) if o not in refused
+        )
+        assert tuple(schema["option_sets"]["objective"][task]) == expected, (
+            f"objective drift for task={task!r}"
+        )
+
+
+def test_refused_objectives_are_real_lizyml_names() -> None:
+    # A refusal of a name the installed LizyML no longer lists is a stale
+    # entry (DC3). This is what flagged binary cross_entropy_lambda after the
+    # 0.20 bump (lizyml 0.19 dropped it), so P-0116 child 4 removed it.
+    provider = _provider()
+    for task, refused in _REFUSED_OBJECTIVES.items():
+        assert task in _TASKS
+        assert refused <= set(provider.objective_choices(task)), (
+            f"stale refusal for task={task!r}: {sorted(refused)}"
+        )
 
 
 def test_option_sets_metric_matches_lizyml_provider() -> None:
