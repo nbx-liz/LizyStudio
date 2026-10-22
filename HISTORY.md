@@ -4820,49 +4820,67 @@ lock を上げた時点で Tune がすべて失敗する。そのため、lock �
 
 #### Acceptance Criteria
 
-- [ ] lizyml 0.20.0 のロックで、backend・integration・functional E2E が retry なしで緑になる。
-- [ ] **探索空間（D1）:**
+- [x] lizyml 0.20.0 のロックで、backend・integration・functional E2E が retry なしで緑になる。
+  - 証拠: #722 の CI（`3916edf`、run 39696123840）で backend・integration・functional E2E が緑、rerun と flaky は 0 件。各子 PR の `scripts/dev_acceptance.sh`（retry なし）は 21/21。以前から `@ci-flaky` の spec 3 本は除外されている。
+- [x] **探索空間（D1）:**
   - 既定の空間による Tune が完了する。
   - 保存された job の設定は、空間の全次元に対応表どおりの名前と `category` を持ち、`space_mode: replace` を持つ。
   - 実際の探索次元は、送った次元と一致する。`objective` などの LizyML の既定の次元は含まない。確かめるには、Tune の結果の `TuningResult.rounds[].space_snapshot`（`core/types/tuning_result.py:68-86`）を使う。
   - `first_metric_only` と `metric` が固定値として `model.params` に入る。
-- [ ] **対応表（D1・D2）:** catalog の全 25 行が対応表に載っていることをテストで確かめる。表に無い LightGBM の正規の名前（例: `min_child_samples`）は、`model` の次元として受け付けられる。
-- [ ] **持ち主の状態（D1）:**
+  - 証拠: #723・#728。`tests/integration/test_space_wire_lizyml.py::test_default_catalog_space_is_routed_by_category`（0.20 で既定の空間の実 Tune）、`tests/test_space_wire.py::TestToWireConfig::test_a_non_empty_space_replaces_the_provider_defaults`、`tests/integration/test_tune_resume_round_trip.py::test_catalog_space_reaches_lizyml_in_replace_mode`（`space_snapshot` の一致）。2 つ目の項目は D-20261021-010 により「保存された設定」ではなく「`create_model` が LizyML に渡す設定」で確かめる。4 つ目の項目（`first_metric_only` と `metric`）は D-20261021-010 で基準から外した。
+- [x] **対応表（D1・D2）:** catalog の全 25 行が対応表に載っていることをテストで確かめる。表に無い LightGBM の正規の名前（例: `min_sum_hessian_in_leaf`）は、`model` の次元として受け付けられる。
+  - 例の差し替え（owner、2026-10-22、決定カード D-20261022-008）: 当初の例 `min_child_samples` は `min_data_in_leaf` の別名で、Studio の既定が置く `min_data_in_leaf_ratio` から LizyML 0.20 が決める名前である。そのため LizyML が名前を挙げて拒否し、それが正しい挙動である。
+  - 証拠: #723、`tests/test_space_wire.py::TestTable::test_table_covers_exactly_the_catalog`。`tests/integration/test_space_wire_lizyml.py::test_a_lightgbm_name_outside_the_table_is_tuned_as_a_model_dim` と `::test_an_alias_of_a_smart_managed_name_is_refused_by_lizyml`（どちらも実 lizyml、リリース準備の PR で追加）。
+- [x] **持ち主の状態（D1）:**
   - `auto_num_leaves` の固定 `true` / 固定 `false` / choice の 3 通りと、`early_stopping.enabled` の `true` / `false` を組み合わせたテストで、次を確かめる。
     - 送る次元が D1 の規則どおりになる。
     - Tune が LizyML に受け付けられる。
   - `num_leaves` は model の次元として送られる。
-- [ ] **LizyML が拒否した空間（D1）:** 次の空間で Tune を始めると、job は trial 0 の前に失敗する。job の error は汎用の文言ではなく、問題の次元の名前と理由を示す。
+  - 証拠: #723、`tests/test_space_wire.py::TestOwnerRules::test_owner_matrix`（送る次元）と `tests/integration/test_space_wire_lizyml.py::test_every_owner_state_is_accepted_by_lizyml`（4 × 2 の全組み合わせを実 lizyml で Tune、リリース準備の PR で追加）。`num_leaves` は `::TestToWireSpace::test_client_category_is_overridden_for_catalog_names`。
+- [x] **LizyML が拒否した空間（D1）:** 次の空間で Tune を始めると、job は trial 0 の前に失敗する。job の error は汎用の文言ではなく、問題の次元の名前と理由を示す。
   - alias の重複（例: `lambda_l2` と `reg_lambda`）
   - training が持つ model の次元（例: `seed`）
   - `auto_num_leaves=true` のときの `num_leaves`
   - task に合わない `objective`
-- [ ] **分配（D2）:** 5 か所それぞれについて、できあがった Fit の設定の全体を期待値と比べるテストを置く。
+  - 証拠: #730、`tests/integration/test_space_wire_lizyml.py::test_space_refusal_is_its_own_error`（4 例、実 lizyml で trial 0 件のまま拒否され、次元の名前を返す）、`tests/test_p0116_d5_backend.py::TestSearchSpaceRefused::test_job_reports_the_space_refused_code`（job の error と WS の `SEARCH_SPACE_REFUSED`）。
+- [x] **分配（D2）:** 5 か所それぞれについて、できあがった Fit の設定の全体を期待値と比べるテストを置く。
   - 5 か所: autofit、retune、unpause の skip 経路、Apply to Fit、Fixed モード
   - 期待値に含めるもの: `model.params`、`model` の smart の項目、`training.seed`、`training.early_stopping` の全体、inner_valid の印
   - smart / training の名前が `model.params` に入らないことだけを確かめるテストでは足りない。
-- [ ] **inner_valid の印（D-20261020-008 の A 案）:** 次の書き手すべてで、印が値つきで必ず書かれ、`validation_ratio` が書かれないことをテストで確かめる。
+  - 証拠: #724・#730、`tests/test_param_routing.py::TestFiveWriters`（D-20261021-012 により `create_model` の出力の全体で比較）。unpause の skip 経路は #735 で restore に置き換わり、`tests/integration/test_unpause_study_continuation.py::test_unpause_after_the_only_round_closed_restores_without_a_trial` が確かめる。
+- [x] **inner_valid の印（D-20261020-008 の A 案）:** 次の書き手すべてで、印が値つきで必ず書かれ、`validation_ratio` が書かれないことをテストで確かめる。
   - 既定の設定（Fit タブ、Tune タブ）: `false`
   - CV の変更による自動の推奨: `false`
   - UI の picker で選んだ値: `true`
   - Fixed モードの固定値: `true`
   - Tune が選んだ `validation_ratio`: `false`
-- [ ] **unpause（D3）:**
+  - 証拠: #730・#731。既定は `tests/test_backends_lizyml.py::test_default_config_marks_the_inner_split_automatic` と `tests/test_lizyml_fixture_freshness.py::test_config_has_the_shape_the_ui_writes`、自動の推奨は `TuneTab.test.tsx` と `useConfigSync.test.ts`、picker は `ConfigForm.test.tsx`、Fixed は `TuneTab.test.tsx`、Tune が選んだ値は `tests/test_param_routing.py::TestAutofitMarker`。Fixed モードは保存する設定の `model.params` に `validation_ratio` を書く（catalog の形、D-20261021-010）。「書かれない」は LizyML に渡す段で確かめる（`tests/test_param_routing.py` の routing のテスト）。
+- [x] **unpause（D3）:**
   - 全 round が済んだ study は、Tune を実行せずに Fit に進む。
   - round が複数の Tune を最初の round の最中に一時停止すると、unpause は残りの round を `resume=True` で実行する。最終的な round 数と trial 数が、当初の計画と一致する。
-- [ ] **0.15 で作った job（D4）:** Phase 1 で 0.15 のサーバが作った実物を fixture にして、次を確かめる。
+  - 証拠: #735、`tests/integration/test_unpause_study_continuation.py`（restore と、[3, 2, 2] で 7 trial の複数 round）。複数 round の分岐は、`re_tune` が Tune タブから job に届かない（#734）ため、integration テストだけで確かめる（D-20261021-023）。
+- [x] **0.15 で作った job（D4）:** Phase 1 で 0.15 のサーバが作った実物を fixture にして、次を確かめる。
   - unpause は job の起動前に 400 で拒否され、「新しい Tune を始める」という案内を返す。
   - SHAP と、Tune した job の export-code は、500 ではなく専用の 4xx を返す。
   - 一覧、詳細、推論、split 重要度は従来どおり動く。
   - 判定が広すぎないことも確かめる。0.20 で作った job で起きる別の `MODEL_NOT_FIT`（学習データが無い場合）と別の `CONFIG_INVALID` は、専用の 4xx に変換されない。
-- [ ] **`direction`:** 利用者が明示した場合だけ job の設定に入る。指標を変えただけでは入らない。
-- [ ] **seed:** 新しい job の設定は、利用者が明示しない限り、split の `random_state` を持たない。split と isotonic は `training.seed` を受け継ぐ。CHANGELOG に結果の変化を書く。
-- [ ] **`embargo`:** `embargo` を持つ保存済みの設定を読んでも job が動く。新しく書く設定は `purge_gap` だけを持つ。
-- [ ] **回帰での stratify:** UI で選べない。API から送られた場合は、job の失敗ではなく、意味のあるエラーで拒否される。対象は stratified な CV、`groups.stratify`、inner_valid の `stratify`。
-- [ ] **#690:** binary の objective の選択肢に `cross_entropy_lambda` が無い。
-- [ ] **#691:** `TUNING_FAILED` は、汎用の 500 ではなく専用のエラーとして返る。
-- [ ] **`PAST_VERSIONS`:** 0.17 / 0.18 / 0.19 を検査する。
-- [ ] **production の fixture:** lizyml 0.20.0 で採り直し、README の記録を更新する。
+  - 証拠: #736、`tests/integration/test_p0116_legacy_015_jobs.py`（実物の 0.15 の job 3 件）と `tests/test_p0116_refit_required.py`。0.20 の job での別の `MODEL_NOT_FIT` は実物で、別の `CONFIG_INVALID` は stub で確かめる。
+- [x] **`direction`:** 利用者が明示した場合だけ job の設定に入る。指標を変えただけでは入らない。
+  - 証拠: #730・#731、`tests/test_p0109_pr4b_storage_rename.py::test_job_config_omits_derived_direction`、`TuneTab.test.tsx`、`tests/test_lizyml_fixture_freshness.py::test_tune_config_omits_a_derived_direction`。
+- [x] **seed:** 新しい job の設定は、利用者が明示しない限り、split の `random_state` を持たない。split と isotonic は `training.seed` を受け継ぐ。CHANGELOG に結果の変化を書く。
+  - 証拠: #730・#731、`tests/test_backends_lizyml.py::test_default_config_has_no_split_random_state`、`buildSyncedConfig.test.ts`、CHANGELOG 0.7.0。split と isotonic が `training.seed` を受け継ぐのは LizyML の挙動（H-0080）で、Studio のテストでは確かめていない。
+- [x] **`embargo`:** `embargo` を持つ保存済みの設定を読んでも job が動く。新しく書く設定は `purge_gap` だけを持つ。
+  - 証拠: #725・#726、`tests/test_p0116_d5_backend.py` の embargo のテストと `cv-section.test.ts`。確かめているのは LizyML に渡す変換の段までで、保存済みの embargo の設定から実際に Fit を走らせるテストは無い。
+- [x] **回帰での stratify:** UI で選べない。API から送られた場合は、job の失敗ではなく、意味のあるエラーで拒否される。対象は stratified な CV、`groups.stratify`、inner_valid の `stratify`。
+  - 証拠: #725・#726、`tests/test_p0116_d5_backend.py::TestRegressionStratify`、`tests/test_workspace_api.py::test_fit_rejects_stratified_split_on_regression`、`tests/test_p0116_relaunch_gate.py`、`CvSection.component.test.tsx`。
+- [x] **#690:** binary の objective の選択肢に `cross_entropy_lambda` が無い。
+  - 証拠: #725・#728、`tests/test_p0116_d5_backend.py`、`tests/contract/test_lizyml_objective_drift.py`。
+- [x] **#691:** `TUNING_FAILED` は、汎用の 500 ではなく専用のエラーとして返る。
+  - 証拠: #725、`tests/test_p0116_d5_backend.py::TestTuningFailed`。HTTP の応答ではなく、job の error と WS のコード `TUNING_FAILED` として返る。
+- [x] **`PAST_VERSIONS`:** 0.17 / 0.18 / 0.19 を検査する。
+  - 証拠: #738、`tests/test_lizyml_fixture_freshness.py::test_past_versions_are_the_three_minors_below_the_installed_one`。matrix は手元で 1 回実行した（`MATRIX_PYTHON=3.12`）。nightly では develop に入ってから走る。
+- [x] **production の fixture:** lizyml 0.20.0 で採り直し、README の記録を更新する。
+  - 証拠: #738、`tests/fixtures/lizyml/README.md`、`tests/test_lizyml_fixture_freshness.py`。
 
 #### Decision
 
@@ -4951,4 +4969,5 @@ lock を上げた時点で Tune がすべて失敗する。そのため、lock �
       - frontend 側の複製が backend 側と JSON として一致する。
       - matrix の script、nightly、bench test の 3 か所の過去の版が一致し、導入済みの minor の直前 3 つである。
     - **実測:** 0.20.0 での採り直しの job は binary_no_cal `job_bfca7941`、binary_isotonic `job_27682903`、regression `job_c499144c`、tune `job_866aa15e`。pickle の matrix を 0.17.0 / 0.18.0 / 0.19.0 で手元で一度実行し、3 つとも `lizyml_version_mismatch` で拒否された（この machine には Python 3.11 が無いので `MATRIX_PYTHON=3.12`。CI は 3.11 のまま）。
-    - **見つけた既存の不具合（本 Proposal の範囲外）:** `lizystudio` の CLI は `--jobs-dir` の既定値で `LIZYSTUDIO_JOBS_DIR` を上書きする（`cli.py:46`）。そのため、E2E の Playwright 設定の `LIZYSTUDIO_JOBS_DIR=/tmp/e2e_jobs` は効いておらず、E2E の job は `.lizystudio/jobs` に入る。採取のスクリプトは `--jobs-dir` を渡す。別の Issue で扱う。
+    - **見つけた既存の不具合（本 Proposal の範囲外）:** `lizystudio` の CLI は `--jobs-dir` の既定値で `LIZYSTUDIO_JOBS_DIR` を上書きする（`cli.py:46`）。そのため、E2E の Playwright 設定の `LIZYSTUDIO_JOBS_DIR=/tmp/e2e_jobs` は効いておらず、E2E の job は `.lizystudio/jobs` に入る。採取のスクリプトは `--jobs-dir` を渡す。#737 で扱う。
+  - **リリース（owner、2026-10-22、決定カード D-20261022-008）:** #722 を develop に merge し、0.7.0 としてリリースする。版番号は過去の基準による（挙動・API の変更や lizyml の SSOT の更新を含むリリースは minor を上げる。0.5.0 と 0.6.0 と同じ）。ROADMAP で v0.7.0 に予定していた P-0110 + P-0111 の枠は v0.8.0 に移す。受け入れ基準の「対応表」の例は `min_child_samples` から `min_sum_hessian_in_leaf` に差し替えた（理由は基準の注記）。リリース準備の PR で、持ち主の状態の全 8 通りと表に無い名前の 2 通りを実 lizyml で確かめるテストを加えた。

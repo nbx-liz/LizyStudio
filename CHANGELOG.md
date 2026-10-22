@@ -7,13 +7,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-22
+
+The **lizyml 0.20** release (P-0116, #721). LizyStudio moves from lizyml
+0.15.0 to 0.20.0 (`lizyml>=0.20.0,<0.21.0`). The 0.6.x range admitted
+lizyml versions newer than the 0.15.0 it was tested on; this range admits
+only the tested minor. `STUDIO_FORMAT_VERSION` stays
+at 2: saved configs and jobs keep their shape, and jobs written under 0.6.x
+still list, open, predict and show split importance.
+
 ### Changed
 
-- **Cross-validation `random_state` no longer defaults to 42 (P-0116).** A new
-  config carries no split `random_state`, so the split inherits `training.seed`
-  under lizyml 0.20 (H-0080). Fits and Tunes created with default settings use
-  a different split than on 0.6.x, so their scores differ from earlier runs.
-  Set Random State explicitly in the CV section to keep a fixed split.
+- **Cross-validation `random_state` no longer defaults to 42.** A new config
+  carries no split `random_state`, so the split inherits `training.seed`
+  under lizyml 0.20 (H-0080). Fits and Tunes created with default settings
+  use a different split than on 0.6.x, so their scores differ from earlier
+  runs. Set Random State explicitly in the CV section to keep a fixed split.
+- **The Tune `direction` is sent only when you set it.** Changing the
+  optimization metric no longer writes a derived direction; lizyml derives it
+  from the metric. A direction contrary to the metric is refused by lizyml
+  instead of being dropped.
+- **Inner validation split marker.** A split you pick (Fit form Inner
+  Validation, Tune tab Fixed `inner_valid` / `validation_ratio`) is marked
+  explicit; the automatic CV recommendation and Apply to Fit are not. The
+  Tune tab shows which one applies.
+- **`embargo` is folded into Purge Gap** for purged time-series CV. The
+  Embargo field is gone; a saved config's embargo is added to its purge gap,
+  which keeps the same split.
+- **Stratification is hidden and refused for regression** (stratified CV,
+  `groups.stratify`, inner-split `stratify`): `/fit`, `/tune` and relaunches
+  return 422 `VALIDATION_ERROR` with the setting's path instead of a failing
+  job.
+- **The Tune search space reaches lizyml in its own form** (wire names,
+  categories, boolean choices, `space_mode: replace`); values tuned or fixed
+  in `model.params` that lizyml reads elsewhere (smart parameters, `seed`,
+  early stopping, inner validation) are routed to their Fit-config place.
+  Saved configs keep the UI's catalog keys.
+- **Log-scale ranges no longer send `step`** (#688), so a Range on
+  `learning_rate` or `lambda_l2` is not refused by lizyml's grid rule.
+- **`cross_entropy_lambda` is no longer offered as a binary objective**
+  (#690).
+- **Unpausing a Tune continues the stored study from its rounds**: it
+  finishes an open round, runs the planned rounds not yet started, or
+  restores the stored result without a trial when every round is done.
+- **`GET /api/backends/ui-schema`: `capabilities.cv_defaults` no longer has
+  `random_state`** (it lists `n_splits`, `shuffle` and `gap`), following the
+  seed change above.
+
+### Results can differ from 0.6.x
+
+lizyml 0.20 changes how some results are computed, so the same config can
+give different numbers than on 0.6.x even with an explicit CV Random State:
+
+- **Isotonic calibration** takes the seed of its validation split from
+  `training.seed`, like the CV split.
+- **Platt calibration** is now fitted as Platt defined it (joint slope and
+  intercept by maximum likelihood with smoothed targets, no penalty); it was a
+  penalised logistic regression before (lizyml H-0100).
+- **Feature weights** (`model.feature_weights`) and parameters passed to a fit
+  now take effect; before, they could be silently ignored (lizyml H-0094).
+- **SHAP importance** explains each fold's model on rows encoded by that fold's
+  own pipeline (lizyml H-0114).
+
+Models saved by this release cannot be read by older lizyml versions.
+
+### Added
+
+- **Error code `REFIT_REQUIRED` (400).** SHAP importance and SHAP plots of a
+  job written by lizyml 0.15, and code export of a Tune written by it, now
+  say the model must be fitted again, instead of a generic 500.
+- **Unpause of a Tune paused under 0.6.x is refused before it starts** with
+  400 `PICKLE_INCOMPATIBLE` (`details.kind` `study_not_resumable`, "Start a
+  new Tune"); the job stays paused.
+- **Errors `TUNING_FAILED` and `SEARCH_SPACE_REFUSED`** on the job WebSocket:
+  a Tune whose trials all fail, or whose search space lizyml refuses, reports
+  the cause (and the refused dims) under its own code (#691).
+- `BackendCore.verify_study_continuable` in the adapter Protocol.
+
+### Known issues
+
+- `/resume` of a failed Tune does not work on lizyml 0.20 in two cases
+  (#733).
+- The Tune tab's Re-tune settings (`tuning.re_tune`) do not reach jobs
+  started from the UI (#734, pre-existing).
+- The `lizystudio` CLI overwrites `LIZYSTUDIO_JOBS_DIR` with its
+  `--jobs-dir` default (#737).
 
 ## [0.6.6] - 2026-06-30
 

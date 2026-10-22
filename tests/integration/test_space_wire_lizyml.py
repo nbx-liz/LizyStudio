@@ -19,7 +19,7 @@ import pytest
 from lizystudio.backends.exceptions import SearchSpaceRefusedError
 from lizystudio.backends.lizyml.adapter import LizyMLAdapter
 from lizystudio.backends.lizyml.config_mixin import _catalog_default_space
-from lizystudio.backends.lizyml.space_wire import WIRE_TABLE
+from lizystudio.backends.lizyml.space_wire import WIRE_TABLE, _row_for_param
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "lizyml" / "tune"
 
@@ -182,3 +182,78 @@ def test_smart_dimension_collision_is_a_space_refusal() -> None:
         backend.tune(model)
 
     assert excinfo.value.dims == ("auto_num_leaves",)
+
+
+# The owner states of P-0116 D1, each tuned by real lizyml 0.20: the unit
+# matrix (tests/test_space_wire.py::TestOwnerRules) pins which dims Studio
+# sends; this pins that lizyml accepts what it sends.
+_OWNER_SPACE = {
+    "num_leaves_ratio": {"type": "float", "low": 0.4, "high": 1.0},
+    "early_stopping.rounds": {"type": "int", "low": 20, "high": 60},
+    "validation_ratio": {"type": "float", "low": 0.1, "high": 0.3},
+}
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("auto_num_leaves_mode", "expect_ratio"),
+    [
+        ("fixed_true", True),
+        ("fixed_false", False),
+        ("choice_with_true", True),
+        ("choice_false_only", False),
+    ],
+)
+@pytest.mark.parametrize("early_stopping_enabled", [True, False])
+def test_every_owner_state_is_accepted_by_lizyml(
+    auto_num_leaves_mode: str, expect_ratio: bool, early_stopping_enabled: bool
+) -> None:
+    space = dict(_OWNER_SPACE)
+    fixed_auto = auto_num_leaves_mode == "fixed_true"
+    if auto_num_leaves_mode == "choice_with_true":
+        space["auto_num_leaves"] = {"type": "categorical", "choices": ["true", "false"]}
+    elif auto_num_leaves_mode == "choice_false_only":
+        space["auto_num_leaves"] = {"type": "categorical", "choices": ["false"]}
+    config = _tune_config(space, n_trials=1)
+    config["model"]["auto_num_leaves"] = fixed_auto
+    config["training"]["early_stopping"]["enabled"] = early_stopping_enabled
+
+    result = _tune(config)
+
+    assert len(result.trials) == 1
+    assert ("num_leaves_ratio" in result.best_smart_params) is expect_ratio
+    tuned_training = set(result.best_training_params)
+    if early_stopping_enabled:
+        assert tuned_training == {"early_stopping_rounds", "validation_ratio"}
+    else:
+        assert tuned_training == set()
+
+
+@pytest.mark.integration
+def test_a_lightgbm_name_outside_the_table_is_tuned_as_a_model_dim() -> None:
+    name = "min_sum_hessian_in_leaf"
+    # The case is the fallback for names the table does not know.
+    assert _row_for_param(name) is None
+    space = {name: {"type": "float", "low": 1e-3, "high": 1.0}}
+
+    result = _tune(_tune_config(space, n_trials=1))
+
+    assert set(result.best_model_params) == {name}
+
+
+@pytest.mark.integration
+def test_an_alias_of_a_smart_managed_name_is_refused_by_lizyml() -> None:
+    """``min_child_samples`` names ``min_data_in_leaf``, which lizyml 0.20 derives
+    from ``min_data_in_leaf_ratio``; with Studio's default ratio set, lizyml
+    refuses the dim before any trial, and Studio reports it by name.
+    """
+    config = _tune_config({"min_child_samples": {"type": "int", "low": 5, "high": 30}})
+    assert config["model"]["min_data_in_leaf_ratio"] is not None
+    df = pd.read_csv(FIXTURE / "data.csv")
+    backend = LizyMLAdapter()
+    model = backend.create_model(config, df)
+
+    with pytest.raises(SearchSpaceRefusedError) as excinfo:
+        backend.tune(model)
+
+    assert excinfo.value.dims == ("min_child_samples",)
