@@ -4971,3 +4971,193 @@ lock を上げた時点で Tune がすべて失敗する。そのため、lock �
     - **実測:** 0.20.0 での採り直しの job は binary_no_cal `job_bfca7941`、binary_isotonic `job_27682903`、regression `job_c499144c`、tune `job_866aa15e`。pickle の matrix を 0.17.0 / 0.18.0 / 0.19.0 で手元で一度実行し、3 つとも `lizyml_version_mismatch` で拒否された（この machine には Python 3.11 が無いので `MATRIX_PYTHON=3.12`。CI は 3.11 のまま）。
     - **見つけた既存の不具合（本 Proposal の範囲外）:** `lizystudio` の CLI は `--jobs-dir` の既定値で `LIZYSTUDIO_JOBS_DIR` を上書きする（`cli.py:46`）。そのため、E2E の Playwright 設定の `LIZYSTUDIO_JOBS_DIR=/tmp/e2e_jobs` は効いておらず、E2E の job は `.lizystudio/jobs` に入る。採取のスクリプトは `--jobs-dir` を渡す。#737 で扱う。
   - **リリース（owner、2026-10-22、決定カード D-20261022-008）:** #722 を develop に merge し、0.7.0 としてリリースする。版番号は過去の基準による（挙動・API の変更や lizyml の SSOT の更新を含むリリースは minor を上げる。0.5.0 と 0.6.0 と同じ）。ROADMAP で v0.7.0 に予定していた P-0110 + P-0111 の枠は v0.8.0 に移す。受け入れ基準の「対応表」の例は `min_child_samples` から `min_sum_hessian_in_leaf` に差し替えた（理由は基準の注記）。リリース準備の PR で、持ち主の状態の全 8 通りと表に無い名前の 2 通りを実 lizyml で確かめるテストを加えた。
+
+### P-0117: lizyml 0.21.1 に追従する（Change Gate: 外部依存・保存互換・API の応答）
+
+Gate-category: state-machine
+
+D3 は、一時停止中の job が running に移れるかの判定を変える（今は完了する unpause を、開始前に拒否する）。そのため、状態遷移の変更にあたる。D1・D2・D4・D5 は、3 つの区分のどれにも入らない。
+
+- **Date:** 2026-11-05 起票
+- **Issue:** #748（追跡 Issue。マイルストーン `lizyml 0.21`）。親 Epic は #638（adapter 境界と API 契約）。
+- **Related:**
+  - P-0116（lizyml 0.20 への追従。本 Proposal は同じ区分 D1〜D5 を使う）
+  - #729（Max Depth によるメモリ枯渇）、#733（0.20 の `/resume`）、#734（`re_tune` が job に届かない）
+  - #719（一時停止が study を止めない）。0.21 は挙動を変えないので、本 Proposal の範囲外とする。直し方（LizyStudio だけで直すか、LizyML に協調停止を求めるか）は #719 で決める
+  - 方針の決定（2026-11-05、owner）: develop に直接小さな PR を出す。lizyml の範囲は手で上げる。子 PR は Codex APPROVE と緑の CI で merge する
+- **影響調査:** 主文脈の静的な読みに加え、Codex の critique を 2 巡行った。1 巡目は独立に導出し、2 巡目は漏れだけを探した。2 巡目の前に絶対モニタを走らせ、判定は DELIVERABLE-FOCUSED（continue）だった。2 巡目では新しい漏れは見つからず、訂正が 1 件あった。LizyML の `lizyml/` で変わった 27 ファイルは、どれも Studio の経路から届く。
+
+#### Motivation
+
+以下の行番号は develop `b6733dd` のものである。
+
+lizyml 0.21.0（2026-10-22）と 0.21.1（2026-10-24）が公開された。主な変更は次のとおり。
+
+- 保存形式が `format_version` 5 になった（H-0138）。0.20 以前の lizyml は v5 を読めない。
+- カテゴリの同一性を構造的な key で判定するようになった（H-0138/H-0139/H-0142/H-0145）。
+- `num_leaves` によるメモリ見積もりの警告が入った（H-0140）。`max_depth=0` は「制限なし」になり、`parameter_bounds["max_depth"]` は `{"min": -1}` だけになった。
+- export_code の列名の別名が入った（H-0141）。
+
+依存では、lizyml だけが動く（LizyML の `pyproject.toml` は v0.20.0..v0.21.1 で依存を変えていない。`uv lock --upgrade-package lizyml` の差分は lizyml の 1 行）。
+
+**Phase 1（実測）。** 使い捨ての作業コピーで lizyml だけを 0.21.1 に上げ、`scripts/dev_acceptance.sh` を実行した。
+
+- **backend:** 6 件失敗、2001 件成功。失敗は 6 件とも `tests/test_lizyml_fixture_freshness.py` で、fixture の版（README とメタデータ 4 つ）と `PAST_VERSIONS` が古いことを、設計どおりに検出したものである（D5）。
+- **integration:** 49 件すべて成功。
+- **frontend:** Vitest、Biome、型検査、build はすべて成功。
+- **functional E2E:** 1 件失敗、147 件成功。失敗は `jobs-flow.spec.ts:201`（job が 90 秒の poll の期限内に終わらない）で、#717 と同じ種類である。同じ spec を単独で実行すると 4/4 成功した。
+- **結論:** 0.21.1 で落ちるのは fixture の鮮度の検査だけである。P-0116 の 0.20 のような、機能が止まる阻害要因は無い。本 Proposal の残りの項目（D1〜D4）は、テストが今は検査していない挙動の追従である。
+
+**0.20 で作った job（実物）を 0.21.1 のサーバで開いた結果。** 0.20 のサーバで HTTP API から Fit、Tune（3 trial）、一時停止中の Tune（30 trial）を作り、export-code の ZIP 2 つとモデルの export（`format_version` 4）を保存した。その job 保存先を 0.21.1 のサーバで開いた。
+
+- **問題なく動いた:** 一覧、詳細、指標、plot、split と SHAP の重要度、lineage、log、export-code、推論（SHAP を含む）、モデルの export。
+- **明示的に拒否される:** retune。400 `PICKLE_INCOMPATIBLE`（"checkpoint was saved with '0.20.0', current runtime is '0.21.1'"）。0.20 の baseline では成功していた。
+- **警告だけで続く:** 一時停止中の Tune の unpause は完了する。job の `execution.log` には LizyML の警告が残るだけである: "study … was created with other library versions (lizyml 0.20.0 -> 0.21.1). The objective identity matches, so the study continues."。この警告は UI には出ない（D3）。
+
+#### Purpose
+
+LizyStudio を lizyml `>=0.21.1,<0.22.0` で動かす。その上で、次の 3 つを満たす。
+
+1. 0.20 以前に作った job と成果物は、行を残したまま、できない操作だけを明確なエラーで拒否する（P-0116 D4 の方針の延長）。
+2. lizyml 0.21 の新しい拒否（列名・カテゴリ値・形式）を、汎用の 500 ではなく、原因と対処の分かるエラーとして返す。
+3. 0.21 への追従に必要なテストと fixture を作り直し、結果の変化を CHANGELOG に書く。
+
+#### 決めること
+
+##### D1. 0.20 で作った成果物を固定のテスト資料として持つ
+
+0.21 に上げると、今ある「0.20 の job」のテスト（例: `tests/integration/test_p0116_legacy_015_jobs.py:291` `test_export_code_on_a_020_tuned_job_is_not_refused`）は、インストール中の lizyml で job を作り直す。そのため、0.20 の成果物を読めるかの確認にならない。
+
+- **(A) `tests/fixtures/lizyml020/` に、Phase 1 で 0.20 のサーバが作った実物の job（Fit、Tune、一時停止中の Tune）を置く（推奨）。** `lizyml015/` と同じ扱いで、撮り直さない（0.20 のサーバでしか作れない）。大きさは約 2.4 MB。テストでは次を確かめる。
+  操作と job の組み合わせは次のとおり。一時停止中の Tune は `model_path`・`fit_result`・`tune_result` を持たないので、完了した job の操作の対象にはしない（`api/jobs.py:662`、`:689`、`services/inference.py:233`）。
+
+  | job | 0.21.1 で確かめること |
+  |---|---|
+  | Fit（完了） | 読み込み、指標、plot、split と SHAP の重要度、推論（SHAP を含む）、export-code、モデルの export が成功する |
+  | Tune（完了） | 上と同じ操作が成功する。retune は 400 `PICKLE_INCOMPATIBLE` で拒否され、job の行は残る |
+  | Tune（一時停止中） | 詳細、log、lineage が読める。unpause は D3 の方針どおりになる（このテストは D3 の PR に置く） |
+- **(B) 置かない。** 0.21 の CHANGELOG の記述を信頼する。
+  - 短所: 次の minor でも同じ盲点が残る（DC5）。
+
+export-code の ZIP とモデルの export（format 4）は、Studio が読むものではないので置かない。生成済みのプロジェクトは同梱のコードで動き、Studio を上げても変わらない。このことは CHANGELOG に書く。
+
+##### D2. lizyml の新しい拒否を、意味のあるエラーとして返す
+
+今は、export-code（`api/jobs.py:695-696`）、推論（`api/inference.py:134`、`:259`）、その他 `api/jobs.py` の 8 か所が、例外をまとめて `BackendError`（500、`details.type` だけ）にする（`api/errors.py:119-127`）。Fit・Tune の job は、例外の型と文言を汎用の error として送る（`_training_core.py:253-256`）。0.21 では、次の拒否が利用者の入力やデータで起きる。
+
+- `SERIALIZATION_FAILED`: 列名（`unsupported_column_name` / `column_name_collision`、kind は 6 種）、保存できないカテゴリ値（H-0145）
+- `DATA_SCHEMA_INVALID`: `calendar_timedelta64` / `unitless_datetime64`
+- `categorical_feature_not_unique`（H-0142）
+- `DESERIALIZATION_FAILED`: 未知の identity version、`identity_columns` の破損
+
+選択肢:
+
+- **(A) adapter で `LizyMLError` の `code` と `context` を Studio の例外（`BackendInputError` など）に移し、API と job の error に code・理由・対処を載せる。HTTP は入力の誤りなら 400/422、成果物の破損なら 409 か 500 にする（推奨）。** 一般の規則として 1 か所で写すので、0.21 の新しい理由だけでなく、今後の理由にも効く。
+- **(B) 0.21 で増えた理由だけを個別に写す。**
+  - 短所: 次の理由が増えるたびに 500 に戻る（DC1）。
+
+Service 層が lizyml の型を扱わないように、写す処理は adapter に置く（CLAUDE.md §8）。
+
+##### D3. バージョンをまたぐ unpause
+
+0.21 は、`max_depth=0` の意味を変えた（葉の数が 8 から 131072 になる）。カテゴリの同一性の判定も変えた。一方、study の「目的が同じか」の判定（objective digest）はこの変化を含まず、ライブラリのバージョンの違いは警告するだけである（LizyML `core/_tuning_resume.py:318-339`）。そのため、0.20 で一時停止した Tune を 0.21 で再開すると、条件の違う trial のスコアが同じ study で比べられうる。Phase 1 では、警告が `execution.log` に出るだけで、UI には出なかった。
+
+- **(A) study を作った lizyml と今の lizyml の major.minor が違えば、unpause を開始前に拒否する（推奨）。** 「新しい Tune を始めてください」と伝える。retune の `PICKLE_INCOMPATIBLE` と同じ規則（`pickle_compat.py:147-150`）になる。判定は `verify_study_continuable`（P-0116 の preflight）に足す。
+  - **版をどこから読むかに決定が要る。** LizyML は study の lineage record に `versions` を記録している（`tuning/lineage_records.py:80`）。しかし公開の `StudyLineage`（`tuning/study_lineage.py:84-98`）はそれを出さない。一時停止中の job には checkpoint の sidecar `model_meta.json`（`"lizyml_version": "0.20.0"`）もある。ただし、現行の決定は「unpause の判定に pickle の版を代わりに使わない（`verify_checkpoint_compatibility` を使わない）」である。そのため、sidecar を使うなら、その決定を、版の判定に限って改める必要がある。
+    - (A-1) LizyML に、`StudyLineage` へ `versions` を出すよう依頼する（上流の Issue）。出るまでは (B) で運用する。
+    - (A-2) sidecar の `lizyml_version` を、版の判定だけに使う。lineage の状態の判定は今までどおり `read_study_lineage` が持つ。owner の決定を記録する。
+- **(B) 再開を許し、版の違いを job の警告として UI に出す。**
+  - 短所: 比べられないスコアが混ざることを止めない。
+- **(C) `max_depth=0` などの影響する条件のときだけ拒否する。**
+  - 短所: 条件の列挙が閉じない（カテゴリの判定の変化も含む）。
+
+##### D4. メモリ見積もりの警告を利用者に見せる（#729 の一部）
+
+0.21 の H-0140 は、Fit の前と、Tune の各 trial の前に、メモリを見積もる。`num_leaves` が 16384 以上か、見積もりが 1 GiB 以上なら、`UserWarning` を出す。Tune の場合、2 つ目以降の該当 trial は、lizyml の logger（`tune.trial.memory_warning`）に書くだけである。
+
+- 拒否はしない。
+- Studio の job のログは、Studio 自身の logger だけを取り込む（`_training_core.py:167-178`）。thread モードでは、この警告はどこにも残らない。
+
+本 Proposal では、次の 2 つを行う。
+
+- Fit と Tune の実行中に出た `UserWarning` と、lizyml の logger の `WARNING`/該当の `INFO` を job のログに取り込む（thread と subprocess の両方のモード）。
+- 警告を job の警告として WebSocket と job の詳細に出す。
+
+Fit フォームと Tune の範囲を制限すること、開始前の preflight（`LGBMProvider.resource_warning`）、閾値を超えたら拒否するかは、#729 で決める。0.21 では、`parameter_bounds` の `max_depth` の上限（30）が無くなる。そのため、上限を Studio が別に持たない限り、Tune の範囲の上限も無くなる。この点を #729 に記録する。
+
+##### D5. 機械的な変更（判断を要しない）
+
+- **依存:** `pyproject.toml` を `lizyml[plots,tuning,calibration,explain]>=0.21.1,<0.22.0` にし、0.21.1 で lock する。
+- **Dependabot:** `.github/dependabot.yml:104-111` の lizyml の ignore は `update-types`（minor/major）で書かれている。しかし PR #746（範囲を `<0.22.0` に広げる）を止めなかった。Dependabot は `uv.lock` を更新しない（#746 の差分は `pyproject.toml` だけ）。範囲の内側の patch は PR にならない。よって「patch は流す」という前提は実際には働いていない。lizyml を丸ごと ignore する。
+- **production の fixture:** commit 済みの driver（`frontend/tests/fixture-capture/capture.spec.ts` と `scripts/export_lizyml_fixtures.py`）で、4 つの scenario を 0.21.1 で撮り直す。README の記録と、フロントエンドの複製 5 つも、同じ PR で更新する。
+- **`PAST_VERSIONS`:** `scripts/pickle_compat_matrix.sh:41`、`.github/workflows/nightly.yml:156`、`tests/bench/test_bench_pickle_compat.py:100`（`PAST_MINORS`）を `0.18.0 0.19.0 0.20.0` にする。
+- **片側だけの範囲:** `parameter_bounds["max_depth"]` が `{"min": -1}` になる。フロントエンドは片側を扱える（`SearchSpaceTable.tsx:58`、`NumberInput.tsx:74`）。
+  - 3 つの task の ui_schema が上限を持たないことと、UI が 30 を超える深さを受け付けることを、テストで固定する。
+  - 記録済みの study は古い上限を持ち続ける（`_tuning_space.py:452`）。このことも、テストで固定する。
+  - `lizyml_ui_schema.py:111` の docstring を直す。
+- **カテゴリの判定の変化:** Studio は、LizyML のカテゴリの同一性の規則そのもの（H-0138/H-0139/H-0142）は再び試験しない。その規則は LizyML のテストが持つ。
+  - 1 つの parquet の列の中では、Arrow が値の型を揃える。そのため、列の中の混在は、ファイル経由では作れない。
+  - 一方、学習と推論は別のファイルを読む（`services/data.py:78`、`services/inference.py:236-254`）。そのため、ファイルをまたぐ型の違いは Studio の経路で起きる。
+  - そこで、境界のある integration のケースを 1 つ置く。
+    - 学習の parquet: Decimal のカテゴリ列を持つ。読んだ後の dtype と値を検査する。
+    - Fit の job で使い、保存されたモデルを推論で読み直す。
+    - 推論のファイル: 同じ数値を整数で持つ。
+    - 期待: 0.21 では同じカテゴリとして扱われ、unseen にならない（LizyML `core/category_values.py` の `_number_key`）。
+  - Tune は、同じ encoder の経路を通る。そのため、このケースを Tune では繰り返さない。
+  - 結果が変わりうることは、CHANGELOG に書く。CSV の文字列の列は変わらない。
+- **export-code:** 生成される `config.json` に `column_name_policy: "str_alias_v1"` と `category_identity_version` が加わる。生成された script は入力の header を検査する。Studio の export-code 経路で作った ZIP を 1 つ展開し、2 つのキーがあることと、`predict.py` が Studio の予測と一致することを確かめる。
+- **Issue テンプレート:** `.github/ISSUE_TEMPLATE/*.yml` に `labels: [needs-triage]` を加える（2026-11-05 の Issue 整理の続き）。
+- **文書:** CHANGELOG に次を書く。BLUEPRINT の保存とエラーの記述も更新する。
+  - 0.20 で作った Tune の retune は拒否される。
+  - D3 の unpause の拒否。
+  - format 5 の一方向性: 一度 0.21 で export したモデルは 0.20 以前で読めない。上げる前に job の保存先をバックアップするよう案内する。
+  - カテゴリの判定による結果の変化。
+  - `max_depth=0` の意味の変化。
+  - 0.21.1 の frozenset の扱い。
+
+##### D6. PR の進め方（develop に直接）
+
+lock を上げると、fixture の鮮度テストが落ちる（`tests/test_lizyml_fixture_freshness.py`）。そのため、lock の更新、fixture、`PAST_VERSIONS`、D1 は 1 つの PR にまとめる。
+
+1. lock の更新、D5 の機械的な変更、fixture の撮り直し、D1 の資料と、完了した job のテスト（Phase 1 で落ちた鮮度テストの修正を含む）
+2. D2（エラーの写し）
+3. D3（unpause の preflight と、一時停止中の 0.20 の job のテスト）。`Gate-category: state-machine` なので、maker は Opus で動かす
+4. D4（警告の取り込みと表示。UI を含むため、ux-designer → frontend-engineer → visual-qa の順で進める）
+
+#### Compatibility
+
+- **外部依存:** lizyml の下限が 0.21.1 になる。0.21 で保存したモデルは format 5 になり、lizyml 0.20 以前では読めない（一方向）。Studio を 0.7.x に戻しても、0.21 で作った job のモデルは読めない。
+- **API の応答:**
+  - これまで 500 `BACKEND_ERROR` だった lizyml の入力の拒否が、4xx の専用のエラーになる（D2）。
+  - 0.20 で一時停止した Tune の unpause が 400 になる（D3）。
+  - job に警告が加わる（D4、追加のみ）。
+- **保存する設定の形:** 変えない。LizyStudio 自身の `format_version` も変えない。
+- **結果の変化（LizyML 側の変更による）:**
+  - カテゴリの判定（Decimal / NumPy、日時の同一時刻、int 名のカテゴリ列）
+  - `max_depth=0` の意味
+  - 既存の保存済みモデルの予測は変わらない（旧い lookup を保つ）。
+
+#### 採らなかった案
+
+- **0.21.0 を経由する:** 0.21.1 は fix だけなので、直接上げる。
+- **`max_depth` の上限 30 を Studio に戻す:** LizyML が上限を外した理由（LightGBM の意味に合わせる）に反する。資源の方針として #729 で決める。
+
+#### Acceptance Criteria
+
+- [ ] lizyml 0.21.1 のロックで、backend、integration、functional E2E が retry なしで緑になる。
+- [ ] **D1:** `tests/fixtures/lizyml020/` の完了した Fit と Tune を 0.21.1 で開くと、D1 の表の操作が成功する。Tune の retune は `PICKLE_INCOMPATIBLE` で拒否され、行は残る。一時停止中の Tune の詳細、log、lineage が読める。
+- [ ] **D2:** 列名の拒否、保存できないカテゴリ値、temporal の拒否、`categorical_feature_not_unique` が、それぞれ実際に通る経路（export-code、Fit の job、推論）で、code と理由を持つエラーになる。
+  - 壊れた identity の状態（未知の `category_identity_version`、壊れた `identity_columns`）を持つモデルを、Studio がモデルを読む経路（推論）で開くと、翻訳された code、理由、対処の文言が返る。
+  - これらのどれも 500 `BACKEND_ERROR` にならない。
+- [ ] **D3:** 0.20 で一時停止した Tune の unpause が、開始前に 400 で拒否される。job は paused のまま残る。同じ版で一時停止した Tune の unpause は今までどおり続く。
+- [ ] **D4:** `max_depth=-1` と `auto_num_leaves` の Fit で、H-0140 の警告が job のログと job の警告に出る。これを thread と subprocess の両方のモードで確かめる。Tune では、2 つ目以降の該当 trial の記録もログに残る。
+- [ ] **D5:** fixture が 0.21.1 で撮り直され、鮮度テストが緑になる。`PAST_VERSIONS` の 3 か所が 0.18/0.19/0.20 になる。片側だけの範囲のテスト、ファイルをまたぐ Decimal と整数のカテゴリの integration のケース（Fit、保存、推論）、export-code の ZIP のテストがある。CHANGELOG に結果の変化と一方向性が書かれている。
+
+#### Decision
+
+**2026-11-05 accepted（owner）。** 推奨どおり、D1 (A)、D2 (A)、D4、D5、D6 とする。D3 は (A-2) とする。
+
+- **D3 (A-2):** unpause の preflight は、一時停止中の job の checkpoint の sidecar（`model_meta.json` の `lizyml_version`）と今の lizyml の major.minor を比べる。違えば、開始前に 400 で拒否する。
+  - 現行の決定「unpause の判定に pickle の版を代わりに使わない（`verify_checkpoint_compatibility` を使わない）」は、**版の判定に限って**改める。lineage の状態（legacy、unreadable、inconsistent、round 番号の無い open round）の判定は、今までどおり `read_study_lineage` と共有の集合が持つ。`optuna.db` の無い job は判定しない。
+- **merge の方針（この run）:** develop への子 PR は、Codex の APPROVE と緑の CI で squash merge する。直前の修正に欠陥が見つかったとき、または round の上限に達したときは、止めて owner に相談する。release は owner が確かめる。
+- **Codex の critique:** 3 round。r1 で 5 件、r2 で 1 件の指摘があり、どちらも反映した。r3 は APPROVE。round の間に、絶対モニタ（DELIVERABLE-FOCUSED）と関係モニタ（CONVERGING）を挟んだ。
