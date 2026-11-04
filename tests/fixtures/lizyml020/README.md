@@ -27,10 +27,13 @@ the job id (`studio-tune-<job_id>`).
   `tests/fixtures/lizyml/binary_no_cal/data.csv` (checked with `cmp`), which
   the tests use instead of a copy
 
-## What was removed
+## What was scrubbed
 
-- `execution.log` of each job (the paused Tune's held local scratchpad
-  paths; the other two were empty)
+- `jobs/job_44a36460/execution.log` (22 lines, the warnings 0.20 logged
+  while the Tune paused): each line's local virtualenv prefix is replaced
+  with `<venv>/lib/python3.12`, from `/site-packages/` on. The rest of each
+  line is as captured. The other two jobs' logs were empty and are kept
+  empty.
 
 Nothing else was changed.
 

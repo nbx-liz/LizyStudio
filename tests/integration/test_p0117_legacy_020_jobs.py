@@ -121,17 +121,31 @@ def test_metrics_of_020_jobs_keep_working(
     assert res.json()
 
 
+_BINARY_PLOTS = [
+    "learning-curve",
+    "roc-curve",
+    "importance",
+    "oof-distribution",
+    "shap-summary",
+]
+# The exact list each 0.20 job offers.  /plots drops a plot whose probe
+# raises, so a count or a discovered list would let a compatibility
+# regression shrink the tested set instead of failing (DC1/DC2).
+EXPECTED_PLOTS = {
+    FIT_JOB: _BINARY_PLOTS,
+    TUNED_JOB: [*_BINARY_PLOTS, "tuning"],
+}
+
+
 @pytest.mark.parametrize("job_id", COMPLETED_JOBS)
-def test_every_available_plot_of_020_jobs_renders(
+def test_every_expected_plot_of_020_jobs_renders(
     legacy_client: TestClient, job_id: str
 ) -> None:
     listed = legacy_client.get(f"/api/jobs/{job_id}/plots")
     assert listed.status_code == 200, listed.text
     plot_types: list[str] = listed.json()
-    # A binary Fit offers well over a handful of plots; an empty list would
-    # make the loop below pass without looking (DC1).
-    assert len(plot_types) >= 5, plot_types
-    for plot_type in plot_types:
+    assert plot_types == EXPECTED_PLOTS[job_id]
+    for plot_type in EXPECTED_PLOTS[job_id]:
         res = legacy_client.get(f"/api/jobs/{job_id}/plot/{plot_type}")
         assert res.status_code == 200, f"{plot_type}: {res.text}"
 
@@ -236,8 +250,11 @@ def test_detail_log_and_lineage_of_a_020_paused_tune_are_readable(
 
     log = legacy_client.get(f"/api/jobs/{PAUSED_JOB}/log")
     assert log.status_code == 200, log.text
-    # The fixture's execution.log was removed (local paths), so it reads empty.
-    assert log.json() == {"log": ""}
+    # The log 0.20 wrote, as committed (only the venv prefix is scrubbed):
+    # the route must return its content, not the missing-file default.
+    committed = (LEGACY_JOBS / PAUSED_JOB / "execution.log").read_text()
+    assert committed.count("PausedError") == 11, committed
+    assert log.json() == {"log": committed}
 
     lineage = legacy_client.get(f"/api/jobs/{PAUSED_JOB}/lineage")
     assert lineage.status_code == 200, lineage.text
