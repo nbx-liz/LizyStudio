@@ -2,7 +2,8 @@
 
 The fixtures under ``tests/fixtures/lizyml015/jobs/`` are real jobs a
 LizyStudio server on lizyml 0.15.0 wrote (see that directory's README):
-a Fit, a completed Tune and a paused Tune.  Under lizyml 0.20:
+a Fit, a completed Tune and a paused Tune.  Under lizyml 0.20 and later (the
+installed lizyml):
 
 * unpausing the paused Tune is refused with 400 ``PICKLE_INCOMPATIBLE``
   before the job starts, because its study has no lizyml record;
@@ -13,7 +14,10 @@ a Fit, a completed Tune and a paused Tune.  Under lizyml 0.20:
 * everything else keeps working.
 
 The refusals are narrow: the same lizyml error codes raised for other
-reasons by jobs written under 0.20 stay generic.
+reasons by jobs the installed lizyml writes stay generic.  Those jobs are
+built by the test, so they are not artifacts of an older lizyml; the real
+0.20-written jobs are in ``tests/fixtures/lizyml020/`` and
+``test_p0117_legacy_020_jobs.py`` (P-0117 D1).
 """
 
 from __future__ import annotations
@@ -288,9 +292,13 @@ def _new_job(
     return job
 
 
-def test_export_code_on_a_020_tuned_job_is_not_refused(
+def test_export_code_on_a_tuned_job_of_the_installed_lizyml_is_not_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # The job is trained here with the installed lizyml, so this checks that
+    # the REFIT_REQUIRED preflight leaves a current Tune alone.  Export-code
+    # of a Tune lizyml 0.20 wrote is checked on the real artifact in
+    # test_p0117_legacy_020_jobs.py.
     jobs_dir = tmp_path / "jobs"
     job_store = JobStore(jobs_dir)
     config = _tune_config()
@@ -304,8 +312,9 @@ def test_export_code_on_a_020_tuned_job_is_not_refused(
     )
     assert done.status == "completed", done.error
     assert done.model_path is not None
-    # The tuned values are in the stored model.params, and lizyml 0.20 routed
-    # the tuned rounds out of them: the preflight has names to judge.
+    # The tuned values are in the stored model.params, and lizyml (0.20 and
+    # later) routed the tuned rounds out of them: the preflight has names to
+    # judge.
     cfg = Model.load(done.model_path).fit_result.run_meta.config_normalized
     stored = cfg["model"]["params"]
     assert "learning_rate" in stored
@@ -316,7 +325,7 @@ def test_export_code_on_a_020_tuned_job_is_not_refused(
         assert res.status_code == 200, res.text
 
 
-def test_other_shap_model_not_fit_on_a_020_job_stays_a_backend_error(
+def test_other_shap_model_not_fit_on_a_current_job_stays_a_backend_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     jobs_dir = tmp_path / "jobs"
@@ -334,10 +343,11 @@ def test_other_shap_model_not_fit_on_a_020_job_stays_a_backend_error(
     )
     assert done.status == "completed", done.error
     assert done.model_path is not None
-    # A 0.20 artifact without diagnostic data: lizyml's own export writes no
-    # analysis_context.pkl for a model holding no training data (and removes
-    # the earlier one).  Its SHAP raises MODEL_NOT_FIT without ``missing``.
-    # Deleting the file instead breaks the 0.20 manifest.
+    # An artifact of the installed lizyml without diagnostic data: lizyml's
+    # own export writes no analysis_context.pkl for a model holding no
+    # training data (and removes the earlier one).  Its SHAP raises
+    # MODEL_NOT_FIT without ``missing``.  Deleting the file instead breaks
+    # the export manifest.
     model = Model.load(done.model_path)
     model._X = None
     model.export(done.model_path)
