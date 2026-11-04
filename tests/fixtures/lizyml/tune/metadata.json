@@ -1,9 +1,9 @@
 {
-  "format_version": 4,
-  "lizyml_version": "0.20.0",
+  "format_version": 5,
+  "lizyml_version": "0.21.1",
   "python_version": "3.12.3 (main, Aug 31 2026, 10:18:26)",
-  "timestamp": "2026-10-21T23:36:06.855018+00:00",
-  "run_id": "99d8698e-2d95-43f0-8763-9cb08029585f",
+  "timestamp": "2026-11-04T22:51:35.425671+00:00",
+  "run_id": "15b9c607-3588-4f6f-b1c7-9ca0257c5a7b",
   "config": {
     "config_version": 1,
     "task": "binary",
@@ -221,8 +221,8 @@
   "checksums": {
     "algorithm": "sha256",
     "files": {
-      "fit_result.pkl": "a74e6ef93cda0f4e8ec445185cdedd69587144ba36cbbdfdd274a889d3065b88",
-      "refit_model.pkl": "f2a6b9eee67b4c6329558b224698deb0502ca3137cb7a50dd9b7ca89603333e1",
+      "fit_result.pkl": "22540df876508083f8359b1a625903c5760483e90b9c22556e9e3a576f9fd1d9",
+      "refit_model.pkl": "d52b9fafcba1aa78d0b1f465c50b7ca7088c4c43a923d936b0760a0eb16097da",
       "analysis_context.pkl": "9540ac15efd1a4f7d3f7a8c43e9c5d896fd95a1c6e36b32604e4f77f3317ef11"
     }
   },
