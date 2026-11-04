@@ -1569,6 +1569,63 @@ describe("SearchSpaceTable", () => {
       const spaceArg = onChange.mock.calls.at(-1)?.[0];
       expect(spaceArg["early_stopping.rounds"].high).toBe(5000);
     });
+
+    // P-0117 D5: lizyml 0.21 bounds max_depth by ``{min: -1}`` only (the
+    // cap of 30 is gone), so a depth above 30 must pass unclamped while the
+    // min still applies.
+    describe("one-sided max_depth bound", () => {
+      const depthCatalog: SearchSpaceCatalogEntry[] = [
+        {
+          key: "max_depth",
+          title: "Max Depth",
+          paramType: "integer",
+          modes: ["fixed", "range"],
+          group: "model_params",
+        },
+      ];
+
+      function renderDepth(onChange: (space: Record<string, unknown>) => void) {
+        render(
+          <SearchSpaceTable
+            space={{ max_depth: { type: "int", low: 3, high: 9, log: false } }}
+            modelParams={{}}
+            onChange={onChange}
+            catalog={depthCatalog}
+            parameterBounds={{ max_depth: { min: -1 } }}
+          />,
+        );
+        const row = screen.getByText("max_depth").closest('[role="button"]');
+        if (row) fireEvent.click(row);
+      }
+
+      it("accepts a Range Max above 30", () => {
+        const onChange = vi.fn();
+        renderDepth(onChange);
+        const maxInput = screen.getByRole("textbox", {
+          name: /max_depth max/i,
+        });
+        fireEvent.change(maxInput, { target: { value: "64" } });
+        onChange.mockClear();
+        fireEvent.blur(maxInput);
+        expect(onChange).toHaveBeenCalledTimes(1);
+        const spaceArg = onChange.mock.calls.at(-1)?.[0];
+        expect(spaceArg.max_depth.high).toBe(64);
+      });
+
+      it("still clamps a Range Min below -1", () => {
+        const onChange = vi.fn();
+        renderDepth(onChange);
+        const minInput = screen.getByRole("textbox", {
+          name: /max_depth min/i,
+        });
+        fireEvent.change(minInput, { target: { value: "-5" } });
+        onChange.mockClear();
+        fireEvent.blur(minInput);
+        expect(onChange).toHaveBeenCalledTimes(1);
+        const spaceArg = onChange.mock.calls.at(-1)?.[0];
+        expect(spaceArg.max_depth.low).toBe(-1);
+      });
+    });
   });
 
   // P-0109 PR-6c: ``userSetSpaceKeys`` drives a "Modified" badge that

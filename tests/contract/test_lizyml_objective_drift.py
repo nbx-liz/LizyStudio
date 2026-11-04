@@ -114,6 +114,19 @@ def test_parameter_bounds_match_lizyml_provider() -> None:
         ), f"parameter_bounds drift for task={task!r}"
 
 
+@pytest.mark.parametrize("task", _TASKS)
+def test_max_depth_bound_has_a_min_and_no_max(task: str) -> None:
+    """lizyml 0.21 dropped the ``max_depth`` cap of 30 (P-0117 D5).
+
+    ``-1`` is LightGBM's "no limit", and so is ``0`` since 0.21.  The bound
+    is one-sided, so the UI must not invent an upper limit.  The drift test
+    above would still pass if the provider brought a ``max`` back, so this
+    pins the shape itself.
+    """
+    bounds = _ui_schema()["parameter_bounds"][task]
+    assert bounds["max_depth"] == {"min": -1}
+
+
 def test_parameter_hint_objective_defaults_are_valid_choices() -> None:
     """Each ``parameter_hints.objective.default[task]`` is in the canonical list."""
     schema = _ui_schema()

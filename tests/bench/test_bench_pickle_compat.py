@@ -97,7 +97,7 @@ def test_pickle_compat_rejects_schema_mismatch(tmp_path: Path) -> None:
 
 # N-3, N-2, N-1 below the installed lizyml minor; kept equal to the matrix
 # script and the nightly workflow by tests/test_lizyml_fixture_freshness.py.
-PAST_MINORS = ("0.17.0", "0.18.0", "0.19.0")
+PAST_MINORS = ("0.18.0", "0.19.0", "0.20.0")
 
 
 @pytest.mark.parametrize("past_minor", PAST_MINORS)
