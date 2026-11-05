@@ -85,6 +85,24 @@ at 2: saved configs and jobs keep their shape.
   WebSocket error. Its `error` holds the code, the reason and the remedy
   without a traceback; the traceback goes to the job's execution log. Every
   other backend error stays 500 `BACKEND_ERROR` with today's job error.
+- **lizyml's memory warning reaches the job** (P-0117 D4, H-0140). lizyml
+  0.21 warns before a Fit, and before the first qualifying Tune trial, when
+  LightGBM will allocate a lot of memory (`num_leaves` of 16384 or more, or an
+  estimate of 1 GiB or more), for example with `max_depth=-1` and Auto Num
+  Leaves. In thread mode the warning used to go nowhere. Now, in both worker
+  modes:
+  - the job's `execution.log` records every warning the job raised
+    (`UserWarning`s and `lizyml` log records at WARNING or above), and the
+    later qualifying Tune trials' `tune.trial.memory_warning` records;
+  - `GET /api/jobs/{job_id}` returns them in a new `warnings` list (each
+    distinct text once, at most 50, message text only without a file
+    path), stored in `meta.json`;
+  - the job's WebSocket sends a new non-terminal `warning` message for each
+    one.
+
+  The field is additive: jobs saved before it show `warnings: []`, and the
+  saved format does not change. Nothing is refused; limiting the Fit form or
+  the Tune range is tracked in #729.
 
 ### Changed
 

@@ -23,7 +23,7 @@ from __future__ import annotations
 import builtins
 import json
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -116,6 +116,25 @@ def read_job_json(path: Path) -> dict[str, Any]:
     return payload
 
 
+def _read_warnings(meta: dict[str, Any], job_id: str) -> list[str]:
+    """The job's warnings from *meta* (P-0117 D4).
+
+    Absent (a job written before the field) is ``[]``. A value that is not
+    a list of strings is corruption of a Studio-written file: it is logged
+    and read as ``[]`` rather than failing the load, so the job stays
+    listable and its other data usable.
+    """
+    raw = meta.get("warnings", [])
+    if isinstance(raw, list) and all(isinstance(item, str) for item in raw):
+        return list(raw)
+    _logger.warning(
+        "Job %s has malformed warnings in meta.json (%s); reading them as []",
+        job_id,
+        type(raw).__name__,
+    )
+    return []
+
+
 @dataclass
 class Job:
     """Persistent job metadata."""
@@ -149,6 +168,10 @@ class Job:
     # H-0062: job lineage for Re-tune / Resume child jobs. Optional so
     # existing jobs on disk (written before Phase B) continue to load.
     parent_job_id: str | None = None
+    # P-0117 D4: distinct backend warnings raised while the job ran
+    # (message text only; see ``services/_job_warnings.py``). Additive:
+    # a ``meta.json`` written before the field loads with ``[]``.
+    warnings: list[str] = field(default_factory=list)
 
 
 class JobMetadataStore:
@@ -294,6 +317,7 @@ class JobMetadataStore:
             "model_path": job.model_path,
             "error": job.error,
             "parent_job_id": job.parent_job_id,
+            "warnings": list(job.warnings),
         }
         write_job_json(self.path_for(job.job_id, "meta"), meta)
 
@@ -334,6 +358,7 @@ class JobMetadataStore:
             model_path=meta.get("model_path"),
             error=meta.get("error"),
             parent_job_id=meta.get("parent_job_id"),
+            warnings=_read_warnings(meta, job_id),
         )
 
     def get_log(self, job_id: str) -> str:

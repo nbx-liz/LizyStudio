@@ -32,6 +32,7 @@ from lizystudio.ws.messages import (
     WsPaused,
     WsPing,
     WsProgress,
+    WsWarning,
 )
 
 # ``functools.lru_cache`` wraps ``get_allowed_ws_origins`` below (H-0083).
@@ -345,6 +346,17 @@ class ProgressBroadcaster:
             trial_number=trial_number,
             message=message,
         )
+        self.send(job_id, model.model_dump(exclude_none=True))
+
+    def send_warning(self, job_id: str, message: str) -> None:
+        """Convenience: send a non-terminal warning message (P-0117 D4).
+
+        Not in :data:`_TERMINAL_TYPES`, so not replayed to late
+        subscribers; the job detail's ``warnings`` holds them. On a full
+        queue it is dropped like a progress frame (the stored warning
+        stays on the job).
+        """
+        model = WsWarning(type="warning", job_id=job_id, message=message)
         self.send(job_id, model.model_dump(exclude_none=True))
 
     def make_callback(self, job_id: str) -> Any:

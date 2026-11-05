@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 from lizystudio.backends.base import BackendAdapter, ProgressCallback
 from lizystudio.backends.types import FitSummary, TuningSummary
+from lizystudio.services._job_warnings import JobWarningCollector, capture_job_warnings
 from lizystudio.services.jobs import Job, JobStore
 
 if TYPE_CHECKING:
@@ -347,10 +348,20 @@ def _run_job_core(
     cb = _make_cancel_aware_cb(job.job_id, job_store, broadcaster)
 
     with _capture_job_logs(job.job_id) as log_buffer:
+        # P-0117 D4: the backend's warnings raised on this thread go to the
+        # job log (attached above) and to ``job.warnings``, in the thread
+        # worker and in the subprocess child alike.
+        collector = JobWarningCollector(
+            job=job,
+            job_store=job_store,
+            broadcaster=broadcaster,
+            job_logger=logging.getLogger(f"lizystudio.training.{job.job_id}"),
+        )
         try:
-            _apply_job_outcome(
-                job, job_store, broadcaster, execute_fn=execute_fn, cb=cb
-            )
+            with capture_job_warnings(collector):
+                _apply_job_outcome(
+                    job, job_store, broadcaster, execute_fn=execute_fn, cb=cb
+                )
         finally:
             # P-0099 v3-20c: paused is non-terminal — KEEP slot ownership and
             # KEEP the cancel flag so the resume worker can short-circuit if

@@ -169,6 +169,7 @@ def get_job(
     job = _get_job_or_404(job_id, job_store)
     result: dict[str, Any] = _job_summary(job)
     result["config"] = job.config
+    result["warnings"] = list(job.warnings)
     if job.fit_result is not None:
         result["fit_result"] = asdict(job.fit_result)
     if job.tune_result is not None:

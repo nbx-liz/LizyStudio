@@ -570,6 +570,16 @@ def _forward_progress(
             trial_number=msg.get("trial_number"),
             message=msg.get("message", "Paused."),
         )
+    elif msg_type == "warning":
+        # P-0117 D4: a warning the child's job stored; the child already
+        # persisted it on the job, so this hop only feeds live subscribers.
+        text = msg.get("message")
+        if not isinstance(text, str) or not text:
+            _logger.warning(
+                "Dropped a subprocess warning message without text for %s", job_id
+            )
+            return
+        broadcaster.send_warning(job_id, text)
 
 
 # --- Child process entry point ---
@@ -787,6 +797,14 @@ class _FileBroadcaster:
         if trial_number is not None:
             msg["trial_number"] = trial_number
         _write_progress(self._path, msg)
+
+    def send_warning(self, job_id: str, message: str) -> None:
+        """P-0117 D4: a stored job warning, written to the JSONL stream.
+
+        The parent's ``_forward_progress`` relays it to the live
+        broadcaster's ``send_warning``.
+        """
+        _write_progress(self._path, {"type": "warning", "message": message})
 
 
 def _write_progress(path: str, msg: dict[str, Any]) -> None:

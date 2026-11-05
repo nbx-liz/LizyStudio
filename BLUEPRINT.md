@@ -400,7 +400,7 @@ class DataRef:
 ```
 {jobs_dir}/
 ├── job_001/
-│   ├── meta.json              # job_id, status, config, data_ref, timestamps, parent_job_id (H-0062)
+│   ├── meta.json              # job_id, status, config, data_ref, timestamps, parent_job_id (H-0062), warnings (P-0117 D4)
 │   ├── model/                 # BackendAdapter.export_model() の出力
 │   ├── fit_result.json        # FitSummary のシリアライズ（Fit/Tune 共通）
 │   ├── tune_result.json       # TuningSummary のシリアライズ（Tune Job のみ）
@@ -421,6 +421,12 @@ class DataRef:
 
 **`model/` の保存形式（lizyml の `format_version`）:** `model/` は lizyml が書き、形式は lizyml が持つ。lizyml 0.21 は `format_version` 5 で書き、lizyml 0.20 以前はそれを読めない（一方向）。0.21 は形式 1〜4 も読み、予測する。そのため、0.20 で作った job は 0.21 でも開け、推論・export-code・モデルの export ができる（`tests/fixtures/lizyml020/`、P-0117 D1）。ただし、0.21 でモデルを export すると形式 5 になり、0.20 以前では読めない。lizyml を上げる前に job の保存先をバックアップする。
 - `meta.json.parent_job_id`: Re-tune / Resume の child job では parent の job_id を参照する。非 child job では `null`。
+- `meta.json.warnings`: job の実行中にバックエンドが出した警告の文面の一覧（P-0117 D4）。lizyml 0.21 の H-0140 のメモリ見積もりの警告（`num_leaves` が 16384 以上か、見積もりが 1 GiB 以上）などが入る。
+  - 取り込むのは、job の thread で出た `UserWarning`（とその派生）と、`lizyml` の logger の `WARNING` 以上の記録である。thread と subprocess の両方のモードで、`_run_job_core` が取り込む（`services/_job_warnings.py`）。
+  - 文面だけを保存する。`warnings.warn` の file と行は保存しないので、ローカルの絶対パスは入らない。
+  - 同じ文面は 1 回だけ保存し、最大 50 件、1 件 2000 文字までとする。上限に達したことは job のログに 1 回書く。新しい文面を保存するたびに `meta.json` を書き直す。
+  - `execution.log` には、出るたびにすべて残す。Tune の 2 つ目以降の該当 trial の記録（lizyml の `lizyml.core.resource_warning` logger の INFO、`event='tune.trial.memory_warning'`）は、ログだけに残し、警告には加えない（最初の trial の `UserWarning` が既に入っている）。ほかの INFO は取り込まない。
+  - 追加のみの項目である。この項目を持たない `meta.json` は `[]` として読む。リストでない値や文字列でない要素は、ログに書いて `[]` として読む。`format_version` は変えない。
 
 **format_version と legacy 保護（P-0103 / v3-25 / R-4.1）:** ディスク上の `meta.json` 等は `storage/versions.py` 経由で読み書きし、`STUDIO_FORMAT_VERSION`（現行 `2` — P-0099 v3-20a で `1`→`2`）の値を `format_version` キーに記録する。
 
@@ -2533,7 +2539,7 @@ Workspace の `workspace_result` は完了時に自動更新される。
 | メソッド | パス | 説明 |
 |---------|------|------|
 | GET | `/api/jobs` | ジョブ一覧（query: `status=completed`, `sort=created_at`) |
-| GET | `/api/jobs/{job_id}` | ジョブ詳細（meta + 結果サマリー） |
+| GET | `/api/jobs/{job_id}` | ジョブ詳細（meta + 結果サマリー）。`warnings: string[]` に job の警告（`meta.json.warnings`、§3.4.4）を返す。無ければ `[]`（P-0117 D4） |
 | GET | `/api/jobs/{job_id}/config` | ジョブの Config |
 | GET | `/api/jobs/{job_id}/metrics` | メトリクステーブル |
 | GET | `/api/jobs/{job_id}/split-summary` | Split サマリー |
@@ -2678,6 +2684,14 @@ Workspace の `workspace_result` は完了時に自動更新される。
 
 ```json
 {
+  "type": "warning",
+  "job_id": "job_042",
+  "message": "LightGBM will train with num_leaves=131072 (derived by auto_num_leaves from max_depth=-1). ..."
+}
+```
+
+```json
+{
   "type": "ping",
   "job_id": "job_042"
 }
@@ -2687,7 +2701,9 @@ Workspace の `workspace_result` は完了時に自動更新される。
 
 `paused` は Tune が user pause で中断したことを通知する（P-0099 v3-20e）。`trial_number` は最初の paused emit 時点で worker が trial に到達していなければ `null`。**terminal メッセージではない** — pause は resumable なので late-subscriber replay cache（下記 Terminal replay）には載せず、frontend は WS 接続を維持したまま `unpause` 後の live stream 継続に備える。
 
-**Schema SSOT (H-0069):** 上記 5 variant は `src/lizystudio/ws/messages.py` の Pydantic discriminated union として単一定義される。サーバ側送信は `WsMessage.model_dump_json(exclude_none=True)` を通り、フロントは生成 `schema.d.ts` から `WsMessage` 型を import する。optional フィールド (`fold_results` / `trial_results`) は値が存在するときだけ wire に現れ、`null` フィールドはシリアライズしない（既存 wire format と bit-identical）。
+`warning` は、job が新しい警告を保存したことを通知する（P-0117 D4）。`job.warnings` に加わる文面ごとに 1 回送る（同じ文面は再送しない）。subprocess モードでは、子の JSONL（`{"type": "warning", "message": ...}`）を親の `_forward_progress` が中継する。**terminal メッセージではない**。replay cache には載せないので、後から接続した subscriber は `GET /api/jobs/{job_id}` の `warnings` を読む。
+
+**Schema SSOT (H-0069):** 上記 6 variant は `src/lizystudio/ws/messages.py` の Pydantic discriminated union として単一定義される。サーバ側送信は `WsMessage.model_dump_json(exclude_none=True)` を通り、フロントは生成 `schema.d.ts` から `WsMessage` 型を import する。optional フィールド (`fold_results` / `trial_results`) は値が存在するときだけ wire に現れ、`null` フィールドはシリアライズしない（既存 wire format と bit-identical）。
 
 **Terminal replay (P-0093 / Issue #327):** `completed` / `error` メッセージは `ProgressBroadcaster._last_terminal` に per-jobId でキャッシュされ、subscribe より前に送信された場合でも late subscriber に replay される。TTL は default 5 分（環境変数 `LIZYSTUDIO_WS_TERMINAL_TTL_S` で上書き可）。これにより高速 fit (< 3 秒) の subscribe-vs-send race が解消される。INV-1: terminal メッセージは subscribe タイミングに関わらず subscriber に **少なくとも一度** 届く。INV-2: live broadcast 経路と replay 経路は subscriber の登録タイミングを境に disjoint なので、同一 subscriber への重複配信は発生しない。replay 発生は `lizystudio_progress_terminal_replayed_total` Counter で観測可能。
 
