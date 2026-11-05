@@ -18,13 +18,13 @@ from pydantic import BaseModel
 
 import lizystudio.security as security
 from lizystudio.api.errors import (
-    BackendError,
     FileInvalidError,
     InferenceNotFoundError,
     JobNotCompletedError,
     JobNotFoundError,
     PathNotFoundError,
     PlotNotAvailableError,
+    backend_error_from,
     refit_required_from,
 )
 from lizystudio.api.models import (
@@ -132,7 +132,7 @@ def inference_run(
         )
         return {"inf_id": record.inf_id, "job_id": record.job_id}
     except Exception as exc:
-        raise BackendError(exc) from exc
+        raise backend_error_from(exc) from exc
     finally:
         # HIGH-8: one-shot upload cleanup. Uploaded files previously
         # lingered in /tmp until ws.reset() ran, exhausting disk on
@@ -257,7 +257,7 @@ def inference_plot(
         # P-0116 D4: SHAP on a parent model lizyml 0.15 wrote.
         raise refit_required_from(exc) from exc
     except Exception as exc:
-        raise BackendError(exc) from exc
+        raise backend_error_from(exc) from exc
 
 
 @router.get(

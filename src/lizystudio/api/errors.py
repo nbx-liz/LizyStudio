@@ -9,7 +9,12 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 
 if TYPE_CHECKING:
-    from lizystudio.backends.exceptions import CheckpointIncompatibleError
+    from lizystudio.backends.exceptions import (
+        BackendArtifactError,
+        BackendInputError,
+        BackendRefusalError,
+        CheckpointIncompatibleError,
+    )
     from lizystudio.backends.exceptions import (
         RefitRequiredError as BackendRefitRequiredError,
     )
@@ -125,6 +130,58 @@ class BackendError(StudioError):
             500,
             details={"type": type(original).__name__},
         )
+
+
+class BackendInputRejectedError(StudioError):
+    """HTTP 400 envelope for data the backend refused (P-0117 D2)."""
+
+    def __init__(self, exc: BackendInputError) -> None:
+        super().__init__(
+            exc.code,
+            exc.message,
+            400,
+            details=_refusal_details(exc),
+        )
+
+
+class ModelArtifactInvalidError(StudioError):
+    """HTTP 409 envelope for a stored model the backend cannot read (P-0117 D2)."""
+
+    def __init__(self, exc: BackendArtifactError) -> None:
+        super().__init__(
+            exc.code,
+            exc.message,
+            409,
+            details=_refusal_details(exc),
+        )
+
+
+def _refusal_details(exc: BackendRefusalError) -> dict[str, Any]:
+    return {
+        "backend_code": exc.backend_code,
+        "reason": exc.reason,
+        "recovery_hint": exc.remedy,
+        "context": dict(exc.context),
+    }
+
+
+def backend_error_from(exc: Exception) -> StudioError:
+    """The HTTP envelope for a backend failure (P-0117 D2).
+
+    A refusal the adapter classified keeps its code, reason and remedy
+    (400 for refused data, 409 for an unreadable model); every other
+    failure stays 500 ``BACKEND_ERROR``.
+    """
+    from lizystudio.backends.exceptions import (
+        BackendArtifactError,
+        BackendInputError,
+    )
+
+    if isinstance(exc, BackendInputError):
+        return BackendInputRejectedError(exc)
+    if isinstance(exc, BackendArtifactError):
+        return ModelArtifactInvalidError(exc)
+    return BackendError(exc)
 
 
 class InferenceNotFoundError(StudioError):

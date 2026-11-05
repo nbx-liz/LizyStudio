@@ -5146,9 +5146,13 @@ lock を上げると、fixture の鮮度テストが落ちる（`tests/test_lizy
 
 - [ ] lizyml 0.21.1 のロックで、backend、integration、functional E2E が retry なしで緑になる。
 - [ ] **D1:** `tests/fixtures/lizyml020/` の完了した Fit と Tune を 0.21.1 で開くと、D1 の表の操作が成功する。Tune の retune は `PICKLE_INCOMPATIBLE` で拒否され、行は残る。一時停止中の Tune の詳細、log、lineage が読める。
-- [ ] **D2:** 列名の拒否、保存できないカテゴリ値、temporal の拒否、`categorical_feature_not_unique` が、それぞれ実際に通る経路（export-code、Fit の job、推論）で、code と理由を持つエラーになる。
-  - 壊れた identity の状態（未知の `category_identity_version`、壊れた `identity_columns`）を持つモデルを、Studio がモデルを読む経路（推論）で開くと、翻訳された code、理由、対処の文言が返る。
-  - これらのどれも 500 `BACKEND_ERROR` にならない。
+- [ ] **D2**（2026-11-05 改訂。Decision の amendment を参照）: Studio の経路で起きる 3 つの拒否は、それぞれ実際に通る経路で、code と理由を持つエラーになる。
+  - export-code: NUL を含む列名（`SERIALIZATION_FAILED` / `unsupported_column_name`）。
+  - Fit の job: `Period`/`Interval` の保存できないカテゴリ値（`SERIALIZATION_FAILED`、H-0145）。job の記録と WebSocket の error の両方で、thread と subprocess の両方のモードで確かめる。
+  - 推論: 壊れた identity の状態（未知の `category_identity_version`、壊れた `identity_columns`）を持つモデル。翻訳された code、理由、対処の文言が返る。
+  - 各ケースで、HTTP の status（または job の error code）、`error.code`、理由を確かめる。500 `BACKEND_ERROR` にならないこと、本文にローカルの tmp のパスが現れないことも確かめる。
+  - Studio の経路では起きない理由（temporal の拒否、`categorical_feature_not_unique`、`column_name_collision`）は、lizyml 自身の関数が投げた実物の `LizyMLError` で、分類表の単体テストを行う。
+  - 分類したエラーの job の `error` は、code・理由・対処を持ち、traceback を含まない。traceback は job の `execution.log` に書く。分類しないエラーは今の形のまま。
 - [ ] **D3:** 0.20 で一時停止した Tune の unpause が、開始前に 400 で拒否される。job は paused のまま残る。同じ版で一時停止した Tune の unpause は今までどおり続く。
 - [ ] **D4:** `max_depth=-1` と `auto_num_leaves` の Fit で、H-0140 の警告が job のログと job の警告に出る。これを thread と subprocess の両方のモードで確かめる。Tune では、2 つ目以降の該当 trial の記録もログに残る。
 - [ ] **D5:** fixture が 0.21.1 で撮り直され、鮮度テストが緑になる。`PAST_VERSIONS` の 3 か所が 0.18/0.19/0.20 になる。片側だけの範囲のテスト、ファイルをまたぐ Decimal と整数のカテゴリの integration のケース（Fit、保存、推論）、export-code の ZIP のテストがある。CHANGELOG に結果の変化と一方向性が書かれている。
@@ -5161,3 +5165,16 @@ lock を上げると、fixture の鮮度テストが落ちる（`tests/test_lizy
   - 現行の決定「unpause の判定に pickle の版を代わりに使わない（`verify_checkpoint_compatibility` を使わない）」は、**版の判定に限って**改める。lineage の状態（legacy、unreadable、inconsistent、round 番号の無い open round）の判定は、今までどおり `read_study_lineage` と共有の集合が持つ。`optuna.db` の無い job は判定しない。
 - **merge の方針（この run）:** develop への子 PR は、Codex の APPROVE と緑の CI で squash merge する。直前の修正に欠陥が見つかったとき、または round の上限に達したときは、止めて owner に相談する。release は owner が確かめる。
 - **Codex の critique:** 3 round。r1 で 5 件、r2 で 1 件の指摘があり、どちらも反映した。r3 は APPROVE。round の間に、絶対モニタ（DELIVERABLE-FOCUSED）と関係モニタ（CONVERGING）を挟んだ。
+
+**2026-11-05 amendment (owner): D2 acceptance を改める**（記録: #748 の comment 6646032857）。D2 の PR の maker が、lizyml 0.21.1 で Studio の経路を実測した。Studio がデータを読む経路は、`services/data.py` の `load_dataframe`（CSV と parquet だけ）である。
+
+- **届く:**
+  - NUL を含む列名は、Fit が完了したあと、export-code で `SERIALIZATION_FAILED`（`reason` `unsupported_column_name`、`kind` `invalid_alias_text`）になる。
+  - `Period`/`Interval`/`time` のカテゴリ値は、Fit の job の Model export で `SERIALIZATION_FAILED` になる（`context` は `column`/`value`/`type`/`state` で、`reason` を持たない）。
+  - 壊れた identity（未知の `category_identity_version`、壊れた `identity_columns`）は、推論でモデルを読むときに `DESERIALIZATION_FAILED` になる。`context` には成果物の絶対パスが入る。
+- **届かない:**
+  - temporal の拒否（`calendar_timedelta64`/`unitless_datetime64`）。Arrow は月・年の timedelta64 と単位の無い datetime64 を parquet に書けない。CSV は文字列になる。
+  - `categorical_feature_not_unique`（H-0142）。列名の重複を読めない（pyarrow は重複を拒み、CSV は `a.1` に改名する）。存在しない列を categorical に指定しても、Fit は完了する。
+  - `column_name_collision`。lizyml の Config は `data.target` に str を求める。str と非 str が混ざった列名を、parquet はすべて str にする。
+- **lizyml の不具合:** 空の列名 `""` を持つモデルは、export できるが load できない（LightGBM の "Wrong size of feature_names" が `DESERIALIZATION_FAILED` になり、`context` に絶対パスが入る）。上流の Issue は主文脈が起票する。
+- **改訂:** D2 の受け入れは、届く 3 つの拒否を実際の経路で確かめ、届かない理由は lizyml 自身の関数が投げた実物の `LizyMLError` で分類表を単体で確かめる（上の Acceptance Criteria）。分類したエラーの job の `error` は traceback を含めず、traceback は `execution.log` に書く。

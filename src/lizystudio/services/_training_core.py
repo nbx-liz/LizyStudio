@@ -50,6 +50,7 @@ _JOIN_TIMEOUT = 30  # seconds — generous to allow subprocess cleanup
 # ``_run_job_core`` and the cancel-aware callback share one identity
 # across in-process and subprocess workers.
 from lizystudio.backends.exceptions import (  # noqa: E402, F401
+    BackendRefusalError,
     CancelledError,
     PausedError,
     SearchSpaceRefusedError,
@@ -235,6 +236,8 @@ def _apply_job_outcome(
         job_store.update(job)
         if broadcaster is not None:
             broadcaster.send_error(job.job_id, "Job cancelled", code="JOB_CANCELLED")
+    except BackendRefusalError as exc:
+        _fail_with_refusal(job, job_store, broadcaster, exc)
     except Exception as exc:
         job.status = "failed"
         job.error = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
@@ -251,6 +254,43 @@ def _apply_job_outcome(
                 broadcaster.send_error(job.job_id, message, code="SEARCH_SPACE_REFUSED")
             else:
                 broadcaster.send_error(job.job_id, message)
+
+
+def refusal_error_text(exc: BackendRefusalError) -> str:
+    """The job error of a classified backend refusal (P-0117 D2).
+
+    Its Studio code, the backend's code and reason, the message and the
+    remedy, on one line and without a traceback.
+    """
+    return (
+        f"{exc.code} ({exc.backend_code}: {exc.reason}): {exc.message} "
+        f"Remedy: {exc.remedy}."
+    )
+
+
+def _fail_with_refusal(
+    job: Job,
+    job_store: JobStore,
+    broadcaster: ProgressBroadcaster | None,
+    exc: BackendRefusalError,
+) -> None:
+    """Fail *job* with a classified backend refusal (P-0117 D2).
+
+    ``job.error`` and the WebSocket error carry the coded reason and the
+    remedy; the traceback goes to the job's logger, which
+    :func:`_capture_job_logs` persists into ``execution.log`` in both
+    worker modes.
+    """
+    text = refusal_error_text(exc)
+    logging.getLogger(f"lizystudio.training.{job.job_id}").error(
+        "Job failed: %s", text, exc_info=exc
+    )
+    job.status = "failed"
+    job.error = text
+    job.completed_at = datetime.now(timezone.utc).isoformat()
+    job_store.update(job)
+    if broadcaster is not None:
+        broadcaster.send_error(job.job_id, text, code=exc.code)
 
 
 def _persist_job_log(job_store: JobStore, job_id: str, captured: str) -> None:

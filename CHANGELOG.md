@@ -53,6 +53,29 @@ at 2: saved configs and jobs keep their shape.
   column takes pandas' path, and model export and export-code refuse it
   instead of failing later.
 
+### Added
+
+- **lizyml's refusals of your data or of a saved model now say why**
+  (P-0117 D2). They used to be 500 `BACKEND_ERROR`. One classification table
+  in the lizyml adapter maps them:
+  - **400 `BACKEND_INPUT_REJECTED`** when lizyml refuses the data. Examples:
+    export-code of a model whose data has a column name a project cannot
+    hold (for example one with a NUL character), and a Fit whose categorical
+    column holds values a saved model cannot hold (`Period`, `Interval`,
+    `time`).
+  - **409 `MODEL_ARTIFACT_INVALID`** when lizyml cannot read a saved model.
+    The cases: an unknown `category_identity_version`, a corrupted
+    `identity_columns`, a pickle whose checksum differs from the one
+    recorded, or a `format_version` lizyml does not read. An I/O failure
+    reading the model stays 500 `BACKEND_ERROR`.
+
+  `details` carries lizyml's code (`backend_code`), the `reason`, a
+  `recovery_hint` and an allowlisted `context`; no local path is passed on.
+  A Fit or Tune job that fails this way reports the same code on the
+  WebSocket error. Its `error` holds the code, the reason and the remedy
+  without a traceback; the traceback goes to the job's execution log. Every
+  other backend error stays 500 `BACKEND_ERROR` with today's job error.
+
 ### Changed
 
 - lizyml is ignored by Dependabot outright and raised by hand (range, lock,
