@@ -176,7 +176,6 @@
 - **P-0113** (Approved 2026-10-19): Python と uv の toolchain の約束。対応範囲 = テストしている版（3.10〜3.14、上限なし）、`.python-version` = 3.12、`[tool.uv] required-version = ">=0.13"`。手順書は CONTRIBUTING.md § Getting started に一本化。
 - **P-0117** (✅ merged to develop 2026-11-05, release 待ち = v0.8.0, Issue #748, PR #749〜#752): lizyml 0.21.1 に追従する。D1 (0.20 の corpus) / D2 (拒否のエラー分類) / D3 (版をまたぐ unpause の拒否) / D4 (メモリ警告) / D5 (機械的な変更) を実装済み。残課題は #719、#729、#733、#734（v0.9.0）、#717、上流 nbx-liz/LizyML#406。
 - **P-0116** (✅ shipped 2026-10-22 as v0.7.0, PR #722, Issue #721): lizyml 0.20.0 に追従する。残課題は #733（0.20 での `/resume`）、#734（`tuning.re_tune` が job に届かない）、#737（CLI の `--jobs-dir`）、#727、#729、#732。
-- **P-0117** (Accepted 2026-11-05, 実装中, Issue #748): lizyml 0.21.1 に追従する。D1（0.20 で作った job の固定資料 `tests/fixtures/lizyml020/`）、D2（lizyml の拒否を意味のあるエラーに写す）、D3（版をまたぐ unpause を開始前に拒否、A-2）、D4（メモリ見積もりの警告の取り込みと表示）、D5（機械的な変更）。develop に直接 4 本の子 PR で出す: PR 1 = lock の更新 + D5 + fixture の撮り直し + D1、PR 2 = D2、PR 3 = D3、PR 4 = D4。
 - **P-0114** (✅ shipped 2026-10-19, PR #709, Issue #701): workspace の reset を、それより前に起動した worker の書き込みから守る。`WorkspaceState` に reset の世代番号を持たせ、launcher が起動時に取得した番号と一致しない `record_completion` / `note_current_job` / `register_job_thread` を捨ててログに残す。Epic #635（古い書き手の問題）の一部。
 
 ### 3.0 P-0094 (済)：pytest-benchmark performance baseline（Issue #27 (a)）

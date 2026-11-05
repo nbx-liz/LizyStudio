@@ -5167,7 +5167,15 @@ lock を上げると、fixture の鮮度テストが落ちる（`tests/test_lizy
   - 限界: (1) 空の port の URL（`http://host:/docs`）は一部が `<path>` に置換される（過剰な sanitize で、漏れはない）。(2) 別 thread の `warnings.catch_warnings(record=True)` が有効な間に上がった job の警告は、その recorder に入る（Python 3.12 の global な warnings 状態）。(3) 警告のみで、Fit の form や Tune の範囲の制限は #729 のまま。
 - [x] **D5:** fixture が 0.21.1 で撮り直され、鮮度テストが緑になる。`PAST_VERSIONS` の 3 か所が 0.18/0.19/0.20 になる。片側だけの範囲のテスト、ファイルをまたぐ Decimal と整数のカテゴリの integration のケース（Fit、保存、推論）、export-code の ZIP のテストがある。CHANGELOG に結果の変化と一方向性が書かれている。
   - 証拠: PR #749（`cf4d1bd`）。fixture は撮り直し用の committed driver で 4 scenario すべてを 0.21.1 で撮り直した（変わったのは 4 つの `metadata.json` だけ）。`tests/test_lizyml_fixture_freshness.py`（`test_past_versions_are_the_three_minors_below_the_installed_one` ほか）。`PAST_VERSIONS` は `scripts/pickle_compat_matrix.sh`、`.github/workflows/nightly.yml`、`tests/bench/test_bench_pickle_compat.py` の 3 か所で 0.18.0/0.19.0/0.20.0。一方向の `max_depth` の範囲は `tests/contract/test_lizyml_objective_drift.py::test_max_depth_bound_has_a_min_and_no_max` と `frontend/src/components/workspace/SearchSpaceTable.test.tsx`（"one-sided max_depth bound"）。ファイルをまたぐ Decimal と整数のカテゴリは `tests/integration/test_p0117_category_identity.py`（`test_training_reads_the_decimal_column_as_decimal_objects`、`test_integer_values_at_inference_are_the_trained_decimal_categories`、`test_a_value_never_trained_is_still_unseen`）。export-code の ZIP は `tests/integration/test_p0117_export_code_zip.py`（`test_generated_config_has_the_021_input_contract`、`test_generated_predict_matches_studio_predictions`）。CHANGELOG の `[0.8.0]` に結果の変化と format 5 の一方向性がある。
-  - 「記録済みの study は古い上限を持ち続ける」は、テストではなく証拠で決着した（PR #751、#748 の comment 6647214544）。D3 のあと、Studio のどの経路も版をまたぐ study を続けられない: 0.20 の corpus の study は `max_depth` に `max_allowed 30` を記録している。lizyml が記録済みの上限を使うのは保存済みの study を続けるときだけで、版をまたぐ unpause は拒否され、`/retune` は元から拒否されている。同じ minor の中では記録された上限が今の上限と等しい。
+  - 「記録済みの study は古い上限を持ち続ける」は、テストではなく証拠で決着した（PR #751、#748 の comment 6647214544）。
+    - 0.20 の corpus の study は、`max_depth` に `max_allowed 30` を記録している。
+    - lizyml が記録済みの上限を使うのは、保存済みの study を続けるときだけである。
+    - checkpoint の sidecar（`model_meta.json`）がある study を版をまたいで続けることは、どの経路でもできない。unpause は D3 で拒否する。`/retune` と `/resume` は `verify_checkpoint_compatibility` が拒否する（`test_retune_of_a_020_tune_is_refused_and_the_row_stays`）。
+    - 同じ minor の中では、記録された上限は今の上限と等しい。
+  - 限界: sidecar の無い checkpoint は、この拒否を通り抜ける。
+    - `checkpoint_mixin.py` の `verify_checkpoint_compatibility` は、`model_meta.json` が無いと検査せずに戻る（sidecar の無い checkpoint を許す legacy 規則。`test_retune_missing_meta_is_tolerated` が 200 を固定している）。そのため `/retune` と `/resume` は `tune(resume=True)` に進み、lizyml 0.21.1 は版の違いを警告するだけで続ける。
+    - sidecar は H-0062（2026-04）から書かれている。それ以降の Tune は、一時停止と完了のたびに sidecar を書く。そのため、この経路に入るのは、sidecar を失った job か、それより前の job だけである。
+    - この経路はテストしていない。D3 の限界（上の D3 の項）と同じ穴である。
 
 #### Decision
 
