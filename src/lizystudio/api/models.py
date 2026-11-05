@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 # --- Data ---
 
@@ -284,6 +284,11 @@ class JobDetailResponse(JobSummaryResponse):
     config: dict[str, Any] | None = None
     fit_result: FitResultResponse | None = None
     tune_result: TuneResultResponse | None = None
+    # P-0117 D4: the distinct backend warnings the job raised (message text
+    # only, at most 50; ``[]`` for a job written before the field).
+    # ``get_job`` always fills it; the default keeps the field additive for
+    # clients (and the frontend's JobDetail fixtures) that predate it.
+    warnings: list[str] = Field(default_factory=list)
 
 
 class PlotResponseModel(BaseModel):

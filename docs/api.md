@@ -74,7 +74,7 @@ When the server is running, visit:
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/jobs` | List jobs (query: `status`, `sort`) |
-| GET | `/api/jobs/{job_id}` | Job details (meta + result summary) |
+| GET | `/api/jobs/{job_id}` | Job details (meta + result summary). `warnings: string[]` lists the distinct backend warnings the job raised (message text only, at most 50; `[]` when none or for a job written before the field, P-0117 D4) |
 | GET | `/api/jobs/{job_id}/config` | Job config snapshot |
 | GET | `/api/jobs/{job_id}/metrics` | Metrics table |
 | GET | `/api/jobs/{job_id}/split-summary` | Per-fold CV summary |
@@ -126,7 +126,9 @@ When the server is running, visit:
 |------|-----------|-------------|
 | `/ws/jobs/{job_id}/progress` | Server → Client | Real-time training progress |
 
-**Message types:** `progress`, `completed`, `error`, `ping` (30s keepalive). Terminal messages (`completed` / `error`) are cached per jobId for ~5 minutes (P-0093) so a late subscriber still receives them.
+**Message types:** `progress`, `completed`, `error`, `paused`, `warning`, `ping` (30s keepalive). Terminal messages (`completed` / `error`) are cached per jobId for ~5 minutes (P-0093) so a late subscriber still receives them.
+
+`warning` (`{type, job_id, message}`, P-0117 D4) is non-terminal and not cached: it is sent once for each distinct warning the job stores, for example lizyml's H-0140 memory estimate before a Fit or the first qualifying Tune trial. A late subscriber reads the stored set from `GET /api/jobs/{job_id}` `warnings`.
 
 ## Error codes
 

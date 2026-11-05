@@ -35,6 +35,7 @@ from lizystudio.api.errors import (
 )
 from lizystudio.backends.registry import get_adapter
 from lizystudio.metrics import MetricsRegistry
+from lizystudio.services._job_warnings import install_job_warning_hooks
 from lizystudio.services.jobs import JobStore
 from lizystudio.services.workspace import WorkspaceState
 from lizystudio.ws.progress import ProgressBroadcaster, websocket_progress
@@ -156,6 +157,9 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        # P-0117 D4: install the job-warning hooks once, while startup is
+        # single-threaded; a job's capture only registers its thread.
+        install_job_warning_hooks()
         adapter = get_adapter(backend_name)
         # Eagerly import the ML backend to avoid import-lock deadlocks
         # when concurrent API requests trigger lazy imports in threads.

@@ -1666,6 +1666,8 @@ export interface components {
             } | null;
             fit_result?: components["schemas"]["FitResultResponse"] | null;
             tune_result?: components["schemas"]["TuneResultResponse"] | null;
+            /** Warnings */
+            warnings?: string[];
         };
         /**
          * JobLogResponse
@@ -2382,7 +2384,30 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        WsMessage: components["schemas"]["WsProgress"] | components["schemas"]["WsCompleted"] | components["schemas"]["WsError"] | components["schemas"]["WsPing"] | components["schemas"]["WsPaused"];
+        /**
+         * WsWarning
+         * @description Non-terminal backend warning raised while the job runs (P-0117 D4).
+         *
+         *     Sent once per distinct warning the job stores (``Job.warnings``), for
+         *     example lizyml's H-0140 memory estimate before a Fit or the first
+         *     qualifying Tune trial. ``message`` is the warning text only, with no
+         *     file or line. Like :class:`WsPaused` it is NOT cached for
+         *     late-subscriber replay: a subscriber that connects later reads the
+         *     stored warnings from ``GET /api/jobs/{job_id}`` (``warnings``). The
+         *     connection stays open.
+         */
+        WsWarning: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "warning";
+            /** Job Id */
+            job_id: string;
+            /** Message */
+            message: string;
+        };
+        WsMessage: components["schemas"]["WsProgress"] | components["schemas"]["WsCompleted"] | components["schemas"]["WsError"] | components["schemas"]["WsPing"] | components["schemas"]["WsPaused"] | components["schemas"]["WsWarning"];
     };
     responses: never;
     parameters: never;

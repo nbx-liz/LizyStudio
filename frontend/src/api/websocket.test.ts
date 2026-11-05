@@ -340,6 +340,50 @@ describe("connectJobProgress", () => {
     vi.useRealTimers();
   });
 
+  it("routes warning messages to onWarning exactly once per message", () => {
+    const onWarning = vi.fn();
+    connectJobProgress("j1", { onWarning });
+
+    const ws = getLastWebSocket();
+    ws.simulateMessage({ type: "warning", job_id: "j1", message: "w1" });
+    expect(onWarning).toHaveBeenCalledTimes(1);
+    ws.simulateMessage({ type: "warning", job_id: "j1", message: "w2" });
+    // 2 calls: one per distinct warning message
+    expect(onWarning).toHaveBeenCalledTimes(2);
+    expect(onWarning).toHaveBeenLastCalledWith({
+      type: "warning",
+      job_id: "j1",
+      message: "w2",
+    });
+  });
+
+  it("keeps reconnecting after a warning (warning is not terminal)", () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5); // jitter == 0
+    const onReconnect = vi.fn();
+    const onWarning = vi.fn();
+    connectJobProgress("j1", { onWarning, onReconnect });
+
+    const ws = getLastWebSocket();
+    ws.simulateMessage({ type: "warning", job_id: "j1", message: "w1" });
+    ws.simulateClose();
+
+    vi.advanceTimersByTime(1000);
+    expect(onReconnect).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
+  it("ignores an unparseable frame without calling onWarning", () => {
+    const onWarning = vi.fn();
+    connectJobProgress("j1", { onWarning });
+
+    const ws = getLastWebSocket();
+    ws.onmessage?.({ data: "{not json" });
+
+    expect(onWarning).toHaveBeenCalledTimes(0);
+  });
+
   it("resets retry count on successful open", () => {
     vi.useFakeTimers();
     vi.spyOn(Math, "random").mockReturnValue(0.5); // jitter == 0

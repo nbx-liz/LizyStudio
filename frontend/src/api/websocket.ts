@@ -31,6 +31,7 @@ const JITTER_RATIO = 0.15;
  *   - ``paused`` (P-0099 v3-20e): do NOT stop — paused is resumable,
  *     and the WS stream picks up live progress when the user clicks
  *     Resume on the same connection.
+ *   - ``warning`` (P-0117 D4): non-terminal, do NOT stop.
  *
  * Missed-message recovery (DoD R-2.1):
  *   - Terminal events that fired during a disconnect are replayed by
@@ -50,6 +51,7 @@ export function connectJobProgress(
     onCompleted?: (msg: WsMessage & { type: "completed" }) => void;
     onError?: (msg: WsMessage & { type: "error" }) => void;
     onPaused?: (msg: WsMessage & { type: "paused" }) => void;
+    onWarning?: (msg: WsMessage & { type: "warning" }) => void;
     onReconnect?: () => void;
   },
 ): () => void {
@@ -90,6 +92,12 @@ export function connectJobProgress(
             // Non-terminal: do NOT set jobDone, keep the WS open so
             // the live stream resumes when the user clicks Resume.
             callbacks.onPaused?.(msg);
+            break;
+          case "warning":
+            // P-0117 D4: non-terminal like "paused" — never set jobDone.
+            // Not replayed to late subscribers; the stored list comes
+            // from GET /api/jobs/{id} (``warnings``).
+            callbacks.onWarning?.(msg);
             break;
         }
       } catch {

@@ -1,7 +1,7 @@
 """WebSocket progress-message schema (H-0069).
 
 Single source of truth for the ``/ws/jobs/{job_id}/progress`` wire
-format.  Four message variants are expressed as Pydantic models and
+format.  The message variants are expressed as Pydantic models and
 combined into a discriminated union so parsers (`TypeAdapter(WsMessage)
 .validate_json`) dispatch on the ``type`` field without ambiguity.
 
@@ -126,8 +126,27 @@ class WsPaused(BaseModel):
     message: str = "Paused."
 
 
+class WsWarning(BaseModel):
+    """Non-terminal backend warning raised while the job runs (P-0117 D4).
+
+    Sent once per distinct warning the job stores (``Job.warnings``), for
+    example lizyml's H-0140 memory estimate before a Fit or the first
+    qualifying Tune trial. ``message`` is the warning text only, with no
+    file or line. Like :class:`WsPaused` it is NOT cached for
+    late-subscriber replay: a subscriber that connects later reads the
+    stored warnings from ``GET /api/jobs/{job_id}`` (``warnings``). The
+    connection stays open.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["warning"]
+    job_id: str
+    message: str
+
+
 WsMessage = Annotated[
-    WsProgress | WsCompleted | WsError | WsPing | WsPaused,
+    WsProgress | WsCompleted | WsError | WsPing | WsPaused | WsWarning,
     Field(discriminator="type"),
 ]
 
@@ -139,4 +158,5 @@ __all__ = [
     "WsPaused",
     "WsPing",
     "WsProgress",
+    "WsWarning",
 ]
