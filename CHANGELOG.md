@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-05
+
 The **lizyml 0.21** follow-up (P-0117, #748). LizyStudio moves from lizyml
 0.20.0 to 0.21.1 (`lizyml>=0.21.1,<0.22.0`). `STUDIO_FORMAT_VERSION` stays
 at 2: saved configs and jobs keep their shape.
@@ -100,11 +102,36 @@ at 2: saved configs and jobs keep their shape.
     example a failed Tune trial's reason) is replaced by `<path>` in the
     log, the list and the WebSocket message alike;
   - the job's WebSocket sends a new non-terminal `warning` message for each
-    one.
+    one;
+  - the job detail page shows them in a warning banner (a polite announcer
+    speaks only when a new warning arrives).
 
   The field is additive: jobs saved before it show `warnings: []`, and the
   saved format does not change. Nothing is refused; limiting the Fit form or
   the Tune range is tracked in #729.
+
+### Known issues and limitations
+
+- Pausing a Tune does not stop the round that is running: LizyML swallows the
+  `PausedError` raised from the progress callback, so the remaining trials of
+  the current round still run (#719).
+- A Fit with `max_depth=-1` or 17 or more with Auto Num Leaves, or a Tune
+  range up to 30, can exhaust server memory. lizyml's warning is shown on the
+  job, but nothing limits the form or the range yet (#729).
+- The Tune tab's Re-tune settings (`tuning.re_tune`) do not reach a Tune job
+  (#734), and `/resume` of a failed Tune does not follow lizyml's resume
+  contract (#733).
+- `/retune` still accepts a checkpoint that has no `model_meta.json` sidecar
+  (H-0068's legacy rule); only Unpause refuses a missing sidecar.
+- A model with an empty column name exports but cannot be loaded again
+  (nbx-liz/LizyML#406, upstream).
+- A job warning raised while another thread's
+  `warnings.catch_warnings(record=True)` is active goes to that recorder
+  (Python 3.12 keeps the warnings state global).
+- A URL with an empty port (`http://host:/docs`) is partly replaced by
+  `<path>` in job warnings. This over-sanitizes and cannot leak a path.
+- One functional E2E test can miss its poll budget in full-suite runs inside
+  the Claude Code sandbox (#717, suspected timing flake).
 
 ### Changed
 

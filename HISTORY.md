@@ -5144,18 +5144,30 @@ lock を上げると、fixture の鮮度テストが落ちる（`tests/test_lizy
 
 #### Acceptance Criteria
 
-- [ ] lizyml 0.21.1 のロックで、backend、integration、functional E2E が retry なしで緑になる。
-- [ ] **D1:** `tests/fixtures/lizyml020/` の完了した Fit と Tune を 0.21.1 で開くと、D1 の表の操作が成功する。Tune の retune は `PICKLE_INCOMPATIBLE` で拒否され、行は残る。一時停止中の Tune の詳細、log、lineage が読める。
-- [ ] **D2**（2026-11-05 改訂。Decision の amendment を参照）: Studio の経路で起きる 3 つの拒否は、それぞれ実際に通る経路で、code と理由を持つエラーになる。
+- [x] lizyml 0.21.1 のロックで、backend、integration、functional E2E が retry なしで緑になる。
+  - 証拠: develop `c09ce93`（4 本の P-0117 PR をすべて含む）で `scripts/dev_acceptance.sh` が 21/21 step 通った。backend 2112 passed、integration 112 passed、functional E2E 154 passed。ローカルで retry なし（#748 の 2026-11-05 の ruling コメント 6651200707）。
+  - 限界: 途中の PR #750 の acceptance では `workspace-tune.spec.ts:356` が一度 timeout した（#717 の類。単独では 4/4 pass）。最終の `c09ce93` では出ていない。
+- [x] **D1:** `tests/fixtures/lizyml020/` の完了した Fit と Tune を 0.21.1 で開くと、D1 の表の操作が成功する。Tune の retune は `PICKLE_INCOMPATIBLE` で拒否され、行は残る。一時停止中の Tune の詳細、log、lineage が読める。
+  - 証拠: PR #749（squash `cf4d1bd`）、`tests/integration/test_p0117_legacy_020_jobs.py`。`test_list_and_detail_of_020_jobs_keep_working`、`test_metrics_of_020_jobs_keep_working`、`test_every_expected_plot_of_020_jobs_renders`（正確な plot の集合を assert）、`test_importance_of_020_jobs_keeps_working`、`test_inference_with_shap_on_020_jobs_keeps_working`、`test_export_code_of_020_jobs_keeps_working`、`test_model_export_of_020_jobs_keeps_working`、`test_retune_of_a_020_tune_is_refused_and_the_row_stays`、`test_detail_log_and_lineage_of_a_020_paused_tune_are_readable`（実際に scrub された log を assert）。`test_the_fixtures_were_written_by_lizyml_020` が、fixture が 0.20 の成果物であることを固定する。Codex の head review は r1 で 2 件（paused log と plot 集合の弱い assertion）を指摘し、両方直して r2 で APPROVE。
+- [x] **D2**（2026-11-05 改訂。Decision の amendment を参照）: Studio の経路で起きる 3 つの拒否は、それぞれ実際に通る経路で、code と理由を持つエラーになる。
   - export-code: NUL を含む列名（`SERIALIZATION_FAILED` / `unsupported_column_name`）。
   - Fit の job: `Period`/`Interval` の保存できないカテゴリ値（`SERIALIZATION_FAILED`、H-0145）。job の記録と WebSocket の error の両方で、thread と subprocess の両方のモードで確かめる。
   - 推論: 壊れた identity の状態（未知の `category_identity_version`、壊れた `identity_columns`）を持つモデル。翻訳された code、理由、対処の文言が返る。
   - 各ケースで、HTTP の status（または job の error code）、`error.code`、理由を確かめる。500 `BACKEND_ERROR` にならないこと、本文にローカルの tmp のパスが現れないことも確かめる。
   - Studio の経路では起きない理由（temporal の拒否、`categorical_feature_not_unique`、`column_name_collision`）は、lizyml 自身の関数が投げた実物の `LizyMLError` で、分類表の単体テストを行う。
   - 分類したエラーの job の `error` は、code・理由・対処を持ち、traceback を含まない。traceback は job の `execution.log` に書く。分類しないエラーは今の形のまま。
-- [ ] **D3:** 0.20 で一時停止した Tune の unpause が、開始前に 400 で拒否される。job は paused のまま残る。同じ版で一時停止した Tune の unpause は今までどおり続く。
-- [ ] **D4:** `max_depth=-1` と `auto_num_leaves` の Fit で、H-0140 の警告が job のログと job の警告に出る。これを thread と subprocess の両方のモードで確かめる。Tune では、2 つ目以降の該当 trial の記録もログに残る。
-- [ ] **D5:** fixture が 0.21.1 で撮り直され、鮮度テストが緑になる。`PAST_VERSIONS` の 3 か所が 0.18/0.19/0.20 になる。片側だけの範囲のテスト、ファイルをまたぐ Decimal と整数のカテゴリの integration のケース（Fit、保存、推論）、export-code の ZIP のテストがある。CHANGELOG に結果の変化と一方向性が書かれている。
+  - 証拠: PR #750（squash `b3e2ff3`）。実経路は `tests/integration/test_p0117_lizyml_refusals.py`: `test_export_code_with_a_nul_column_name_is_an_input_refusal`（400 `BACKEND_INPUT_REJECTED`）、`test_fit_job_with_an_unsaveable_category_value_reports_the_reason` と `test_the_job_api_returns_the_coded_error`（job の記録と WebSocket の error）、`test_inference_on_a_corrupted_identity_model_is_an_artifact_refusal` と `test_inference_on_a_tampered_model_is_an_artifact_refusal`（409 `MODEL_ARTIFACT_INVALID`）、`test_a_corrupted_identity_marker_holding_a_path_does_not_leak`（パスが漏れない）、`test_a_pickle_that_cannot_be_read_stays_a_backend_error`（I/O は 500 のまま）、`test_an_unclassified_job_failure_keeps_its_traceback`（分類しないエラーは今の形）。届かない理由の分類表は `tests/test_p0117_error_mapping.py`（lizyml 自身が投げた実物の `LizyMLError`）。Codex の head review は r1 で major 3 件（分類と context の露出）を指摘して全て修正、r2 で APPROVE。
+  - 限界: Fit の job の 2 モード（thread と subprocess）は `test_fit_job_with_an_unsaveable_category_value_reports_the_reason` の parametrize で確かめた。上流の不具合（空の列名 `""` が export できて load できない、H-0145 の拒否に `reason` が無い）は nbx-liz/LizyML#406 に起票し、P-0117 を block しない。
+- [x] **D3:** 0.20 で一時停止した Tune の unpause が、開始前に 400 で拒否される。job は paused のまま残る。同じ版で一時停止した Tune の unpause は今までどおり続く。
+  - 証拠: PR #751（squash `9b4df29`）。`tests/integration/test_p0117_legacy_020_jobs.py::test_unpause_of_a_020_paused_tune_is_refused_before_the_job_starts`（実物の 0.20 の paused job、400 `PICKLE_INCOMPATIBLE`、job は paused のまま）。`tests/integration/test_p0117_unpause_version.py`: `test_same_version_paused_tune_unpauses_and_continues_the_study`、`test_another_patch_of_the_installed_minor_unpauses`、`test_unpause_is_refused_before_the_job_starts`（sidecar の無い・壊れた・UTF-8 でない場合も fail-closed）、`test_other_minor_message_names_both_versions`、`test_a_storage_without_a_sidecar_location_is_refused_before_any_read`。UTF-8 でない sidecar が 500 になる欠陥は r1 で見つかり、修正前 RED・修正後 GREEN のテストを付けた。
+  - 限界: `/retune` は sidecar の無い checkpoint をまだ受け付ける（H-0068 の legacy 規則）。`/resume` は 0.20 の契約に従わない（#733）。どちらも D3 の外。
+- [x] **D4:** `max_depth=-1` と `auto_num_leaves` の Fit で、H-0140 の警告が job のログと job の警告に出る。これを thread と subprocess の両方のモードで確かめる。Tune では、2 つ目以降の該当 trial の記録もログに残る。
+  - 証拠: PR #752（squash `c09ce93`）。`tests/integration/test_p0117_job_warnings.py::test_fit_memory_warning_reaches_log_job_api_and_broadcast[thread|subprocess]`、`::test_tune_warns_once_and_logs_the_later_qualifying_trials[thread|subprocess]`、`::test_concurrent_thread_jobs_keep_their_own_warnings`、`::test_a_normal_fit_has_no_warnings_and_no_capture_noise`。単体は `tests/test_job_warnings.py`。frontend は `JobWarnings.test.tsx`、`JobDetail.warnings.test.tsx`、`frontend/tests/e2e/jobs-warnings.spec.ts`。visual-qa は conditional PASS で、唯一の HIGH（長い token の overflow）は回帰テスト付きで修正した。
+  - Codex の head review は 3 round。r1 で major 3 件と minor 2 件、r2 で r1 の remedy に major 2 件（lizyml logger の handler が `logging.lastResort` を抑える、コロンの後の絶対パスを sanitizer が逃す）。owner が narrow な修正と r3 を判断し（#748 の ruling）、r3 は minor 1 件つきの APPROVE。
+  - 限界: (1) 空の port の URL（`http://host:/docs`）は一部が `<path>` に置換される（過剰な sanitize で、漏れはない）。(2) 別 thread の `warnings.catch_warnings(record=True)` が有効な間に上がった job の警告は、その recorder に入る（Python 3.12 の global な warnings 状態）。(3) 警告のみで、Fit の form や Tune の範囲の制限は #729 のまま。
+- [x] **D5:** fixture が 0.21.1 で撮り直され、鮮度テストが緑になる。`PAST_VERSIONS` の 3 か所が 0.18/0.19/0.20 になる。片側だけの範囲のテスト、ファイルをまたぐ Decimal と整数のカテゴリの integration のケース（Fit、保存、推論）、export-code の ZIP のテストがある。CHANGELOG に結果の変化と一方向性が書かれている。
+  - 証拠: PR #749（`cf4d1bd`）。fixture は撮り直し用の committed driver で 4 scenario すべてを 0.21.1 で撮り直した（変わったのは 4 つの `metadata.json` だけ）。`tests/test_lizyml_fixture_freshness.py`（`test_past_versions_are_the_three_minors_below_the_installed_one` ほか）。`PAST_VERSIONS` は `scripts/pickle_compat_matrix.sh`、`.github/workflows/nightly.yml`、`tests/bench/test_bench_pickle_compat.py` の 3 か所で 0.18.0/0.19.0/0.20.0。一方向の `max_depth` の範囲は `tests/contract/test_lizyml_objective_drift.py::test_max_depth_bound_has_a_min_and_no_max` と `frontend/src/components/workspace/SearchSpaceTable.test.tsx`（"one-sided max_depth bound"）。ファイルをまたぐ Decimal と整数のカテゴリは `tests/integration/test_p0117_category_identity.py`（`test_training_reads_the_decimal_column_as_decimal_objects`、`test_integer_values_at_inference_are_the_trained_decimal_categories`、`test_a_value_never_trained_is_still_unseen`）。export-code の ZIP は `tests/integration/test_p0117_export_code_zip.py`（`test_generated_config_has_the_021_input_contract`、`test_generated_predict_matches_studio_predictions`）。CHANGELOG の `[0.8.0]` に結果の変化と format 5 の一方向性がある。
+  - 「記録済みの study は古い上限を持ち続ける」は、テストではなく証拠で決着した（PR #751、#748 の comment 6647214544）。D3 のあと、Studio のどの経路も版をまたぐ study を続けられない: 0.20 の corpus の study は `max_depth` に `max_allowed 30` を記録している。lizyml が記録済みの上限を使うのは保存済みの study を続けるときだけで、版をまたぐ unpause は拒否され、`/retune` は元から拒否されている。同じ minor の中では記録された上限が今の上限と等しい。
 
 #### Decision
 
@@ -5176,5 +5188,14 @@ lock を上げると、fixture の鮮度テストが落ちる（`tests/test_lizy
   - temporal の拒否（`calendar_timedelta64`/`unitless_datetime64`）。Arrow は月・年の timedelta64 と単位の無い datetime64 を parquet に書けない。CSV は文字列になる。
   - `categorical_feature_not_unique`（H-0142）。列名の重複を読めない（pyarrow は重複を拒み、CSV は `a.1` に改名する）。存在しない列を categorical に指定しても、Fit は完了する。
   - `column_name_collision`。lizyml の Config は `data.target` に str を求める。str と非 str が混ざった列名を、parquet はすべて str にする。
-- **lizyml の不具合:** 空の列名 `""` を持つモデルは、export できるが load できない（LightGBM の "Wrong size of feature_names" が `DESERIALIZATION_FAILED` になり、`context` に絶対パスが入る）。上流の Issue は主文脈が起票する。
+- **lizyml の不具合:** 空の列名 `""` を持つモデルは、export できるが load できない（LightGBM の "Wrong size of feature_names" が `DESERIALIZATION_FAILED` になり、`context` に絶対パスが入る）。上流の Issue は nbx-liz/LizyML#406。
 - **改訂:** D2 の受け入れは、届く 3 つの拒否を実際の経路で確かめ、届かない理由は lizyml 自身の関数が投げた実物の `LizyMLError` で分類表を単体で確かめる（上の Acceptance Criteria）。分類したエラーの job の `error` は traceback を含めず、traceback は `execution.log` に書く。
+
+**2026-11-05 release ruling (owner): 0.8.0 として release する**（記録: #748 の comment 6651200707）。
+
+- 版: P-0117 を 0.8.0 として出す。版は git tag から決まる（hatch-vcs）ので版ファイルは変えない。
+- v0.8.0 の milestone にあった #536（P-0110）、#528（P-0111）、#734 は v0.9.0 に移す。P-0110 + P-0111 の release window は v0.9.0 になる。
+- 手順は前例どおり: develop への chore PR（CHANGELOG の header と HISTORY の acceptance の tick）、次に develop から main への release PR を `--merge` で、そして tag。PyPI への publish は取り消せないので、main への merge の直前に owner がもう一度確かめる。
+- visual-qa が見つけた既存の 2 件は、別の Issue に起票した（milestone `backlog`）。
+  - #753: Jobs ページが tablet と mobile の幅で崩れる。
+  - #754: axe 違反 2 件。
