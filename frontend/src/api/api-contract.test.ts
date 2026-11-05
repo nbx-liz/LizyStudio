@@ -408,7 +408,7 @@ describe("WsMessage (H-0069 SSOT)", () => {
     assertDefined(msg.job_id, "job_id");
   });
 
-  it("WsMessage union covers progress/completed/error/ping", () => {
+  it("WsMessage union covers progress/completed/error/ping/warning", () => {
     const messages: WsMessage[] = [
       {
         type: "progress",
@@ -422,13 +422,15 @@ describe("WsMessage (H-0069 SSOT)", () => {
       { type: "completed", job_id: "j1", message: "Completed." },
       { type: "error", job_id: "j1", message: "fail", code: "BACKEND_ERROR" },
       { type: "ping", job_id: "j1" },
+      { type: "warning", job_id: "j1", message: "Estimated memory is high." },
     ];
-    expect(messages).toHaveLength(4);
+    expect(messages).toHaveLength(5);
     expect(messages.map((m) => m.type)).toEqual([
       "progress",
       "completed",
       "error",
       "ping",
+      "warning",
     ]);
   });
 });

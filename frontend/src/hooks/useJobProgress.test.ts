@@ -401,3 +401,79 @@ describe("useJobProgress — Issue #339 polling-storm guards", () => {
     expect(connectJobProgress).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("useJobProgress — live warnings (P-0117 D4)", () => {
+  const warningMsg = (message: string) => ({
+    type: "warning" as const,
+    job_id: "j1",
+    message,
+  });
+
+  it("starts with no live warnings", () => {
+    const { result } = renderHook(
+      () => useJobProgress({ jobId: "j1", job: runningJob() }),
+      { wrapper },
+    );
+    expect(result.current.liveWarnings).toEqual([]);
+  });
+
+  it("appends a new message and ignores an already-held one", () => {
+    const { result } = renderHook(
+      () => useJobProgress({ jobId: "j1", job: runningJob() }),
+      { wrapper },
+    );
+
+    act(() => {
+      lastCallbacks?.onWarning?.(warningMsg("a"));
+    });
+    act(() => {
+      lastCallbacks?.onWarning?.(warningMsg("a"));
+    });
+    act(() => {
+      lastCallbacks?.onWarning?.(warningMsg("b"));
+    });
+
+    expect(result.current.liveWarnings).toEqual(["a", "b"]);
+  });
+
+  it("keeps the warnings when the job pauses and when it completes", () => {
+    const { result } = renderHook(
+      () => useJobProgress({ jobId: "j1", job: runningJob() }),
+      { wrapper },
+    );
+
+    act(() => {
+      lastCallbacks?.onWarning?.(warningMsg("a"));
+    });
+    act(() => {
+      lastCallbacks?.onPaused?.({
+        type: "paused",
+        job_id: "j1",
+        trial_number: null,
+        message: "paused",
+      });
+    });
+    expect(result.current.liveWarnings).toEqual(["a"]);
+
+    act(() => {
+      lastCallbacks?.onCompleted?.(completedMsg);
+    });
+    expect(result.current.liveWarnings).toEqual(["a"]);
+  });
+
+  it("resets when the job id changes", () => {
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string }) =>
+        useJobProgress({ jobId: id, job: runningJob({ job_id: id }) }),
+      { wrapper, initialProps: { id: "j1" } },
+    );
+
+    act(() => {
+      lastCallbacks?.onWarning?.(warningMsg("a"));
+    });
+    expect(result.current.liveWarnings).toEqual(["a"]);
+
+    rerender({ id: "j2" });
+    expect(result.current.liveWarnings).toEqual([]);
+  });
+});
