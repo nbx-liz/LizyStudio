@@ -7,6 +7,141 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-05
+
+The **lizyml 0.21** follow-up (P-0117, #748). LizyStudio moves from lizyml
+0.20.0 to 0.21.1 (`lizyml>=0.21.1,<0.22.0`). `STUDIO_FORMAT_VERSION` stays
+at 2: saved configs and jobs keep their shape.
+
+### Upgrade notes
+
+- **Back up your jobs directory before upgrading.** lizyml 0.21 writes models
+  in its `format_version` 5, and lizyml 0.20 or older cannot read it. The
+  change is one way: a model exported under 0.21 (including a Model export of
+  a job made under 0.20) cannot be opened again by LizyStudio 0.7.x or any
+  other lizyml 0.20 install.
+- **Jobs made under lizyml 0.20 keep working**: they list, open, show metrics,
+  plots and split or SHAP importance, predict (with SHAP), export code and
+  export the model.
+- **Re-tune of a Tune made under lizyml 0.20 is refused** with 400
+  `PICKLE_INCOMPATIBLE`: its checkpoint was saved by another lizyml minor.
+  The Tune itself stays; start a new Tune to tune again.
+- **Unpause of a Tune paused under lizyml 0.20 is refused** with 400
+  `PICKLE_INCOMPATIBLE` (`details.kind` `lizyml_version_mismatch`) before the
+  job starts (P-0117 D3). The job stays paused and its study is not touched;
+  start a new Tune. lizyml 0.21 would continue such a study with only a log
+  warning, mixing trials scored under 0.20's and 0.21's rules (for example the
+  new meaning of `max_depth=0`). The version is read from the job's checkpoint
+  file `model_meta.json`, on major.minor, the rule Re-tune already applies. A
+  paused Tune whose `model_meta.json` is missing or unreadable is refused the
+  same way (`missing_meta` / `corrupt_meta`). Unpause of a Tune paused under
+  the installed lizyml minor works as before.
+- **Generated export-code projects keep their bundled behaviour.** A project
+  exported before the upgrade runs its own bundled code and does not change.
+  A project exported now carries `column_name_policy: "str_alias_v1"` and
+  `category_identity_version` in its `config.json`, and its `predict.py`
+  checks the input header.
+
+### Results can differ from 0.20
+
+- **Categorical values are matched by value, not by Python type** (lizyml
+  H-0138, H-0139, H-0142). lizyml 0.21 keys a category structurally, so
+  `Decimal("2")`, `2` and `2.0` are one category, and aware date-times are one
+  category when they are the same instant. A new Fit or Tune on a column whose
+  values pandas confused can give different results, and so can one with an
+  int-named categorical column (LightGBM used to read the name as a
+  position). For a model trained under 0.21, inference on a file whose
+  category column has another numeric type than the training file (for
+  example integers against a Parquet `Decimal` column) finds the trained
+  categories instead of treating them as unseen. Models saved under 0.20 keep
+  the lookup they were trained with, so their predictions do not change. CSV
+  string columns are unchanged.
+- **`max_depth=0` now means no limit, as in LightGBM** (H-0140). With Auto Num
+  Leaves, `max_depth=0` used to derive 8 leaves; it now derives like `-1`.
+  The Max Depth search range is no longer capped at 30: the bound is
+  `min: -1` only. Studies already recorded keep their recorded range.
+- **A frozenset category value that would not read back as written is
+  outside the saveable set** (lizyml 0.21.1, H-0145): the Fit warns, the
+  column takes pandas' path, and model export and export-code refuse it
+  instead of failing later.
+
+### Added
+
+- **lizyml's refusals of your data or of a saved model now say why**
+  (P-0117 D2). They used to be 500 `BACKEND_ERROR`. One classification table
+  in the lizyml adapter maps them:
+  - **400 `BACKEND_INPUT_REJECTED`** when lizyml refuses the data. Examples:
+    export-code of a model whose data has a column name a project cannot
+    hold (for example one with a NUL character), and a Fit whose categorical
+    column holds values a saved model cannot hold (`Period`, `Interval`,
+    `time`).
+  - **409 `MODEL_ARTIFACT_INVALID`** when lizyml cannot read a saved model.
+    The cases: an unknown `category_identity_version`, a corrupted
+    `identity_columns`, a pickle whose checksum differs from the one
+    recorded, or a `format_version` lizyml does not read. An I/O failure
+    reading the model stays 500 `BACKEND_ERROR`.
+
+  `details` carries lizyml's code (`backend_code`), the `reason`, a
+  `recovery_hint` and an allowlisted `context`; no local path is passed on.
+  A Fit or Tune job that fails this way reports the same code on the
+  WebSocket error. Its `error` holds the code, the reason and the remedy
+  without a traceback; the traceback goes to the job's execution log. Every
+  other backend error stays 500 `BACKEND_ERROR` with today's job error.
+- **lizyml's memory warning reaches the job** (P-0117 D4, H-0140). lizyml
+  0.21 warns before a Fit, and before the first qualifying Tune trial, when
+  LightGBM will allocate a lot of memory (`num_leaves` of 16384 or more, or an
+  estimate of 1 GiB or more), for example with `max_depth=-1` and Auto Num
+  Leaves. In thread mode the warning used to go nowhere. Now, in both worker
+  modes:
+  - the job's `execution.log` records every warning the job raised
+    (`UserWarning`s and `lizyml` log records at WARNING or above), and the
+    later qualifying Tune trials' `tune.trial.memory_warning` records;
+  - `GET /api/jobs/{job_id}` returns them in a new `warnings` list (each
+    distinct text once, at most 50, message text only without a file
+    path), stored in `meta.json`. An absolute path inside the text (for
+    example a failed Tune trial's reason) is replaced by `<path>` in the
+    log, the list and the WebSocket message alike;
+  - the job's WebSocket sends a new non-terminal `warning` message for each
+    one;
+  - the job detail page shows them in a warning banner (a polite announcer
+    speaks only when a new warning arrives).
+
+  The field is additive: jobs saved before it show `warnings: []`, and the
+  saved format does not change. Nothing is refused; limiting the Fit form or
+  the Tune range is tracked in #729.
+
+### Known issues and limitations
+
+- Pausing a Tune does not stop the round that is running: LizyML swallows the
+  `PausedError` raised from the progress callback, so the remaining trials of
+  the current round still run (#719).
+- A Fit with `max_depth=-1` or 17 or more with Auto Num Leaves, or a Tune
+  range up to 30, can exhaust server memory. lizyml's warning is shown on the
+  job, but nothing limits the form or the range yet (#729).
+- The Tune tab's Re-tune settings (`tuning.re_tune`) do not reach a Tune job
+  (#734), and `/resume` of a failed Tune does not follow lizyml's resume
+  contract (#733).
+- `/retune` still accepts a checkpoint that has no `model_meta.json` sidecar
+  (H-0068's legacy rule); only Unpause refuses a missing sidecar.
+- A model with an empty column name exports but cannot be loaded again
+  (nbx-liz/LizyML#406, upstream).
+- A job warning raised while another thread's
+  `warnings.catch_warnings(record=True)` is active goes to that recorder
+  (Python 3.12 keeps the warnings state global).
+- A URL with an empty port (`http://host:/docs`) is partly replaced by
+  `<path>` in job warnings. This over-sanitizes and cannot leak a path.
+- One functional E2E test can miss its poll budget in full-suite runs inside
+  the Claude Code sandbox (#717, suspected timing flake).
+
+### Changed
+
+- lizyml is ignored by Dependabot outright and raised by hand (range, lock,
+  fixtures and tests together); the update-types ignore let a range-only
+  widening through (#746).
+- The production fixtures are re-captured under lizyml 0.21.1, and the
+  pickle-compat matrix covers lizyml 0.18.0, 0.19.0 and 0.20.0.
+- New issues opened from the templates get the `needs-triage` label.
+
 ## [0.7.0] - 2026-10-22
 
 The **lizyml 0.20** release (P-0116, #721). LizyStudio moves from lizyml

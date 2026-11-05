@@ -13,6 +13,7 @@ import pandas as pd
 from lizystudio.backends.exceptions import PlotNotAvailableError, RefitRequiredError
 from lizystudio.backends.types import PlotData, PredictionSummary
 
+from .error_mapping import maps_lizyml_refusals
 from .space_wire import names_routed_outside_model_params
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,7 @@ def _shap_refit_required() -> Iterator[None]:
 class EvaluationMixin:
     """Prediction, evaluation, plots, importance, and model export."""
 
+    @maps_lizyml_refusals
     def predict(
         self,
         model: Any,
@@ -206,10 +208,12 @@ class EvaluationMixin:
             logger.debug("shap importance not available", exc_info=True)
         return plots
 
+    @maps_lizyml_refusals
     def export_model(self, model: Any, path: str) -> str:
         exported: Path = model.export(path)
         return str(exported)
 
+    @maps_lizyml_refusals
     def export_code(self, model: Any, path: str) -> str:
         """Generate standalone Python code from *model* into *path*.
 
@@ -233,6 +237,7 @@ class EvaluationMixin:
         exported: Path = model.export_code(path)
         return str(exported)
 
+    @maps_lizyml_refusals
     def load_model(self, path: str) -> Any:
         from lizyml import Model
 

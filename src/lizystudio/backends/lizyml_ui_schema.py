@@ -111,6 +111,10 @@ def _build_eval_metric_option_sets() -> dict[str, list[str]]:
 def _build_parameter_bounds() -> dict[str, dict[str, dict[str, float | int]]]:
     """``{task: {param: {"min": ..., "max": ...}}}`` from the provider.
 
+    A bound may be one-sided: either key can be absent.  Since lizyml 0.21
+    ``max_depth`` has only ``{"min": -1}`` (P-0117 D5), and the frontend
+    clamps only the sides that are present.
+
     Keys use LizyML's canonical parameter names (e.g. ``early_stopping_rounds``);
     the frontend maps the dotted ``search_space_catalog`` key
     (``early_stopping.rounds``) onto the underscored bound key.

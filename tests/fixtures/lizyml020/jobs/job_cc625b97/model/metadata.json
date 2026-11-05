@@ -1,0 +1,142 @@
+{
+  "format_version": 4,
+  "lizyml_version": "0.20.0",
+  "python_version": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+  "timestamp": "2026-11-04T17:19:50.711536+00:00",
+  "run_id": "83f1b13f-0cc3-430b-8549-bf6901e44402",
+  "config": {
+    "config_version": 1,
+    "task": "binary",
+    "data": {
+      "path": null,
+      "target": "Survived",
+      "time_col": null,
+      "group_col": null
+    },
+    "features": {
+      "exclude": [],
+      "auto_categorical": true,
+      "categorical": [],
+      "unseen_policy": "mode"
+    },
+    "split": {
+      "method": "stratified_kfold",
+      "n_splits": 5,
+      "random_state": null
+    },
+    "model": {
+      "name": "lgbm",
+      "params": {},
+      "auto_num_leaves": true,
+      "num_leaves_ratio": 1.0,
+      "min_data_in_leaf_ratio": 0.01,
+      "min_data_in_bin_ratio": 0.01,
+      "feature_weights": null,
+      "balanced": null
+    },
+    "training": {
+      "seed": 1120,
+      "early_stopping": {
+        "enabled": true,
+        "rounds": 150,
+        "inner_valid": {
+          "method": "holdout",
+          "ratio": 0.1,
+          "stratify": false,
+          "random_state": 42
+        },
+        "validation_ratio": 0.1,
+        "inner_valid_explicit": false
+      }
+    },
+    "tuning": null,
+    "evaluation": {
+      "metrics": []
+    },
+    "calibration": null,
+    "output_dir": null
+  },
+  "metrics": {
+    "raw": {
+      "oof": {
+        "logloss": 0.6425904160767955,
+        "auc": 0.6300424228732084
+      },
+      "oof_per_fold": [
+        {
+          "logloss": 0.6368303367833678,
+          "auc": 0.6426332288401254
+        },
+        {
+          "logloss": 0.6449565663147542,
+          "auc": 0.5969135802469135
+        },
+        {
+          "logloss": 0.6482007647522409,
+          "auc": 0.7567901234567901
+        },
+        {
+          "logloss": 0.6448137330170927,
+          "auc": 0.6922094508301405
+        },
+        {
+          "logloss": 0.638123975665679,
+          "auc": 0.632183908045977
+        }
+      ],
+      "if_mean": {
+        "logloss": 0.6282066682512087,
+        "auc": 0.8974126211961094
+      },
+      "if_per_fold": [
+        {
+          "logloss": 0.6265232435091149,
+          "auc": 0.8986189579409918
+        },
+        {
+          "logloss": 0.6141947861246675,
+          "auc": 0.92713379810154
+        },
+        {
+          "logloss": 0.6421256979919442,
+          "auc": 0.8595060853125369
+        },
+        {
+          "logloss": 0.643773097371857,
+          "auc": 0.8866281340310864
+        },
+        {
+          "logloss": 0.6144165162584598,
+          "auc": 0.9151761305943918
+        }
+      ],
+      "oof_coverage": 1.0
+    }
+  },
+  "feature_names": [
+    "PassengerId",
+    "Pclass",
+    "Sex",
+    "Age",
+    "SibSp",
+    "Parch",
+    "Fare",
+    "Embarked",
+    "CabinDeck",
+    "Name",
+    "Ticket",
+    "Cabin"
+  ],
+  "task": "binary",
+  "checksums": {
+    "algorithm": "sha256",
+    "files": {
+      "fit_result.pkl": "d13d386bc46b7054218c3820f1ffe3fd3ea7ad9dd4fa6a93ac7909eae5545fb0",
+      "refit_model.pkl": "b5319c2daadd34887ccaca903498a77e89eed8e8117b7e2b0b80aa3824aad08a",
+      "analysis_context.pkl": "4d985bad96205d569870865e4228fdbf07c5ba8ff6a202ea5c378671c4a140fb"
+    }
+  },
+  "applied_training_params": {},
+  "applied_sample_weight": "none",
+  "declared_categories": {}
+}

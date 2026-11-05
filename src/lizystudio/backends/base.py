@@ -342,7 +342,10 @@ class BackendCore(Protocol):
         so a study the backend would refuse in :meth:`tune` with
         ``resume=True`` is refused up front instead of failing the job.
         Raise :class:`~lizystudio.backends.exceptions.CheckpointIncompatibleError`
-        for exactly the studies ``tune`` would refuse, and return otherwise.
+        for the studies ``tune`` would refuse (their lineage state), and also
+        for a study whose checkpoint sidecar (``model_meta.json``
+        ``lizyml_version``) differs in major.minor from the installed backend
+        version, or cannot be read (P-0117 D3, A-2); return otherwise.
         The study at *storage* must exist; the caller does not call this
         when the job never wrote its storage.
         """

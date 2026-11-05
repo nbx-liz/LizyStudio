@@ -15,7 +15,7 @@ match the same class.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Any, ClassVar, Literal
 
 
 class CancelledError(Exception):
@@ -61,8 +61,11 @@ class CheckpointIncompatibleError(Exception):
     ``suggested_fix`` propagate the backend's classification through to
     the HTTP envelope. ``kind`` should be one of:
     ``"schema_mismatch"`` / ``"lizyml_version_mismatch"`` /
-    ``"corrupt_meta"`` / ``"unknown"`` (the last is the safe fallback
-    for legacy call sites and future second-backend extensions).
+    ``"corrupt_meta"`` / ``"missing_meta"`` (an unpause found no
+    sidecar for its study, P-0117 D3) / ``"study_not_resumable"``
+    (:class:`StudyNotResumableError`, P-0116 D3) / ``"unknown"`` (the
+    last is the safe fallback for legacy call sites and future
+    second-backend extensions).
     """
 
     def __init__(
@@ -237,7 +240,56 @@ class SearchSpaceRefusedError(Exception):
         self.dims = dims
 
 
+class BackendRefusalError(Exception):
+    """A backend refusal the adapter classified, with its reason (P-0117 D2).
+
+    The adapter translates its library's coded errors into a subclass of
+    this type through one classification table, so the API and the job
+    report a Studio code, the backend's own code, the reason and a remedy
+    instead of a generic backend error.
+
+    ``message`` never holds a local path: the adapter builds it from the
+    backend's user message only for input refusals, whose messages name the
+    data, and from fixed text otherwise.  ``context`` is an allowlisted,
+    JSON-safe subset of the backend's structured context.  ``code`` is the
+    Studio error code both the API envelope and the job's error carry.
+    """
+
+    code: ClassVar[str] = "BACKEND_ERROR"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        backend_code: str,
+        reason: str,
+        remedy: str,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.backend_code = backend_code
+        self.reason = reason
+        self.remedy = remedy
+        self.context: dict[str, Any] = dict(context or {})
+
+
+class BackendInputError(BackendRefusalError):
+    """The backend refused the user's data (P-0117 D2): HTTP 400."""
+
+    code: ClassVar[str] = "BACKEND_INPUT_REJECTED"
+
+
+class BackendArtifactError(BackendRefusalError):
+    """The backend cannot read a stored model artifact (P-0117 D2): HTTP 409."""
+
+    code: ClassVar[str] = "MODEL_ARTIFACT_INVALID"
+
+
 __all__ = [
+    "BackendArtifactError",
+    "BackendInputError",
+    "BackendRefusalError",
     "CancelledError",
     "CheckpointIncompatibleError",
     "CheckpointPreflightError",

@@ -17,7 +17,6 @@ from pydantic import BaseModel
 
 from lizystudio.api.deps import get_broadcaster
 from lizystudio.api.errors import (
-    BackendError,
     ExportError,
     JobNotCompletedError,
     JobNotFoundError,
@@ -26,6 +25,7 @@ from lizystudio.api.errors import (
     PlotNotAvailableError,
     StudioError,
     WorkspaceNoDataError,
+    backend_error_from,
     pickle_incompatible_from,
     refit_required_from,
 )
@@ -42,6 +42,7 @@ from lizystudio.api.models import (
     UnpauseJobResponse,
 )
 from lizystudio.backends.exceptions import (
+    BackendRefusalError,
     CheckpointIncompatibleError,
 )
 from lizystudio.backends.exceptions import (
@@ -168,6 +169,7 @@ def get_job(
     job = _get_job_or_404(job_id, job_store)
     result: dict[str, Any] = _job_summary(job)
     result["config"] = job.config
+    result["warnings"] = list(job.warnings)
     if job.fit_result is not None:
         result["fit_result"] = asdict(job.fit_result)
     if job.tune_result is not None:
@@ -345,7 +347,9 @@ def unpause_job(
     is done. A study it cannot continue (one lizyml 0.15 wrote, an
     unreadable or an inconsistent one) is refused with 400
     ``PICKLE_INCOMPATIBLE`` before the relaunch, and the job stays
-    paused (P-0116 D4). Slot
+    paused (P-0116 D4). So is a study another lizyml major.minor wrote,
+    read from the job's checkpoint sidecar (P-0117 D3,
+    ``details.kind == "lizyml_version_mismatch"``). Slot
     ownership stays with the original job_id from paused into running
     (paused→running is a legal INV-3 transition), so the active-slot
     lock is never released across the round-trip.
@@ -373,8 +377,9 @@ def unpause_job(
     from lizystudio.api.workspace import require_relaunchable_config
 
     require_relaunchable_config(ws, job.config)
-    # P-0116 D4: a study the adapter cannot continue (e.g. one lizyml 0.15
-    # wrote) is refused here, with the job still paused, not by failing it.
+    # P-0116 D4 / P-0117 D3: a study the adapter cannot continue (e.g. one
+    # lizyml 0.15 wrote, or one another lizyml minor wrote) is refused here,
+    # with the job still paused, not by failing it.
     try:
         verify_unpause_study(backend=ws.backend, job_store=job_store, job=job)
     except CheckpointIncompatibleError as exc:
@@ -411,7 +416,7 @@ def get_job_metrics_endpoint(
     try:
         return get_metrics_table(job, ws.backend, job_store.model_cache)
     except Exception as exc:
-        raise BackendError(exc) from exc
+        raise backend_error_from(exc) from exc
 
 
 @router.get("/{job_id}/split-summary")
@@ -426,7 +431,7 @@ def get_job_split_summary_endpoint(
     try:
         return get_split_summary(job, ws.backend, job_store.model_cache)
     except Exception as exc:
-        raise BackendError(exc) from exc
+        raise backend_error_from(exc) from exc
 
 
 @router.get("/{job_id}/importance")
@@ -456,7 +461,7 @@ def get_job_importance_endpoint(
     except _BackendRefitRequired as exc:
         raise refit_required_from(exc) from exc
     except Exception as exc:
-        raise BackendError(exc) from exc
+        raise backend_error_from(exc) from exc
 
     # Server-side payload cap. If the user asked for a specific top_n
     # the route honours it silently above; the cap below only fires
@@ -503,7 +508,7 @@ def get_job_importance_kinds_endpoint(
     try:
         return get_importance_kinds(job, ws.backend, job_store.model_cache)
     except Exception as exc:
-        raise BackendError(exc) from exc
+        raise backend_error_from(exc) from exc
 
 
 @router.get("/{job_id}/learning-curve/metrics")
@@ -523,7 +528,7 @@ def get_job_learning_curve_metrics_endpoint(
     try:
         return get_learning_curve_metrics(job, ws.backend, job_store.model_cache)
     except Exception as exc:
-        raise BackendError(exc) from exc
+        raise backend_error_from(exc) from exc
 
 
 @router.get("/{job_id}/plot/{plot_type}", response_model=PlotResponseModel)
@@ -588,7 +593,7 @@ def get_job_plot_endpoint(
     except _BackendRefitRequired as exc:
         raise refit_required_from(exc) from exc
     except Exception as exc:
-        raise BackendError(exc) from exc
+        raise backend_error_from(exc) from exc
 
 
 @router.get("/{job_id}/plots")
@@ -603,7 +608,7 @@ def get_job_available_plots_endpoint(
     try:
         return get_available_plots(job, ws.backend, job_store.model_cache)
     except Exception as exc:
-        raise BackendError(exc) from exc
+        raise backend_error_from(exc) from exc
 
 
 # --- Export ---
@@ -671,6 +676,8 @@ def export_job(
                 job=job, backend=ws.backend, output_path=body.output_path
             )
         return {"exported_path": path, "export_type": body.export_type}
+    except BackendRefusalError as exc:
+        raise backend_error_from(exc) from exc
     except Exception as exc:
         raise ExportError(str(exc)) from exc
 
@@ -693,7 +700,7 @@ def export_code(
     except _BackendRefitRequired as exc:
         raise refit_required_from(exc) from exc
     except Exception as exc:
-        raise BackendError(exc) from exc
+        raise backend_error_from(exc) from exc
     # Schedule cleanup of the temporary ZIP file after the response is sent
     background_tasks.add_task(os.unlink, str(zip_path))
     filename = _build_export_filename(job, job_store)

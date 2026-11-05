@@ -33,7 +33,7 @@ export function useJobLifecycle({
 }: UseJobLifecycleParams) {
   const queryClient = useQueryClient();
   const { data: job, refetch: refetchJob } = useJob(jobId);
-  const { progress, foldLog, clearProgress } = useJobProgress({
+  const { progress, foldLog, liveWarnings, clearProgress } = useJobProgress({
     jobId,
     job,
     onTerminal,
@@ -79,6 +79,7 @@ export function useJobLifecycle({
     refetchJob,
     progress,
     foldLog,
+    liveWarnings,
     clearProgress,
     cancel,
   };

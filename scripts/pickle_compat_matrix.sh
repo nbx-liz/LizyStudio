@@ -22,7 +22,7 @@
 #
 # Local invocation::
 #
-#     PAST_VERSIONS="0.17.0 0.18.0 0.19.0" bash scripts/pickle_compat_matrix.sh
+#     PAST_VERSIONS="0.18.0 0.19.0 0.20.0" bash scripts/pickle_compat_matrix.sh
 #
 # ``MATRIX_PYTHON`` (default 3.11, the CI interpreter) picks the Python of the
 # throwaway venvs, for a machine without 3.11.
@@ -38,7 +38,7 @@ cd "$REPO_ROOT"
 
 ARTEFACT_DIR="${ARTEFACT_DIR:-/tmp/pickle_compat_matrix}"
 MATRIX_PYTHON="${MATRIX_PYTHON:-3.11}"
-PAST_VERSIONS="${PAST_VERSIONS:-0.17.0 0.18.0 0.19.0}"
+PAST_VERSIONS="${PAST_VERSIONS:-0.18.0 0.19.0 0.20.0}"
 
 # Resolve the runtime version so the matrix table prints a clear contrast
 # between "saved with X" and "verified against Y" in the CI log.

@@ -101,14 +101,14 @@ updates:
       default-days: 5
       semver-major-days: 14
     ignore:
-      # A lizyml minor changes behaviour LizyStudio depends on, and this
-      # updater widens only the pyproject range: #584/#639/#692 merged green
-      # while uv.lock stayed on 0.15.0, so the declared range outran the tested
-      # one. Raise lizyml by hand, lock and tests together. Patches still flow.
+      # Ignore lizyml outright and raise it by hand: range, lock, fixtures and
+      # tests in one PR (P-0117 D5). This updater edits only the pyproject
+      # range and never uv.lock: #584/#639/#692 merged green while uv.lock
+      # stayed on 0.15.0, so the declared range outran the tested one. An
+      # update-types ignore did not stop it either: #746 widened the range to
+      # <0.22.0 anyway. And a patch inside the range never becomes a PR, so
+      # "patches still flow" did not hold.
       - dependency-name: "lizyml"
-        update-types:
-          - "version-update:semver-minor"
-          - "version-update:semver-major"
     groups:
       python-minor-patch:
         patterns:

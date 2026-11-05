@@ -230,8 +230,10 @@ class BackendCore(Protocol):
     def load_checkpoint(self, path: Any, *, allowed_root: Any | None = None) -> Any: ...
     def verify_checkpoint_compatibility(self, job_dir: Any) -> None: ...  # H-0068
         # pickle / sidecar 互換性を確認できないときは backends.exceptions.CheckpointIncompatibleError を raise
-    def verify_study_continuable(self, storage: str, study_name: str) -> None: ...  # P-0116 D4
+    def verify_study_continuable(self, storage: str, study_name: str) -> None: ...  # P-0116 D4, P-0117 D3
         # unpause の起動前に、tune(resume=True) が拒否する study を CheckpointIncompatibleError で拒否する
+        # lizyml adapter は、SQLite の study の隣の checkpoint sidecar（model_meta.json の lizyml_version）が
+        # 今の lizyml と major.minor で違う study も拒否する（P-0117 D3 (A-2)）
     def preflight_checkpoint_dir(self, job_dir: Any) -> None: ...  # H-0062
         # tune 開始前に書き込み権限と picklable 性を検証。問題があれば PICKLE_PREFLIGHT_FAILED を raise
 
@@ -398,7 +400,7 @@ class DataRef:
 ```
 {jobs_dir}/
 ├── job_001/
-│   ├── meta.json              # job_id, status, config, data_ref, timestamps, parent_job_id (H-0062)
+│   ├── meta.json              # job_id, status, config, data_ref, timestamps, parent_job_id (H-0062), warnings (P-0117 D4)
 │   ├── model/                 # BackendAdapter.export_model() の出力
 │   ├── fit_result.json        # FitSummary のシリアライズ（Fit/Tune 共通）
 │   ├── tune_result.json       # TuningSummary のシリアライズ（Tune Job のみ）
@@ -415,8 +417,19 @@ class DataRef:
 
 **H-0062 Phase B 追加ファイル:**
 - `model.pkl`: Tune 実行中に各 trial 完了毎に atomic rename で上書き保存される（クラッシュ耐性のための best-effort）。加えて `Model.tune()` が `self._study` をセットしてから `return` する前に、**確定版の最終 save を必ず 1 回実行する**。lizyml の `Model.tune()` は study を関数末尾でのみ内部フィールドに代入する契約のため、毎 trial save だけだと pickle に `_study=None` しか残らず、Re-tune / Resume で `load_checkpoint()` した Model が `lizyml: Cannot resume tuning: no previous tune() call` を発生させる（H-0062 Bugfix 2026-04-14）。再tune / resume 時はこの最終 save をソース・オブ・トゥルースとして `load_checkpoint()` でモデル状態（Optuna study 含む）を復元する。
-- `model_meta.json`: pickle schema version + saved_at + lizyml/lightgbm/optuna のバージョン記録。メジャーバージョン不一致時は `PICKLE_INCOMPATIBLE` で load を拒否する。
+- `model_meta.json`: pickle schema version + saved_at + lizyml/lightgbm/optuna のバージョン記録。lizyml の major.minor が今の runtime と違うと、`PICKLE_INCOMPATIBLE` で load を拒否する（`pickle_compat.py`、`kind = "lizyml_version_mismatch"`）。たとえば lizyml 0.20 で作った Tune の retune は、lizyml 0.21 では拒否される（job の行は残る。P-0117 D1）。
+
+**`model/` の保存形式（lizyml の `format_version`）:** `model/` は lizyml が書き、形式は lizyml が持つ。lizyml 0.21 は `format_version` 5 で書き、lizyml 0.20 以前はそれを読めない（一方向）。0.21 は形式 1〜4 も読み、予測する。そのため、0.20 で作った job は 0.21 でも開け、推論・export-code・モデルの export ができる（`tests/fixtures/lizyml020/`、P-0117 D1）。ただし、0.21 でモデルを export すると形式 5 になり、0.20 以前では読めない。lizyml を上げる前に job の保存先をバックアップする。
 - `meta.json.parent_job_id`: Re-tune / Resume の child job では parent の job_id を参照する。非 child job では `null`。
+- `meta.json.warnings`: job の実行中にバックエンドが出した警告の文面の一覧（P-0117 D4）。lizyml 0.21 の H-0140 のメモリ見積もりの警告（`num_leaves` が 16384 以上か、見積もりが 1 GiB 以上）などが入る。
+  - 取り込むのは、job の thread で出た `UserWarning`（とその派生）と、`lizyml` の logger の `WARNING` 以上の記録である。thread と subprocess の両方のモードで、`_run_job_core` が取り込む（`services/_job_warnings.py`）。
+  - 取り込みの仕組みは、プロセスの開始時に 1 回だけ入れる（server の lifespan と subprocess の子）。`warnings.showwarning` の dispatcher と `lizyml` の logger の handler を入れ、`lizyml.core.resource_warning` の logger を INFO にする。どれも戻さない。job は自分の thread を登録・解除するだけで、`warnings.showwarning` には触れない。
+  - 既知の限界: 別の thread が `warnings.catch_warnings(record=True)` の中にいる間は、Python の warnings の状態がプロセス全体で共有されるため、その間に job が出した警告はその記録先に入り、job には入らない。
+  - 同じ場所の同じ警告は Python の `default` の動作で 2 回目が抑止されうるが、学習 job は 1 つの `JobStore` で同時に 1 つしか走らない（active slot）ので、別の job の警告の陰に隠れることはない。
+  - 文面だけを保存する。`warnings.warn` の file と行は保存しない。文面の中の絶対パス（POSIX、Windows のドライブと UNC、`file://` URI）は `<path>` に置き換える。置き換えは取り込みの入口で 1 回だけ行うので、`execution.log`・`meta.json`・API・WebSocket は同じ文面になる。
+  - 同じ文面は 1 回だけ保存し、最大 50 件、1 件 2000 文字までとする。上限に達したことは job のログに 1 回書く。新しい文面を保存するたびに `meta.json` を書き直す。
+  - `execution.log` には、出るたびにすべて残す。Tune の 2 つ目以降の該当 trial の記録（lizyml の `lizyml.core.resource_warning` logger の INFO、`event='tune.trial.memory_warning'`）は、ログだけに残し、警告には加えない（最初の trial の `UserWarning` が既に入っている）。ほかの INFO は取り込まない。
+  - 追加のみの項目である。この項目を持たない `meta.json` は `[]` として読む。リストでない値や文字列でない要素は、ログに書いて `[]` として読む。`format_version` は変えない。
 
 **format_version と legacy 保護（P-0103 / v3-25 / R-4.1）:** ディスク上の `meta.json` 等は `storage/versions.py` 経由で読み書きし、`STUDIO_FORMAT_VERSION`（現行 `2` — P-0099 v3-20a で `1`→`2`）の値を `format_version` キーに記録する。
 
@@ -2529,7 +2542,7 @@ Workspace の `workspace_result` は完了時に自動更新される。
 | メソッド | パス | 説明 |
 |---------|------|------|
 | GET | `/api/jobs` | ジョブ一覧（query: `status=completed`, `sort=created_at`) |
-| GET | `/api/jobs/{job_id}` | ジョブ詳細（meta + 結果サマリー） |
+| GET | `/api/jobs/{job_id}` | ジョブ詳細（meta + 結果サマリー）。`warnings: string[]` に job の警告（`meta.json.warnings`、§3.4.4）を返す。無ければ `[]`（P-0117 D4） |
 | GET | `/api/jobs/{job_id}/config` | ジョブの Config |
 | GET | `/api/jobs/{job_id}/metrics` | メトリクステーブル |
 | GET | `/api/jobs/{job_id}/split-summary` | Split サマリー |
@@ -2543,7 +2556,7 @@ Workspace の `workspace_result` は完了時に自動更新される。
 | GET | `/api/jobs/{job_id}/log` | 実行ログ取得（H-0006） |
 | POST | `/api/jobs/{job_id}/cancel` | Running / Paused ジョブのキャンセル（H-0011 / P-0099 v3-20c） |
 | POST | `/api/jobs/{job_id}/pause` | Running Tune を paused に遷移（次の trial 完了時）。Fit ジョブは `JOB_NOT_PAUSEABLE`、running 以外は `JOB_NOT_RUNNING`（P-0099 v3-20d） |
-| POST | `/api/jobs/{job_id}/unpause` | Paused Tune を同 job_id で in-place 再開（Optuna `load_if_exists=True` で trial 継続）。data 再ロード必須。paused 以外は `JOB_NOT_PAUSED`、data 未読込は `WORKSPACE_NO_DATA`（P-0099 v3-20d）。継続できない study は起動前に `PICKLE_INCOMPATIBLE` で拒否し、job は paused のまま（P-0116 D4） |
+| POST | `/api/jobs/{job_id}/unpause` | Paused Tune を同 job_id で in-place 再開（Optuna `load_if_exists=True` で trial 継続）。data 再ロード必須。paused 以外は `JOB_NOT_PAUSED`、data 未読込は `WORKSPACE_NO_DATA`（P-0099 v3-20d）。継続できない study は起動前に `PICKLE_INCOMPATIBLE` で拒否し、job は paused のまま（P-0116 D4）。別の lizyml の major.minor で一時停止した job も同じく拒否する（checkpoint sidecar `model_meta.json` の `lizyml_version` で判定、P-0117 D3） |
 | POST | `/api/jobs/{job_id}/retune` | 完了 Tune を起点に再チューニング子ジョブを作成（H-0062） |
 | POST | `/api/jobs/{job_id}/resume` | 失敗/中断 Tune の再開子ジョブを作成（H-0062 Phase B。`unpause` とは別 — こちらは lineage child を作る） |
 | GET | `/api/jobs/{job_id}/lineage` | ジョブ系譜のサブツリー（H-0062） |
@@ -2674,6 +2687,14 @@ Workspace の `workspace_result` は完了時に自動更新される。
 
 ```json
 {
+  "type": "warning",
+  "job_id": "job_042",
+  "message": "LightGBM will train with num_leaves=131072 (derived by auto_num_leaves from max_depth=-1). ..."
+}
+```
+
+```json
+{
   "type": "ping",
   "job_id": "job_042"
 }
@@ -2683,7 +2704,9 @@ Workspace の `workspace_result` は完了時に自動更新される。
 
 `paused` は Tune が user pause で中断したことを通知する（P-0099 v3-20e）。`trial_number` は最初の paused emit 時点で worker が trial に到達していなければ `null`。**terminal メッセージではない** — pause は resumable なので late-subscriber replay cache（下記 Terminal replay）には載せず、frontend は WS 接続を維持したまま `unpause` 後の live stream 継続に備える。
 
-**Schema SSOT (H-0069):** 上記 5 variant は `src/lizystudio/ws/messages.py` の Pydantic discriminated union として単一定義される。サーバ側送信は `WsMessage.model_dump_json(exclude_none=True)` を通り、フロントは生成 `schema.d.ts` から `WsMessage` 型を import する。optional フィールド (`fold_results` / `trial_results`) は値が存在するときだけ wire に現れ、`null` フィールドはシリアライズしない（既存 wire format と bit-identical）。
+`warning` は、job が新しい警告を保存したことを通知する（P-0117 D4）。`job.warnings` に加わる文面ごとに 1 回送る（同じ文面は再送しない）。subprocess モードでは、子の JSONL（`{"type": "warning", "message": ...}`）を親の `_forward_progress` が中継する。**terminal メッセージではない**。replay cache には載せないので、後から接続した subscriber は `GET /api/jobs/{job_id}` の `warnings` を読む。
+
+**Schema SSOT (H-0069):** 上記 6 variant は `src/lizystudio/ws/messages.py` の Pydantic discriminated union として単一定義される。サーバ側送信は `WsMessage.model_dump_json(exclude_none=True)` を通り、フロントは生成 `schema.d.ts` から `WsMessage` 型を import する。optional フィールド (`fold_results` / `trial_results`) は値が存在するときだけ wire に現れ、`null` フィールドはシリアライズしない（既存 wire format と bit-identical）。
 
 **Terminal replay (P-0093 / Issue #327):** `completed` / `error` メッセージは `ProgressBroadcaster._last_terminal` に per-jobId でキャッシュされ、subscribe より前に送信された場合でも late subscriber に replay される。TTL は default 5 分（環境変数 `LIZYSTUDIO_WS_TERMINAL_TTL_S` で上書き可）。これにより高速 fit (< 3 秒) の subscribe-vs-send race が解消される。INV-1: terminal メッセージは subscribe タイミングに関わらず subscriber に **少なくとも一度** 届く。INV-2: live broadcast 経路と replay 経路は subscriber の登録タイミングを境に disjoint なので、同一 subscriber への重複配信は発生しない。replay 発生は `lizystudio_progress_terminal_replayed_total` Counter で観測可能。
 
@@ -2802,7 +2825,7 @@ Workspace の `workspace_result` は完了時に自動更新される。
 |-----------|------|
 | `sections` | Fit タブの Accordion セクション定義 |
 | `option_sets` | Task 別の選択肢リスト。`objective`（`{task: [...]}`）は LizyML `LGBMProvider.objective_choices(task)` の canonical 全列挙（P-0104 Wave 3.1a）、`metric`（`{task: {native, feval}}`）は `LGBMProvider.metric_choices(task)` の `model.params.metric` 選択肢で `feval` 由来は "Custom (slow)" バッジ表示（P-0104 Wave 3.1b / Q2-Q3）、`eval_metric`（`{task: [...]}`）は LizyML eval-metrics registry の post-hoc 評価メトリクス（Tune Evaluation セクション用）。いずれも Studio 側でハードコードしない。`model_metric` は Wave 3.1b で撤廃（`metric` に統合） |
-| `parameter_bounds` | Task 別の hyper-parameter 上下限（`{task: {param: {"min": ..., "max": ...}}}`）。LizyML `LGBMProvider.parameter_bounds(task)` を SSOT として読込む（P-0104 Wave 3.1a）。キーは LizyML 正規名（`early_stopping_rounds`）。フロントエンドは `search_space_catalog` のドット記法キー（`early_stopping.rounds`）をアンダースコア記法に正規化して参照し、Tune Search Space の Range Min/Max NumberInput をこの範囲にクランプする |
+| `parameter_bounds` | Task 別の hyper-parameter 上下限（`{task: {param: {"min": ..., "max": ...}}}`）。LizyML `LGBMProvider.parameter_bounds(task)` を SSOT として読込む（P-0104 Wave 3.1a）。キーは LizyML 正規名（`early_stopping_rounds`）。フロントエンドは `search_space_catalog` のドット記法キー（`early_stopping.rounds`）をアンダースコア記法に正規化して参照し、Tune Search Space の Range Min/Max NumberInput をこの範囲にクランプする。片側だけの範囲もある（lizyml 0.21 以降の `max_depth` は `{"min": -1}` だけ。P-0117 D5）。無い側はクランプしない |
 | `parameter_hints` | Model Params セクションに常時表示するパラメータ定義 |
 | `search_space_catalog` | Tune Search Space に表示するパラメータ定義（`group` でグループ分け）。各エントリの詳細は下記参照 |
 | `step_map` | NumberInput のステップ値マップ |
@@ -2961,9 +2984,11 @@ lizystudio_active_jobs 0.0
 | `FILE_INVALID` | ファイルの読み込み失敗 | 400 |
 | `PATH_NOT_FOUND` | 指定されたローカルパスが存在しない | 400 |
 | `BACKEND_ERROR` | バックエンドライブラリの内部エラー | 500 |
+| `BACKEND_INPUT_REJECTED` | バックエンドが利用者のデータを拒否した（P-0117 D2）。例: export-code が書けない列名、保存できないカテゴリ値。`details` は `backend_code`（lizyml の code）、`reason`、`recovery_hint`、`context`（許可した key だけ） | 400 |
+| `MODEL_ARTIFACT_INVALID` | 保存されたモデルをバックエンドが読めない（P-0117 D2）。例: 未知の `category_identity_version`、壊れた `identity_columns`。`details` は `BACKEND_INPUT_REJECTED` と同じ形。message は固定の文言で、ローカルのパスを含まない | 409 |
 | `INTERNAL_ERROR` | 予期しないエラー | 500 |
 | `PICKLE_PREFLIGHT_FAILED` | Tune 開始前の pickle 事前検証失敗（書き込み権限/picklable 検査）(H-0062) | 400 |
-| `PICKLE_INCOMPATIBLE` | 保存された checkpoint のバージョンが現行 runtime と非互換 (H-0062)。unpause では、継続できない study（lizyml 0.15 が書いた study など）を job の起動前に拒否する（`details.kind = "study_not_resumable"`、P-0116 D4） | 400 |
+| `PICKLE_INCOMPATIBLE` | 保存された checkpoint のバージョンが現行 runtime と非互換 (H-0062)。unpause では、継続できない study（lizyml 0.15 が書いた study など）を job の起動前に拒否する（`details.kind = "study_not_resumable"`、P-0116 D4）。study を書いた lizyml（checkpoint sidecar の `lizyml_version`）が今の lizyml と major.minor で違う job も起動前に拒否する（`details.kind = "lizyml_version_mismatch"`。sidecar が無い・読めないときは `missing_meta` / `corrupt_meta`。P-0117 D3） | 400 |
 | `REFIT_REQUIRED` | 旧い backend の版で作ったモデルで、その操作に必要なものが無い。再 Fit が必要（P-0116 D4）。`details.kind` は `shap_per_fold_state_missing`（SHAP の重要度と plot）または `export_param_names`（Tune した job の export-code、`details.names` に該当する名前） | 400 |
 | `PARENT_LOCKED` | 同一 parent への Re-tune/Resume が既に実行中 (H-0062) | 409 |
 | `PARENT_HAS_ACTIVE_CHILDREN` | DELETE 対象 parent に active children がある（cascade=true 必須）(H-0062) | 409 |
@@ -2977,7 +3002,22 @@ lizystudio_active_jobs 0.0
 
 ### 6.2 バックエンドエラーの伝播
 
-バックエンドライブラリのエラー（例: LizyML の `LizyMLError`）は `BACKEND_ERROR` として返す。`details` に元のエラー情報を含める。
+バックエンドライブラリのエラー（例: LizyML の `LizyMLError`）は、adapter の 1 つの分類表（`backends/lizyml/error_mapping.py` の `RULES`）で 3 つに分ける（P-0117 D2）。表は code と `context` の形の両方で判定し、最初に合った行を使う。
+
+| 区分 | 条件（lizyml の code と `context`） | Studio の例外 | API | job |
+|---|---|---|---|---|
+| 入力の誤り | `SERIALIZATION_FAILED` で `surface == "export_code"`（列名）、`column` を持つ（保存できないカテゴリ値）、または `type` と `reason`/`where` を持つ（値）。`DATA_SCHEMA_INVALID` で `column` を持つ | `BackendInputError` | 400 `BACKEND_INPUT_REJECTED` | error code `BACKEND_INPUT_REJECTED` |
+| 成果物の破損 | `DESERIALIZATION_FAILED` で、lizyml 0.21.1 の実際の raise 箇所の形に合うもの: `category_identity_version` を持つ（未知の identity version）、`identity_columns` を持つ（壊れた identity_columns）、`file`・`expected`・`actual` をすべて持つ（pickle の SHA-256 が記録と違う。`persistence/loader.py` `_verify_and_read_pkl`）、`format_version`・`supported` をすべて持つ（読めない format_version。`persistence/loader.py` `load`） | `BackendArtifactError` | 409 `MODEL_ARTIFACT_INVALID` | error code `MODEL_ARTIFACT_INVALID` |
+| それ以外 | 上のどれにも合わないもの。未知の code、未知の `context` の形、`context` が `path` だけのもの（無いディレクトリ）や `file` だけのもの（pickle を読む I/O の失敗）、`MODEL_NOT_FIT`、`CONFIG_INVALID` を含む | 元の例外のまま | 500 `BACKEND_ERROR`（`details.type` だけ） | 今までどおり |
+
+- 入力の誤りの規則は、`context` に `path` があれば使わない（lizyml の message をそのまま渡すため）。
+- 入力の誤りの `reason` は、lizyml の `context["reason"]` が token（`[a-z][a-z0-9_]*`）ならそれを使い、そうでなければ行の既定の reason を使う。分類しなかったエラーも、adapter が code と reason を WARNING で log に残す。
+- 入力の誤りの `context` は、許可した key（列名、値、その型など）だけを渡す。値は利用者が読み込ませたデータそのものなので、同じ利用者に返してよい。文字列は 200 文字までにする。`path` と `exception` は渡さない。
+- 成果物の破損の `context` は、行ごとに安全と分かる値だけを渡す（区切りを含まない file 名、int の `format_version`・`supported`）。lizyml が保存値を `repr()` した文字列（identity の marker など。壊れた marker はパスを含みうる）は渡さない。reason は行の既定の reason に固定する。message は固定の文言で、lizyml の message（成果物の絶対パスを含みうる）を渡さない。
+- NaN と無限大の float は文字列にする。そのため、エラーの本文は常に正しい JSON になる。
+- 表を使うのは adapter の `fit`、`tune`、`export_model`、`export_code`、`load_model`、`predict` である。`create_model` などそれ以外の method が投げる拒否は、`BACKEND_ERROR` のまま。
+- P-0116 の狭い翻訳（`REFIT_REQUIRED`、`TUNING_FAILED`、`SEARCH_SPACE_REFUSED`、`PICKLE_INCOMPATIBLE`）は、この表より内側で先に効く。
+- 分類したエラーで失敗した job の `error` は、code、lizyml の code と reason、message、対処を 1 行で持ち、traceback を含まない。traceback は job の `execution.log` に書く（thread と subprocess の両方のモード）。分類しないエラーの `error` は今までどおり traceback を含む。
 
 ### 6.3 フロントエンドのエラー表示
 

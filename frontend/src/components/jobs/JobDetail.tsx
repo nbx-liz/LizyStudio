@@ -40,6 +40,7 @@ import { CompletedContent } from "./CompletedContent";
 import { ConfigTreeView } from "./ConfigTreeView";
 import { DeleteDialog } from "./DeleteDialog";
 import { ExportDialog } from "./ExportDialog";
+import { JobWarnings, mergeJobWarnings } from "./JobWarnings";
 import { PauseActionButton } from "./PauseActionButton";
 import { UnpauseActionButton } from "./UnpauseActionButton";
 
@@ -80,7 +81,7 @@ export function JobDetailPanel({
     toast.error(message);
   }, []);
 
-  const { job, progress, cancel } = useJobLifecycle({
+  const { job, progress, liveWarnings, cancel } = useJobLifecycle({
     jobId,
     onTerminal,
     onWsError,
@@ -169,6 +170,15 @@ export function JobDetailPanel({
           modelName={modelName}
           status={job.status}
           job={job}
+        />
+
+        {/* P-0117 D4: backend warnings for every status. Fetched
+         (job.warnings) merged with live WebSocket messages; keyed on
+         the job id so the collapse state resets per job. */}
+        <JobWarnings
+          key={jobId}
+          warnings={mergeJobWarnings(job.warnings ?? [], liveWarnings)}
+          status={job.status}
         />
 
         {/* Running state */}

@@ -41,6 +41,7 @@ def test_ws_messages_module_exports_union() -> None:
         "WsError",
         "WsPing",
         "WsPaused",
+        "WsWarning",
         "WsMessage",
     ):
         assert hasattr(mod, name), (

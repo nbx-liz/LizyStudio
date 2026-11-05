@@ -14,6 +14,7 @@ from lizystudio.backends.exceptions import SearchSpaceRefusedError, TuningFailed
 from lizystudio.backends.types import FitSummary, TuningSummary
 
 from .config_compat import parse_re_tune, strip_internal_keys
+from .error_mapping import maps_lizyml_refusals
 from .serialization import serialize_tuning_result
 from .space_wire import catalog_key_for_wire_name, to_wire_config
 
@@ -161,6 +162,7 @@ class LifecycleMixin:
         clean = to_wire_config(strip_internal_keys(config))
         return Model(clean, data=dataframe)
 
+    @maps_lizyml_refusals
     def fit(
         self,
         model: Any,
@@ -175,6 +177,7 @@ class LifecycleMixin:
             on_progress(current=1, total=1, message="Fit complete.")
         return self._convert_fit_result(model, fit_result)
 
+    @maps_lizyml_refusals
     def tune(
         self,
         model: Any,
