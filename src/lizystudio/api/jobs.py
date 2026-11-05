@@ -346,7 +346,9 @@ def unpause_job(
     is done. A study it cannot continue (one lizyml 0.15 wrote, an
     unreadable or an inconsistent one) is refused with 400
     ``PICKLE_INCOMPATIBLE`` before the relaunch, and the job stays
-    paused (P-0116 D4). Slot
+    paused (P-0116 D4). So is a study another lizyml major.minor wrote,
+    read from the job's checkpoint sidecar (P-0117 D3,
+    ``details.kind == "lizyml_version_mismatch"``). Slot
     ownership stays with the original job_id from paused into running
     (paused→running is a legal INV-3 transition), so the active-slot
     lock is never released across the round-trip.
@@ -374,8 +376,9 @@ def unpause_job(
     from lizystudio.api.workspace import require_relaunchable_config
 
     require_relaunchable_config(ws, job.config)
-    # P-0116 D4: a study the adapter cannot continue (e.g. one lizyml 0.15
-    # wrote) is refused here, with the job still paused, not by failing it.
+    # P-0116 D4 / P-0117 D3: a study the adapter cannot continue (e.g. one
+    # lizyml 0.15 wrote, or one another lizyml minor wrote) is refused here,
+    # with the job still paused, not by failing it.
     try:
         verify_unpause_study(backend=ws.backend, job_store=job_store, job=job)
     except CheckpointIncompatibleError as exc:

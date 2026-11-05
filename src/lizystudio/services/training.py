@@ -263,7 +263,11 @@ def verify_unpause_study(
     """Refuse an unpause whose stored study cannot be continued (P-0116 D4).
 
     Runs before ``POST /jobs/{id}/unpause`` relaunches the job, through the
-    adapter's :meth:`verify_study_continuable`.  A job that never wrote its
+    adapter's :meth:`verify_study_continuable`, which also refuses a study
+    another backend version wrote (P-0117 D3).  The adapter finds the
+    checkpoint sidecar beside the SQLite file the storage URL names, the
+    job directory :func:`run_tune` passes as its ``checkpoint_dir``.  A job
+    that never wrote its
     ``optuna.db`` has no study to judge, and the read would create the file,
     so it is skipped; the worker then starts the study as before.
 

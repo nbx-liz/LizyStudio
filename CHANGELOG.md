@@ -24,6 +24,16 @@ at 2: saved configs and jobs keep their shape.
 - **Re-tune of a Tune made under lizyml 0.20 is refused** with 400
   `PICKLE_INCOMPATIBLE`: its checkpoint was saved by another lizyml minor.
   The Tune itself stays; start a new Tune to tune again.
+- **Unpause of a Tune paused under lizyml 0.20 is refused** with 400
+  `PICKLE_INCOMPATIBLE` (`details.kind` `lizyml_version_mismatch`) before the
+  job starts (P-0117 D3). The job stays paused and its study is not touched;
+  start a new Tune. lizyml 0.21 would continue such a study with only a log
+  warning, mixing trials scored under 0.20's and 0.21's rules (for example the
+  new meaning of `max_depth=0`). The version is read from the job's checkpoint
+  file `model_meta.json`, on major.minor, the rule Re-tune already applies. A
+  paused Tune whose `model_meta.json` is missing or unreadable is refused the
+  same way (`missing_meta` / `corrupt_meta`). Unpause of a Tune paused under
+  the installed lizyml minor works as before.
 - **Generated export-code projects keep their bundled behaviour.** A project
   exported before the upgrade runs its own bundled code and does not change.
   A project exported now carries `column_name_policy: "str_alias_v1"` and

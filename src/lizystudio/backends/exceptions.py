@@ -61,8 +61,11 @@ class CheckpointIncompatibleError(Exception):
     ``suggested_fix`` propagate the backend's classification through to
     the HTTP envelope. ``kind`` should be one of:
     ``"schema_mismatch"`` / ``"lizyml_version_mismatch"`` /
-    ``"corrupt_meta"`` / ``"unknown"`` (the last is the safe fallback
-    for legacy call sites and future second-backend extensions).
+    ``"corrupt_meta"`` / ``"missing_meta"`` (an unpause found no
+    sidecar for its study, P-0117 D3) / ``"study_not_resumable"``
+    (:class:`StudyNotResumableError`, P-0116 D3) / ``"unknown"`` (the
+    last is the safe fallback for legacy call sites and future
+    second-backend extensions).
     """
 
     def __init__(

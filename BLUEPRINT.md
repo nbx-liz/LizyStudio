@@ -230,8 +230,10 @@ class BackendCore(Protocol):
     def load_checkpoint(self, path: Any, *, allowed_root: Any | None = None) -> Any: ...
     def verify_checkpoint_compatibility(self, job_dir: Any) -> None: ...  # H-0068
         # pickle / sidecar 互換性を確認できないときは backends.exceptions.CheckpointIncompatibleError を raise
-    def verify_study_continuable(self, storage: str, study_name: str) -> None: ...  # P-0116 D4
+    def verify_study_continuable(self, storage: str, study_name: str) -> None: ...  # P-0116 D4, P-0117 D3
         # unpause の起動前に、tune(resume=True) が拒否する study を CheckpointIncompatibleError で拒否する
+        # lizyml adapter は、SQLite の study の隣の checkpoint sidecar（model_meta.json の lizyml_version）が
+        # 今の lizyml と major.minor で違う study も拒否する（P-0117 D3 (A-2)）
     def preflight_checkpoint_dir(self, job_dir: Any) -> None: ...  # H-0062
         # tune 開始前に書き込み権限と picklable 性を検証。問題があれば PICKLE_PREFLIGHT_FAILED を raise
 
@@ -2545,7 +2547,7 @@ Workspace の `workspace_result` は完了時に自動更新される。
 | GET | `/api/jobs/{job_id}/log` | 実行ログ取得（H-0006） |
 | POST | `/api/jobs/{job_id}/cancel` | Running / Paused ジョブのキャンセル（H-0011 / P-0099 v3-20c） |
 | POST | `/api/jobs/{job_id}/pause` | Running Tune を paused に遷移（次の trial 完了時）。Fit ジョブは `JOB_NOT_PAUSEABLE`、running 以外は `JOB_NOT_RUNNING`（P-0099 v3-20d） |
-| POST | `/api/jobs/{job_id}/unpause` | Paused Tune を同 job_id で in-place 再開（Optuna `load_if_exists=True` で trial 継続）。data 再ロード必須。paused 以外は `JOB_NOT_PAUSED`、data 未読込は `WORKSPACE_NO_DATA`（P-0099 v3-20d）。継続できない study は起動前に `PICKLE_INCOMPATIBLE` で拒否し、job は paused のまま（P-0116 D4） |
+| POST | `/api/jobs/{job_id}/unpause` | Paused Tune を同 job_id で in-place 再開（Optuna `load_if_exists=True` で trial 継続）。data 再ロード必須。paused 以外は `JOB_NOT_PAUSED`、data 未読込は `WORKSPACE_NO_DATA`（P-0099 v3-20d）。継続できない study は起動前に `PICKLE_INCOMPATIBLE` で拒否し、job は paused のまま（P-0116 D4）。別の lizyml の major.minor で一時停止した job も同じく拒否する（checkpoint sidecar `model_meta.json` の `lizyml_version` で判定、P-0117 D3） |
 | POST | `/api/jobs/{job_id}/retune` | 完了 Tune を起点に再チューニング子ジョブを作成（H-0062） |
 | POST | `/api/jobs/{job_id}/resume` | 失敗/中断 Tune の再開子ジョブを作成（H-0062 Phase B。`unpause` とは別 — こちらは lineage child を作る） |
 | GET | `/api/jobs/{job_id}/lineage` | ジョブ系譜のサブツリー（H-0062） |
@@ -2967,7 +2969,7 @@ lizystudio_active_jobs 0.0
 | `MODEL_ARTIFACT_INVALID` | 保存されたモデルをバックエンドが読めない（P-0117 D2）。例: 未知の `category_identity_version`、壊れた `identity_columns`。`details` は `BACKEND_INPUT_REJECTED` と同じ形。message は固定の文言で、ローカルのパスを含まない | 409 |
 | `INTERNAL_ERROR` | 予期しないエラー | 500 |
 | `PICKLE_PREFLIGHT_FAILED` | Tune 開始前の pickle 事前検証失敗（書き込み権限/picklable 検査）(H-0062) | 400 |
-| `PICKLE_INCOMPATIBLE` | 保存された checkpoint のバージョンが現行 runtime と非互換 (H-0062)。unpause では、継続できない study（lizyml 0.15 が書いた study など）を job の起動前に拒否する（`details.kind = "study_not_resumable"`、P-0116 D4） | 400 |
+| `PICKLE_INCOMPATIBLE` | 保存された checkpoint のバージョンが現行 runtime と非互換 (H-0062)。unpause では、継続できない study（lizyml 0.15 が書いた study など）を job の起動前に拒否する（`details.kind = "study_not_resumable"`、P-0116 D4）。study を書いた lizyml（checkpoint sidecar の `lizyml_version`）が今の lizyml と major.minor で違う job も起動前に拒否する（`details.kind = "lizyml_version_mismatch"`。sidecar が無い・読めないときは `missing_meta` / `corrupt_meta`。P-0117 D3） | 400 |
 | `REFIT_REQUIRED` | 旧い backend の版で作ったモデルで、その操作に必要なものが無い。再 Fit が必要（P-0116 D4）。`details.kind` は `shap_per_fold_state_missing`（SHAP の重要度と plot）または `export_param_names`（Tune した job の export-code、`details.names` に該当する名前） | 400 |
 | `PARENT_LOCKED` | 同一 parent への Re-tune/Resume が既に実行中 (H-0062) | 409 |
 | `PARENT_HAS_ACTIVE_CHILDREN` | DELETE 対象 parent に active children がある（cascade=true 必須）(H-0062) | 409 |
