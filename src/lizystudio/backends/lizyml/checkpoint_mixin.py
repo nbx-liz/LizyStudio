@@ -51,18 +51,30 @@ class CheckpointMixin:
             raise CheckpointPreflightError(str(exc)) from exc
 
     def verify_study_continuable(self, storage: str, study_name: str) -> None:
-        """Refuse a stored study an unpause cannot continue (P-0116 D4).
+        """Refuse a stored study an unpause cannot continue (P-0116 D4, P-0117 D3).
 
-        Reads the study's lizyml lineage and applies the refusal rule
-        ``tune(resume=True)`` applies when the job runs, so the unpause
-        route refuses before relaunching: ``legacy`` (written before lizyml
-        0.19, e.g. by 0.15), ``unreadable`` and ``inconsistent`` studies
-        raise :class:`StudyNotResumableError`.
+        Two checks, in this order, so the unpause route refuses before
+        relaunching:
+
+        1. The study's lizyml lineage, with the refusal rule
+           ``tune(resume=True)`` applies when the job runs: ``legacy``
+           (written before lizyml 0.19, e.g. by 0.15), ``unreadable`` and
+           ``inconsistent`` studies raise :class:`StudyNotResumableError`.
+        2. The lizyml version (P-0117 D3, A-2): the checkpoint sidecar beside
+           the SQLite study must name the installed lizyml's major.minor,
+           else :class:`CheckpointIncompatibleError`
+           (``lizyml_version_mismatch``; ``missing_meta`` / ``corrupt_meta``
+           when the sidecar is absent or unreadable).  A storage that is not
+           a SQLite file is refused before the lineage is read, since no
+           sidecar can be located for it.
         """
         # Imported here so importing the adapter does not import lizyml.
         from .study_continuation import verify_continuable
+        from .unpause_version import sidecar_path, verify_same_lizyml_minor
 
+        sidecar_path(storage)  # refuses a storage no sidecar sits beside
         verify_continuable(storage, study_name)
+        verify_same_lizyml_minor(storage)
 
     def verify_checkpoint_compatibility(self, job_dir: Path) -> None:
         """Validate ``job_dir/model_meta.json`` against the current runtime (H-0068).

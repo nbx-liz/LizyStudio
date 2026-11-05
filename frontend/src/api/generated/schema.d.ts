@@ -644,7 +644,9 @@ export interface paths {
          *     is done. A study it cannot continue (one lizyml 0.15 wrote, an
          *     unreadable or an inconsistent one) is refused with 400
          *     ``PICKLE_INCOMPATIBLE`` before the relaunch, and the job stays
-         *     paused (P-0116 D4). Slot
+         *     paused (P-0116 D4). So is a study another lizyml major.minor wrote,
+         *     read from the job's checkpoint sidecar (P-0117 D3,
+         *     ``details.kind == "lizyml_version_mismatch"``). Slot
          *     ownership stays with the original job_id from paused into running
          *     (paused→running is a legal INV-3 transition), so the active-slot
          *     lock is never released across the round-trip.

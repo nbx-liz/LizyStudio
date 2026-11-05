@@ -8,8 +8,10 @@ Fit, a completed Tune and a paused Tune.  Under the installed lizyml 0.21:
   SHAP importance, predict with SHAP, export code and export the model;
 * retune of the completed Tune is refused with 400 ``PICKLE_INCOMPATIBLE``
   before any child job is made, and the parent row stays;
-* the paused Tune's detail, log and lineage are readable.  Its unpause is
-  P-0117 D3 and is tested with that change.
+* the paused Tune's detail, log and lineage are readable, and its unpause is
+  refused with 400 ``PICKLE_INCOMPATIBLE`` before the job starts, because
+  its study was written by another lizyml minor (D3): the job stays paused
+  and no trial is added.
 """
 
 from __future__ import annotations
@@ -20,6 +22,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import optuna
+import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
@@ -259,3 +263,50 @@ def test_detail_log_and_lineage_of_a_020_paused_tune_are_readable(
     lineage = legacy_client.get(f"/api/jobs/{PAUSED_JOB}/lineage")
     assert lineage.status_code == 200, lineage.text
     assert lineage.json()["tree"]["job_id"] == PAUSED_JOB
+
+
+def _trial_count(job_dir: Path, job_id: str) -> int:
+    study = optuna.load_study(
+        storage=f"sqlite:///{(job_dir / 'optuna.db').resolve()}",
+        study_name=f"studio-tune-{job_id}",
+    )
+    return len(study.trials)
+
+
+def test_unpause_of_a_020_paused_tune_is_refused_before_the_job_starts(
+    legacy_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app: Any = legacy_client.app
+    job_store: JobStore = app.state.job_store
+    job_dir = job_store.job_dir(PAUSED_JOB)
+    trials_before = _trial_count(job_dir, PAUSED_JOB)
+    assert trials_before == 30
+    sidecar_before = (job_dir / "model_meta.json").read_bytes()
+    job = job_store.get(PAUSED_JOB)
+    assert job is not None and job.status == "paused"
+    assert job_store.is_pause_requested(PAUSED_JOB) is True
+    app.state.workspace.set_data(pd.read_csv(LEGACY_DATA), job.data_ref)
+
+    launched: list[object] = []
+    from lizystudio.api import jobs as jobs_api
+
+    monkeypatch.setattr(jobs_api, "start_tune_async", lambda **kw: launched.append(kw))
+
+    res = legacy_client.post(f"/api/jobs/{PAUSED_JOB}/unpause")
+
+    assert res.status_code == 400, res.text
+    error = _error(res)
+    assert error["code"] == "PICKLE_INCOMPATIBLE"
+    assert error["details"]["kind"] == "lizyml_version_mismatch"
+    assert error["details"]["recovery_hint"] == "Start a new Tune"
+    assert "0.20.0" in error["message"]
+    assert "Start a new Tune" in error["message"]
+    # Refused before the start: no worker, the PAUSE flag and the status
+    # kept, the study and the sidecar untouched.
+    assert launched == []
+    assert job_store.is_pause_requested(PAUSED_JOB) is True
+    reloaded = job_store.get(PAUSED_JOB)
+    assert reloaded is not None and reloaded.status == "paused"
+    assert json.loads((job_dir / "meta.json").read_text())["status"] == "paused"
+    assert _trial_count(job_dir, PAUSED_JOB) == trials_before
+    assert (job_dir / "model_meta.json").read_bytes() == sidecar_before
