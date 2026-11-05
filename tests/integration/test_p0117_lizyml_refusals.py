@@ -365,7 +365,7 @@ def test_inference_on_a_corrupted_identity_model_is_an_artifact_refusal(
     details = error["details"]
     assert details["backend_code"] == "DESERIALIZATION_FAILED"
     assert details["reason"] == reason
-    assert context_key in details["context"]
+    assert details["context"] == {}
     assert "path" not in details["context"]
     assert details["recovery_hint"].endswith("run a new Fit")
     assert reason in error["message"]
@@ -376,7 +376,7 @@ def test_inference_on_a_tampered_model_is_an_artifact_refusal(
     tmp_path: Path, jobs_dir: Path, client: TestClient
 ) -> None:
     # A pickle rewritten without re-signing the manifest: lizyml refuses it
-    # at its integrity check, naming the file (the artifact_unreadable row).
+    # at its integrity check, naming the file (the checksum_mismatch row).
     frame = _frame({"c": _codes().astype(str)})
     done = _fit(
         JobStore(jobs_dir), _config(["c"]), _write(frame, tmp_path / "t.parquet")
@@ -405,6 +405,114 @@ def test_inference_on_a_tampered_model_is_an_artifact_refusal(
     error = res.json()["error"]
     assert error["code"] == ARTIFACT_CODE
     assert error["details"]["backend_code"] == "DESERIALIZATION_FAILED"
-    assert error["details"]["reason"] == "artifact_unreadable"
+    assert error["details"]["reason"] == "checksum_mismatch"
     assert error["details"]["context"] == {"file": "refit_model.pkl"}
+    _assert_no_local_path(res.text, tmp_path)
+
+
+# --- round 1 of the head review (PR #750) -----------------------------------
+
+
+def _fitted_with_category(tmp_path: Path, jobs_dir: Path) -> tuple[Job, Path]:
+    frame = _frame({"c": _codes().astype(str)})
+    done = _fit(
+        JobStore(jobs_dir), _config(["c"]), _write(frame, tmp_path / "t.parquet")
+    )
+    assert done.status == "completed", done.error
+    assert done.model_path is not None
+    infer = _write(frame.drop(columns=["target"]), tmp_path / "infer.parquet")
+    return done, infer
+
+
+def _infer(client: TestClient, job_id: str, data: Path) -> Any:
+    return client.post(
+        "/api/inference/run",
+        json={
+            "job_id": job_id,
+            "data": {"source_type": "path", "path": str(data)},
+            "return_shap": False,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "reason"),
+    [
+        ("category_identity_version", "unknown_category_identity_version"),
+        ("identity_columns", "malformed_identity_columns"),
+    ],
+    ids=["version-holds-a-path", "columns-hold-a-Path"],
+)
+def test_a_corrupted_identity_marker_holding_a_path_does_not_leak(
+    tmp_path: Path, jobs_dir: Path, client: TestClient, field: str, reason: str
+) -> None:
+    done, infer = _fitted_with_category(tmp_path, jobs_dir)
+    secret = tmp_path / "secret-dir" / "secret.txt"
+    value: Any = str(secret) if field == "category_identity_version" else [secret]
+    assert done.model_path is not None
+    _corrupt(Path(done.model_path), field, value)
+    # lizyml puts repr() of the marker, the path included, in its context.
+    with pytest.raises(LizyMLError) as caught:
+        Model.load(done.model_path)
+    assert str(secret) in caught.value.context[field]
+
+    res = _infer(client, done.job_id, infer)
+
+    assert res.status_code == 409, res.text
+    error = res.json()["error"]
+    assert error["code"] == ARTIFACT_CODE
+    assert error["details"]["reason"] == reason
+    assert error["details"]["context"] == {}
+    _assert_no_local_path(res.text, tmp_path)
+    assert "secret" not in res.text
+
+
+def test_a_pickle_that_cannot_be_read_stays_a_backend_error(
+    tmp_path: Path, jobs_dir: Path, client: TestClient
+) -> None:
+    # persistence/loader.py _verify_and_read_pkl: an OSError reading the
+    # pickle raises DESERIALIZATION_FAILED with only {"file"}.  That is an
+    # I/O failure, not a damaged model, so it is not classified.
+    done, infer = _fitted_with_category(tmp_path, jobs_dir)
+    assert done.model_path is not None
+    pickle_path = Path(done.model_path) / "refit_model.pkl"
+    pickle_path.chmod(0)
+    try:
+        with pytest.raises(LizyMLError) as caught:
+            Model.load(done.model_path)
+        assert caught.value.code.value == "DESERIALIZATION_FAILED"
+        assert caught.value.context == {"file": "refit_model.pkl"}
+
+        res = _infer(client, done.job_id, infer)
+    finally:
+        pickle_path.chmod(0o600)
+
+    assert res.status_code == 500, res.text
+    error = res.json()["error"]
+    assert error["code"] == "BACKEND_ERROR"
+    assert error["details"] == {"type": "LizyMLError"}
+    _assert_no_local_path(res.text, tmp_path)
+
+
+def test_a_non_finite_format_version_gives_a_valid_coded_envelope(
+    tmp_path: Path, jobs_dir: Path, client: TestClient
+) -> None:
+    done, infer = _fitted_with_category(tmp_path, jobs_dir)
+    assert done.model_path is not None
+    meta_path = Path(done.model_path) / "metadata.json"
+    meta = json.loads(meta_path.read_text())
+    assert meta["format_version"] == 5
+    text = json.dumps(meta).replace('"format_version": 5', '"format_version": 1e400', 1)
+    meta_path.write_text(text)
+    with pytest.raises(LizyMLError) as caught:
+        Model.load(done.model_path)
+    assert caught.value.context["format_version"] == float("inf")
+
+    res = _infer(client, done.job_id, infer)
+
+    assert res.status_code == 409, res.text
+    error = json.loads(res.text)["error"]
+    assert error["code"] == ARTIFACT_CODE
+    assert error["details"]["reason"] == "unsupported_format_version"
+    assert error["details"]["context"] == {"supported": [1, 2, 3, 4, 5]}
     _assert_no_local_path(res.text, tmp_path)

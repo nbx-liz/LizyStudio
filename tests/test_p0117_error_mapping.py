@@ -11,6 +11,7 @@ amendment) are covered here only; the reachable ones run end to end in
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any
@@ -25,7 +26,7 @@ from lizyml.core.category_values import (
     encode,
     identity_fields,
 )
-from lizyml.core.exceptions import LizyMLError
+from lizyml.core.exceptions import ErrorCode, LizyMLError
 from lizyml.estimators.lgbm.adapter import categorical_positions
 
 from lizystudio.api.errors import backend_error_from
@@ -262,7 +263,7 @@ def test_artifact_refusals_become_409_with_fixed_text() -> None:
     assert envelope.code == "MODEL_ARTIFACT_INVALID"
     assert envelope.details["backend_code"] == "DESERIALIZATION_FAILED"
     assert envelope.details["reason"] == "unknown_category_identity_version"
-    assert envelope.details["context"] == {"category_identity_version": "7"}
+    assert envelope.details["context"] == {}
     assert "/home/someone" not in envelope.message
     assert "/home/someone" not in repr(envelope.details)
 
@@ -279,3 +280,98 @@ def test_every_rule_names_a_class_reason_and_remedy(rule: Any) -> None:
     assert rule.error_class in {"input", "artifact"}
     assert rule.reason
     assert rule.remedy
+
+
+# --- round 1 of the head review (PR #750) -----------------------------------
+
+
+@pytest.mark.parametrize(
+    "context",
+    [
+        # A shape no lizyml 0.21.1 raise site produces.
+        {"something_new": 1},
+        # A reason lizyml may add for a load failure.
+        {"reason": "brand_new_reason", "file": "fit_result.pkl"},
+        # persistence/loader.py _verify_and_read_pkl on OSError: an I/O
+        # failure, not a damaged artifact (the real raise is run end to end
+        # in the integration suite).
+        {"file": "refit_model.pkl"},
+        # Only part of the checksum shape.
+        {"file": "refit_model.pkl", "expected": "0" * 64},
+        # Only part of the format shape.
+        {"format_version": 9},
+    ],
+    ids=["unknown", "new-reason", "io-file-only", "partial-digest", "partial-format"],
+)
+def test_an_unknown_load_failure_shape_stays_generic(context: dict[str, Any]) -> None:
+    # Hand-built: the point is a shape lizyml does not raise today.
+    exc = LizyMLError(ErrorCode.DESERIALIZATION_FAILED, "m", context=context)
+
+    found = classify(exc)
+
+    assert found.error_class == "unclassified"
+    assert found.context == {}
+    assert translated(exc) is None
+
+
+def test_a_non_finite_value_in_an_input_context_is_json_safe() -> None:
+    # A real raise whose context carries a float infinity.
+    exc = _raised(lambda: categorical_positions(["a"], [float("inf")]))
+    assert exc.context["column"] == float("inf")
+
+    found = classify(exc)
+
+    assert found.error_class == "input"
+    assert found.context["column"] == "inf"
+    json.dumps(found.context, allow_nan=False)
+
+
+def test_a_non_finite_format_version_is_dropped_from_the_artifact_context() -> None:
+    exc = LizyMLError(
+        ErrorCode.DESERIALIZATION_FAILED,
+        "m",
+        context={"format_version": float("inf"), "supported": [1, 2, 3, 4, 5]},
+    )
+
+    found = classify(exc)
+
+    assert found.error_class == "artifact"
+    assert found.reason == "unsupported_format_version"
+    assert found.context == {"supported": [1, 2, 3, 4, 5]}
+
+
+@pytest.mark.parametrize(
+    "file", ["/home/someone/refit_model.pkl", "../refit_model.pkl", "a b.pkl"]
+)
+def test_a_checksum_refusal_shows_only_a_bare_file_name(file: str) -> None:
+    exc = LizyMLError(
+        ErrorCode.DESERIALIZATION_FAILED,
+        "m",
+        context={"file": file, "expected": "0" * 64, "actual": "1" * 64},
+    )
+
+    found = classify(exc)
+
+    assert found.error_class == "artifact"
+    assert found.reason == "checksum_mismatch"
+    assert found.context == {}
+
+
+def test_an_identity_marker_holding_a_path_is_not_echoed() -> None:
+    exc = _raised(
+        lambda: identity_fields(
+            {
+                "category_identity_version": "/home/someone/secret",
+                "identity_columns": [],
+                "categories": {},
+            }
+        )
+    )
+    assert "/home/someone" in exc.context["category_identity_version"]
+
+    envelope = backend_error_from(translated(exc) or exc)
+
+    assert envelope.status_code == 409
+    assert envelope.details["context"] == {}
+    assert "/home/someone" not in envelope.message
+    assert "/home/someone" not in json.dumps(envelope.details)

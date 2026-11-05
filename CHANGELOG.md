@@ -64,8 +64,10 @@ at 2: saved configs and jobs keep their shape.
     column holds values a saved model cannot hold (`Period`, `Interval`,
     `time`).
   - **409 `MODEL_ARTIFACT_INVALID`** when lizyml cannot read a saved model.
-    Examples: an unknown `category_identity_version`, or a corrupted
-    `identity_columns`.
+    The cases: an unknown `category_identity_version`, a corrupted
+    `identity_columns`, a pickle whose checksum differs from the one
+    recorded, or a `format_version` lizyml does not read. An I/O failure
+    reading the model stays 500 `BACKEND_ERROR`.
 
   `details` carries lizyml's code (`backend_code`), the `reason`, a
   `recovery_hint` and an allowlisted `context`; no local path is passed on.

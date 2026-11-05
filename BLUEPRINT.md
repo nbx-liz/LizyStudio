@@ -2986,12 +2986,14 @@ lizystudio_active_jobs 0.0
 | 区分 | 条件（lizyml の code と `context`） | Studio の例外 | API | job |
 |---|---|---|---|---|
 | 入力の誤り | `SERIALIZATION_FAILED` で `surface == "export_code"`（列名）、`column` を持つ（保存できないカテゴリ値）、または `type` と `reason`/`where` を持つ（値）。`DATA_SCHEMA_INVALID` で `column` を持つ | `BackendInputError` | 400 `BACKEND_INPUT_REJECTED` | error code `BACKEND_INPUT_REJECTED` |
-| 成果物の破損 | `DESERIALIZATION_FAILED` で、`path` 以外の key を持つ（`category_identity_version`、`identity_columns` など） | `BackendArtifactError` | 409 `MODEL_ARTIFACT_INVALID` | error code `MODEL_ARTIFACT_INVALID` |
-| それ以外 | 上のどれにも合わないもの。未知の code、`context` が `path` だけのもの（I/O の失敗、無いディレクトリ）、`MODEL_NOT_FIT`、`CONFIG_INVALID` を含む | 元の例外のまま | 500 `BACKEND_ERROR`（`details.type` だけ） | 今までどおり |
+| 成果物の破損 | `DESERIALIZATION_FAILED` で、lizyml 0.21.1 の実際の raise 箇所の形に合うもの: `category_identity_version` を持つ（未知の identity version）、`identity_columns` を持つ（壊れた identity_columns）、`file`・`expected`・`actual` をすべて持つ（pickle の SHA-256 が記録と違う。`persistence/loader.py` `_verify_and_read_pkl`）、`format_version`・`supported` をすべて持つ（読めない format_version。`persistence/loader.py` `load`） | `BackendArtifactError` | 409 `MODEL_ARTIFACT_INVALID` | error code `MODEL_ARTIFACT_INVALID` |
+| それ以外 | 上のどれにも合わないもの。未知の code、未知の `context` の形、`context` が `path` だけのもの（無いディレクトリ）や `file` だけのもの（pickle を読む I/O の失敗）、`MODEL_NOT_FIT`、`CONFIG_INVALID` を含む | 元の例外のまま | 500 `BACKEND_ERROR`（`details.type` だけ） | 今までどおり |
 
 - 入力の誤りの規則は、`context` に `path` があれば使わない（lizyml の message をそのまま渡すため）。
-- `reason` は、lizyml の `context["reason"]` が token（`[a-z][a-z0-9_]*`）ならそれを使い、そうでなければ行の既定の reason を使う。分類しなかったエラーも、adapter が code と reason を WARNING で log に残す。
-- `context` は許可した key だけを渡す。`path` と `exception` は渡さない。成果物の破損の message は固定の文言で、lizyml の message（成果物の絶対パスを含みうる）を渡さない。
+- 入力の誤りの `reason` は、lizyml の `context["reason"]` が token（`[a-z][a-z0-9_]*`）ならそれを使い、そうでなければ行の既定の reason を使う。分類しなかったエラーも、adapter が code と reason を WARNING で log に残す。
+- 入力の誤りの `context` は、許可した key（列名、値、その型など）だけを渡す。値は利用者が読み込ませたデータそのものなので、同じ利用者に返してよい。文字列は 200 文字までにする。`path` と `exception` は渡さない。
+- 成果物の破損の `context` は、行ごとに安全と分かる値だけを渡す（区切りを含まない file 名、int の `format_version`・`supported`）。lizyml が保存値を `repr()` した文字列（identity の marker など。壊れた marker はパスを含みうる）は渡さない。reason は行の既定の reason に固定する。message は固定の文言で、lizyml の message（成果物の絶対パスを含みうる）を渡さない。
+- NaN と無限大の float は文字列にする。そのため、エラーの本文は常に正しい JSON になる。
 - 表を使うのは adapter の `fit`、`tune`、`export_model`、`export_code`、`load_model`、`predict` である。`create_model` などそれ以外の method が投げる拒否は、`BACKEND_ERROR` のまま。
 - P-0116 の狭い翻訳（`REFIT_REQUIRED`、`TUNING_FAILED`、`SEARCH_SPACE_REFUSED`、`PICKLE_INCOMPATIBLE`）は、この表より内側で先に効く。
 - 分類したエラーで失敗した job の `error` は、code、lizyml の code と reason、message、対処を 1 行で持ち、traceback を含まない。traceback は job の `execution.log` に書く（thread と subprocess の両方のモード）。分類しないエラーの `error` は今までどおり traceback を含む。
