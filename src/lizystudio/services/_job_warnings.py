@@ -16,60 +16,94 @@ job's thread only:
   ``"<Category>: <text>"`` and to the job's warnings;
 - every ``lizyml`` log record at WARNING or above to the job log and the
   job's warnings;
-- the ``tune.trial.memory_warning`` INFO record to the job log only (its
-  first occurrence in the tune is already the stored ``UserWarning``).
-  No other INFO record is captured.
+- the ``tune.trial.memory_warning`` record to the job log only (its first
+  occurrence in the tune is already the stored ``UserWarning``). It is
+  matched exactly: level INFO, logger ``lizyml.core.resource_warning``,
+  and lizyml's unformatted template :data:`MEMORY_WARNING_TEMPLATE`. No
+  other record below WARNING is captured.
 
-Thread safety. ``warnings.catch_warnings`` swaps process-global state and
-is not safe with concurrent jobs, so it is not used. Instead one
-process-wide dispatcher replaces ``warnings.showwarning`` while any job
-is capturing, and one handler sits on the ``lizyml`` logger. Both look the
-emitting thread up (``threading.get_ident()`` / ``LogRecord.thread``) in a
-lock-guarded map of thread to collector: a warning reaches the job whose
-thread emitted it, and a thread that runs no job falls through to the
-previous ``showwarning`` unchanged. A warning a job emits from a thread it
-started itself is not attributed to the job (lizyml's tune runs its trials
-on the calling thread). The hook, the handler and the logger level are
-restored when the last capturing job ends.
+Hooks, installed once. :func:`install_job_warning_hooks` runs once per
+process at start: in the server's lifespan (``server.py``) and in the
+subprocess child before it runs the job (``subprocess_runner``). It puts
+one dispatcher into ``warnings.showwarning``, chained to the hook that was
+there at install time, adds one handler to the ``lizyml`` logger, and
+sets the ``lizyml.core.resource_warning`` logger to INFO (it inherits
+WARNING otherwise, and the trial record would not be created; it emits
+only this event, so the console sees it during a tune only). None of
+these is undone. It is idempotent: the dispatcher is checked by identity,
+so a second call changes nothing.
+
+A capture then only registers the calling thread's collector in a
+lock-guarded map of thread to collector, and removes it on exit; it never
+touches ``warnings.showwarning`` or the loggers. The dispatcher and the
+handler look the emitting thread up (``threading.get_ident()`` /
+``LogRecord.thread``): a warning reaches the job whose thread emitted it,
+and a thread that runs no job passes through untouched (to the chained
+hook, or to the logger's other handlers). A warning a job emits from a
+thread it started itself is not attributed to the job (lizyml's tune runs
+its trials on the calling thread). A capture in a process that never
+installed the hooks logs that once, at WARNING, on this module's logger.
+
+Because the dispatcher is installed once, a third party's
+``warnings.catch_warnings`` saves and restores *our* dispatcher, on any
+thread and in any order relative to a job. Residual (documented, not
+fixed): while another thread's ``catch_warnings(record=True)`` is active
+(lizyml's calibration option check, for example), Python 3.12's
+``warnings`` state is process-global, so a job warning raised in that
+window goes to that recorder and not to the job. And two
+``catch_warnings`` contexts on two threads that exit out of order can
+restore a stale hook; that is Python's own limit (``catch_warnings`` is
+not thread-safe) and applies to any process hook.
 
 Filters are not changed: an ``ignore`` (``server.py``'s SHAP filter) is
 honoured, and an ignored warning is not captured. Python's ``default``
-action would show a warning once per code location per process, but the
-lizyml fit path enters ``warnings.catch_warnings`` many times (measured
-2026-11-05: the filters version moved from 72 to 732 across one Fit),
-which clears every module's registry, so a second identical job warns
-again. ``tests/integration/test_p0117_job_warnings.py`` pins that for
-Fit and Tune; if it goes red, an ``always`` filter is the remedy, with
-its measured firing rate.
+action shows a warning once per code location until the filters next
+change, and it suppresses a repeat *before* ``showwarning`` is called.
+That cannot hide one job's warning behind another's: a server's
+``JobStore`` runs at most one training job at a time (the single active
+slot, ``services/_job_active_slot.py``), so two jobs never warn
+concurrently; and between sequential jobs the lizyml fit path enters
+``warnings.catch_warnings`` many times (measured 2026-11-05: the filters
+version moved from 72 to 732 across one Fit), which clears every module's
+registry, so a second identical job warns again.
+``tests/integration/test_p0117_job_warnings.py`` pins that for Fit and
+Tune. A scoped ``always`` filter for lizyml (``module=r"^lizyml"``) was
+weighed and not added: ``filterwarnings`` inserts at the front, so its
+order against the SHAP ``ignore`` (whose location may be lizyml's SHAP
+module) and against pytest's or ``-W`` filters would decide behaviour;
+it would repeat lizyml warnings on API threads (inference, plots) on
+every request; and it is a new conditionally-active filter that needs a
+measured firing rate under the Change Gate, against a failure the single
+active slot already rules out. If the sequential pin goes red, that
+filter is the remedy, with its measurement.
 
-The ``lizyml.core.resource_warning`` logger is set to INFO while a job
-captures (it inherits WARNING otherwise, and the trial record would not
-be created); it emits only this event, and its level is restored after
-the last job.
-
-A capture nested on one thread raises ``RuntimeError`` before the job
-starts. ``_run_job_core`` is never nested on today's call graph, so this
-guards a programming error rather than a runtime path.
-
-The stored text is the message only: no file, line or category, so no
-local path from ``warnings.warn``'s location leaks into ``meta.json``,
-the API or the WebSocket.
+Text. The stored text is the message only: no file, line or category.
+Absolute paths inside the message (a trial failure's ``reason`` is
+``str(exc)``, which can name a file) are replaced by
+:data:`PATH_PLACEHOLDER` by :func:`sanitize_warning_text`, once, at the
+collector's entry, so ``execution.log``, ``meta.json``, the API and the
+WebSocket all carry the same sanitized text.
 
 Volume. The log keeps every occurrence. The job's warnings keep each
 distinct text once, at most :data:`MAX_JOB_WARNINGS` of them, each cut to
 :data:`MAX_WARNING_CHARS`; reaching the cap is logged once. Each newly
 stored text is persisted (``meta.json``) and broadcast once.
+
+A capture nested on one thread raises ``RuntimeError`` before the job
+starts. ``_run_job_core`` is never nested on today's call graph, so this
+guards a programming error rather than a runtime path.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import sys
 import threading
 import warnings
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any, TextIO
+from typing import TYPE_CHECKING, TextIO
 
 if TYPE_CHECKING:
     from lizystudio.services.jobs import Job, JobStore
@@ -84,9 +118,47 @@ MAX_WARNING_CHARS = 2000
 
 LIZYML_LOGGER = "lizyml"
 RESOURCE_LOGGER = "lizyml.core.resource_warning"
-MEMORY_WARNING_EVENT = "event='tune.trial.memory_warning'"
+#: lizyml v0.21.1 ``core/_resource_warning.py``: the later qualifying
+#: trials' record, logged as ``_log.info(MEMORY_WARNING_TEMPLATE, text)``.
+MEMORY_WARNING_TEMPLATE = "event='tune.trial.memory_warning' %s"
+
+#: What an absolute path inside a warning's text becomes.
+PATH_PLACEHOLDER = "<path>"
+
+# Applied in this order; each replaces a whole match with the placeholder.
+# A quoted span that starts like an absolute path, up to its closing quote
+# (so a path with spaces goes whole); the quotes are kept.
+_QUOTED_PATH = re.compile(
+    r"""(?P<q>['"])(?:file://|[A-Za-z]:[\\/]|\\\\|/)[^'"\r\n]*(?P=q)""",
+    re.IGNORECASE,
+)
+# A ``file:`` URI.
+_FILE_URI = re.compile(r"""file://[^\s'"<>]*""", re.IGNORECASE)
+# A Windows drive path (``C:\`` or ``C:/``) and a UNC path (``\\host\share``).
+_WINDOWS_PATH = re.compile(r"""(?<![\w])[A-Za-z]:[\\/][^\s'"<>]*""")
+_UNC_PATH = re.compile(r"""(?<![\w\\])\\\\[^\s\\'"<>]+\\[^\s'"<>]*""")
+# A POSIX absolute path: a ``/`` not preceded by a word character, ``:``
+# or ``/`` (so ``and/or``, ``1/2`` and the ``//`` of a URL are kept), then
+# at least one path character. It ends at whitespace or a quote.
+_POSIX_PATH = re.compile(r"""(?<![\w:/])/[^\s/'"<>]+(?:/[^\s/'"<>]*)*""")
 
 _ShowWarning = Callable[..., None]
+
+
+def sanitize_warning_text(text: str) -> str:
+    """*text* with every absolute path replaced by :data:`PATH_PLACEHOLDER`.
+
+    Covers POSIX absolute paths, Windows drive and UNC paths, and ``file:``
+    URIs. Deterministic: the same input always gives the same output. A
+    path ends at whitespace or a quote unless it is quoted, so an unquoted
+    path with a space keeps its tail after the space (relative, no root).
+    """
+    text = _QUOTED_PATH.sub(
+        lambda m: f"{m.group('q')}{PATH_PLACEHOLDER}{m.group('q')}", text
+    )
+    for pattern in (_FILE_URI, _WINDOWS_PATH, _UNC_PATH, _POSIX_PATH):
+        text = pattern.sub(PATH_PLACEHOLDER, text)
+    return text
 
 
 def _bounded(text: str) -> str:
@@ -116,20 +188,23 @@ class JobWarningCollector:
 
     def record_warning(self, text: str, category_name: str) -> None:
         """A ``warnings.warn`` the job's thread raised."""
-        self._job_logger.warning("%s: %s", category_name, text)
-        self._store(text)
+        self._accept(logging.WARNING, category_name, text)
 
     def record_log(self, record: logging.LogRecord) -> None:
         """A ``lizyml`` log record the job's thread emitted."""
-        text = record.getMessage()
-        self._job_logger.log(
-            record.levelno, "%s %s: %s", record.name, record.levelname, text
+        self._accept(
+            record.levelno, f"{record.name} {record.levelname}", record.getMessage()
         )
-        if record.levelno >= logging.WARNING:
+
+    def _accept(self, level: int, label: str, raw: str) -> None:
+        """The one entry: sanitize, log, and store from WARNING up."""
+        text = sanitize_warning_text(raw)
+        self._job_logger.log(level, "%s: %s", label, text)
+        if level >= logging.WARNING:
             self._store(text)
 
-    def _store(self, raw: str) -> None:
-        text = _bounded(raw)
+    def _store(self, clean: str) -> None:
+        text = _bounded(clean)
         if text in self._seen:
             return
         if len(self._job.warnings) >= MAX_JOB_WARNINGS:
@@ -153,18 +228,27 @@ class JobWarningCollector:
             self._broadcaster.send_warning(self._job.job_id, text)
 
 
+def _is_captured(record: logging.LogRecord) -> bool:
+    """A record at WARNING or above, or exactly the trial memory event."""
+    if record.levelno >= logging.WARNING:
+        return True
+    return (
+        record.levelno == logging.INFO
+        and record.name == RESOURCE_LOGGER
+        and record.msg == MEMORY_WARNING_TEMPLATE
+    )
+
+
 class _LizymlRecordHandler(logging.Handler):
-    """Routes a ``lizyml`` record to the collector of its emitting thread."""
+    """Routes a ``lizyml`` record to the collector of its emitting thread.
+
+    A record from a thread that runs no job is left alone: this handler
+    neither changes it nor stops it reaching the logger's other handlers.
+    """
 
     def emit(self, record: logging.LogRecord) -> None:
         collector = _registry.collector_for(record.thread)
-        if collector is None:
-            return
-        captured = record.levelno >= logging.WARNING or (
-            record.name == RESOURCE_LOGGER
-            and MEMORY_WARNING_EVENT in record.getMessage()
-        )
-        if not captured:
+        if collector is None or not _is_captured(record):
             return
         try:
             collector.record_log(record)
@@ -178,9 +262,9 @@ class _CaptureRegistry:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._collectors: dict[int, JobWarningCollector] = {}
-        self._previous_showwarning: _ShowWarning | None = None
-        self._handler = _LizymlRecordHandler()
-        self._saved_resource_level: int | None = None
+        self._chain: _ShowWarning | None = None
+        self._installed = False
+        self._not_installed_logged = False
 
     def collector_for(self, thread_id: int | None) -> JobWarningCollector | None:
         if thread_id is None:
@@ -188,9 +272,22 @@ class _CaptureRegistry:
         with self._lock:
             return self._collectors.get(thread_id)
 
-    def previous_showwarning(self) -> _ShowWarning | None:
+    def chain(self) -> _ShowWarning | None:
         with self._lock:
-            return self._previous_showwarning
+            return self._chain
+
+    def install(self) -> None:
+        with self._lock:
+            if warnings.showwarning is not _showwarning:
+                self._chain = warnings.showwarning
+                warnings.showwarning = _showwarning
+            lizyml_logger = logging.getLogger(LIZYML_LOGGER)
+            if _HANDLER not in lizyml_logger.handlers:
+                lizyml_logger.addHandler(_HANDLER)
+            resource = logging.getLogger(RESOURCE_LOGGER)
+            if resource.getEffectiveLevel() > logging.INFO:
+                resource.setLevel(logging.INFO)
+            self._installed = True
 
     def enter(self, collector: JobWarningCollector) -> int:
         ident = threading.get_ident()
@@ -198,44 +295,26 @@ class _CaptureRegistry:
             if ident in self._collectors:
                 msg = "this thread is already capturing job warnings"
                 raise RuntimeError(msg)
-            if warnings.showwarning is not _showwarning:
-                self._previous_showwarning = warnings.showwarning
-                warnings.showwarning = _showwarning
-            if not self._collectors:
-                self._attach_logging()
             self._collectors[ident] = collector
+            log_not_installed = not self._installed and not self._not_installed_logged
+            if log_not_installed:
+                self._not_installed_logged = True
+        if log_not_installed:
+            _logger.warning(
+                "Job warning hooks are not installed in this process; call "
+                "install_job_warning_hooks() at process start. Job warnings "
+                "are not captured."
+            )
         return ident
 
     def exit(self, ident: int) -> None:
         with self._lock:
             self._collectors.pop(ident, None)
-            if self._collectors:
-                return
-            if (
-                warnings.showwarning is _showwarning
-                and self._previous_showwarning is not None
-            ):
-                warnings.showwarning = self._previous_showwarning
-            # ``_previous_showwarning`` is kept: if another party saved our
-            # hook and restores it after this exit, ``_showwarning`` still
-            # has a hook to fall through to.
-            self._detach_logging()
-
-    def _attach_logging(self) -> None:
-        logging.getLogger(LIZYML_LOGGER).addHandler(self._handler)
-        resource = logging.getLogger(RESOURCE_LOGGER)
-        if resource.getEffectiveLevel() > logging.INFO:
-            self._saved_resource_level = resource.level
-            resource.setLevel(logging.INFO)
-
-    def _detach_logging(self) -> None:
-        logging.getLogger(LIZYML_LOGGER).removeHandler(self._handler)
-        if self._saved_resource_level is not None:
-            logging.getLogger(RESOURCE_LOGGER).setLevel(self._saved_resource_level)
-            self._saved_resource_level = None
 
 
 _registry = _CaptureRegistry()
+#: One handler per process; it routes through whichever registry is current.
+_HANDLER = _LizymlRecordHandler()
 
 
 def _showwarning(
@@ -246,7 +325,7 @@ def _showwarning(
     file: TextIO | None = None,
     line: str | None = None,
 ) -> None:
-    """``warnings.showwarning`` while a job captures: dispatch by thread."""
+    """The installed ``warnings.showwarning``: dispatch by thread."""
     collector = _registry.collector_for(threading.get_ident())
     if collector is not None and issubclass(category, UserWarning):
         try:
@@ -254,13 +333,24 @@ def _showwarning(
         except Exception:  # noqa: BLE001 - a capture failure must not fail the job
             _logger.exception("Failed to capture a job warning")
         return
-    previous: Any = _registry.previous_showwarning()
-    if previous is None or previous is _showwarning:
-        # No other hook was ever seen: print as Python's default does.
+    chain = _registry.chain()
+    if chain is None or chain is _showwarning:
+        # No hook to chain to: print as Python's default does.
         stream = file if file is not None else sys.stderr
         stream.write(warnings.formatwarning(message, category, filename, lineno, line))
         return
-    previous(message, category, filename, lineno, file, line)
+    chain(message, category, filename, lineno, file, line)
+
+
+def install_job_warning_hooks() -> None:
+    """Install the dispatcher, the ``lizyml`` handler and the resource
+    logger's level, once per process (see the module doc). Idempotent.
+
+    Call it at process start, while no other thread is inside
+    ``warnings.catch_warnings``: in the server's lifespan and in the
+    subprocess child before it runs the job.
+    """
+    _registry.install()
 
 
 @contextmanager
@@ -276,7 +366,10 @@ def capture_job_warnings(collector: JobWarningCollector) -> Iterator[None]:
 __all__ = [
     "MAX_JOB_WARNINGS",
     "MAX_WARNING_CHARS",
-    "MEMORY_WARNING_EVENT",
+    "MEMORY_WARNING_TEMPLATE",
+    "PATH_PLACEHOLDER",
     "JobWarningCollector",
     "capture_job_warnings",
+    "install_job_warning_hooks",
+    "sanitize_warning_text",
 ]

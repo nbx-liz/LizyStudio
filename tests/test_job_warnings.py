@@ -9,6 +9,7 @@ JSONL hop.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import shutil
@@ -21,17 +22,33 @@ from unittest.mock import MagicMock
 import pytest
 
 from lizystudio.backends.types import DataRef
+from lizystudio.services import _job_warnings
 from lizystudio.services._job_warnings import (
     MAX_JOB_WARNINGS,
     MAX_WARNING_CHARS,
+    PATH_PLACEHOLDER,
     JobWarningCollector,
     capture_job_warnings,
+    install_job_warning_hooks,
+    sanitize_warning_text,
 )
 from lizystudio.services.jobs import Job, JobStore
 
 pytestmark = pytest.mark.unit
 
 _FIXTURES = Path(__file__).resolve().parent / "fixtures"
+MEMORY_TEMPLATE = "event='tune.trial.memory_warning' %s"
+
+
+@pytest.fixture(autouse=True)
+def _job_warning_hooks() -> None:
+    """Install the hooks as process start does (server lifespan, child).
+
+    pytest runs each test inside ``warnings.catch_warnings(record=True)``,
+    whose exit restores ``warnings.showwarning``: the install is per test
+    here, once per process in production.
+    """
+    install_job_warning_hooks()
 
 
 def _job(store: JobStore) -> Job:
@@ -171,45 +188,276 @@ def test_user_warning_in_the_job_thread_is_captured_without_its_location(
     assert lines == ["UserWarning: be careful"]
 
 
+class _SentinelHook:
+    """A ``showwarning`` another party installed before Studio's."""
+
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    def __call__(
+        self,
+        message: Warning | str,
+        category: type[Warning],
+        filename: str,
+        lineno: int,
+        file: Any = None,
+        line: str | None = None,
+    ) -> None:
+        self.messages.append(str(message))
+
+
+def _fresh_install(monkeypatch: pytest.MonkeyPatch) -> _SentinelHook:
+    """A fresh registry chained to a sentinel hook, as at process start."""
+    monkeypatch.setattr(_job_warnings, "_registry", _job_warnings._CaptureRegistry())
+    sentinel = _SentinelHook()
+    warnings.showwarning = sentinel
+    install_job_warning_hooks()
+    return sentinel
+
+
 def test_non_user_warnings_pass_through_to_the_previous_hook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sentinel = _fresh_install(monkeypatch)
+    store = JobStore(tmp_path / "jobs")
+    job = _job(store)
+    collector, _ = _collector(store, job)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("always")
+        with capture_job_warnings(collector):
+            warnings.warn("old api", DeprecationWarning, stacklevel=1)
+        warnings.warn("not in a job", UserWarning, stacklevel=1)
+
+    assert job.warnings == []
+    assert sentinel.messages == ["old api", "not in a job"]
+
+
+def test_install_is_idempotent_and_chains_to_the_hook_it_replaced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel = _fresh_install(monkeypatch)
+    dispatcher = warnings.showwarning
+    lizyml_logger = logging.getLogger("lizyml")
+    handlers = list(lizyml_logger.handlers)
+
+    install_job_warning_hooks()
+    install_job_warning_hooks()
+
+    assert warnings.showwarning is dispatcher
+    assert dispatcher is not sentinel
+    assert lizyml_logger.handlers == handlers
+    assert (
+        sum(
+            isinstance(h, _job_warnings._LizymlRecordHandler)
+            for h in lizyml_logger.handlers
+        )
+        == 1
+    )
+    assert (
+        logging.getLogger("lizyml.core.resource_warning").getEffectiveLevel()
+        <= logging.INFO
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("always")
+        warnings.warn("chained once", UserWarning, stacklevel=1)
+    # Not recursed into itself, not dropped: the sentinel sees it once.
+    assert sentinel.messages == ["chained once"]
+
+
+def test_capture_never_touches_the_process_hook_or_the_logger_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fresh_install(monkeypatch)
+    store = JobStore(tmp_path / "jobs")
+    collector, _ = _collector(store, _job(store))
+    hook = warnings.showwarning
+    lizyml_logger = logging.getLogger("lizyml")
+    handlers = list(lizyml_logger.handlers)
+    resource_logger = logging.getLogger("lizyml.core.resource_warning")
+    level = resource_logger.level
+
+    with capture_job_warnings(collector):
+        assert warnings.showwarning is hook
+        assert lizyml_logger.handlers == handlers
+
+    # Installed once: the dispatcher and the handler stay after the job.
+    assert warnings.showwarning is hook
+    assert lizyml_logger.handlers == handlers
+    assert resource_logger.level == level
+
+
+def test_a_capture_without_installed_hooks_is_logged_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """DC1: a process that never installed the hooks says so, once."""
+    monkeypatch.setattr(_job_warnings, "_registry", _job_warnings._CaptureRegistry())
+    store = JobStore(tmp_path / "jobs")
+
+    with caplog.at_level(logging.WARNING, logger="lizystudio.services._job_warnings"):
+        for _ in range(2):
+            collector, _ = _collector(store, _job(store))
+            with capture_job_warnings(collector):
+                pass
+
+    not_installed = [r for r in caplog.records if "not installed" in r.message]
+    assert len(not_installed) == 1
+
+
+# The three orders of a job capture and another thread's real recorder.
+# Each step is (actor, action); the threads take turns in this order.
+_RECORDER_ORDERS: dict[str, tuple[list[tuple[str, str]], list[str]]] = {
+    "recorder-inside-job": (
+        [
+            ("job", "enter"),
+            ("job", "warn:before the window"),
+            ("rec", "enter"),
+            ("job", "warn:in the window"),
+            ("rec", "exit"),
+            ("job", "warn:after the window"),
+            ("job", "exit"),
+        ],
+        ["before the window", "after the window"],
+    ),
+    "recorder-straddles-job-start": (
+        [
+            ("rec", "enter"),
+            ("job", "enter"),
+            ("job", "warn:in the window"),
+            ("rec", "exit"),
+            ("job", "warn:after the window"),
+            ("job", "exit"),
+        ],
+        ["after the window"],
+    ),
+    "recorder-straddles-job-end": (
+        [
+            ("job", "enter"),
+            ("job", "warn:before the window"),
+            ("rec", "enter"),
+            ("job", "warn:in the window"),
+            ("job", "exit"),
+            ("rec", "exit"),
+        ],
+        ["before the window"],
+    ),
+}
+
+
+@pytest.mark.parametrize("order", list(_RECORDER_ORDERS))
+def test_a_third_party_recorder_during_a_job_leaves_the_dispatcher_installed(
+    order: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 1: a real ``catch_warnings(record=True)`` on another thread,
+    overlapping a job's capture, does not uninstall the dispatcher.
+
+    The threads take turns in the given order (a condition variable). A
+    warning the job raises while the recorder is active goes to the
+    recorder: Python 3.12's warnings state is process-global (the
+    documented residual). Every warning the job raises outside that window
+    is captured, and after both leave the dispatcher is still installed
+    and still chains to the hook it replaced.
+    """
+    steps, expected = _RECORDER_ORDERS[order]
+    sentinel = _fresh_install(monkeypatch)
+    store = JobStore(tmp_path / "jobs")
+    job = _job(store)
+    collector, _ = _collector(store, job)
+    turn = threading.Condition()
+    state = {"next": 0}
+    recorded: list[str] = []
+    errors: list[BaseException] = []
+
+    def run(actor: str) -> None:
+        stack = contextlib.ExitStack()
+        log: list[warnings.WarningMessage] = []
+        try:
+            for index, (who, action) in enumerate(steps):
+                if who != actor:
+                    continue
+                with turn:
+                    assert turn.wait_for(lambda i=index: state["next"] == i, 10)
+                if action == "enter" and actor == "job":
+                    stack.enter_context(capture_job_warnings(collector))
+                elif action == "enter":
+                    log = stack.enter_context(warnings.catch_warnings(record=True))
+                    warnings.simplefilter("always")
+                elif action == "exit":
+                    stack.close()
+                else:
+                    warnings.warn(action.removeprefix("warn:"), UserWarning, 1)
+                with turn:
+                    state["next"] = index + 1
+                    turn.notify_all()
+            recorded.extend(str(w.message) for w in log)
+        except BaseException as exc:  # noqa: BLE001 - re-raised below
+            errors.append(exc)
+            with turn:
+                state["next"] = len(steps)
+                turn.notify_all()
+        finally:
+            stack.close()
+
+    threads = [threading.Thread(target=run, args=(a,)) for a in ("job", "rec")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=20)
+
+    assert not errors, errors
+    assert warnings.showwarning is _job_warnings._showwarning
+    assert job.warnings == expected
+    assert recorded == ["in the window"]
+    # The original chain still works for a thread that runs no job.
+    with warnings.catch_warnings():
+        warnings.simplefilter("always")
+        warnings.warn("server thread", UserWarning, stacklevel=1)
+    assert sentinel.messages == ["server thread"]
+
+
+def test_a_lizyml_record_from_an_unregistered_thread_passes_through_untouched(
     tmp_path: Path,
 ) -> None:
     store = JobStore(tmp_path / "jobs")
     job = _job(store)
     collector, _ = _collector(store, job)
+    seen: list[tuple[str, Any, int]] = []
 
-    with warnings.catch_warnings(record=True) as seen:
-        warnings.simplefilter("always")
+    class _Spy(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            seen.append((record.getMessage(), record.args, record.levelno))
+
+    spy = _Spy()
+    lizyml_model = logging.getLogger("lizyml.model")
+    lizyml_model.addHandler(spy)
+    try:
         with capture_job_warnings(collector):
-            warnings.warn("old api", DeprecationWarning, stacklevel=1)
+            outside = threading.Thread(
+                target=lambda: lizyml_model.warning("from %s", "/srv/api/thread")
+            )
+            outside.start()
+            outside.join(timeout=10)
+    finally:
+        lizyml_model.removeHandler(spy)
 
+    assert seen == [("from /srv/api/thread", ("/srv/api/thread",), logging.WARNING)]
     assert job.warnings == []
-    assert [str(w.message) for w in seen] == ["old api"]
 
 
-def test_the_hook_and_logger_state_are_restored_after_the_last_job(
+def test_the_server_lifespan_installs_the_dispatcher(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A fresh registry: a job thread another test left running would
-    # otherwise still be capturing, and the hook rightly stays for it.
-    from lizystudio.services import _job_warnings
+    """DC4: production reaches the installer (``server.py`` lifespan)."""
+    from fastapi.testclient import TestClient
+
+    from lizystudio.server import create_app
 
     monkeypatch.setattr(_job_warnings, "_registry", _job_warnings._CaptureRegistry())
-    store = JobStore(tmp_path / "jobs")
-    collector, _ = _collector(store, _job(store))
-    before_hook = warnings.showwarning
-    lizyml_logger = logging.getLogger("lizyml")
-    before_handlers = list(lizyml_logger.handlers)
-    resource_logger = logging.getLogger("lizyml.core.resource_warning")
-    before_level = resource_logger.level
+    warnings.showwarning = _SentinelHook()
+    monkeypatch.setenv("LIZYSTUDIO_JOBS_DIR", str(tmp_path / "jobs"))
 
-    with capture_job_warnings(collector):
-        assert warnings.showwarning is not before_hook
-        assert resource_logger.getEffectiveLevel() <= logging.INFO
-
-    assert warnings.showwarning is before_hook
-    assert lizyml_logger.handlers == before_handlers
-    assert resource_logger.level == before_level
+    with TestClient(create_app()):
+        assert warnings.showwarning is _job_warnings._showwarning
 
 
 def test_capture_leaves_the_warning_filters_unchanged(tmp_path: Path) -> None:
@@ -267,6 +515,128 @@ def test_lizyml_records_are_captured_by_level_and_event(tmp_path: Path) -> None:
     assert job.warnings == ["a lizyml warning"]
 
 
+@pytest.mark.parametrize(
+    ("logger_name", "level", "msg", "args"),
+    [
+        # Another lizyml logger quoting the event text at INFO.
+        ("lizyml.model", logging.INFO, MEMORY_TEMPLATE, ("big leaves",)),
+        # The resource logger at DEBUG with the exact template.
+        (
+            "lizyml.core.resource_warning",
+            logging.DEBUG,
+            MEMORY_TEMPLATE,
+            ("big leaves",),
+        ),
+        # The resource logger at INFO, pre-formatted (not the template).
+        (
+            "lizyml.core.resource_warning",
+            logging.INFO,
+            "event='tune.trial.memory_warning' big leaves",
+            (),
+        ),
+        # The resource logger at INFO, quoting the event inside other text.
+        (
+            "lizyml.core.resource_warning",
+            logging.INFO,
+            "note: " + MEMORY_TEMPLATE,
+            ("big leaves",),
+        ),
+    ],
+    ids=["other-logger-info", "resource-debug", "preformatted", "embedded"],
+)
+def test_only_the_exact_resource_info_event_is_captured_below_warning(
+    tmp_path: Path, logger_name: str, level: int, msg: str, args: tuple[Any, ...]
+) -> None:
+    store = JobStore(tmp_path / "jobs")
+    job = _job(store)
+    collector, lines = _collector(store, job)
+    emitter = logging.getLogger(logger_name)
+    saved_level = emitter.level
+    emitter.setLevel(logging.DEBUG)
+    try:
+        with capture_job_warnings(collector):
+            emitter.log(level, msg, *args)
+    finally:
+        emitter.setLevel(saved_level)
+
+    assert lines == []
+    assert job.warnings == []
+
+
+# --- Paths inside message text --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "clean"),
+    [
+        ("cannot open /tmp/pytest-1/x.parquet now", "cannot open <path> now"),
+        ("reason=ValueError: '/home/u/My Data/x.csv'", "reason=ValueError: '<path>'"),
+        ('path="/srv/data/a b.csv"', 'path="<path>"'),
+        ("path=/srv/data/x.csv", "path=<path>"),
+        ("see (/opt/lib/a.py)", "see (<path>"),
+        (r"C:\Users\u\x.csv missing", "<path> missing"),
+        ("D:/data/x.csv missing", "<path> missing"),
+        ("at file:///home/u/x.py line 3", "at <path> line 3"),
+        ("at FILE://host/share/x.py", "at <path>"),
+        (r"\\server\share\x.csv gone", "<path> gone"),
+        ("/abs/at/start", "<path>"),
+    ],
+)
+def test_sanitize_replaces_absolute_paths_with_a_placeholder(
+    raw: str, clean: str
+) -> None:
+    assert PATH_PLACEHOLDER == "<path>"
+    assert sanitize_warning_text(raw) == clean
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "and/or",
+        "1/2 of the rows",
+        "n/a",
+        "application/json",
+        "see https://example.com/docs/x for details",
+        "a / b",
+        "ratio 3/4, max_depth=-1",
+        "LightGBM will train with num_leaves=131072 (derived by auto_num_leaves "
+        "from max_depth=-1). about 0.2 GiB",
+        "",
+    ],
+)
+def test_sanitize_leaves_text_without_an_absolute_path_unchanged(text: str) -> None:
+    assert sanitize_warning_text(text) == text
+
+
+def test_the_collector_sanitizes_before_log_store_and_broadcast(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path / "jobs")
+    job = _job(store)
+    broadcaster = MagicMock()
+    collector, lines = _collector(store, job, broadcaster)
+    secret = str(tmp_path / "data" / "train.parquet")
+
+    with capture_job_warnings(collector):
+        warnings.warn(f"cannot read {secret}", UserWarning, stacklevel=1)
+        logging.getLogger("lizyml.tuner").warning(
+            "event='trial.failed' trial=%d state=%s reason=%s",
+            0,
+            "FAIL",
+            f"ValueError: no such file: '{secret}'",
+        )
+
+    expected = [
+        "cannot read <path>",
+        "event='trial.failed' trial=0 state=FAIL reason=ValueError: "
+        "no such file: '<path>'",
+    ]
+    assert job.warnings == expected
+    assert str(tmp_path) not in "\n".join(lines)
+    assert [c.args[1] for c in broadcaster.send_warning.call_args_list] == expected
+    assert str(tmp_path) not in store.path_for(job.job_id, "meta").read_text()
+
+
 def test_capture_refuses_a_nested_capture_on_one_thread(tmp_path: Path) -> None:
     store = JobStore(tmp_path / "jobs")
     first, _ = _collector(store, _job(store))
@@ -283,14 +653,19 @@ def test_capture_refuses_a_nested_capture_on_one_thread(tmp_path: Path) -> None:
 
 
 def test_concurrent_jobs_receive_only_their_own_thread_warnings(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Both jobs are registered at once when each one warns.
 
     The events force the interleaving: A and B both enter the capture,
     then each warns and logs, then both exit. A third, unregistered
-    thread warns while both are active and reaches neither job.
+    thread warns while both are active and reaches neither job; it goes to
+    the hook the dispatcher chained to. (Production runs one job at a time
+    per store; this pins the per-thread routing. No recorder wraps the
+    jobs here: a ``catch_warnings(record=True)`` would take every thread's
+    warnings for its duration, the documented residual.)
     """
+    sentinel = _fresh_install(monkeypatch)
     store = JobStore(tmp_path / "jobs")
     jobs = {name: _job(store) for name in ("a", "b")}
     collectors = {name: _collector(store, jobs[name])[0] for name in jobs}
@@ -309,7 +684,7 @@ def test_concurrent_jobs_receive_only_their_own_thread_warnings(
             errors.append(exc)
 
     threads = [threading.Thread(target=job_thread, args=(n,)) for n in jobs]
-    with warnings.catch_warnings(record=True) as outside:
+    with warnings.catch_warnings():
         warnings.simplefilter("always")
         for t in threads:
             t.start()
@@ -322,7 +697,7 @@ def test_concurrent_jobs_receive_only_their_own_thread_warnings(
     assert not errors, errors
     assert jobs["a"].warnings == ["from a", "log from a"]
     assert jobs["b"].warnings == ["from b", "log from b"]
-    assert [str(w.message) for w in outside] == ["from the server thread"]
+    assert sentinel.messages == ["from the server thread"]
 
 
 # --- meta.json ------------------------------------------------------------------

@@ -29,6 +29,7 @@ from fastapi.testclient import TestClient
 from lizystudio.backends.lizyml.adapter import LizyMLAdapter
 from lizystudio.backends.types import DataRef
 from lizystudio.server import create_app
+from lizystudio.services._job_warnings import install_job_warning_hooks
 from lizystudio.services.data import load_dataframe
 from lizystudio.services.jobs import Job, JobStore
 from lizystudio.services.subprocess_runner import run_job_in_subprocess
@@ -155,6 +156,18 @@ def _run(
     )
 
 
+@pytest.fixture(autouse=True)
+def _job_warning_hooks() -> None:
+    """Install the hooks as process start does (server lifespan, child).
+
+    pytest runs each test inside ``warnings.catch_warnings(record=True)``,
+    whose exit restores ``warnings.showwarning``: the install is per test
+    here, once per process in production. The subprocess child installs
+    its own (``_child_main``), so the subprocess cases also pin that.
+    """
+    install_job_warning_hooks()
+
+
 @pytest.fixture()
 def jobs_dir(tmp_path: Path) -> Path:
     return tmp_path / "jobs"
@@ -205,6 +218,8 @@ def test_fit_memory_warning_reaches_log_job_api_and_broadcast(
     assert "derived by auto_num_leaves from max_depth=-1" in text
     assert reloaded.warnings == [text]
     _assert_no_local_path(text, tmp_path)
+    # The path sanitizer leaves the real H-0140 text alone (no over-match).
+    assert "<path>" not in text
 
     log = store.get_log(done.job_id)
     assert log.count(f"UserWarning: {text}") == 1
@@ -231,6 +246,11 @@ def test_a_second_identical_thread_job_in_one_process_carries_the_warning_too(
     clearing the warning registries (see ``services/_job_warnings.py``).
     This goes red if that stops, for the Fit's location
     (``lifecycle_mixin``) and the tune trial's (``lizyml.tuning.tuner``).
+
+    Sequential is the only production case: a server's ``JobStore`` runs at
+    most one training job at a time (``services/_job_active_slot.py``), so
+    two identical warnings from two concurrent jobs cannot occur, and the
+    registry cannot suppress one job's warning behind another's.
     """
     store = JobStore(jobs_dir)
     data = _data(tmp_path)
@@ -277,6 +297,7 @@ def test_tune_warns_once_and_logs_the_later_qualifying_trials(
     # boosters, the auto-fit after the tune its 2 folds plus the refit.
     assert len(reloaded.warnings) == 2, reloaded.warnings
     trial_text, fit_text = reloaded.warnings
+    assert "<path>" not in trial_text + fit_text
     assert trial_text.startswith(WARNING_PREFIX)
     assert "the trees of 2 booster(s)" in trial_text
     assert fit_text.startswith(WARNING_PREFIX)
@@ -295,6 +316,79 @@ def test_tune_warns_once_and_logs_the_later_qualifying_trials(
         f"lizyml.core.resource_warning INFO: {MEMORY_EVENT} {trial_text}"
     ) == (N_TRIALS - 1)
     assert [w["message"] for w in broadcaster.warnings()] == [trial_text, fit_text]
+
+
+# --- Paths inside a warning's text -------------------------------------------
+
+
+def test_a_trial_failure_path_reaches_no_surface(
+    tmp_path: Path,
+    jobs_dir: Path,
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real Tune whose first trial fails with an absolute path in the
+    exception: lizyml logs ``event='trial.failed' ... reason=<str(exc)>``
+    at WARNING (``tuning/tuner.py``). The path must reach none of
+    ``execution.log``, ``meta.json``, ``GET`` and the broadcast.
+
+    Thread mode: the failure is injected with ``monkeypatch`` on
+    ``lightgbm.train``, which the subprocess child would not see.
+    """
+    import lightgbm
+
+    secret = str(tmp_path / "private" / "cache.bin")
+    real_train = lightgbm.train
+    calls = {"n": 0}
+
+    def failing_once(*args: Any, **kwargs: Any) -> Any:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            msg = f"cannot read {secret}"
+            raise ValueError(msg)
+        return real_train(*args, **kwargs)
+
+    monkeypatch.setattr(lightgbm, "train", failing_once)
+    store = JobStore(jobs_dir)
+    broadcaster = RecordingBroadcaster()
+
+    done = _run(
+        store,
+        _config(max_depth=None, tune=True),
+        _data(tmp_path),
+        mode="thread",
+        broadcaster=broadcaster,
+    )
+
+    assert done.status == "completed", done.error
+    reloaded = store.get(done.job_id)
+    assert reloaded is not None
+    failed = [w for w in reloaded.warnings if "event='trial.failed'" in w]
+    assert failed == [
+        "event='trial.failed' trial=0 state=FAIL reason=ValueError: cannot read <path>"
+    ], reloaded.warnings
+    log = store.get_log(done.job_id)
+    assert f"lizyml.tuner WARNING: {failed[0]}" in log
+    meta = store.path_for(done.job_id, "meta").read_text()
+    body = client.get(f"/api/jobs/{done.job_id}").json()
+    # ``meta.json`` and GET hold the job's own data and model paths by
+    # design (``data_ref``, ``model_path``), so the tmp prefix is checked
+    # on their ``warnings``; the injected path is checked everywhere.
+    warning_surfaces = {
+        "execution.log": log,
+        "meta.json warnings": json.dumps(json.loads(meta)["warnings"]),
+        "GET warnings": json.dumps(body["warnings"]),
+        "broadcast": json.dumps(broadcaster.warnings()),
+    }
+    for name, text in warning_surfaces.items():
+        assert str(tmp_path) not in text, name
+    for name, text in {
+        **warning_surfaces,
+        "meta.json": meta,
+        "GET": json.dumps(body),
+    }.items():
+        assert secret not in text, name
+    assert failed[0] in [w["message"] for w in broadcaster.warnings()]
 
 
 # --- No warning --------------------------------------------------------------
@@ -332,7 +426,11 @@ def test_a_normal_fit_has_no_warnings_and_no_capture_noise(
 def test_concurrent_thread_jobs_keep_their_own_warnings(tmp_path: Path) -> None:
     """Two jobs in two threads at once: the warning stays on its own job.
 
-    Separate stores, because one store's active slot admits one job.
+    Separate stores, because one store's active slot admits one job: a
+    server has one store, so this overlap does not happen in production.
+    It pins the per-thread routing, with different texts on purpose (two
+    concurrent identical warnings are out of scope; see the sequential
+    case above).
     """
     data = _data(tmp_path)
     stores = {

@@ -641,6 +641,10 @@ def _child_main(args_path: str, progress_path: str) -> None:
     # real work so a parent-triggered SIGTERM during setup still runs
     # the _run_job_core finally block.
     _install_sigterm_handler()
+    # P-0117 D4: the job-warning hooks, once, before any thread or job.
+    from lizystudio.services._job_warnings import install_job_warning_hooks
+
+    install_job_warning_hooks()
 
     with open(args_path, encoding="utf-8") as f:
         args = json.load(f)

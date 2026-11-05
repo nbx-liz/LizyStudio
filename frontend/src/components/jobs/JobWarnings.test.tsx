@@ -153,13 +153,30 @@ describe("JobWarnings announcer", () => {
 
     rerender(<JobWarnings warnings={["a"]} status="running" />);
     expect(screen.getByTestId("job-warnings-announcer").textContent).toBe(
-      "New job warning.",
+      "New job warning (1 total).",
     );
 
     rerender(<JobWarnings warnings={["a", "b", "c"]} status="running" />);
     expect(screen.getByTestId("job-warnings-announcer").textContent).toBe(
-      "New job warnings.",
+      "2 new job warnings (3 total).",
     );
+  });
+
+  it("changes the announcement on every single-warning arrival", () => {
+    // A live region announces a change of its text: two arrivals of one
+    // warning each must not leave the same string in place.
+    const { rerender } = render(<JobWarnings warnings={[]} status="running" />);
+    const seen: (string | null)[] = [];
+    for (const warnings of [["a"], ["a", "b"], ["a", "b", "c"]]) {
+      rerender(<JobWarnings warnings={warnings} status="running" />);
+      seen.push(screen.getByTestId("job-warnings-announcer").textContent);
+    }
+    expect(seen).toEqual([
+      "New job warning (1 total).",
+      "New job warning (2 total).",
+      "New job warning (3 total).",
+    ]);
+    expect(new Set(seen).size).toBe(3);
   });
 
   it("stays silent when the count increases while paused", () => {

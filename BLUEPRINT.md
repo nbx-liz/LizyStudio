@@ -423,7 +423,10 @@ class DataRef:
 - `meta.json.parent_job_id`: Re-tune / Resume の child job では parent の job_id を参照する。非 child job では `null`。
 - `meta.json.warnings`: job の実行中にバックエンドが出した警告の文面の一覧（P-0117 D4）。lizyml 0.21 の H-0140 のメモリ見積もりの警告（`num_leaves` が 16384 以上か、見積もりが 1 GiB 以上）などが入る。
   - 取り込むのは、job の thread で出た `UserWarning`（とその派生）と、`lizyml` の logger の `WARNING` 以上の記録である。thread と subprocess の両方のモードで、`_run_job_core` が取り込む（`services/_job_warnings.py`）。
-  - 文面だけを保存する。`warnings.warn` の file と行は保存しないので、ローカルの絶対パスは入らない。
+  - 取り込みの仕組みは、プロセスの開始時に 1 回だけ入れる（server の lifespan と subprocess の子）。`warnings.showwarning` の dispatcher と `lizyml` の logger の handler を入れ、`lizyml.core.resource_warning` の logger を INFO にする。どれも戻さない。job は自分の thread を登録・解除するだけで、`warnings.showwarning` には触れない。
+  - 既知の限界: 別の thread が `warnings.catch_warnings(record=True)` の中にいる間は、Python の warnings の状態がプロセス全体で共有されるため、その間に job が出した警告はその記録先に入り、job には入らない。
+  - 同じ場所の同じ警告は Python の `default` の動作で 2 回目が抑止されうるが、学習 job は 1 つの `JobStore` で同時に 1 つしか走らない（active slot）ので、別の job の警告の陰に隠れることはない。
+  - 文面だけを保存する。`warnings.warn` の file と行は保存しない。文面の中の絶対パス（POSIX、Windows のドライブと UNC、`file://` URI）は `<path>` に置き換える。置き換えは取り込みの入口で 1 回だけ行うので、`execution.log`・`meta.json`・API・WebSocket は同じ文面になる。
   - 同じ文面は 1 回だけ保存し、最大 50 件、1 件 2000 文字までとする。上限に達したことは job のログに 1 回書く。新しい文面を保存するたびに `meta.json` を書き直す。
   - `execution.log` には、出るたびにすべて残す。Tune の 2 つ目以降の該当 trial の記録（lizyml の `lizyml.core.resource_warning` logger の INFO、`event='tune.trial.memory_warning'`）は、ログだけに残し、警告には加えない（最初の trial の `UserWarning` が既に入っている）。ほかの INFO は取り込まない。
   - 追加のみの項目である。この項目を持たない `meta.json` は `[]` として読む。リストでない値や文字列でない要素は、ログに書いて `[]` として読む。`format_version` は変えない。

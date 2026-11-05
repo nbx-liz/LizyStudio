@@ -96,7 +96,9 @@ at 2: saved configs and jobs keep their shape.
     later qualifying Tune trials' `tune.trial.memory_warning` records;
   - `GET /api/jobs/{job_id}` returns them in a new `warnings` list (each
     distinct text once, at most 50, message text only without a file
-    path), stored in `meta.json`;
+    path), stored in `meta.json`. An absolute path inside the text (for
+    example a failed Tune trial's reason) is replaced by `<path>` in the
+    log, the list and the WebSocket message alike;
   - the job's WebSocket sends a new non-terminal `warning` message for each
     one.
 

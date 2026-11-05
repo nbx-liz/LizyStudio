@@ -107,7 +107,7 @@ describe("JobDetailPanel warnings", () => {
     expect(await screen.findByTestId("job-warnings")).toBeInTheDocument();
     expect(screen.getAllByTestId("job-warning-item")).toHaveLength(1);
     expect(screen.getByTestId("job-warnings-announcer")).toHaveTextContent(
-      "New job warning.",
+      "New job warning (1 total).",
     );
   });
 

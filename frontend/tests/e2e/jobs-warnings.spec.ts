@@ -93,7 +93,7 @@ test.describe("Job warnings banner (P-0117 D4)", () => {
       LIVE_WARNING,
     );
     await expect(page.getByTestId("job-warnings-announcer")).toHaveText(
-      "New job warning.",
+      "New job warning (1 total).",
     );
   });
 

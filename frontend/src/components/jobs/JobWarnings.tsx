@@ -48,6 +48,17 @@ function helperText(status: string): string {
 }
 
 /**
+ * The announcer's text for *increase* new warnings, *total* in all. The total
+ * makes every arrival a different string, so a live region announces each
+ * one (an unchanged text is not announced again).
+ */
+export function warningAnnouncement(increase: number, total: number): string {
+  const what =
+    increase === 1 ? "New job warning" : `${increase} new job warnings`;
+  return `${what} (${total} total).`;
+}
+
+/**
  * Announces a newly arrived warning to assistive technology while a job is
  * running. Initial render, the fetch of an existing job and the change to
  * completed stay silent: only a count increase after mount, while running.
@@ -59,9 +70,7 @@ function useWarningAnnouncement(count: number, status: string): string {
     const increase = count - previousCount.current;
     previousCount.current = count;
     if (increase > 0 && status === "running") {
-      setAnnouncement(
-        increase === 1 ? "New job warning." : "New job warnings.",
-      );
+      setAnnouncement(warningAnnouncement(increase, count));
     }
   }, [count, status]);
   return announcement;
