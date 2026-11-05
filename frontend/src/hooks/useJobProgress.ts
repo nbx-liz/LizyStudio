@@ -40,6 +40,12 @@ export interface UseJobProgressParams {
 export interface UseJobProgress {
   progress: ProgressMessage | null;
   foldLog: string[];
+  /**
+   * P-0117 D4: distinct warning messages received over the WebSocket for
+   * the selected job. Live only: the message is not replayed, so a late
+   * subscriber reads ``job.warnings`` instead (see ``mergeJobWarnings``).
+   */
+  liveWarnings: string[];
   /** Manually clear the transient progress state (used by cancel). */
   clearProgress: () => void;
 }
@@ -60,6 +66,7 @@ export function useJobProgress({
   const queryClient = useQueryClient();
   const [progress, setProgress] = useState<ProgressMessage | null>(null);
   const [foldLog, setFoldLog] = useState<string[]>([]);
+  const [liveWarnings, setLiveWarnings] = useState<string[]>([]);
 
   // Per-job guard so we never fire ``onTerminal`` twice for the same job
   // when BOTH the WebSocket ``completed`` message AND the polling-
@@ -132,6 +139,13 @@ export function useJobProgress({
         invalidateOnce();
         fireTerminal();
       },
+      onWarning: (msg) => {
+        // P-0117 D4: append only a message not already held (absorbs a
+        // reconnect re-delivery). Not cleared on paused or terminal.
+        setLiveWarnings((prev) =>
+          prev.includes(msg.message) ? prev : [...prev, msg.message],
+        );
+      },
       onPaused: () => {
         // P-0099 v3-20e: paused is non-terminal — invalidate the
         // cached job state so the UI flips to the Resume / Cancel
@@ -168,6 +182,7 @@ export function useJobProgress({
       prevStatusRef.current = undefined;
       terminalFiredRef.current = null;
       terminalInvalidatedRef.current = null;
+      setLiveWarnings((held) => (held.length === 0 ? held : []));
     }
     const prev = prevStatusRef.current;
     prevStatusRef.current = job?.status;
@@ -193,6 +208,7 @@ export function useJobProgress({
   return {
     progress,
     foldLog,
+    liveWarnings,
     clearProgress,
   };
 }
