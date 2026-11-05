@@ -208,6 +208,10 @@ def _invalid_json(job_dir: Path) -> None:
     (job_dir / "model_meta.json").write_text("{", encoding="utf-8")
 
 
+def _invalid_utf8(job_dir: Path) -> None:
+    (job_dir / "model_meta.json").write_bytes(b'{"lizyml_version": "\xff"}')
+
+
 def _not_an_object(job_dir: Path) -> None:
     _write_sidecar(job_dir, ["lizyml_version", lizyml.__version__])
 
@@ -222,6 +226,7 @@ REFUSALS: dict[str, tuple[Callable[[Path], None], str]] = {
     "other_minor": (_sidecar_with_version(_other_minor()), "lizyml_version_mismatch"),
     "missing_sidecar": (_drop_sidecar, "missing_meta"),
     "invalid_json": (_invalid_json, "corrupt_meta"),
+    "invalid_utf8": (_invalid_utf8, "corrupt_meta"),
     "not_an_object": (_not_an_object, "corrupt_meta"),
     "no_version_key": (_no_version_key, "lizyml_version_mismatch"),
     "empty_version": (_sidecar_with_version(""), "lizyml_version_mismatch"),

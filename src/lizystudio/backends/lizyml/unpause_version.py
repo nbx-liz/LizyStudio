@@ -74,7 +74,9 @@ def _read_sidecar(path: Path) -> dict[str, Any]:
             kind="missing_meta",
             suggested_fix="Start a new Tune; this paused study cannot be checked.",
         ) from exc
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
+        # UnicodeDecodeError is a ValueError, not an OSError: bytes that are
+        # not UTF-8 must refuse as corrupt, not escape as a 500.
         raise _corrupt(path, exc) from exc
     try:
         meta = json.loads(text)
