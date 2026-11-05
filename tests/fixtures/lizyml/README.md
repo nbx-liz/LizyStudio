@@ -39,12 +39,12 @@ Each directory contains:
 
 ## Capture metadata
 
-- **Captured**: 2026-10-22
-- **lizyml version**: 0.20.0
+- **Captured**: 2026-11-05
+- **lizyml version**: 0.21.1
 - **Python version**: 3.12.3
 - **Platform**: linux (aarch64)
-- **Jobs**: binary_no_cal `job_bfca7941`, binary_isotonic `job_27682903`,
-  regression `job_c499144c`, tune `job_866aa15e` (P-0116 child 8)
+- **Jobs**: binary_no_cal `job_86acb8ea`, binary_isotonic `job_1599d4e7`,
+  regression `job_d712ddeb`, tune `job_f4b84b7e` (P-0117 PR 1)
 
 ## Re-capture procedure
 

@@ -1,6 +1,6 @@
 name: Tech Task
 description: Refactoring, hardening, chore, test coverage, or other technical work
-labels: ["tech-task"]
+labels: ["tech-task", "needs-triage"]
 body:
   - type: markdown
     attributes:

@@ -1,9 +1,9 @@
 {
-  "format_version": 4,
-  "lizyml_version": "0.20.0",
+  "format_version": 5,
+  "lizyml_version": "0.21.1",
   "python_version": "3.12.3 (main, Aug 31 2026, 10:18:26)",
-  "timestamp": "2026-10-21T23:36:01.483096+00:00",
-  "run_id": "49889745-e09c-4559-a0e9-be09ce9a0580",
+  "timestamp": "2026-11-04T22:51:29.157268+00:00",
+  "run_id": "807ceddc-c1be-42a5-991b-f98520e53c56",
   "config": {
     "config_version": 1,
     "task": "regression",
@@ -228,8 +228,8 @@
   "checksums": {
     "algorithm": "sha256",
     "files": {
-      "fit_result.pkl": "0688234a3fcf57ca4a1e68f5578c5a27f8d949a83adc53b470fbfc3b05eeff89",
-      "refit_model.pkl": "2421fe1ce997faed001a4d54021fc76aac8e04f044bc96503e9f12a0f6cc886a",
+      "fit_result.pkl": "17ad9554f250be18a8fd4f82f0888570edebbb6e257aa569aff905fe2b45a9f2",
+      "refit_model.pkl": "7887cd1fe544505a32f1a64a13094725c228393a1b24ab8a731c80c3f203a070",
       "analysis_context.pkl": "fb8150fc37d12e64ac16e24542bb61e2fb3e9fd8c34ec440aff2cc0877341494"
     }
   },

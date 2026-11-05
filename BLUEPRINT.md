@@ -415,7 +415,9 @@ class DataRef:
 
 **H-0062 Phase B 追加ファイル:**
 - `model.pkl`: Tune 実行中に各 trial 完了毎に atomic rename で上書き保存される（クラッシュ耐性のための best-effort）。加えて `Model.tune()` が `self._study` をセットしてから `return` する前に、**確定版の最終 save を必ず 1 回実行する**。lizyml の `Model.tune()` は study を関数末尾でのみ内部フィールドに代入する契約のため、毎 trial save だけだと pickle に `_study=None` しか残らず、Re-tune / Resume で `load_checkpoint()` した Model が `lizyml: Cannot resume tuning: no previous tune() call` を発生させる（H-0062 Bugfix 2026-04-14）。再tune / resume 時はこの最終 save をソース・オブ・トゥルースとして `load_checkpoint()` でモデル状態（Optuna study 含む）を復元する。
-- `model_meta.json`: pickle schema version + saved_at + lizyml/lightgbm/optuna のバージョン記録。メジャーバージョン不一致時は `PICKLE_INCOMPATIBLE` で load を拒否する。
+- `model_meta.json`: pickle schema version + saved_at + lizyml/lightgbm/optuna のバージョン記録。lizyml の major.minor が今の runtime と違うと、`PICKLE_INCOMPATIBLE` で load を拒否する（`pickle_compat.py`、`kind = "lizyml_version_mismatch"`）。たとえば lizyml 0.20 で作った Tune の retune は、lizyml 0.21 では拒否される（job の行は残る。P-0117 D1）。
+
+**`model/` の保存形式（lizyml の `format_version`）:** `model/` は lizyml が書き、形式は lizyml が持つ。lizyml 0.21 は `format_version` 5 で書き、lizyml 0.20 以前はそれを読めない（一方向）。0.21 は形式 1〜4 も読み、予測する。そのため、0.20 で作った job は 0.21 でも開け、推論・export-code・モデルの export ができる（`tests/fixtures/lizyml020/`、P-0117 D1）。ただし、0.21 でモデルを export すると形式 5 になり、0.20 以前では読めない。lizyml を上げる前に job の保存先をバックアップする。
 - `meta.json.parent_job_id`: Re-tune / Resume の child job では parent の job_id を参照する。非 child job では `null`。
 
 **format_version と legacy 保護（P-0103 / v3-25 / R-4.1）:** ディスク上の `meta.json` 等は `storage/versions.py` 経由で読み書きし、`STUDIO_FORMAT_VERSION`（現行 `2` — P-0099 v3-20a で `1`→`2`）の値を `format_version` キーに記録する。
@@ -2802,7 +2804,7 @@ Workspace の `workspace_result` は完了時に自動更新される。
 |-----------|------|
 | `sections` | Fit タブの Accordion セクション定義 |
 | `option_sets` | Task 別の選択肢リスト。`objective`（`{task: [...]}`）は LizyML `LGBMProvider.objective_choices(task)` の canonical 全列挙（P-0104 Wave 3.1a）、`metric`（`{task: {native, feval}}`）は `LGBMProvider.metric_choices(task)` の `model.params.metric` 選択肢で `feval` 由来は "Custom (slow)" バッジ表示（P-0104 Wave 3.1b / Q2-Q3）、`eval_metric`（`{task: [...]}`）は LizyML eval-metrics registry の post-hoc 評価メトリクス（Tune Evaluation セクション用）。いずれも Studio 側でハードコードしない。`model_metric` は Wave 3.1b で撤廃（`metric` に統合） |
-| `parameter_bounds` | Task 別の hyper-parameter 上下限（`{task: {param: {"min": ..., "max": ...}}}`）。LizyML `LGBMProvider.parameter_bounds(task)` を SSOT として読込む（P-0104 Wave 3.1a）。キーは LizyML 正規名（`early_stopping_rounds`）。フロントエンドは `search_space_catalog` のドット記法キー（`early_stopping.rounds`）をアンダースコア記法に正規化して参照し、Tune Search Space の Range Min/Max NumberInput をこの範囲にクランプする |
+| `parameter_bounds` | Task 別の hyper-parameter 上下限（`{task: {param: {"min": ..., "max": ...}}}`）。LizyML `LGBMProvider.parameter_bounds(task)` を SSOT として読込む（P-0104 Wave 3.1a）。キーは LizyML 正規名（`early_stopping_rounds`）。フロントエンドは `search_space_catalog` のドット記法キー（`early_stopping.rounds`）をアンダースコア記法に正規化して参照し、Tune Search Space の Range Min/Max NumberInput をこの範囲にクランプする。片側だけの範囲もある（lizyml 0.21 以降の `max_depth` は `{"min": -1}` だけ。P-0117 D5）。無い側はクランプしない |
 | `parameter_hints` | Model Params セクションに常時表示するパラメータ定義 |
 | `search_space_catalog` | Tune Search Space に表示するパラメータ定義（`group` でグループ分け）。各エントリの詳細は下記参照 |
 | `step_map` | NumberInput のステップ値マップ |
