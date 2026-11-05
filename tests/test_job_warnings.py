@@ -15,6 +15,7 @@ import logging
 import shutil
 import threading
 import warnings
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -415,6 +416,123 @@ def test_a_third_party_recorder_during_a_job_leaves_the_dispatcher_installed(
     assert sentinel.messages == ["server thread"]
 
 
+class _LastResortSpy(logging.Handler):
+    """Stands in for ``logging.lastResort`` (level WARNING, like the real one)."""
+
+    def __init__(self) -> None:
+        super().__init__(logging.WARNING)
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+
+@contextlib.contextmanager
+def _bare_lizyml_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[_LastResortSpy, logging.Logger]]:
+    """No handler on the ``lizyml.x`` chain but ours, and ``lastResort``
+    replaced by a spy; handler lists and ``propagate`` restored on exit.
+
+    Entered in the test body: pytest adds its root capture handlers at the
+    start of the call phase, after fixtures run.
+    """
+    spy = _LastResortSpy()
+    monkeypatch.setattr(logging, "lastResort", spy)
+    chain = [
+        logging.getLogger(),
+        logging.getLogger("lizyml"),
+        logging.getLogger("lizyml.x"),
+    ]
+    saved = [(lg, list(lg.handlers), lg.propagate) for lg in chain]
+    for lg in chain:
+        lg.handlers = [h for h in lg.handlers if h is _job_warnings._HANDLER]
+        lg.propagate = True
+    assert logging.getLogger("lizyml").handlers == [_job_warnings._HANDLER]
+    try:
+        yield spy, logging.getLogger("lizyml.x")
+    finally:
+        for lg, handlers, propagate in saved:
+            lg.handlers = handlers
+            lg.propagate = propagate
+
+
+class _ListHandler(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
+
+
+def _log_on_another_thread(logger: logging.Logger, text: str) -> None:
+    t = threading.Thread(target=lambda: logger.warning("%s", text))
+    t.start()
+    t.join(timeout=10)
+
+
+def test_an_unhandled_lizyml_warning_off_a_job_still_reaches_last_resort(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Round 2: our handler on ``lizyml`` makes ``callHandlers`` count one
+    handler, which would skip ``lastResort``; the handler reproduces the
+    fallback for a thread that runs no job."""
+    with _bare_lizyml_chain(monkeypatch) as (spy, emitter):
+        _log_on_another_thread(emitter, "nobody else listens")
+        emitter.info("below lastResort's level")
+
+    assert spy.messages == ["nobody else listens"]
+
+
+@pytest.mark.parametrize("where", ["root", "lizyml.x"])
+def test_last_resort_is_not_used_when_another_handler_exists(
+    where: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    other = _ListHandler()
+    with _bare_lizyml_chain(monkeypatch) as (spy, emitter):
+        target = logging.getLogger() if where == "root" else emitter
+        target.addHandler(other)
+        _log_on_another_thread(emitter, "someone listens")
+
+    assert spy.messages == []
+    assert other.messages == ["someone listens"]
+
+
+def test_the_walk_stops_where_propagate_is_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """As ``callHandlers`` does: with ``lizyml`` not propagating, a root
+    handler is never reached and does not count, so the fallback runs."""
+    root_handler = _ListHandler()
+    with _bare_lizyml_chain(monkeypatch) as (spy, emitter):
+        logging.getLogger("lizyml").propagate = False
+        logging.getLogger().addHandler(root_handler)
+        _log_on_another_thread(emitter, "stops at lizyml")
+
+    assert root_handler.messages == []
+    assert spy.messages == ["stops at lizyml"]
+
+
+def test_a_job_thread_record_does_not_reach_last_resort(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A job thread's record keeps today's behaviour: captured, and not
+    also printed by the fallback."""
+    store = JobStore(tmp_path / "jobs")
+    job = _job(store)
+    collector, _ = _collector(store, job)
+
+    with (
+        _bare_lizyml_chain(monkeypatch) as (spy, emitter),
+        capture_job_warnings(collector),
+    ):
+        emitter.warning("the job's own")
+
+    assert job.warnings == ["the job's own"]
+    assert spy.messages == []
+
+
 def test_a_lizyml_record_from_an_unregistered_thread_passes_through_untouched(
     tmp_path: Path,
 ) -> None:
@@ -580,6 +698,10 @@ def test_only_the_exact_resource_info_event_is_captured_below_warning(
         ("at FILE://host/share/x.py", "at <path>"),
         (r"\\server\share\x.csv gone", "<path> gone"),
         ("/abs/at/start", "<path>"),
+        # Right after a colon (round 2): a colon is not a URL by itself.
+        ("cannot read:/srv/x", "cannot read:<path>"),
+        ("reason=ValueError:/tmp/a/b", "reason=ValueError:<path>"),
+        ("path:/a", "path:<path>"),
     ],
 )
 def test_sanitize_replaces_absolute_paths_with_a_placeholder(
@@ -597,6 +719,7 @@ def test_sanitize_replaces_absolute_paths_with_a_placeholder(
         "n/a",
         "application/json",
         "see https://example.com/docs/x for details",
+        "http://host/x",
         "a / b",
         "ratio 3/4, max_depth=-1",
         "LightGBM will train with num_leaves=131072 (derived by auto_num_leaves "
@@ -630,6 +753,32 @@ def test_the_collector_sanitizes_before_log_store_and_broadcast(
         "cannot read <path>",
         "event='trial.failed' trial=0 state=FAIL reason=ValueError: "
         "no such file: '<path>'",
+    ]
+    assert job.warnings == expected
+    assert str(tmp_path) not in "\n".join(lines)
+    assert [c.args[1] for c in broadcaster.send_warning.call_args_list] == expected
+    assert str(tmp_path) not in store.path_for(job.job_id, "meta").read_text()
+
+
+def test_the_collector_sanitizes_a_path_right_after_a_colon(
+    tmp_path: Path,
+) -> None:
+    store = JobStore(tmp_path / "jobs")
+    job = _job(store)
+    broadcaster = MagicMock()
+    collector, lines = _collector(store, job, broadcaster)
+    secret = str(tmp_path / "private" / "cache.bin")
+
+    with capture_job_warnings(collector):
+        logging.getLogger("lizyml.tuner").warning(
+            "event='trial.failed' trial=%d state=%s reason=%s",
+            1,
+            "FAIL",
+            f"OSError: cannot read:{secret}",
+        )
+
+    expected = [
+        "event='trial.failed' trial=1 state=FAIL reason=OSError: cannot read:<path>"
     ]
     assert job.warnings == expected
     assert str(tmp_path) not in "\n".join(lines)

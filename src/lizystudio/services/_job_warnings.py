@@ -39,7 +39,8 @@ touches ``warnings.showwarning`` or the loggers. The dispatcher and the
 handler look the emitting thread up (``threading.get_ident()`` /
 ``LogRecord.thread``): a warning reaches the job whose thread emitted it,
 and a thread that runs no job passes through untouched (to the chained
-hook, or to the logger's other handlers). A warning a job emits from a
+hook, or to the logger's other handlers, or to ``logging.lastResort`` when
+there are none, as if our handler were not installed). A warning a job emits from a
 thread it started itself is not attributed to the job (lizyml's tune runs
 its trials on the calling thread). A capture in a process that never
 installed the hooks logs that once, at WARNING, on this module's logger.
@@ -137,10 +138,13 @@ _FILE_URI = re.compile(r"""file://[^\s'"<>]*""", re.IGNORECASE)
 # A Windows drive path (``C:\`` or ``C:/``) and a UNC path (``\\host\share``).
 _WINDOWS_PATH = re.compile(r"""(?<![\w])[A-Za-z]:[\\/][^\s'"<>]*""")
 _UNC_PATH = re.compile(r"""(?<![\w\\])\\\\[^\s\\'"<>]+\\[^\s'"<>]*""")
-# A POSIX absolute path: a ``/`` not preceded by a word character, ``:``
-# or ``/`` (so ``and/or``, ``1/2`` and the ``//`` of a URL are kept), then
-# at least one path character. It ends at whitespace or a quote.
-_POSIX_PATH = re.compile(r"""(?<![\w:/])/[^\s/'"<>]+(?:/[^\s/'"<>]*)*""")
+# A POSIX absolute path: a ``/`` not preceded by a word character or ``/``
+# (so ``and/or`` and ``1/2`` are kept), then at least one path character
+# that is not ``/``. A colon before it is allowed (``read:/srv/x``); a URL's
+# ``scheme://host/x`` is kept because its first ``/`` is followed by ``/``,
+# its second is preceded by ``/``, and ``/x`` is preceded by the host.
+# It ends at whitespace or a quote.
+_POSIX_PATH = re.compile(r"""(?<![\w/])/[^\s/'"<>]+(?:/[^\s/'"<>]*)*""")
 
 _ShowWarning = Callable[..., None]
 
@@ -239,16 +243,41 @@ def _is_captured(record: logging.LogRecord) -> bool:
     )
 
 
+def _last_resort(record: logging.LogRecord, own: logging.Handler) -> None:
+    """Python's no-handler fallback, as if *own* were not installed.
+
+    Walks the emitting logger's chain as ``Logger.callHandlers`` does
+    (stopping after a logger with ``propagate`` false) and counts every
+    handler but *own*, whatever its level. When it counts none, the record
+    goes to ``logging.lastResort`` if that exists and the record's level
+    reaches it. ``callHandlers`` itself counted *own*, so it skipped this.
+    """
+    logger: logging.Logger | None = logging.getLogger(record.name)
+    while logger is not None:
+        if any(h is not own for h in logger.handlers):
+            return
+        logger = logger.parent if logger.propagate else None
+    fallback = logging.lastResort
+    if fallback is not None and record.levelno >= fallback.level:
+        fallback.handle(record)
+
+
 class _LizymlRecordHandler(logging.Handler):
     """Routes a ``lizyml`` record to the collector of its emitting thread.
 
     A record from a thread that runs no job is left alone: this handler
     neither changes it nor stops it reaching the logger's other handlers.
+    Being a handler, though, it is counted by ``Logger.callHandlers``, which
+    calls ``logging.lastResort`` only when it counts none; so for such a
+    record it reproduces that fallback itself (:func:`_last_resort`).
     """
 
     def emit(self, record: logging.LogRecord) -> None:
         collector = _registry.collector_for(record.thread)
-        if collector is None or not _is_captured(record):
+        if collector is None:
+            _last_resort(record, self)
+            return
+        if not _is_captured(record):
             return
         try:
             collector.record_log(record)
