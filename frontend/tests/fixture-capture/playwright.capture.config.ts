@@ -31,8 +31,8 @@ export default defineConfig({
   timeout: 300_000,
   webServer: [
     {
-      // --jobs-dir, not LIZYSTUDIO_JOBS_DIR: the CLI overwrites that variable
-      // with its own --jobs-dir default.
+      // An explicit --jobs-dir wins over any LIZYSTUDIO_JOBS_DIR in the
+      // environment (#737), so the capture always writes to jobsDir.
       command: `LIZYSTUDIO_FILES_ROOT=/tmp uv run lizystudio --port 8501 --jobs-dir ${jobsDir}`,
       url: "http://localhost:8501/api/workspace/status",
       reuseExistingServer: false,
