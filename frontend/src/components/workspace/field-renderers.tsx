@@ -376,14 +376,7 @@ function renderDiscriminatedUnion(
   ) => ReactNode,
 ): ReactNode {
   const alternatives = prop.alternatives ?? [];
-  const selectedTitle =
-    (value != null && typeof value === "object" ? prop.title : undefined) ??
-    alternatives[0].title ??
-    alternatives[0].type;
-  const selectedIdx = alternatives.findIndex(
-    (alt) => (alt.title ?? alt.type) === selectedTitle,
-  );
-  const activeIdx = selectedIdx >= 0 ? selectedIdx : 0;
+  const activeIdx = prop.activeAlternativeIndex ?? 0;
   const activeAlt = alternatives[activeIdx];
 
   return (

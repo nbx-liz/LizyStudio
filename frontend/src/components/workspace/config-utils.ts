@@ -24,6 +24,8 @@ export interface SchemaProperty {
   nullable?: boolean;
   /** Resolved alternatives for multi-type anyOf (discriminated unions). */
   alternatives?: SchemaProperty[];
+  /** Index of the matching resolved alternative, defaulting to the first. */
+  activeAlternativeIndex?: number;
 }
 
 export type Defs = Record<string, SchemaProperty>;
@@ -47,6 +49,16 @@ export function setNestedValue(
   path: string[],
   value: unknown,
 ): Record<string, unknown> {
+  if (Array.isArray(obj)) {
+    const result = [...obj];
+    const [first, ...rest] = path;
+    const index = Number(first);
+    result[index] =
+      rest.length === 0
+        ? value
+        : setNestedValue(result[index] ?? {}, rest, value);
+    return result as unknown as Record<string, unknown>;
+  }
   const result = { ...obj };
   if (path.length === 1) {
     result[path[0]] = value;
@@ -136,9 +148,9 @@ export function resolveSchema(
           ? (effectiveValue as Record<string, unknown>)
           : null;
 
-      let primary = resolvedAlternatives[0];
+      let activeAlternativeIndex = 0;
       if (currentObj) {
-        const match = resolvedAlternatives.find((alt) => {
+        const matchIndex = resolvedAlternatives.findIndex((alt) => {
           if (!alt.properties) return false;
           return Object.entries(alt.properties).some(([k, p]) => {
             const resolved = resolveSchema(p, defs, undefined, _visited);
@@ -148,16 +160,17 @@ export function resolveSchema(
             );
           });
         });
-        if (match) primary = match;
+        if (matchIndex >= 0) activeAlternativeIndex = matchIndex;
       }
 
       return {
-        ...primary,
+        ...resolvedAlternatives[activeAlternativeIndex],
         ...(prop.title ? { title: prop.title } : {}),
         ...(prop.default !== undefined ? { default: prop.default } : {}),
         ...(prop.description ? { description: prop.description } : {}),
         ...(hasNull ? { nullable: true } : {}),
         alternatives: resolvedAlternatives,
+        activeAlternativeIndex,
       };
     }
 

@@ -66,6 +66,32 @@ describe("materializeOp", () => {
       split: { method: "kfold" },
     });
   });
+
+  it("preserves arrays when patching a child field of an array item", () => {
+    const current = {
+      steps: [
+        { name: "first", enabled: true },
+        { name: "second", enabled: false },
+      ],
+    };
+    const op: WriteOp = {
+      kind: "patch",
+      path: ["steps", "1", "name"],
+      value: "updated",
+      reason: "config-form-edit",
+    };
+
+    const out = materializeOp(op, current);
+
+    expect(Array.isArray(out.steps)).toBe(true);
+    expect(out.steps).toEqual([
+      { name: "first", enabled: true },
+      { name: "updated", enabled: false },
+    ]);
+    expect(out.steps).not.toBe(current.steps);
+    expect((out.steps as unknown[])[0]).toBe(current.steps[0]);
+    expect(current.steps[1]).toEqual({ name: "second", enabled: false });
+  });
 });
 
 describe("coalesceByReason", () => {

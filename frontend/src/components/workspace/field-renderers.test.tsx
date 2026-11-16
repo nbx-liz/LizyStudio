@@ -556,6 +556,61 @@ describe("renderField — discriminated union", () => {
     cleanup();
   });
 
+  it("selects the matching non-first anyOf object variant despite the outer title", () => {
+    // No live schema has this shape yet; keep the latent anyOf case inline.
+    const fixture: {
+      schema: SchemaProperty;
+      value: unknown;
+      selectedTitle: string;
+    } = {
+      schema: {
+        title: "Strategy",
+        anyOf: [
+          {
+            type: "object",
+            title: "Option A",
+            properties: {
+              mode: { type: "string", const: "a" },
+              value_a: { type: "number" },
+            },
+          },
+          {
+            type: "object",
+            title: "Option B",
+            properties: {
+              mode: { type: "string", const: "b" },
+              value_b: { type: "string" },
+            },
+          },
+        ],
+      },
+      value: { mode: "b", value_b: "saved" },
+      selectedTitle: "Option B",
+    };
+    const onChange = vi.fn();
+
+    renderNode(
+      renderField(
+        fixture.schema,
+        "strategy",
+        ["strategy"],
+        fixture.value,
+        onChange,
+        emptyDefs,
+      ),
+    );
+
+    expect(
+      screen.getByRole("combobox", { name: "Strategy" }),
+    ).toHaveTextContent(fixture.selectedTitle);
+    expect(screen.queryByText("Value A")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByDisplayValue("saved"), {
+      target: { value: "edited" },
+    });
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith(["strategy", "value_b"], "edited");
+  });
+
   it("renders discriminated union with alternatives", () => {
     const prop: SchemaProperty = {
       alternatives: [

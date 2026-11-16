@@ -39,6 +39,26 @@ describe("setNestedValue", () => {
     ).toBe(0.01);
   });
 
+  it("preserves arrays when editing a child field of an array item", () => {
+    const obj = {
+      steps: [
+        { name: "first", enabled: true },
+        { name: "second", enabled: false },
+      ],
+    };
+
+    const result = setNestedValue(obj, ["steps", "1", "name"], "updated");
+
+    expect(Array.isArray(result.steps)).toBe(true);
+    expect(result.steps).toEqual([
+      { name: "first", enabled: true },
+      { name: "updated", enabled: false },
+    ]);
+    expect(result.steps).not.toBe(obj.steps);
+    expect((result.steps as unknown[])[0]).toBe(obj.steps[0]);
+    expect(obj.steps[1]).toEqual({ name: "second", enabled: false });
+  });
+
   it("creates intermediate objects if missing", () => {
     const obj = {};
     const result = setNestedValue(obj, ["a", "b", "c"], 42);
