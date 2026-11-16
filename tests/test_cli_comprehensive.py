@@ -15,6 +15,55 @@ from lizystudio.cli import main
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def _isolate_cli_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start clean and restore all CLI env writes after each test."""
+    for name in (
+        "LIZYSTUDIO_BACKEND",
+        "LIZYSTUDIO_JOBS_DIR",
+        "LIZYSTUDIO_RELOAD",
+    ):
+        # Register restoration even when the variable was initially absent.
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
+
+
+class TestCliEnvPrecedence:
+    """Explicit flags win over the environment, which wins over defaults."""
+
+    def test_jobs_dir_env_kept_without_flag(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Keep the caller's jobs directory when --jobs-dir is omitted."""
+        monkeypatch.setenv("LIZYSTUDIO_JOBS_DIR", "/env/jobs")
+        with patch("uvicorn.run"):
+            main([])
+            assert os.environ["LIZYSTUDIO_JOBS_DIR"] == "/env/jobs"
+
+    def test_jobs_dir_flag_wins_over_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An explicit --jobs-dir takes precedence over the environment."""
+        monkeypatch.setenv("LIZYSTUDIO_JOBS_DIR", "/env/jobs")
+        with patch("uvicorn.run"):
+            main(["--jobs-dir", "/flag/jobs"])
+            assert os.environ["LIZYSTUDIO_JOBS_DIR"] == "/flag/jobs"
+
+    def test_backend_env_kept_without_flag(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Keep the caller's backend when --backend is omitted."""
+        monkeypatch.setenv("LIZYSTUDIO_BACKEND", "env_backend")
+        with patch("uvicorn.run"):
+            main([])
+            assert os.environ["LIZYSTUDIO_BACKEND"] == "env_backend"
+
+    def test_backend_flag_wins_over_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An explicit --backend takes precedence over the environment."""
+        monkeypatch.setenv("LIZYSTUDIO_BACKEND", "env_backend")
+        with patch("uvicorn.run"):
+            main(["--backend", "flag_backend"])
+            assert os.environ["LIZYSTUDIO_BACKEND"] == "flag_backend"
+
+
 class TestCliAllOptions:
     """Test all CLI option combinations."""
 

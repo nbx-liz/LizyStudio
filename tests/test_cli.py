@@ -12,6 +12,19 @@ from lizystudio.cli import main
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def _isolate_cli_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Start clean and restore all CLI env writes after each test."""
+    for name in (
+        "LIZYSTUDIO_BACKEND",
+        "LIZYSTUDIO_JOBS_DIR",
+        "LIZYSTUDIO_RELOAD",
+    ):
+        # Register restoration even when the variable was initially absent.
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
+
+
 class TestCli:
     def test_parse_default_args(self) -> None:
         """Default args set host=127.0.0.1, port=8501, no reload."""

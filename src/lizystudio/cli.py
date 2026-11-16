@@ -30,20 +30,29 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--backend",
-        default="lizyml",
-        help="Backend adapter name (default: lizyml)",
+        default=None,
+        help="Backend adapter name (default: LIZYSTUDIO_BACKEND if set, else lizyml)",
     )
     parser.add_argument(
         "--jobs-dir",
         type=Path,
-        default=Path(".lizystudio/jobs"),
-        help="Job storage directory (default: .lizystudio/jobs)",
+        default=None,
+        help=(
+            "Job storage directory "
+            "(default: LIZYSTUDIO_JOBS_DIR if set, else .lizystudio/jobs)"
+        ),
     )
     args = parser.parse_args(argv)
 
     # Pass settings via env vars so they survive --reload restarts
-    os.environ["LIZYSTUDIO_BACKEND"] = args.backend
-    os.environ["LIZYSTUDIO_JOBS_DIR"] = str(args.jobs_dir)
+    if args.backend is not None:
+        os.environ["LIZYSTUDIO_BACKEND"] = args.backend
+    else:
+        os.environ.setdefault("LIZYSTUDIO_BACKEND", "lizyml")
+    if args.jobs_dir is not None:
+        os.environ["LIZYSTUDIO_JOBS_DIR"] = str(args.jobs_dir)
+    else:
+        os.environ.setdefault("LIZYSTUDIO_JOBS_DIR", ".lizystudio/jobs")
     if args.reload:
         os.environ["LIZYSTUDIO_RELOAD"] = "1"
 
