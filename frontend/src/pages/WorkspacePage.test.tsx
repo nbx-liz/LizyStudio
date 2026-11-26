@@ -2,7 +2,10 @@ import { act, cleanup, screen, waitFor } from "@testing-library/react";
 import { forwardRef, useImperativeHandle } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/test/helpers";
-import { validationProblem } from "@/test/problemDetails";
+import {
+  validationProblem,
+  workspaceLockedProblem,
+} from "@/test/problemDetails";
 import { WorkspacePage } from "./WorkspacePage";
 
 // --- API mocks ---
@@ -384,6 +387,26 @@ describe("WorkspacePage", () => {
     expect(mockToast.success).not.toHaveBeenCalledWith(
       "Best params applied to Fit tab. Click Fit to run.",
     );
+  });
+
+  // BLUEPRINT §6.3 (P-0110): a 409 WORKSPACE_LOCKED is the quiet info
+  // toast every other config writer shows, not the error toast.
+  it("handleApplyToFit shows the lock info toast when backend answers 409", async () => {
+    mockUpdateConfig.mockRejectedValueOnce(workspaceLockedProblem());
+    renderWithProviders(<WorkspacePage />);
+
+    const onApplyToFit = capturedResultsPanelProps.onApplyToFit as (
+      config: Record<string, unknown>,
+    ) => Promise<void>;
+    await act(async () => onApplyToFit({ model: { name: "X" } }));
+
+    expect(mockUpdateConfig).toHaveBeenCalledTimes(1);
+    expect(mockToast.info).toHaveBeenCalledTimes(1);
+    expect(mockToast.info).toHaveBeenCalledWith(
+      "Config is locked while a job is running",
+    );
+    expect(mockToast.error).toHaveBeenCalledTimes(0);
+    expect(mockToast.success).toHaveBeenCalledTimes(0);
   });
 
   it("updates task when onTaskChanged is called", () => {

@@ -908,6 +908,55 @@ describe("useModelPanelData", () => {
       errorSpy.mockRestore();
     });
 
+    // PR #781 round 3: a successful undo / redo clears the entries a
+    // refused one stored, like a successful form edit does, so Fit and
+    // Tune are not blocked by errors of a snapshot the server refused.
+    // The saved snapshot is then validated as after any save.
+    it.each([
+      ["undo", "handleUndo", { model: { name: "A" } }],
+      ["redo", "handleRedo", { model: { name: "B" } }],
+    ] as const)(
+      "a successful %s after a refused one clears the refusal errors",
+      async (_label, handler, savedSnapshot) => {
+        const { result } = await renderWithTwoEdits();
+        if (handler === "handleRedo") {
+          // Move to A first so B is the redo target.
+          vi.mocked(updateConfig).mockResolvedValueOnce({
+            config: {},
+            validation_errors: [],
+          });
+          await act(async () => {
+            await result.current.handleUndo();
+          });
+        }
+        vi.mocked(updateConfig).mockRejectedValueOnce(validationProblem());
+        await act(async () => {
+          await result.current[
+            handler === "handleRedo" ? "handleRedo" : "handleUndo"
+          ]();
+        });
+        expect(result.current.errors).toEqual([N_SPLITS_ERROR]);
+        expect(result.current.fitEnabled).toBe(false);
+
+        vi.mocked(validateConfig).mockClear();
+        vi.mocked(updateConfig).mockResolvedValueOnce({
+          config: {},
+          validation_errors: [],
+        });
+        await act(async () => {
+          await result.current[handler]();
+        });
+
+        expect(result.current.errors).toEqual([]);
+        expect(result.current.fitEnabled).toBe(true);
+        expect(result.current.disabledReason).toBeNull();
+        await waitFor(() => expect(validateConfig).toHaveBeenCalledTimes(1), {
+          timeout: 2000,
+        });
+        expect(validateConfig).toHaveBeenCalledWith(savedSnapshot);
+      },
+    );
+
     it("a refused redo keeps the cursor and the cache on the current snapshot", async () => {
       const { toast } = await import("sonner");
       const { result, queryClient } = await renderWithTwoEdits();

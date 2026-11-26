@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import {
   getErrorMessage,
   getValidationErrors,
+  isWorkspaceLocked,
   summarizeValidationErrors,
 } from "@/api/errors";
 import { useConfig, useUiSchema, useWorkspaceStatus } from "@/api/queries";
@@ -251,6 +252,13 @@ export function WorkspacePage() {
         reason: "apply-to-fit",
       });
       if (!result.ok) {
+        // BLUEPRINT §6.3: a 409 WORKSPACE_LOCKED is the quiet info toast
+        // every other config writer shows.
+        if (isWorkspaceLocked(result.details)) {
+          toast.info("Config is locked while a job is running");
+          queryClient.invalidateQueries({ queryKey: queryKeys.config() });
+          return;
+        }
         // P-0110: a validation rejection is a 422 Problem Details error.
         const validationErrors = getValidationErrors(result.details);
         toast.error(
