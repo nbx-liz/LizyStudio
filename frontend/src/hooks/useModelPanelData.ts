@@ -37,6 +37,7 @@ import type {
   WriteReason,
 } from "@/hooks/useConfigWriteFunnel";
 import { useConfigWriteFunnelOptional } from "@/hooks/useConfigWriteFunnelContext";
+import { useConfigWritePending } from "@/hooks/useConfigWritePending";
 
 const VALIDATION_DEBOUNCE_MS = 500;
 
@@ -74,6 +75,9 @@ export function useModelPanelData({
   const contextFunnel = useConfigWriteFunnelOptional();
   const writeFunnel =
     writeFunnelOverride !== undefined ? writeFunnelOverride : contextFunnel;
+  // P-0110: true while a config write is queued or in flight; undo / redo
+  // and preset load are disabled then (owner ruling, PR #781 round 2).
+  const writePending = useConfigWritePending(writeFunnel);
 
   // --------------------------------------------------------------------
   // Data
@@ -257,58 +261,104 @@ export function useModelPanelData({
     async (
       body: Record<string, unknown>,
       reason: WriteReason,
-    ): Promise<{ ok: boolean; viaFunnel: boolean }> => {
+    ): Promise<{ ok: boolean; viaFunnel: boolean; error?: unknown }> => {
       if (writeFunnel) {
         const result = await writeFunnel.enqueueWrite({
           kind: "replace",
           config: body,
           reason,
         });
-        return { ok: result.ok, viaFunnel: true };
+        return result.ok
+          ? { ok: true, viaFunnel: true }
+          : { ok: false, viaFunnel: true, error: result.details };
       }
       try {
         await updateConfig(body);
         return { ok: true, viaFunnel: false };
-      } catch {
-        return { ok: false, viaFunnel: false };
+      } catch (err) {
+        return { ok: false, viaFunnel: false, error: err };
       }
     },
     [writeFunnel],
   );
 
-  // P-0110: the cursor moves only after the backend accepted the PUT. A
-  // refused undo / redo (422 / 409) leaves the history where it was, so
-  // the cursor never sits on a snapshot the server does not hold. The
-  // commit is skipped if another edit changed the history meanwhile.
+  // P-0110 (BLUEPRINT §6.3): a refused undo / redo shows why. A lock is
+  // the quiet info toast; a 422 fills the errors state and names the
+  // first blocking entry; anything else keeps the generic message.
+  const reportHistoryFailure = useCallback(
+    (label: "Undo" | "Redo", err: unknown) => {
+      if (isWorkspaceLocked(err)) {
+        toast.info("Config is locked while a job is running");
+        return;
+      }
+      const validationErrors = getValidationErrors(err);
+      if (validationErrors !== null) {
+        setErrors(validationErrors);
+        toast.error(
+          `${label} failed: ${summarizeValidationErrors(validationErrors)}`,
+        );
+        return;
+      }
+      toast.error(`${label} failed`);
+    },
+    [],
+  );
+
+  // P-0110: the cursor moves only after the backend accepted the PUT, so
+  // a refused undo / redo (422 / 409) leaves the history where it was.
+  // Owner ruling (PR #781 round 2): undo / redo are disabled while a
+  // config write is pending (`writePending`), and the handlers return
+  // early if called then, so no other write can interleave between the
+  // snapshot read and this commit.
   const handleUndo = useCallback(async () => {
+    if (writeFunnel?.isFlushing()) return;
     const prev = history.peekUndo();
     if (!prev) return;
-    const { ok, viaFunnel } = await sendThroughFunnelOrLegacy(prev, "undo");
-    if (ok) {
-      if (equal(history.peekUndo(), prev)) history.undo();
-      if (!viaFunnel) {
-        queryClient.setQueryData(queryKeys.config(), prev);
-      }
-      toast.info("Config undone");
-    } else {
-      toast.error("Undo failed");
+    const { ok, viaFunnel, error } = await sendThroughFunnelOrLegacy(
+      prev,
+      "undo",
+    );
+    if (!ok) {
+      reportHistoryFailure("Undo", error);
+      return;
     }
-  }, [history, queryClient, sendThroughFunnelOrLegacy]);
+    history.undo();
+    if (!viaFunnel) {
+      queryClient.setQueryData(queryKeys.config(), prev);
+    }
+    toast.info("Config undone");
+  }, [
+    history,
+    queryClient,
+    sendThroughFunnelOrLegacy,
+    reportHistoryFailure,
+    writeFunnel,
+  ]);
 
   const handleRedo = useCallback(async () => {
+    if (writeFunnel?.isFlushing()) return;
     const next = history.peekRedo();
     if (!next) return;
-    const { ok, viaFunnel } = await sendThroughFunnelOrLegacy(next, "redo");
-    if (ok) {
-      if (equal(history.peekRedo(), next)) history.redo();
-      if (!viaFunnel) {
-        queryClient.setQueryData(queryKeys.config(), next);
-      }
-      toast.info("Config redone");
-    } else {
-      toast.error("Redo failed");
+    const { ok, viaFunnel, error } = await sendThroughFunnelOrLegacy(
+      next,
+      "redo",
+    );
+    if (!ok) {
+      reportHistoryFailure("Redo", error);
+      return;
     }
-  }, [history, queryClient, sendThroughFunnelOrLegacy]);
+    history.redo();
+    if (!viaFunnel) {
+      queryClient.setQueryData(queryKeys.config(), next);
+    }
+    toast.info("Config redone");
+  }, [
+    history,
+    queryClient,
+    sendThroughFunnelOrLegacy,
+    reportHistoryFailure,
+    writeFunnel,
+  ]);
 
   // --------------------------------------------------------------------
   // Preset handlers
@@ -324,6 +374,10 @@ export function useModelPanelData({
 
   const handleLoadPreset = useCallback(
     async (name: string) => {
+      // Owner ruling (PR #781 round 2): no preset load while a config
+      // write is pending, so its single write cannot coalesce with or
+      // queue behind another one; the menu is disabled then too.
+      if (writeFunnel?.isFlushing()) return;
       const preset = loadPreset(name);
       if (!preset) return;
       // Issue #276: presets intentionally omit data-bound fields (path,
@@ -346,7 +400,7 @@ export function useModelPanelData({
       const saved = await handleConfigChange(merged);
       if (saved) toast.success(`Preset "${name}" loaded`);
     },
-    [loadPreset, handleConfigChange, queryClient],
+    [loadPreset, handleConfigChange, queryClient, writeFunnel],
   );
 
   // --------------------------------------------------------------------
@@ -411,6 +465,7 @@ export function useModelPanelData({
     handleRedo,
     confirmSavePreset,
     handleLoadPreset,
+    writePending,
   };
 }
 

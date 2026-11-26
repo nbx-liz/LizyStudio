@@ -24,7 +24,7 @@ import {
   workspaceLockedProblem,
 } from "@/test/problemDetails";
 import type { WriteResult } from "./useConfigWriteFunnel";
-import type { ColumnOverride } from "./useDataPanel.types";
+import { buildSyncKey, type ColumnOverride } from "./useDataPanel.types";
 
 const mocks = vi.hoisted(() => ({
   fetchColumns: vi.fn(),
@@ -311,8 +311,13 @@ describe("useTargetSelection", () => {
       folds: 7,
     };
 
-    function renderWithFunnel(result: WriteResult) {
-      const enqueueWrite = vi.fn(async () => result);
+    function renderWithFunnel(
+      result: WriteResult | (() => Promise<WriteResult>),
+      isFlushing: () => boolean = () => false,
+    ) {
+      const enqueueWrite = vi.fn(async () =>
+        typeof result === "function" ? result() : result,
+      );
       const deps = {
         setTarget: fn<[string | null]>(),
         setTask: fn<[string | null]>(),
@@ -337,7 +342,7 @@ describe("useTargetSelection", () => {
             uiSchema: undefined,
             setSyncSuppressed: fn(),
             ...deps,
-            writeFunnel: { enqueueWrite, isFlushing: () => false },
+            writeFunnel: { enqueueWrite, isFlushing },
           }),
         { wrapper: createWrapper() },
       );
@@ -362,8 +367,19 @@ describe("useTargetSelection", () => {
       expect(deps.onTaskChanged).toHaveBeenLastCalledWith("regression");
       expect(deps.setCv).toHaveBeenCalledTimes(2);
       expect(deps.setCv).toHaveBeenLastCalledWith(PRIOR_CV);
-      // Neither the sync key nor a data change is reported.
-      expect(deps.preseedSyncKey).toHaveBeenCalledTimes(0);
+      // The restored selection's key is recorded once, so the sync
+      // effect sees no change and sends no PUT; no data change is
+      // reported.
+      expect(deps.preseedSyncKey).toHaveBeenCalledTimes(1);
+      expect(deps.preseedSyncKey).toHaveBeenCalledWith(
+        buildSyncKey(
+          "old_target",
+          "regression",
+          PRIOR_OVERRIDES,
+          PRIOR_CV,
+          INITIAL_BLOCKED_STATE,
+        ),
+      );
       expect(deps.onDataChanged).toHaveBeenCalledTimes(0);
     }
 
@@ -432,6 +448,55 @@ describe("useTargetSelection", () => {
       expect(deps.setTarget).toHaveBeenCalledTimes(1);
       expect(deps.preseedSyncKey).toHaveBeenCalledTimes(0);
       expect(deps.onDataChanged).toHaveBeenCalledTimes(0);
+    });
+
+    // Owner ruling (PR #781 round 2): no target change while another
+    // config write is pending, and one target change at a time.
+    it("is a no-op while another config write is pending", async () => {
+      const { hook, enqueueWrite, deps } = renderWithFunnel(
+        { ok: true, saved: { config: {}, validation_errors: [] } },
+        () => true,
+      );
+
+      await act(async () => {
+        await hook.current.handleTargetChange("a");
+      });
+
+      expect(enqueueWrite).toHaveBeenCalledTimes(0);
+      expect(mocks.fetchColumns).toHaveBeenCalledTimes(0);
+      expect(deps.setTarget).toHaveBeenCalledTimes(0);
+      expect(deps.preseedSyncKey).toHaveBeenCalledTimes(0);
+      expect(mocks.toastError).toHaveBeenCalledTimes(0);
+    });
+
+    it("ignores a second change while the first is still in progress", async () => {
+      let settle: (r: WriteResult) => void = () => {};
+      const { hook, enqueueWrite, deps } = renderWithFunnel(
+        () =>
+          new Promise<WriteResult>((resolve) => {
+            settle = resolve;
+          }),
+      );
+
+      let first: Promise<void> = Promise.resolve();
+      await act(async () => {
+        first = hook.current.handleTargetChange("a");
+        await new Promise((r) => setTimeout(r, 10));
+      });
+      expect(hook.current.selecting).toBe(true);
+      await act(async () => {
+        await hook.current.handleTargetChange("c");
+      });
+      await act(async () => {
+        settle({ ok: true, saved: { config: {}, validation_errors: [] } });
+        await first;
+      });
+
+      expect(enqueueWrite).toHaveBeenCalledTimes(1);
+      expect(mocks.fetchColumns).toHaveBeenCalledTimes(1);
+      expect(deps.setTarget).toHaveBeenCalledTimes(1);
+      expect(deps.setTarget).toHaveBeenCalledWith("a");
+      expect(hook.current.selecting).toBe(false);
     });
 
     it("a committed write preseeds the sync key and reports the change once", async () => {

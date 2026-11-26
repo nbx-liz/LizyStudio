@@ -35,6 +35,7 @@ import { queryKeys } from "@/api/queryKeys";
 import { INITIAL_BLOCKED_STATE } from "@/components/workspace/BlockedGroupKFoldEditor";
 import { INITIAL_CV_STATE } from "@/components/workspace/cv-state";
 import {
+  N_SPLITS_ERROR,
   validationProblem,
   workspaceLockedProblem,
 } from "@/test/problemDetails";
@@ -526,6 +527,32 @@ describe("useConfigSync", () => {
       );
 
       await waitFor(() => expect(onDataChanged).toHaveBeenCalledTimes(1));
+    });
+
+    // BLUEPRINT §6.3 (P-0110): a 422 names its first blocking entry.
+    it("names the first blocking entry when the funnel write is refused with 422", async () => {
+      const { funnel, enqueueWrite } = createStubFunnel(() => ({
+        ok: false,
+        error: "rejected",
+        details: validationProblem(),
+      }));
+      const { wrapper } = testWrapper;
+      renderHook(
+        () =>
+          useConfigSync(
+            defaultParams({
+              // biome-ignore lint/suspicious/noExplicitAny: stub funnel
+              writeFunnel: funnel as any,
+            }),
+          ),
+        { wrapper },
+      );
+
+      await waitFor(() => expect(mocks.toastError).toHaveBeenCalledTimes(1));
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        `Config sync failed: ${N_SPLITS_ERROR.message}`,
+      );
+      expect(enqueueWrite).toHaveBeenCalledTimes(1);
     });
 
     it("surfaces error toast when funnel returns ok=false (network/other)", async () => {

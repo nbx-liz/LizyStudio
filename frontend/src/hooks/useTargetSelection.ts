@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 import { getErrorMessage } from "@/api/errors";
 import type { ColumnInfo, UiSchema } from "@/api/types";
@@ -93,10 +93,27 @@ export function useTargetSelection({
   writeFunnel,
   legacyUpdateConfig,
 }: UseTargetSelectionParams) {
+  // Owner ruling (PR #781 round 2): one target change at a time, and none
+  // while another config write is pending. A change reads the current
+  // selection, writes once, then rolls back or commits on that write's
+  // result; a second change or another writer in between would make the
+  // rollback overwrite it. `selecting` covers the whole change, including
+  // the column / defaults fetches before its write is enqueued, which the
+  // funnel's own pending flag does not.
+  const inFlightRef = useRef(false);
+  const [selecting, setSelecting] = useState(false);
+
   const handleTargetChange = useCallback(
     async (value: string) => {
+      if (inFlightRef.current || writeFunnel?.isFlushing()) return;
+      inFlightRef.current = true;
+      setSelecting(true);
       // The selection the server holds before this change, restored when
-      // the server refuses the target-select write (P-0110).
+      // the server refuses the target-select write (P-0110). The restored
+      // selection's sync key is recorded too: the sync effect had already
+      // recorded the optimistic key while suppressed, so without this the
+      // restored state would read as a new change and send a cv-change PUT
+      // once suppression ends.
       const restorePrior = () => {
         setTarget(target);
         setColumns(columns);
@@ -105,6 +122,7 @@ export function useTargetSelection({
         onTaskChanged?.(task);
         setCv(cv);
         setBlocked(blocked);
+        preseedSyncKey(buildSyncKey(target, task, overrides, cv, blocked));
       };
       setSyncSuppressed(true);
       setTarget(value);
@@ -208,6 +226,8 @@ export function useTargetSelection({
       } catch (err) {
         toast.error(`Column detection failed: ${getErrorMessage(err)}`);
       } finally {
+        inFlightRef.current = false;
+        setSelecting(false);
         setSyncSuppressed(false);
         // Radix Select returns focus to the trigger on close via
         // `onCloseAutoFocus`, which runs AFTER our finally block. Defer
@@ -244,5 +264,5 @@ export function useTargetSelection({
     ],
   );
 
-  return { handleTargetChange };
+  return { handleTargetChange, selecting };
 }

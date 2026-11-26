@@ -17,6 +17,7 @@ import {
 import { useColumnOverrides } from "./useColumnOverrides";
 import { useConfigSync } from "./useConfigSync";
 import { useConfigWriteFunnelOptional } from "./useConfigWriteFunnelContext";
+import { useConfigWritePending } from "./useConfigWritePending";
 import { useDataLoad } from "./useDataLoad";
 import {
   buildMergedConfig,
@@ -92,6 +93,10 @@ export function useDataPanel({
   // path keeps working for any caller that renders the hook outside
   // a provider (test paths, the few story setups).
   const writeFunnel = useConfigWriteFunnelOptional();
+  // P-0110 (owner ruling, PR #781 round 2): the Target selector is
+  // disabled while any config write is pending or a target change is
+  // still in progress, so a change's rollback cannot overwrite another.
+  const writePending = useConfigWritePending(writeFunnel);
 
   // Issue #358: latch the strategy the user just picked so a stale
   // cache update (cache subscriber firing while the user-driven PUT
@@ -133,38 +138,40 @@ export function useDataPanel({
     };
   }, []);
 
-  const { handleTargetChange } = useTargetSelection({
-    target,
-    columns,
-    overrides: columnOverrides.overrides,
-    task,
-    cv,
-    blocked,
-    dataPath: dataLoad.dataPath,
-    uiSchema,
-    setTarget,
-    setTask,
-    // Issue #358: target-select also resets cv via the suggested-task
-    // path; route it through the user-driven setter so the latch is
-    // marked and any stale cache update during the in-flight PUT is
-    // ignored.
-    setCv: setCvFromUser,
-    setBlocked,
-    setColumns,
-    setOverrides: columnOverrides.setOverrides,
-    setSyncSuppressed: configSync.setSyncSuppressed,
-    preseedSyncKey: configSync.preseedSyncKey,
-    onDataChanged,
-    onTaskChanged,
-    writeFunnel,
-    legacyUpdateConfig: writeFunnel
-      ? undefined
-      : {
-          putConfig: updateConfig,
-          setQueryData: (config) =>
-            queryClient.setQueryData(queryKeys.config(), config),
-        },
-  });
+  const { handleTargetChange, selecting: targetSelecting } = useTargetSelection(
+    {
+      target,
+      columns,
+      overrides: columnOverrides.overrides,
+      task,
+      cv,
+      blocked,
+      dataPath: dataLoad.dataPath,
+      uiSchema,
+      setTarget,
+      setTask,
+      // Issue #358: target-select also resets cv via the suggested-task
+      // path; route it through the user-driven setter so the latch is
+      // marked and any stale cache update during the in-flight PUT is
+      // ignored.
+      setCv: setCvFromUser,
+      setBlocked,
+      setColumns,
+      setOverrides: columnOverrides.setOverrides,
+      setSyncSuppressed: configSync.setSyncSuppressed,
+      preseedSyncKey: configSync.preseedSyncKey,
+      onDataChanged,
+      onTaskChanged,
+      writeFunnel,
+      legacyUpdateConfig: writeFunnel
+        ? undefined
+        : {
+            putConfig: updateConfig,
+            setQueryData: (config) =>
+              queryClient.setQueryData(queryKeys.config(), config),
+          },
+    },
+  );
 
   const handleTaskChange = useCallback(
     (newTask: TaskType) => {
@@ -304,6 +311,7 @@ export function useDataPanel({
     handleLoadPathByValue: dataLoad.handleLoadPathByValue,
     handleUpload: dataLoad.handleUpload,
     handleTargetChange,
+    targetChangeBlocked: targetSelecting || writePending,
     handleTaskChange,
     handleExcludeToggle: columnOverrides.handleExcludeToggle,
     handleTypeChange: columnOverrides.handleTypeChange,

@@ -13,6 +13,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { queryKeys } from "@/api/queryKeys";
+import { createControllableFunnel } from "@/test/fakeFunnel";
 import {
   asServedEntry,
   N_SPLITS_ERROR,
@@ -767,6 +768,92 @@ describe("useModelPanelData", () => {
   });
 
   // -------------------------------------------------------------------------
+  // Owner ruling (PR #781 round 2): undo, redo and preset load are disabled
+  // while a config write is queued or in flight, and their handlers return
+  // early if called then, so no other write can interleave between their
+  // snapshot read and their commit / rollback.
+  // -------------------------------------------------------------------------
+  describe("undo / redo / preset load while a write is pending (P-0110)", () => {
+    it("reports writePending and makes the three handlers no-ops", async () => {
+      const { toast } = await import("sonner");
+      const successSpy = vi.spyOn(toast, "success");
+      const infoSpy = vi.spyOn(toast, "info");
+      const errorSpy = vi.spyOn(toast, "error");
+      localStorage.setItem(
+        "lizystudio-config-presets",
+        JSON.stringify([
+          {
+            name: "p1",
+            config: { model: { name: "P" } },
+            createdAt: "2026-01-01",
+          },
+        ]),
+      );
+      const { funnel, enqueueWrite, setBusy } = createControllableFunnel();
+      const { wrapper } = makeWrapper();
+      const { result } = renderHook(
+        () =>
+          useModelPanelData({
+            hasData: true,
+            running: false,
+            writeFunnel: funnel,
+          }),
+        { wrapper },
+      );
+      await waitFor(() => expect(result.current.config).toBeDefined());
+      await act(async () => {
+        await result.current.handleConfigChange({ model: { name: "A" } });
+      });
+      await act(async () => {
+        await result.current.handleConfigChange({ model: { name: "B" } });
+      });
+      await act(async () => {
+        await result.current.handleUndo();
+      });
+      // A is current, B is redoable, and nothing is undoable.
+      expect(enqueueWrite).toHaveBeenCalledTimes(3);
+      expect(result.current.writePending).toBe(false);
+      successSpy.mockClear();
+      infoSpy.mockClear();
+
+      setBusy(true);
+      expect(result.current.writePending).toBe(true);
+      await act(async () => {
+        await result.current.handleRedo();
+        await result.current.handleUndo();
+        await result.current.handleLoadPreset("p1");
+      });
+
+      // No PUT, no cursor move, no toast.
+      expect(enqueueWrite).toHaveBeenCalledTimes(3);
+      expect(result.current.history.peekRedo()).toEqual({
+        model: { name: "B" },
+      });
+      expect(successSpy).toHaveBeenCalledTimes(0);
+      expect(infoSpy).toHaveBeenCalledTimes(0);
+      expect(errorSpy).toHaveBeenCalledTimes(0);
+
+      // Once the write settles, redo works again (the committed path).
+      setBusy(false);
+      expect(result.current.writePending).toBe(false);
+      await act(async () => {
+        await result.current.handleRedo();
+      });
+      expect(enqueueWrite).toHaveBeenCalledTimes(4);
+      expect(result.current.history.peekUndo()).toEqual({
+        model: { name: "A" },
+      });
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      expect(infoSpy).toHaveBeenCalledWith("Config redone");
+
+      localStorage.removeItem("lizystudio-config-presets");
+      successSpy.mockRestore();
+      infoSpy.mockRestore();
+      errorSpy.mockRestore();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // P-0110: undo / redo move the history cursor only after the backend
   // accepted the PUT. A refused write leaves the cursor where it was, so it
   // never sits on a snapshot the server does not hold.
@@ -806,7 +893,10 @@ describe("useModelPanelData", () => {
         model: { name: "A" },
       });
       expect(errorSpy).toHaveBeenCalledTimes(1);
-      expect(errorSpy).toHaveBeenCalledWith("Undo failed");
+      expect(errorSpy).toHaveBeenCalledWith(
+        `Undo failed: ${N_SPLITS_ERROR.message}`,
+      );
+      expect(result.current.errors).toEqual([N_SPLITS_ERROR]);
       expect(result.current.history.peekUndo()).toEqual({
         model: { name: "A" },
       });
@@ -833,6 +923,7 @@ describe("useModelPanelData", () => {
       });
 
       const errorSpy = vi.spyOn(toast, "error");
+      const infoSpy = vi.spyOn(toast, "info");
       vi.mocked(updateConfig).mockRejectedValueOnce(workspaceLockedProblem());
       await act(async () => {
         await result.current.handleRedo();
@@ -842,8 +933,12 @@ describe("useModelPanelData", () => {
       expect(vi.mocked(updateConfig).mock.calls[3][0]).toEqual({
         model: { name: "B" },
       });
-      expect(errorSpy).toHaveBeenCalledTimes(1);
-      expect(errorSpy).toHaveBeenCalledWith("Redo failed");
+      expect(errorSpy).toHaveBeenCalledTimes(0);
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      expect(infoSpy).toHaveBeenCalledWith(
+        "Config is locked while a job is running",
+      );
+      infoSpy.mockRestore();
       // Cursor still on A: B stays the redo target, nothing is undoable.
       expect(result.current.history.peekRedo()).toEqual({
         model: { name: "B" },

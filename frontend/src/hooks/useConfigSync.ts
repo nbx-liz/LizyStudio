@@ -1,7 +1,11 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
-import { isWorkspaceLocked } from "@/api/errors";
+import {
+  getValidationErrors,
+  isWorkspaceLocked,
+  summarizeValidationErrors,
+} from "@/api/errors";
 import { queryKeys } from "@/api/queryKeys";
 import type { UiSchema } from "@/api/types";
 import {
@@ -210,7 +214,13 @@ export function useConfigSync({
           toast.info("Config is locked while a job is running");
           return;
         }
-        toast.error("Config sync failed — changes may not be saved");
+        // BLUEPRINT §6.3 (P-0110): a 422 names its first blocking entry.
+        const validationErrors = getValidationErrors(putError);
+        toast.error(
+          validationErrors !== null
+            ? `Config sync failed: ${summarizeValidationErrors(validationErrors)}`
+            : "Config sync failed — changes may not be saved",
+        );
         return;
       }
       onDataChanged();
