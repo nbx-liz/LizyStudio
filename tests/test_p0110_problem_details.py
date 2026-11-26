@@ -26,7 +26,11 @@ import yaml
 from fastapi.testclient import TestClient
 
 from lizystudio.api.errors import PROBLEM_JSON_MEDIA_TYPE, wants_problem_details
-from lizystudio.api.models import ProblemDetails
+from lizystudio.api.models import (
+    LegacyErrorEnvelope,
+    ProblemDetails,
+    ValidationEntry,
+)
 from lizystudio.backends.types import DataRef
 from tests.lifecycle_seed import seed_job
 
@@ -248,6 +252,31 @@ def test_tune_search_space_refusal_is_problem(
     assert start.call_count == 0
 
 
+def test_tune_keeps_an_accepted_inline_config_when_a_later_gate_refuses(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """The no-save guarantee of a 422 is PUT /config and upload only.
+
+    POST /tune saves an inline config that passes ``validate_config``
+    (P-0086) before the search-space run gate can refuse; the 422 does
+    not undo that save. docs/api.md and BLUEPRINT §6.1.1 document it.
+    """
+    _load_data(client, tmp_path)
+    config = _valid_config(client)
+    config["split"]["n_splits"] = 4
+    config["tuning"] = {
+        "optuna": {
+            "params": {"n_trials": 3, "timeout": None},
+            "space": {"learning_rate": {"type": "float", "low": 0.5, "high": 0.01}},
+        }
+    }
+    with patch("lizystudio.api.workspace.start_tune_async") as start:
+        res = client.post("/api/workspace/tune", json={"config": config})
+    _assert_validation_problem(res)
+    assert start.call_count == 0
+    assert client.get("/api/workspace/config").json()["split"]["n_splits"] == 4
+
+
 # ---------------------------------------------------------------------------
 # Other StudioErrors under /api/workspace
 # ---------------------------------------------------------------------------
@@ -320,12 +349,49 @@ def test_request_body_parse_error_keeps_legacy_envelope(client: TestClient) -> N
     assert res.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
-def test_unknown_workspace_route_is_problem(client: TestClient) -> None:
-    """The /api catch-all raises a StudioError, so it is Problem Details too."""
-    res = client.get("/api/workspace/does-not-exist")
+def _client_with_static(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, built: bool
+) -> TestClient:
+    """A client whose SPA catch-all exists only when *built* is true.
+
+    ``server.create_app`` registers the GET catch-all only when the built
+    frontend (``STATIC_DIR/index.html``) exists, which the backend CI job
+    does not have. Pin both cases instead of depending on the checkout.
+    """
+    import lizystudio.security as sec
+    import lizystudio.server as server_module
+
+    static_dir = tmp_path / "static"
+    if built:
+        (static_dir / "assets").mkdir(parents=True)
+        (static_dir / "index.html").write_text("<html></html>")
+    monkeypatch.setattr(server_module, "STATIC_DIR", static_dir)
+    monkeypatch.setenv("LIZYSTUDIO_JOBS_DIR", str(tmp_path / "jobs"))
+    monkeypatch.setattr(sec, "ALLOWED_FILES_ROOT", Path("/tmp").resolve())
+    return TestClient(server_module.create_app())
+
+
+def test_unknown_workspace_route_is_problem_with_built_frontend(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """With the SPA built, the catch-all raises a StudioError 404."""
+    with _client_with_static(monkeypatch, tmp_path, built=True) as c:
+        res = c.get("/api/workspace/does-not-exist")
     assert res.status_code == 404, res.text
     assert res.headers["content-type"].startswith(PROBLEM_JSON_MEDIA_TYPE)
     _assert_matches_problem_schema(res.json())
+    assert res.json()["code"] == "NOT_FOUND"
+
+
+def test_unknown_workspace_route_without_built_frontend_is_framework_404(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Without the SPA build there is no catch-all: FastAPI's own 404."""
+    with _client_with_static(monkeypatch, tmp_path, built=False) as c:
+        res = c.get("/api/workspace/does-not-exist")
+    assert res.status_code == 404, res.text
+    assert res.headers["content-type"].startswith("application/json")
+    assert res.json() == {"detail": "Not Found"}
 
 
 def test_framework_405_is_not_a_studio_error(client: TestClient) -> None:
@@ -379,6 +445,48 @@ def test_openapi_exports_problem_json_on_422(
     assert content[PROBLEM_JSON_MEDIA_TYPE]["schema"] == {
         "$ref": "#/components/schemas/ProblemDetails"
     }
+    # A request body that fails to parse is the other 422 these routes
+    # answer: application/json with the legacy envelope (INV-API-4).
+    assert content["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/LegacyErrorEnvelope"
+    }
+    assert set(content) == {PROBLEM_JSON_MEDIA_TYPE, "application/json"}
+
+
+def test_openapi_legacy_error_envelope_component(client: TestClient) -> None:
+    schemas = client.get("/openapi.json").json()["components"]["schemas"]
+    assert schemas["LegacyErrorEnvelope"]["required"] == ["error"]
+    body = client.put(
+        "/api/workspace/config",
+        content=b"not json",
+        headers={"Content-Type": "application/json"},
+    ).json()
+    LegacyErrorEnvelope.model_validate(body)
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "kwargs"),
+    [
+        (
+            "put",
+            "/api/workspace/config",
+            {"content": b"not json", "headers": {"Content-Type": "application/json"}},
+        ),
+        ("post", "/api/workspace/config/upload", {}),
+        ("post", "/api/workspace/fit", {"json": {"config": "not-a-dict"}}),
+        ("post", "/api/workspace/tune", {"json": {"config": "not-a-dict"}}),
+    ],
+)
+def test_converted_routes_answer_request_validation_with_legacy_json(
+    client: TestClient, method: str, path: str, kwargs: dict[str, Any]
+) -> None:
+    """Both documented 422 media types really occur on the converted routes."""
+    res = client.request(method.upper(), path, **kwargs)
+    assert res.status_code == 422, res.text
+    assert res.headers["content-type"].startswith("application/json")
+    body = res.json()
+    LegacyErrorEnvelope.model_validate(body)
+    assert body["error"]["code"] == "VALIDATION_ERROR"
 
 
 def test_openapi_config_update_response_has_no_saved(client: TestClient) -> None:
@@ -389,3 +497,28 @@ def test_openapi_config_update_response_has_no_saved(client: TestClient) -> None
     problem = schemas["ProblemDetails"]["properties"]
     for key in ("type", "title", "status", "detail", "code", "validation_errors"):
         assert key in problem
+
+
+def test_openapi_validation_entries_are_typed(client: TestClient) -> None:
+    """Both bodies type their entries as ``ValidationEntry`` (no free dicts)."""
+    schemas = client.get("/openapi.json").json()["components"]["schemas"]
+    ref = {"$ref": "#/components/schemas/ValidationEntry"}
+    update_items = schemas["ConfigUpdateResponse"]["properties"]["validation_errors"]
+    assert update_items["items"] == ref
+    problem_entries = schemas["ProblemDetails"]["properties"]["validation_errors"]
+    assert {"items": ref, "type": "array"} in problem_entries["anyOf"]
+    entry = schemas["ValidationEntry"]
+    assert set(entry["properties"]) == {"path", "message", "severity", "suggested_fix"}
+    assert entry["properties"]["severity"]["enum"] == ["error", "warning", "info"]
+
+
+def test_served_entries_match_validation_entry(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """Every entry the real validators emit fits the declared model (DC3)."""
+    _load_data(client, tmp_path)
+    res = client.put("/api/workspace/config", json=_blocking_config(client))
+    entries = res.json()["validation_errors"]
+    for entry in entries:
+        assert set(entry) == set(ValidationEntry.model_fields)
+        ValidationEntry.model_validate(entry)
