@@ -14,6 +14,7 @@ import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { queryKeys } from "@/api/queryKeys";
 import {
+  asServedEntry,
   N_SPLITS_ERROR,
   validationProblem,
   workspaceLockedProblem,
@@ -490,16 +491,19 @@ describe("useModelPanelData", () => {
         await result.current.handleConfigChange({ model: { name: "X" } });
       });
 
-      expect(result.current.errors).toEqual(rejectionErrors);
+      expect(result.current.errors).toEqual(rejectionErrors.map(asServedEntry));
       expect(errorSpy).toHaveBeenCalledTimes(1);
       expect(errorSpy).toHaveBeenCalledWith("Config not saved: Field required");
       errorSpy.mockRestore();
     });
 
     it("does not push rejected config onto history (undo would otherwise re-apply it)", async () => {
-      vi.mocked(updateConfig).mockRejectedValueOnce(
-        validationProblem([{ path: "data", message: "Field required" }]),
-      );
+      vi.mocked(updateConfig)
+        .mockResolvedValueOnce({ config: {}, validation_errors: [] })
+        .mockRejectedValueOnce(
+          validationProblem([{ path: "data", message: "Field required" }]),
+        )
+        .mockResolvedValueOnce({ config: {}, validation_errors: [] });
 
       const { wrapper } = makeWrapper();
       const { result } = renderHook(
@@ -508,12 +512,24 @@ describe("useModelPanelData", () => {
       );
       await waitFor(() => expect(result.current.config).toBeDefined());
 
-      const undoBefore = result.current.history.canUndo;
+      await act(async () => {
+        await result.current.handleConfigChange({ model: { name: "A" } });
+      });
       await act(async () => {
         await result.current.handleConfigChange({ model: { name: "X" } });
       });
-      // Rejected change must not have been recorded in history.
-      expect(result.current.history.canUndo).toBe(undoBefore);
+      // Only A is recorded: had X been pushed, A would be undoable.
+      expect(result.current.history.peekUndo()).toBeNull();
+      expect(result.current.history.canUndo).toBe(false);
+
+      await act(async () => {
+        await result.current.handleConfigChange({ model: { name: "B" } });
+      });
+      // The undo target after B is A, never the refused X.
+      expect(result.current.history.peekUndo()).toEqual({
+        model: { name: "A" },
+      });
+      expect(updateConfig).toHaveBeenCalledTimes(3);
     });
 
     it("clears errors when a subsequent successful change comes through", async () => {
@@ -683,6 +699,7 @@ describe("useModelPanelData", () => {
       await result.current.handleImport(file);
     });
 
+    expect(uploadConfig).toHaveBeenCalledTimes(1);
     expect(uploadConfig).toHaveBeenCalledWith(file);
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: queryKeys.config(),
@@ -739,7 +756,7 @@ describe("useModelPanelData", () => {
     });
 
     expect(result.current.errors).toEqual([
-      { path: "model", message: "required" },
+      asServedEntry({ path: "model", message: "required" }),
     ]);
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(errorSpy).toHaveBeenCalledWith("Import failed: required");
@@ -747,6 +764,96 @@ describe("useModelPanelData", () => {
     expect(invalidateSpy).not.toHaveBeenCalled();
     errorSpy.mockRestore();
     successSpy.mockRestore();
+  });
+
+  // -------------------------------------------------------------------------
+  // P-0110: undo / redo move the history cursor only after the backend
+  // accepted the PUT. A refused write leaves the cursor where it was, so it
+  // never sits on a snapshot the server does not hold.
+  // -------------------------------------------------------------------------
+  describe("undo / redo refused by the backend (P-0110)", () => {
+    async function renderWithTwoEdits() {
+      vi.mocked(updateConfig)
+        .mockResolvedValueOnce({ config: {}, validation_errors: [] })
+        .mockResolvedValueOnce({ config: {}, validation_errors: [] });
+      const { wrapper, queryClient } = makeWrapper();
+      const { result } = renderHook(
+        () => useModelPanelData({ hasData: true, running: false }),
+        { wrapper },
+      );
+      await waitFor(() => expect(result.current.config).toBeDefined());
+      await act(async () => {
+        await result.current.handleConfigChange({ model: { name: "A" } });
+      });
+      await act(async () => {
+        await result.current.handleConfigChange({ model: { name: "B" } });
+      });
+      return { result, queryClient };
+    }
+
+    it("a refused undo keeps the cursor and the cache on the current snapshot", async () => {
+      const { toast } = await import("sonner");
+      const errorSpy = vi.spyOn(toast, "error");
+      const { result, queryClient } = await renderWithTwoEdits();
+      vi.mocked(updateConfig).mockRejectedValueOnce(validationProblem());
+
+      await act(async () => {
+        await result.current.handleUndo();
+      });
+
+      expect(updateConfig).toHaveBeenCalledTimes(3);
+      expect(vi.mocked(updateConfig).mock.calls[2][0]).toEqual({
+        model: { name: "A" },
+      });
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith("Undo failed");
+      expect(result.current.history.peekUndo()).toEqual({
+        model: { name: "A" },
+      });
+      expect(result.current.history.peekRedo()).toBeNull();
+      expect(result.current.history.canRedo).toBe(false);
+      expect(queryClient.getQueryData(queryKeys.config())).toEqual({
+        model: { name: "B" },
+      });
+      errorSpy.mockRestore();
+    });
+
+    it("a refused redo keeps the cursor and the cache on the current snapshot", async () => {
+      const { toast } = await import("sonner");
+      const { result, queryClient } = await renderWithTwoEdits();
+      vi.mocked(updateConfig).mockResolvedValueOnce({
+        config: {},
+        validation_errors: [],
+      });
+      await act(async () => {
+        await result.current.handleUndo();
+      });
+      expect(result.current.history.peekRedo()).toEqual({
+        model: { name: "B" },
+      });
+
+      const errorSpy = vi.spyOn(toast, "error");
+      vi.mocked(updateConfig).mockRejectedValueOnce(workspaceLockedProblem());
+      await act(async () => {
+        await result.current.handleRedo();
+      });
+
+      expect(updateConfig).toHaveBeenCalledTimes(4);
+      expect(vi.mocked(updateConfig).mock.calls[3][0]).toEqual({
+        model: { name: "B" },
+      });
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith("Redo failed");
+      // Cursor still on A: B stays the redo target, nothing is undoable.
+      expect(result.current.history.peekRedo()).toEqual({
+        model: { name: "B" },
+      });
+      expect(result.current.history.peekUndo()).toBeNull();
+      expect(queryClient.getQueryData(queryKeys.config())).toEqual({
+        model: { name: "A" },
+      });
+      errorSpy.mockRestore();
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -856,7 +963,7 @@ describe("useModelPanelData", () => {
         await result.current.handleConfigChange({ model: { name: "X" } });
       });
 
-      expect(result.current.errors).toEqual(rejectionErrors);
+      expect(result.current.errors).toEqual(rejectionErrors.map(asServedEntry));
       // Cache must NOT contain the rejected payload — invalidate forces re-fetch.
       expect(invalidateSpy).toHaveBeenCalledWith({
         queryKey: queryKeys.config(),

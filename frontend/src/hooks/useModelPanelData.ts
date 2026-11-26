@@ -125,14 +125,18 @@ export function useModelPanelData({
     return () => clearTimeout(validateTimer.current);
   }, []);
 
+  // Resolves `true` when the backend holds `newConfig` afterwards (saved
+  // now, or already equal to the cached server config) and `false` when it
+  // does not (refused, failed, or skipped while a job runs), so callers
+  // such as `handleLoadPreset` can gate their own success feedback.
   const handleConfigChange = useCallback(
-    async (newConfig: Record<string, unknown>) => {
-      if (running) return;
+    async (newConfig: Record<string, unknown>): Promise<boolean> => {
+      if (running) return false;
       const cached = queryClient.getQueryData<Record<string, unknown>>(
         queryKeys.config(),
       );
       if (cached && equal(cached, newConfig)) {
-        return;
+        return true;
       }
       // INV-A1/A2/A3 (Issue #276) + P-0110: a blocking validation
       // rejection is a 422 Problem Details error, never a 200. The
@@ -176,15 +180,16 @@ export function useModelPanelData({
             reason: "config-form-edit",
           });
           if (!result.ok) {
-            rejectWrite(result.details);
-            return;
+            // An aborted write means the funnel tore down: not a refusal.
+            if (result.error !== "aborted") rejectWrite(result.details);
+            return false;
           }
         } else {
           await updateConfig(newConfig);
         }
       } catch (err) {
         rejectWrite(err);
-        return;
+        return false;
       }
       queryClient.setQueryData(queryKeys.config(), newConfig);
       history.push(newConfig);
@@ -201,6 +206,7 @@ export function useModelPanelData({
           // state on the next successful call
         }
       }, VALIDATION_DEBOUNCE_MS);
+      return true;
     },
     [queryClient, running, history.push, writeFunnel],
   );
@@ -270,11 +276,16 @@ export function useModelPanelData({
     [writeFunnel],
   );
 
+  // P-0110: the cursor moves only after the backend accepted the PUT. A
+  // refused undo / redo (422 / 409) leaves the history where it was, so
+  // the cursor never sits on a snapshot the server does not hold. The
+  // commit is skipped if another edit changed the history meanwhile.
   const handleUndo = useCallback(async () => {
-    const prev = history.undo();
+    const prev = history.peekUndo();
     if (!prev) return;
     const { ok, viaFunnel } = await sendThroughFunnelOrLegacy(prev, "undo");
     if (ok) {
+      if (equal(history.peekUndo(), prev)) history.undo();
       if (!viaFunnel) {
         queryClient.setQueryData(queryKeys.config(), prev);
       }
@@ -285,10 +296,11 @@ export function useModelPanelData({
   }, [history, queryClient, sendThroughFunnelOrLegacy]);
 
   const handleRedo = useCallback(async () => {
-    const next = history.redo();
+    const next = history.peekRedo();
     if (!next) return;
     const { ok, viaFunnel } = await sendThroughFunnelOrLegacy(next, "redo");
     if (ok) {
+      if (equal(history.peekRedo(), next)) history.redo();
       if (!viaFunnel) {
         queryClient.setQueryData(queryKeys.config(), next);
       }
@@ -311,7 +323,7 @@ export function useModelPanelData({
   );
 
   const handleLoadPreset = useCallback(
-    (name: string) => {
+    async (name: string) => {
       const preset = loadPreset(name);
       if (!preset) return;
       // Issue #276: presets intentionally omit data-bound fields (path,
@@ -329,8 +341,10 @@ export function useModelPanelData({
       if (current?.output_dir && merged.output_dir === undefined) {
         merged.output_dir = current.output_dir;
       }
-      handleConfigChange(merged);
-      toast.success(`Preset "${name}" loaded`);
+      // P-0110: claim success only once the backend saved the preset. A
+      // refused write already shows its own toast in handleConfigChange.
+      const saved = await handleConfigChange(merged);
+      if (saved) toast.success(`Preset "${name}" loaded`);
     },
     [loadPreset, handleConfigChange, queryClient],
   );

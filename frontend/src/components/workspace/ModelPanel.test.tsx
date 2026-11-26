@@ -10,7 +10,10 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { renderWithQuery } from "@/test/helpers";
-import { validationProblem } from "@/test/problemDetails";
+import {
+  validationProblem,
+  workspaceLockedProblem,
+} from "@/test/problemDetails";
 import { ModelPanel } from "./ModelPanel";
 
 vi.mock("sonner", () => ({
@@ -910,13 +913,10 @@ describe("ModelPanel", () => {
 
   // --- handleLoadPreset ---
 
-  it("loads preset from localStorage and calls handleConfigChange", async () => {
-    const { updateConfig: mockUpdate } = await import("@/api/workspace");
-    const { toast } = await import("sonner");
-    (mockUpdate as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
-    (toast.success as ReturnType<typeof vi.fn>).mockClear();
-
-    // Seed localStorage with a preset
+  // P-0110: the preset toast must follow the write's outcome. Each case
+  // really opens the menu and picks the preset, so the click runs
+  // handleLoadPreset → handleConfigChange → updateConfig.
+  async function selectPreset(): Promise<void> {
     localStorage.setItem(
       "lizystudio-config-presets",
       JSON.stringify([
@@ -927,7 +927,6 @@ describe("ModelPanel", () => {
         },
       ]),
     );
-
     renderWithQuery(
       <ModelPanel
         hasData={true}
@@ -937,14 +936,76 @@ describe("ModelPanel", () => {
         running={false}
       />,
     );
-
     await waitFor(() => {
       expect(screen.getByTestId("mock-config-form")).toBeInTheDocument();
     });
+    fireEvent.click(screen.getByRole("button", { name: "Load preset" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "fast-lgbm" }));
+  }
 
-    // Load Preset select trigger should be visible
-    expect(screen.getByText("Load Preset")).toBeInTheDocument();
+  it("shows the preset-loaded toast once the write is saved", async () => {
+    const { updateConfig: mockUpdate } = await import("@/api/workspace");
+    const { toast } = await import("sonner");
+    const update = mockUpdate as ReturnType<typeof vi.fn>;
+    update.mockReset();
+    update.mockResolvedValue({ config: {}, validation_errors: [] });
+    (toast.success as ReturnType<typeof vi.fn>).mockClear();
+    (toast.error as ReturnType<typeof vi.fn>).mockClear();
 
+    await selectPreset();
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    expect(update.mock.calls[0][0]).toMatchObject({
+      model: { name: "lgbm", params: { n_iter: 10 } },
+    });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledTimes(1));
+    expect(toast.success).toHaveBeenCalledWith('Preset "fast-lgbm" loaded');
+    expect(toast.error).not.toHaveBeenCalled();
+    localStorage.removeItem("lizystudio-config-presets");
+  });
+
+  it("does not claim the preset loaded when the write is refused (422)", async () => {
+    const { updateConfig: mockUpdate } = await import("@/api/workspace");
+    const { toast } = await import("sonner");
+    const update = mockUpdate as ReturnType<typeof vi.fn>;
+    update.mockReset();
+    update.mockRejectedValue(
+      validationProblem([{ path: "data", message: "Field required" }]),
+    );
+    (toast.success as ReturnType<typeof vi.fn>).mockClear();
+    (toast.error as ReturnType<typeof vi.fn>).mockClear();
+
+    await selectPreset();
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    expect(toast.error).toHaveBeenCalledWith(
+      "Config not saved: Field required",
+    );
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(toast.success).not.toHaveBeenCalled();
+    update.mockReset();
+    update.mockResolvedValue(undefined);
+    localStorage.removeItem("lizystudio-config-presets");
+  });
+
+  it("does not claim the preset loaded when the config is locked (409)", async () => {
+    const { updateConfig: mockUpdate } = await import("@/api/workspace");
+    const { toast } = await import("sonner");
+    const update = mockUpdate as ReturnType<typeof vi.fn>;
+    update.mockReset();
+    update.mockRejectedValue(workspaceLockedProblem());
+    (toast.success as ReturnType<typeof vi.fn>).mockClear();
+    (toast.info as ReturnType<typeof vi.fn>).mockClear();
+
+    await selectPreset();
+
+    await waitFor(() => expect(toast.info).toHaveBeenCalledTimes(1));
+    expect(toast.info).toHaveBeenCalledWith(
+      "Config is locked while a job is running",
+    );
+    expect(toast.success).not.toHaveBeenCalled();
+    update.mockReset();
+    update.mockResolvedValue(undefined);
     localStorage.removeItem("lizystudio-config-presets");
   });
 

@@ -431,6 +431,7 @@ describe("useConfigWriteFunnel", () => {
       reason: "cv-change",
     });
 
+    expect(onWriteCommitted).toHaveBeenCalledTimes(1);
     expect(onWriteCommitted).toHaveBeenCalledWith({
       task: "binary",
       split: { method: "kfold" },
@@ -1106,6 +1107,8 @@ describe("useConfigWriteFunnel", () => {
       });
       expect(res.ok).toBe(true);
       if (res.ok) expect(res.saved).toBe(wrapper);
+      expect(putConfig).toHaveBeenCalledTimes(1);
+      expect(onWriteCommitted).toHaveBeenCalledTimes(1);
       expect(onWriteCommitted).toHaveBeenCalledWith(wrapper);
     });
   });

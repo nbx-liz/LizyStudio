@@ -134,6 +134,9 @@ export function useDataPanel({
   }, []);
 
   const { handleTargetChange } = useTargetSelection({
+    target,
+    columns,
+    overrides: columnOverrides.overrides,
     task,
     cv,
     blocked,

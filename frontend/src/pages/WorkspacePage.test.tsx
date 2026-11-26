@@ -293,9 +293,11 @@ describe("WorkspacePage", () => {
     ) => Promise<void>;
     await act(async () => onApplyToFit({ model: { name: "LGBMClassifier" } }));
 
+    expect(mockUpdateConfig).toHaveBeenCalledTimes(1);
     expect(mockUpdateConfig).toHaveBeenCalledWith({
       model: { name: "LGBMClassifier" },
     });
+    expect(mockToast.success).toHaveBeenCalledTimes(1);
     expect(mockToast.success).toHaveBeenCalledWith(
       "Best params applied to Fit tab. Click Fit to run.",
     );
@@ -351,6 +353,8 @@ describe("WorkspacePage", () => {
     ) => Promise<void>;
     await act(async () => onApplyToFit({}));
 
+    expect(mockUpdateConfig).toHaveBeenCalledTimes(1);
+    expect(mockToast.error).toHaveBeenCalledTimes(1);
     expect(mockToast.error).toHaveBeenCalledWith("Failed to apply tune config");
   });
 

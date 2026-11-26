@@ -21,9 +21,18 @@ import type { WriteResult } from "./useConfigWriteFunnel";
  *
  * The funnel does not call `onWriteCommitted` for a failed write, so the
  * config cache still holds the last saved config and needs no re-fetch.
+ *
+ * One toast per refused PUT: the funnel coalesces same-reason ops (e.g.
+ * ConfigForm's objective and metric resets) into one PUT and resolves
+ * every coalesced caller with that PUT's single `WriteResult` object, so
+ * a result already shown is skipped.
  */
+const surfaced = new WeakSet<WriteResult>();
+
 export function surfaceWriteFailure(result: WriteResult): void {
   if (result.ok || result.error === "aborted") return;
+  if (surfaced.has(result)) return;
+  surfaced.add(result);
   if (result.error === "locked") {
     toast.info("Config is locked while a job is running");
     return;

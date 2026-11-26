@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   fetchConfigDefaults: vi.fn(),
   updateConfig: vi.fn(),
   toastError: vi.fn(),
+  toastInfo: vi.fn(),
 }));
 
 vi.mock("@/api/workspace", () => ({
@@ -25,7 +26,7 @@ vi.mock("sonner", () => ({
   toast: {
     error: mocks.toastError,
     success: vi.fn(),
-    info: vi.fn(),
+    info: mocks.toastInfo,
     warning: vi.fn(),
   },
 }));
@@ -233,6 +234,7 @@ describe("useConfigSync", () => {
         "Config sync failed — changes may not be saved",
       ),
     );
+    expect(mocks.toastError).toHaveBeenCalledTimes(1);
   });
 
   it("swallows AbortError silently (no toast)", async () => {
@@ -414,6 +416,7 @@ describe("useConfigSync", () => {
           "Config sync failed — changes may not be saved",
         ),
       );
+      expect(mocks.toastError).toHaveBeenCalledTimes(1);
       // No setQueryData on failure — cache must remain untouched.
       expect(queryClient.getQueryData(queryKeys.config())).toBeUndefined();
     });
@@ -457,6 +460,7 @@ describe("useConfigSync", () => {
       return {
         funnel: { enqueueWrite, isFlushing: () => false },
         calls,
+        enqueueWrite,
       };
     }
 
@@ -547,10 +551,11 @@ describe("useConfigSync", () => {
           "Config sync failed — changes may not be saved",
         ),
       );
+      expect(mocks.toastError).toHaveBeenCalledTimes(1);
     });
 
     it("surfaces info toast (not error) when funnel returns 409 WORKSPACE_LOCKED via details", async () => {
-      const { funnel } = createStubFunnel(() => ({
+      const { funnel, enqueueWrite } = createStubFunnel(() => ({
         ok: false,
         error: "network",
         details: workspaceLockedProblem("xyz"),
@@ -567,11 +572,14 @@ describe("useConfigSync", () => {
         { wrapper },
       );
 
-      // The hook must NOT show the generic error toast for the lock case.
-      await new Promise((r) => setTimeout(r, 30));
-      expect(mocks.toastError).not.toHaveBeenCalledWith(
-        "Config sync failed — changes may not be saved",
+      // The write ran, and its 409 shows the quiet lock toast exactly
+      // once instead of the generic error toast.
+      await waitFor(() => expect(mocks.toastInfo).toHaveBeenCalledTimes(1));
+      expect(mocks.toastInfo).toHaveBeenCalledWith(
+        "Config is locked while a job is running",
       );
+      expect(enqueueWrite).toHaveBeenCalledTimes(1);
+      expect(mocks.toastError).toHaveBeenCalledTimes(0);
     });
 
     it("does not call onDataChanged when funnel returns ok=false with error=aborted", async () => {

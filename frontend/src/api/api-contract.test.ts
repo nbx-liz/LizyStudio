@@ -3,7 +3,7 @@
  * required fields and correct shapes, catching drift before the generated
  * schema fully replaces them.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
   BackendInfo,
   ColumnInfo,
@@ -23,6 +23,7 @@ import type {
   SplitSummaryRow,
   TuneResult,
   UiSchema,
+  ValidationEntry,
   WorkspaceStatus,
   WsMessage,
 } from "./types";
@@ -171,20 +172,45 @@ describe("PreviewResponse", () => {
 // ConfigUpdateResponse + ConfigError
 // ---------------------------------------------------------------------------
 describe("ConfigUpdateResponse", () => {
-  it("has config and validation_errors (P-0110: no saved flag)", () => {
-    const warning: ConfigError = {
-      path: "evaluation.metrics",
-      message: "MAPE is undefined",
-      severity: "warning",
-    };
+  // P-0110: type-level assertions on the generated type. `tsc -b` (run by
+  // `pnpm build` in CI) type-checks this file, so a `saved` member coming
+  // back — required or optional — or any other key fails the build.
+  it("the generated type has exactly config and validation_errors", () => {
+    expectTypeOf<keyof ConfigUpdateResponse>().toEqualTypeOf<
+      "config" | "validation_errors"
+    >();
+    expectTypeOf<ConfigUpdateResponse>().not.toHaveProperty("saved");
+    expectTypeOf<ConfigUpdateResponse["validation_errors"]>().toEqualTypeOf<
+      ValidationEntry[]
+    >();
+  });
+
+  it("the generated ValidationEntry carries the four served fields", () => {
+    expectTypeOf<keyof ValidationEntry>().toEqualTypeOf<
+      "path" | "message" | "severity" | "suggested_fix"
+    >();
+    expectTypeOf<ValidationEntry["severity"]>().toEqualTypeOf<
+      "error" | "warning" | "info"
+    >();
+    // A served entry is usable wherever the UI's ConfigError is expected.
+    expectTypeOf<ValidationEntry>().toExtend<ConfigError>();
+  });
+
+  it("accepts a warning-only 200 body", () => {
     const resp: ConfigUpdateResponse = {
       config: { model: { name: "lgbm" } },
-      validation_errors: [warning],
+      validation_errors: [
+        {
+          path: "evaluation.metrics",
+          message: "MAPE is undefined",
+          severity: "warning",
+          suggested_fix: null,
+        },
+      ],
     };
     assertDefined(resp.config, "config");
     expect(resp.validation_errors).toHaveLength(1);
     expect(resp.validation_errors[0].path).toBe("evaluation.metrics");
-    expect(Object.keys(resp).sort()).toEqual(["config", "validation_errors"]);
   });
 });
 

@@ -31,13 +31,18 @@ import {
  * new target column".
  */
 interface UseTargetSelectionParams {
+  /** Current target, columns and overrides: restored when the server
+   * refuses the target-select write (P-0110). */
+  target: string | null;
+  columns: ColumnInfo[];
+  overrides: Record<string, ColumnOverride>;
   task: TaskType | null;
   cv: CvState;
   blocked: BlockedGroupKFoldState;
   dataPath: string;
   uiSchema?: UiSchema;
-  setTarget: (value: string) => void;
-  setTask: (task: TaskType) => void;
+  setTarget: (value: string | null) => void;
+  setTask: (task: TaskType | null) => void;
   setCv: (cv: CvState) => void;
   setBlocked: (blocked: BlockedGroupKFoldState) => void;
   setColumns: (columns: ColumnInfo[]) => void;
@@ -67,6 +72,9 @@ interface UseTargetSelectionParams {
 }
 
 export function useTargetSelection({
+  target,
+  columns,
+  overrides,
   task,
   cv,
   blocked,
@@ -87,6 +95,17 @@ export function useTargetSelection({
 }: UseTargetSelectionParams) {
   const handleTargetChange = useCallback(
     async (value: string) => {
+      // The selection the server holds before this change, restored when
+      // the server refuses the target-select write (P-0110).
+      const restorePrior = () => {
+        setTarget(target);
+        setColumns(columns);
+        setOverrides(overrides);
+        setTask(task);
+        onTaskChanged?.(task);
+        setCv(cv);
+        setBlocked(blocked);
+      };
       setSyncSuppressed(true);
       setTarget(value);
       try {
@@ -153,9 +172,18 @@ export function useTargetSelection({
               config: merged,
               reason: "target-select",
             });
-            // P-0110: a rejected write (422 / 409 / network) is surfaced,
-            // not dropped.
-            surfaceWriteFailure(result);
+            if (!result.ok) {
+              // P-0110: the server refused the write (422 / 409 / network)
+              // and still holds its previous config. Say why, put the
+              // controls back on the selection the server holds, and
+              // neither preseed the sync key nor report a data change:
+              // the rolled-back state matches the pre-change sync key, so
+              // useConfigSync has nothing to resync. An aborted write
+              // means the caller tore down; leave its state alone.
+              surfaceWriteFailure(result);
+              if (result.error !== "aborted") restorePrior();
+              return;
+            }
           } else if (legacyUpdateConfig) {
             await legacyUpdateConfig.putConfig(merged);
             legacyUpdateConfig.setQueryData(merged);
@@ -193,6 +221,9 @@ export function useTargetSelection({
       }
     },
     [
+      target,
+      columns,
+      overrides,
       task,
       cv,
       blocked,

@@ -1,6 +1,6 @@
 import { ApiError } from "@/api/client";
 import type { ProblemDetailsBody } from "@/api/errors";
-import type { ConfigError } from "@/api/types";
+import type { ConfigError, ValidationEntry } from "@/api/types";
 
 /**
  * Test builders for the RFC 9457 Problem Details bodies the workspace
@@ -11,13 +11,27 @@ import type { ConfigError } from "@/api/types";
  */
 
 /** The `validation_errors` entry the real backend sent for n_splits=1000. */
-export const N_SPLITS_ERROR: ConfigError = {
+export const N_SPLITS_ERROR: ValidationEntry = {
   path: "split.n_splits",
   message:
     "n_splits=1000 is greater than the number of samples in the loaded dataset (n_rows=50). Reduce Folds to at most 50.",
   severity: "error",
   suggested_fix: "Set Folds (split.n_splits) to 50 or fewer.",
 };
+
+/**
+ * Fill the two fields the backend always sends, as
+ * `services.workspace.validate_config` does: a missing `severity` is
+ * `"error"` and a missing `suggested_fix` is `null`.
+ */
+export function asServedEntry(entry: ConfigError): ValidationEntry {
+  return {
+    path: entry.path,
+    message: entry.message,
+    severity: entry.severity ?? "error",
+    suggested_fix: entry.suggested_fix ?? null,
+  };
+}
 
 /** 422 `VALIDATION_ERROR` body: the config was not saved. */
 export function validationProblemBody(
@@ -30,9 +44,7 @@ export function validationProblemBody(
     detail: "Config validation failed",
     code: "VALIDATION_ERROR",
     details: {},
-    validation_errors: validationErrors as unknown as {
-      [key: string]: unknown;
-    }[],
+    validation_errors: validationErrors.map(asServedEntry),
   };
 }
 

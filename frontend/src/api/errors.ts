@@ -1,6 +1,6 @@
 import { ApiError } from "./client";
 import type { components } from "./generated/schema";
-import type { ConfigError } from "./types";
+import type { ConfigError, ValidationEntry } from "./types";
 
 /**
  * Legacy backend StudioError JSON envelope. The jobs / inference / files
@@ -70,12 +70,12 @@ export function isWorkspaceLocked(err: unknown): boolean {
  * (P-0110), or `null` when `err` is any other failure. A blocking config
  * write lands here: the backend did not save it, and these entries say why.
  */
-export function getValidationErrors(err: unknown): ConfigError[] | null {
+export function getValidationErrors(err: unknown): ValidationEntry[] | null {
   if (!(err instanceof ApiError) || !isProblemDetails(err.body)) return null;
   if (err.body.code !== "VALIDATION_ERROR") return null;
   const entries = err.body.validation_errors;
   if (!Array.isArray(entries)) return null;
-  return entries as unknown as ConfigError[];
+  return entries;
 }
 
 /**

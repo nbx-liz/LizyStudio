@@ -1426,9 +1426,7 @@ export interface components {
                 [key: string]: unknown;
             };
             /** Validation Errors */
-            validation_errors: {
-                [key: string]: unknown;
-            }[];
+            validation_errors: components["schemas"]["ValidationEntry"][];
         };
         /** DataLoadResponse */
         DataLoadResponse: {
@@ -2197,6 +2195,28 @@ export interface components {
             /** Job Id */
             job_id: string;
         };
+        /**
+         * ValidationEntry
+         * @description One config validation entry (P-0100 severity contract, P-0110).
+         *
+         *     The shape ``services.workspace.validate_config`` normalizes every
+         *     backend and workspace-aware validator to. ``severity == "error"``
+         *     blocks a save, Fit and Tune; ``"warning"`` / ``"info"`` only advise.
+         */
+        ValidationEntry: {
+            /** Path */
+            path: string;
+            /** Message */
+            message: string;
+            /**
+             * Severity
+             * @default error
+             * @enum {string}
+             */
+            severity: "error" | "warning" | "info";
+            /** Suggested Fix */
+            suggested_fix?: string | null;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -2473,9 +2493,32 @@ export interface components {
              * Validation Errors
              * @default null
              */
-            validation_errors: {
+            validation_errors: components["schemas"]["ValidationEntry"][] | null;
+        };
+        /**
+         * LegacyErrorBody
+         * @description The ``error`` member of :class:`LegacyErrorEnvelope`.
+         */
+        LegacyErrorBody: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /** Details */
+            details?: {
                 [key: string]: unknown;
-            }[] | null;
+            };
+        };
+        /**
+         * LegacyErrorEnvelope
+         * @description The pre-P-0110 ``{"error": {code, message, details}}`` body.
+         *
+         *     Still served as ``application/json`` by every router outside
+         *     ``/api/workspace``, and on every path for a request body that fails
+         *     to parse (FastAPI ``RequestValidationError``, INV-API-4).
+         */
+        LegacyErrorEnvelope: {
+            error: components["schemas"]["LegacyErrorBody"];
         };
     };
     responses: never;
@@ -2845,13 +2888,14 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Blocking config validation, VALIDATION_ERROR with validation_errors (RFC 9457 Problem Details). A request body that fails to parse still answers 422 with the legacy error envelope. */
+            /** @description Blocking config validation: application/problem+json VALIDATION_ERROR with validation_errors (RFC 9457 Problem Details). A request body that fails to parse answers application/json with the legacy error envelope instead. */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
+                    "application/json": components["schemas"]["LegacyErrorEnvelope"];
                 };
             };
         };
@@ -3010,13 +3054,14 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Blocking config validation, VALIDATION_ERROR with validation_errors (RFC 9457 Problem Details). A request body that fails to parse still answers 422 with the legacy error envelope. */
+            /** @description Blocking config validation: application/problem+json VALIDATION_ERROR with validation_errors (RFC 9457 Problem Details). A request body that fails to parse answers application/json with the legacy error envelope instead. */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
+                    "application/json": components["schemas"]["LegacyErrorEnvelope"];
                 };
             };
         };
@@ -3081,13 +3126,14 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Blocking config validation, VALIDATION_ERROR with validation_errors (RFC 9457 Problem Details). A request body that fails to parse still answers 422 with the legacy error envelope. */
+            /** @description Blocking config validation: application/problem+json VALIDATION_ERROR with validation_errors (RFC 9457 Problem Details). A request body that fails to parse answers application/json with the legacy error envelope instead. */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
+                    "application/json": components["schemas"]["LegacyErrorEnvelope"];
                 };
             };
         };
@@ -3132,13 +3178,14 @@ export interface operations {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
                 };
             };
-            /** @description Blocking config validation, VALIDATION_ERROR with validation_errors (RFC 9457 Problem Details). A request body that fails to parse still answers 422 with the legacy error envelope. */
+            /** @description Blocking config validation: application/problem+json VALIDATION_ERROR with validation_errors (RFC 9457 Problem Details). A request body that fails to parse answers application/json with the legacy error envelope instead. */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/problem+json": components["schemas"]["ProblemDetails"];
+                    "application/json": components["schemas"]["LegacyErrorEnvelope"];
                 };
             };
         };
