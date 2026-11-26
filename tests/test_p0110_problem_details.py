@@ -383,6 +383,21 @@ def test_unknown_workspace_route_is_problem_with_built_frontend(
     assert res.json()["code"] == "NOT_FOUND"
 
 
+def test_unknown_workspace_route_post_with_built_frontend_is_framework_405(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The SPA catch-all is GET-only: another method gets FastAPI's 405.
+
+    docs/api.md and BLUEPRINT §6.1.1 qualify the Problem Details 404 with
+    GET for this reason.
+    """
+    with _client_with_static(monkeypatch, tmp_path, built=True) as c:
+        res = c.post("/api/workspace/does-not-exist", json={})
+    assert res.status_code == 405, res.text
+    assert res.headers["content-type"].startswith("application/json")
+    assert res.json() == {"detail": "Method Not Allowed"}
+
+
 def test_unknown_workspace_route_without_built_frontend_is_framework_404(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
