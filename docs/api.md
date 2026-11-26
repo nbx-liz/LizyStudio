@@ -27,8 +27,11 @@ When the server is running, visit:
 
   Failures that are not LizyStudio errors keep the framework's default body
   on every path: a `405` (`{"detail": "Method Not Allowed"}`) and an
-  unhandled `500`. An unknown `/api/workspace/...` route is a LizyStudio
-  `404 NOT_FOUND`, so it is Problem Details.
+  unhandled `500`. An unknown `/api/workspace/...` route depends on whether
+  the server serves the built frontend: with the build present, the SPA
+  catch-all answers a LizyStudio `404 NOT_FOUND` (Problem Details); without
+  it (for example a backend run before `pnpm build`), FastAPI answers its
+  own `404` `{"detail": "Not Found"}`.
 
 ### Problem Details (`/api/workspace/**`)
 
@@ -40,7 +43,9 @@ is the HTTP reason phrase of `status`; the problem is identified by `code`
 and `null` otherwise. The OpenAPI component is `ProblemDetails`.
 
 `422` — blocking config validation (`PUT /config`, `POST /config/upload`,
-`POST /fit`, `POST /tune`). The config was **not** saved:
+`POST /fit`, `POST /tune`). On `PUT /config` and `POST /config/upload` the
+config was **not** saved. On `POST /fit` and `POST /tune` see the ordering
+note below:
 
 ```json
 {
@@ -64,6 +69,21 @@ and `null` otherwise. The OpenAPI component is `ProblemDetails`.
 On `PUT /config` and `POST /config/upload`, `validation_errors` carries every
 entry, warnings included; only `severity: "error"` entries cause the 422.
 `POST /fit` and `POST /tune` list the blocking entries only.
+
+**Ordering on `POST /fit` and `POST /tune`.** An inline `{"config": ...}`
+body is validated first; when it has a blocking entry the answer is `422`
+and nothing is saved. When it passes, it **is saved** to the workspace
+(P-0086, with its `tuning` block moved to the Tune overrides) before the
+later gates run, and a later refusal does not undo that save:
+`400 WORKSPACE_NO_DATA`, `409 JOB_CONFLICT`, and on `POST /tune` the `422`
+of the materialized Tune config and of the search-space run gate (an
+inverted Range or a log Range with `low <= 0`). The search-space gate runs
+only at Tune time, so the same config is saved without complaint by
+`PUT /config`.
+
+A `422` on these four routes can also be the legacy envelope under
+`application/json`: a request body that cannot be parsed (FastAPI request
+validation). The OpenAPI schema lists both media types for those 422s.
 
 `409` — a config write while a job is running:
 

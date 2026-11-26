@@ -4338,6 +4338,11 @@ Decision 時に M-1 または M-2 のいずれかを確定する。frontend は�
   - **OpenAPI**: `ProblemDetails` component を登録し、`PUT /config`・`POST /config/upload`・`POST /fit`・`POST /tune` の 4xx を `application/problem+json` で export する。
   - **frontend**: `api/errors.ts` に両方の形を読む accessor（`getErrorCode` / `isWorkspaceLocked` / `getValidationErrors` / `summarizeValidationErrors`）を置き、per-hook の `saved` 読み（`useModelPanelData`、`WorkspacePage`）と `error.code` 読み（`useConfigWriteFunnel`、`useModelPanelData`、`useConfigSync`）をそれに置き換えた。これまで結果を読んでいなかった `useTargetSelection` と `ConfigForm` の auto-reset は、拒否された書き込みを `surfaceWriteFailure` で toast に出す（409 は他と同じ info toast）。
   - **対象外（未対応）**: `POST /config/upload` には running-lock の検査が無い（409 を返さない。P-0110 以前から）。405 と処理されない 500 は `StudioError` ではないので Problem Details にならない。
+  - **review round 1（PR #781）で確定した点**:
+    - 422 で保存されないことの保証は `PUT /config` と `POST /config/upload` だけ。`POST /fit` / `POST /tune` は通った inline config を後の gate より前に保存する（P-0086）。`POST /tune` の search-space gate の 422 は、その保存を取り消さない（test: `test_tune_keeps_an_accepted_inline_config_when_a_later_gate_refuses`）。
+    - OpenAPI: validation entry を `ValidationEntry` model で型付けする（frontend の cast を削除）。変換した 4 route の 422 には `application/json` の `LegacyErrorEnvelope`（request body の parse 失敗）も載せる。
+    - 未知の `/api/workspace/...` route が Problem Details になるのは、build 済み frontend があるとき（SPA catch-all）だけ。build が無いときは FastAPI の 404。
+    - frontend: 拒否された target 変更は選択を元に戻し、sync key の preseed と `onDataChanged` を行わない。Load Preset の成功 toast は保存を待つ。undo / redo は保存が通ってから history の cursor を動かす。coalesce された 1 つの PUT の拒否は toast 1 回。
   - test: `tests/test_p0110_problem_details.py`、`frontend/src/api/errors.test.ts`、`frontend/src/hooks/useTargetSelection.test.ts`（funnel write result）ほか。
 
 ### P-0111: Tune-tab write path の sparse-overrides 経路 — `TuningOverrides` schema 拡張 vs 2-path 許容（P-0109 follow-up）

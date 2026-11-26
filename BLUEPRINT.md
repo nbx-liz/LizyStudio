@@ -3037,13 +3037,14 @@ lizystudio_active_jobs 0.0
 | `/api/workspace` とその下（`/api/workspace/**`） | `application/problem+json` | RFC 9457 Problem Details |
 | それ以外（`/api/jobs/**`、`/api/inference/**`、`/api/files/**` など） | `application/json` | 従来の `{"error": {"code", "message", "details"}}` |
 
-`StudioError` ではない失敗は対象外で、FastAPI / Starlette の既定の本文のまま: 405（`{"detail": "Method Not Allowed"}`）や、処理されない例外の 500。未知の `/api/workspace/...` route は catch-all が `StudioError` の 404 `NOT_FOUND` を投げるので Problem Details になる。
+`StudioError` ではない失敗は対象外で、FastAPI / Starlette の既定の本文のまま: 405（`{"detail": "Method Not Allowed"}`）や、処理されない例外の 500。未知の `/api/workspace/...` route は、build 済みの frontend（`STATIC_DIR/index.html`）があるときだけ SPA の catch-all が `StudioError` の 404 `NOT_FOUND` を投げ、Problem Details になる。build が無いとき（`pnpm build` 前の backend、CI の backend job など）は catch-all が登録されず、FastAPI の 404 `{"detail": "Not Found"}` になる。
 
 - `/api/workspace/**` が 2xx を返したら、副作用（config の保存など）は確定している（INV-API-1）。本文に `saved` は無い。
 - Problem Details の member は常にすべて送る: `type`（常に `"about:blank"`）、`title`（HTTP の reason phrase）、`status`、`detail`（旧 `message`）、`code`（§6.1 のコード）、`details`（旧 `details`。`job_id`、`recovery_hint` など）、`validation_errors`（`VALIDATION_ERROR` では entry の配列、それ以外は `null`）。OpenAPI の component は `ProblemDetails`。
-- blocking な validation（`severity == "error"` の entry が 1 つ以上）は 422 `VALIDATION_ERROR`。`PUT /api/workspace/config`、`POST /api/workspace/config/upload`、`POST /api/workspace/fit`、`POST /api/workspace/tune` が返す。warning / info だけなら 200 で、entry は 200 本文の `validation_errors` に入る（P-0100 の severity 契約は変えない）。
+- blocking な validation（`severity == "error"` の entry が 1 つ以上）は 422 `VALIDATION_ERROR`。`PUT /api/workspace/config`、`POST /api/workspace/config/upload`、`POST /api/workspace/fit`、`POST /api/workspace/tune` が返す。warning / info だけなら 200 で、entry は 200 本文の `validation_errors` に入る（P-0100 の severity 契約は変えない）。entry の型は OpenAPI の `ValidationEntry`（`path` / `message` / `severity` / `suggested_fix`）。
+- 422 のとき保存されないことが保証されるのは `PUT /config` と `POST /config/upload` だけ。`POST /fit` / `POST /tune` は body の `config` を先に validate し、blocking な entry があれば何も保存せず 422 を返す。通れば、後の gate より前に workspace に保存する（P-0086。`tuning` block は Tune overrides に移す）。その後の拒否（400 `WORKSPACE_NO_DATA`、409 `JOB_CONFLICT`、`POST /tune` の materialize 後の config と search-space run gate の 422）は、この保存を取り消さない。
 - 409 `WORKSPACE_LOCKED` も Problem Details で、`details.job_id` を持つ。
-- request body が parse できない（FastAPI の `RequestValidationError`）422 は、`/api/workspace/**` でも従来の envelope のまま（INV-API-4 の「別途 422」）。
+- request body が parse できない（FastAPI の `RequestValidationError`）422 は、`/api/workspace/**` でも従来の envelope のまま（INV-API-4 の「別途 422」）。OpenAPI では、変換した 4 route の 422 に `application/problem+json`（`ProblemDetails`）と `application/json`（`LegacyErrorEnvelope`）の両方を載せる。
 - 同じ `ValidationError` でも、job の relaunch gate（`POST /api/jobs/{id}/unpause`、retune / resume。P-0116 D5）が返すものは `/api/jobs/**` なので従来の envelope（`error.details.errors`）のまま。
 - frontend は `api/errors.ts` の accessor（`getErrorCode` / `isWorkspaceLocked` / `getValidationErrors` / `getErrorMessage`）で両方の形を読む。
 
