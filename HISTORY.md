@@ -4343,6 +4343,7 @@ Decision 時に M-1 または M-2 のいずれかを確定する。frontend は�
     - OpenAPI: validation entry を `ValidationEntry` model で型付けする（frontend の cast を削除）。変換した 4 route の 422 には `application/json` の `LegacyErrorEnvelope`（request body の parse 失敗）も載せる。
     - 未知の `/api/workspace/...` route が Problem Details になるのは、build 済み frontend があるとき（SPA catch-all）だけ。build が無いときは FastAPI の 404。
     - frontend: 拒否された target 変更は選択を元に戻し、sync key の preseed と `onDataChanged` を行わない。Load Preset の成功 toast は保存を待つ。undo / redo は保存が通ってから history の cursor を動かす。coalesce された 1 つの PUT の拒否は toast 1 回。
+  - **review round 2（PR #781）の owner 判断: 割り込みを防ぐ**（token による再検証はしない）。target の変更、preset の load、undo / redo は、config の書き込みが queue か実行中にある間（write funnel の `isFlushing()`。reactive には新しい `subscribe` と `useConfigWritePending`）disabled にし、handler も何もしないで戻る。target の変更は、書き込みを enqueue する前の fetch の間も 1 回ずつに限る（`selecting`）。拒否された target 変更の取り消しは、戻した選択の sync key も記録し、cv-change の PUT を出さない（test: `useDataPanel — refused target change (P-0110)`）。undo / redo の失敗と CV 同期の失敗の toast は、最初の blocking な entry を出す。errors state に入れるのは Model Panel 自身の書き込みだけ（Data Panel の書き込み、auto-reset、Apply to Fit は toast だけ）。
   - test: `tests/test_p0110_problem_details.py`、`frontend/src/api/errors.test.ts`、`frontend/src/hooks/useTargetSelection.test.ts`（funnel write result）ほか。
 
 ### P-0111: Tune-tab write path の sparse-overrides 経路 — `TuningOverrides` schema 拡張 vs 2-path 許容（P-0109 follow-up）

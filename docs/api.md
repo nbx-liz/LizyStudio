@@ -27,11 +27,13 @@ When the server is running, visit:
 
   Failures that are not LizyStudio errors keep the framework's default body
   on every path: a `405` (`{"detail": "Method Not Allowed"}`) and an
-  unhandled `500`. An unknown `/api/workspace/...` route depends on whether
-  the server serves the built frontend: with the build present, the SPA
-  catch-all answers a LizyStudio `404 NOT_FOUND` (Problem Details); without
-  it (for example a backend run before `pnpm build`), FastAPI answers its
-  own `404` `{"detail": "Not Found"}`.
+  unhandled `500`. A `GET` of an unknown `/api/workspace/...` route depends
+  on whether the server serves the built frontend: with the build present,
+  the SPA catch-all answers a LizyStudio `404 NOT_FOUND` (Problem Details);
+  without it (for example a backend run before `pnpm build`), FastAPI
+  answers its own `404` `{"detail": "Not Found"}`. The catch-all is
+  `GET`-only, so with the build present any other method on an unknown
+  route answers `405` `{"detail": "Method Not Allowed"}`.
 
 ### Problem Details (`/api/workspace/**`)
 

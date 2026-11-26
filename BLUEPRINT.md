@@ -3037,7 +3037,7 @@ lizystudio_active_jobs 0.0
 | `/api/workspace` とその下（`/api/workspace/**`） | `application/problem+json` | RFC 9457 Problem Details |
 | それ以外（`/api/jobs/**`、`/api/inference/**`、`/api/files/**` など） | `application/json` | 従来の `{"error": {"code", "message", "details"}}` |
 
-`StudioError` ではない失敗は対象外で、FastAPI / Starlette の既定の本文のまま: 405（`{"detail": "Method Not Allowed"}`）や、処理されない例外の 500。未知の `/api/workspace/...` route は、build 済みの frontend（`STATIC_DIR/index.html`）があるときだけ SPA の catch-all が `StudioError` の 404 `NOT_FOUND` を投げ、Problem Details になる。build が無いとき（`pnpm build` 前の backend、CI の backend job など）は catch-all が登録されず、FastAPI の 404 `{"detail": "Not Found"}` になる。
+`StudioError` ではない失敗は対象外で、FastAPI / Starlette の既定の本文のまま: 405（`{"detail": "Method Not Allowed"}`）や、処理されない例外の 500。未知の `/api/workspace/...` route への GET は、build 済みの frontend（`STATIC_DIR/index.html`）があるときだけ SPA の catch-all が `StudioError` の 404 `NOT_FOUND` を投げ、Problem Details になる。catch-all は GET だけなので、build があっても未知の route への POST などは 405 `{"detail": "Method Not Allowed"}` になる。build が無いとき（`pnpm build` 前の backend、CI の backend job など）は catch-all が登録されず、FastAPI の 404 `{"detail": "Not Found"}` になる。
 
 - `/api/workspace/**` が 2xx を返したら、副作用（config の保存など）は確定している（INV-API-1）。本文に `saved` は無い。
 - Problem Details の member は常にすべて送る: `type`（常に `"about:blank"`）、`title`（HTTP の reason phrase）、`status`、`detail`（旧 `message`）、`code`（§6.1 のコード）、`details`（旧 `details`。`job_id`、`recovery_hint` など）、`validation_errors`（`VALIDATION_ERROR` では entry の配列、それ以外は `null`）。OpenAPI の component は `ProblemDetails`。
@@ -3092,7 +3092,9 @@ lizystudio_active_jobs 0.0
 
 - API エラーは Toast（sonner）で画面上部に表示
 - バリデーションエラーはフォームフィールドにインラインで表示
-- config の書き込み（`PUT /api/workspace/config`、`POST /api/workspace/config/upload`）が 422 を返したら、`validation_errors` を errors state に入れ、最初の blocking な entry の message を toast に出し、config の cache は書き換えない（P-0110。旧 `saved=false` の扱いを 4xx に移した）。成功判定は HTTP status だけで行う
+- config の書き込み（`PUT /api/workspace/config`、`POST /api/workspace/config/upload`）が 422 を返したら、最初の blocking な entry の message を toast に出し、config の cache は書き換えない（P-0110。旧 `saved=false` の扱いを 4xx に移した）。成功判定は HTTP status だけで行う。409 `WORKSPACE_LOCKED` は info toast にする
+- `validation_errors` を Model Panel の errors state（inline 表示と Fit / Tune の可否）に入れるのは、Model Panel 自身の書き込み（form の編集、Import、undo / redo、preset の load）だけ。Data Panel の書き込み（target の変更、CV の同期）、form の auto-reset、Apply to Fit は、toast だけで errors state に入れない。errors state は Model Panel の hook が持っていて、ほかの writer から届かないため
+- target の変更、preset の load、undo / redo は、1 回の書き込みの結果で取り消しか確定をする。そのため、config の書き込みが queue か実行中にある間（write funnel の `isFlushing()`）は、これらの control を disabled にし、handler も何もしないで戻る（PR #781 round 2 の owner 判断。書き込みが割り込まないようにする）。拒否された target の変更は、server がまだ持っている選択に control を戻す
 - WebSocket の error メッセージは Training 画面のログに表示
 
 ---
