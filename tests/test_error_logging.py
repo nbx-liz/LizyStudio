@@ -71,7 +71,7 @@ def test_studio_error_warning_does_not_leak_details_payload(
         json={"path": f"/tmp/{secret_marker}.csv"},
     )
     assert resp.status_code == 400
-    assert resp.json()["error"]["code"] == "PATH_NOT_FOUND"
+    assert resp.json()["code"] == "PATH_NOT_FOUND"
 
     records = _warning_records(caplog)
     assert len(records) == 1

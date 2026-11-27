@@ -102,3 +102,65 @@ describe("ModelPanelActions / LoadPresetMenu (Issue #369)", () => {
     expect(screen.queryByRole("menuitem")).not.toBeInTheDocument();
   });
 });
+
+// P-0110 round 2 (owner ruling): Undo, Redo and Load Preset are disabled
+// while a config write is queued or in flight.
+describe("ModelPanelActions while a config write is pending (P-0110)", () => {
+  it("disables Undo, Redo and Load Preset and fires none of them", async () => {
+    const user = userEvent.setup();
+    const onUndo = vi.fn();
+    const onRedo = vi.fn();
+    const onLoadPreset = vi.fn();
+    renderWithTooltip(
+      <ModelPanelActions
+        {...baseProps}
+        canUndo
+        canRedo
+        onUndo={onUndo}
+        onRedo={onRedo}
+        onLoadPreset={onLoadPreset}
+        writePending
+      />,
+    );
+
+    const undo = screen.getByRole("button", { name: "Undo" });
+    const redo = screen.getByRole("button", { name: "Redo" });
+    const load = screen.getByRole("button", { name: "Load preset" });
+    expect(undo).toBeDisabled();
+    expect(redo).toBeDisabled();
+    expect(load).toBeDisabled();
+
+    await user.click(undo);
+    await user.click(redo);
+    await user.click(load);
+    expect(screen.queryByRole("menuitem")).not.toBeInTheDocument();
+    expect(onUndo).toHaveBeenCalledTimes(0);
+    expect(onRedo).toHaveBeenCalledTimes(0);
+    expect(onLoadPreset).toHaveBeenCalledTimes(0);
+  });
+
+  it("enables them again once no write is pending", async () => {
+    const user = userEvent.setup();
+    const onUndo = vi.fn();
+    const onLoadPreset = vi.fn();
+    renderWithTooltip(
+      <ModelPanelActions
+        {...baseProps}
+        canUndo
+        canRedo
+        onUndo={onUndo}
+        onLoadPreset={onLoadPreset}
+        writePending={false}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Undo" })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Redo" })).not.toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Undo" }));
+    expect(onUndo).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "Load preset" }));
+    await user.click(await screen.findByRole("menuitem", { name: "preset-A" }));
+    expect(onLoadPreset).toHaveBeenCalledTimes(1);
+    expect(onLoadPreset).toHaveBeenCalledWith("preset-A");
+  });
+});

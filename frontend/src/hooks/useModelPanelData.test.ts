@@ -13,6 +13,13 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { queryKeys } from "@/api/queryKeys";
+import { createControllableFunnel } from "@/test/fakeFunnel";
+import {
+  asServedEntry,
+  N_SPLITS_ERROR,
+  validationProblem,
+  workspaceLockedProblem,
+} from "@/test/problemDetails";
 import { useModelPanelData } from "./useModelPanelData";
 
 // All API calls are mocked — we only need to prove the hook wires them
@@ -28,12 +35,13 @@ vi.mock("@/api/workspace", () => ({
   fetchConfigSchema: vi.fn().mockResolvedValue({ type: "object" }),
   fetchUiSchema: vi.fn().mockResolvedValue({}),
   getConfigDownloadUrl: vi.fn().mockReturnValue("/api/config/download"),
-  // PUT /config returns { config, errors, saved } per ConfigUpdateResponse.
-  // Default mock simulates a successful save so existing tests keep working.
+  // PUT /config returns { config, validation_errors } per
+  // ConfigUpdateResponse on a 200, and throws a 422 ApiError when it
+  // refuses the body (P-0110). Default mock simulates a successful save.
   updateConfig: vi
     .fn()
-    .mockResolvedValue({ config: {}, errors: [], saved: true }),
-  uploadConfig: vi.fn().mockResolvedValue({ errors: [] }),
+    .mockResolvedValue({ config: {}, validation_errors: [] }),
+  uploadConfig: vi.fn().mockResolvedValue({ validation_errors: [] }),
   validateConfig: vi.fn().mockResolvedValue({ errors: [] }),
 }));
 
@@ -262,25 +270,17 @@ describe("useModelPanelData", () => {
   });
 
   it("fitEnabled is false when at least one severity=error entry is present", async () => {
-    vi.mocked(updateConfig).mockResolvedValueOnce({
-      config: { model: {} },
-      errors: [
-        {
-          path: "split.n_splits",
-          message: "n_splits=1000 > n_rows=50",
-          severity: "error",
-          suggested_fix: "Set Folds to 50 or fewer.",
-        },
+    vi.mocked(updateConfig).mockRejectedValueOnce(
+      validationProblem([
+        N_SPLITS_ERROR,
         {
           path: "evaluation.metrics",
           message: "MAPE undefined when target contains zeros.",
           severity: "warning",
           suggested_fix: "Remove 'mape' from evaluation.metrics.",
         },
-      ],
-      saved: false,
-      // biome-ignore lint/suspicious/noExplicitAny: test fixture shape
-    } as any);
+      ]),
+    );
 
     const { wrapper } = makeWrapper();
     const { result } = renderHook(
@@ -436,26 +436,23 @@ describe("useModelPanelData", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Issue #276: handleConfigChange must observe `saved:false` from the
-  // backend and not silently swallow the rejection.
+  // Issue #276 + P-0110: handleConfigChange must observe the 422 Problem
+  // Details rejection from the backend and not silently swallow it.
   //
   // Invariants under test:
-  //   INV-A1: when updateConfig returns saved=false, the cached query data
+  //   INV-A1: when updateConfig throws the 422, the cached query data
   //           is NOT updated (frontend stays consistent with backend).
-  //   INV-A2: when updateConfig returns saved=false, the rejection errors
-  //           surface on the hook's `errors` state.
-  //   INV-A3: when updateConfig returns saved=false, the change is NOT
+  //   INV-A2: when updateConfig throws the 422, its validation_errors
+  //           surface on the hook's `errors` state and in one toast.
+  //   INV-A3: when updateConfig throws the 422, the change is NOT
   //           pushed to history (undo/redo would otherwise re-apply the
   //           unsaved config).
   // -------------------------------------------------------------------------
-  describe("handleConfigChange — saved:false observation (#276)", () => {
-    it("does not write to cache when backend returns saved=false", async () => {
-      vi.mocked(updateConfig).mockResolvedValueOnce({
-        config: { model: {} },
-        errors: [{ path: "data", message: "Field required" }],
-        saved: false,
-        // biome-ignore lint/suspicious/noExplicitAny: test fixture shape
-      } as any);
+  describe("handleConfigChange — 422 rejection observation (#276, P-0110)", () => {
+    it("does not write to cache when backend answers 422", async () => {
+      vi.mocked(updateConfig).mockRejectedValueOnce(
+        validationProblem([{ path: "data", message: "Field required" }]),
+      );
 
       const { wrapper, queryClient } = makeWrapper();
       const { result } = renderHook(
@@ -473,17 +470,16 @@ describe("useModelPanelData", () => {
       expect(queryClient.getQueryData(queryKeys.config())).toEqual(before);
     });
 
-    it("surfaces backend errors on the errors state when saved=false", async () => {
+    it("surfaces backend errors on the errors state and in one toast when 422", async () => {
+      const { toast } = await import("sonner");
+      const errorSpy = vi.spyOn(toast, "error");
       const rejectionErrors = [
         { path: "data", message: "Field required" },
         { path: "split.method", message: "Invalid value" },
       ];
-      vi.mocked(updateConfig).mockResolvedValueOnce({
-        config: { model: {} },
-        errors: rejectionErrors,
-        saved: false,
-        // biome-ignore lint/suspicious/noExplicitAny: test fixture shape
-      } as any);
+      vi.mocked(updateConfig).mockRejectedValueOnce(
+        validationProblem(rejectionErrors),
+      );
 
       const { wrapper } = makeWrapper();
       const { result } = renderHook(
@@ -496,16 +492,19 @@ describe("useModelPanelData", () => {
         await result.current.handleConfigChange({ model: { name: "X" } });
       });
 
-      expect(result.current.errors).toEqual(rejectionErrors);
+      expect(result.current.errors).toEqual(rejectionErrors.map(asServedEntry));
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith("Config not saved: Field required");
+      errorSpy.mockRestore();
     });
 
     it("does not push rejected config onto history (undo would otherwise re-apply it)", async () => {
-      vi.mocked(updateConfig).mockResolvedValueOnce({
-        config: { model: {} },
-        errors: [{ path: "data", message: "Field required" }],
-        saved: false,
-        // biome-ignore lint/suspicious/noExplicitAny: test fixture shape
-      } as any);
+      vi.mocked(updateConfig)
+        .mockResolvedValueOnce({ config: {}, validation_errors: [] })
+        .mockRejectedValueOnce(
+          validationProblem([{ path: "data", message: "Field required" }]),
+        )
+        .mockResolvedValueOnce({ config: {}, validation_errors: [] });
 
       const { wrapper } = makeWrapper();
       const { result } = renderHook(
@@ -514,28 +513,35 @@ describe("useModelPanelData", () => {
       );
       await waitFor(() => expect(result.current.config).toBeDefined());
 
-      const undoBefore = result.current.history.canUndo;
+      await act(async () => {
+        await result.current.handleConfigChange({ model: { name: "A" } });
+      });
       await act(async () => {
         await result.current.handleConfigChange({ model: { name: "X" } });
       });
-      // Rejected change must not have been recorded in history.
-      expect(result.current.history.canUndo).toBe(undoBefore);
+      // Only A is recorded: had X been pushed, A would be undoable.
+      expect(result.current.history.peekUndo()).toBeNull();
+      expect(result.current.history.canUndo).toBe(false);
+
+      await act(async () => {
+        await result.current.handleConfigChange({ model: { name: "B" } });
+      });
+      // The undo target after B is A, never the refused X.
+      expect(result.current.history.peekUndo()).toEqual({
+        model: { name: "A" },
+      });
+      expect(updateConfig).toHaveBeenCalledTimes(3);
     });
 
     it("clears errors when a subsequent successful change comes through", async () => {
       vi.mocked(updateConfig)
-        .mockResolvedValueOnce({
-          config: { model: {} },
-          errors: [{ path: "data", message: "Field required" }],
-          saved: false,
-          // biome-ignore lint/suspicious/noExplicitAny: test fixture shape
-        } as any)
+        .mockRejectedValueOnce(
+          validationProblem([{ path: "data", message: "Field required" }]),
+        )
         .mockResolvedValueOnce({
           config: { model: { name: "Y" } },
-          errors: [],
-          saved: true,
-          // biome-ignore lint/suspicious/noExplicitAny: test fixture shape
-        } as any);
+          validation_errors: [],
+        });
 
       const { wrapper } = makeWrapper();
       const { result } = renderHook(
@@ -566,15 +572,8 @@ describe("useModelPanelData", () => {
     it("invalidates cache and does not push to history when 409 fires", async () => {
       // Lazy import inside the test to avoid hoisting weirdness with the
       // top-level vi.mock("@/api/workspace") block.
-      const { ApiError } = await import("@/api/client");
       vi.mocked(updateConfig).mockRejectedValueOnce(
-        new ApiError(409, {
-          error: {
-            code: "WORKSPACE_LOCKED",
-            message: "Config is locked while job xyz is running",
-            details: { job_id: "xyz" },
-          },
-        }),
+        workspaceLockedProblem("xyz"),
       );
 
       const { wrapper, queryClient } = makeWrapper();
@@ -685,9 +684,9 @@ describe("useModelPanelData", () => {
   // -------------------------------------------------------------------------
   it("handleImport posts the file and invalidates config cache on success", async () => {
     vi.mocked(uploadConfig).mockResolvedValueOnce({
-      errors: [],
-      // biome-ignore lint/suspicious/noExplicitAny: test fixture shape
-    } as any);
+      config: {},
+      validation_errors: [],
+    });
     const { wrapper, queryClient } = makeWrapper();
     const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
     const { result } = renderHook(
@@ -701,6 +700,7 @@ describe("useModelPanelData", () => {
       await result.current.handleImport(file);
     });
 
+    expect(uploadConfig).toHaveBeenCalledTimes(1);
     expect(uploadConfig).toHaveBeenCalledWith(file);
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: queryKeys.config(),
@@ -709,12 +709,42 @@ describe("useModelPanelData", () => {
     expect(invalidateSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("handleImport surfaces errors from the server response", async () => {
+  it("handleImport surfaces warnings from a 200 response", async () => {
+    const warning = {
+      path: "evaluation.metrics",
+      message: "MAPE undefined",
+      severity: "warning" as const,
+    };
     vi.mocked(uploadConfig).mockResolvedValueOnce({
-      errors: [{ path: "model", message: "required" }],
-      // biome-ignore lint/suspicious/noExplicitAny: test fixture shape
-    } as any);
+      config: {},
+      validation_errors: [warning],
+    });
     const { wrapper } = makeWrapper();
+    const { result } = renderHook(
+      () => useModelPanelData({ hasData: true, running: false }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.config).toBeDefined());
+
+    const file = new File(["ok"], "c.yaml", { type: "text/yaml" });
+    await act(async () => {
+      await result.current.handleImport(file);
+    });
+
+    expect(result.current.errors).toEqual([warning]);
+  });
+
+  // P-0110: an imported config that fails validation is a 422. Before, the
+  // 200 + saved=false answer still showed "Config imported".
+  it("handleImport surfaces a 422 rejection as an error, not success", async () => {
+    const { toast } = await import("sonner");
+    const errorSpy = vi.spyOn(toast, "error");
+    const successSpy = vi.spyOn(toast, "success");
+    vi.mocked(uploadConfig).mockRejectedValueOnce(
+      validationProblem([{ path: "model", message: "required" }]),
+    );
+    const { wrapper, queryClient } = makeWrapper();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
     const { result } = renderHook(
       () => useModelPanelData({ hasData: true, running: false }),
       { wrapper },
@@ -727,8 +757,278 @@ describe("useModelPanelData", () => {
     });
 
     expect(result.current.errors).toEqual([
-      { path: "model", message: "required" },
+      asServedEntry({ path: "model", message: "required" }),
     ]);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalledWith("Import failed: required");
+    expect(successSpy).not.toHaveBeenCalled();
+    expect(invalidateSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+    successSpy.mockRestore();
+  });
+
+  // -------------------------------------------------------------------------
+  // Owner ruling (PR #781 round 2): undo, redo and preset load are disabled
+  // while a config write is queued or in flight, and their handlers return
+  // early if called then, so no other write can interleave between their
+  // snapshot read and their commit / rollback.
+  // -------------------------------------------------------------------------
+  describe("undo / redo / preset load while a write is pending (P-0110)", () => {
+    it("reports writePending and makes the three handlers no-ops", async () => {
+      const { toast } = await import("sonner");
+      const successSpy = vi.spyOn(toast, "success");
+      const infoSpy = vi.spyOn(toast, "info");
+      const errorSpy = vi.spyOn(toast, "error");
+      localStorage.setItem(
+        "lizystudio-config-presets",
+        JSON.stringify([
+          {
+            name: "p1",
+            config: { model: { name: "P" } },
+            createdAt: "2026-01-01",
+          },
+        ]),
+      );
+      const { funnel, enqueueWrite, setBusy } = createControllableFunnel();
+      const { wrapper } = makeWrapper();
+      const { result } = renderHook(
+        () =>
+          useModelPanelData({
+            hasData: true,
+            running: false,
+            writeFunnel: funnel,
+          }),
+        { wrapper },
+      );
+      await waitFor(() => expect(result.current.config).toBeDefined());
+      await act(async () => {
+        await result.current.handleConfigChange({ model: { name: "A" } });
+      });
+      await act(async () => {
+        await result.current.handleConfigChange({ model: { name: "B" } });
+      });
+      await act(async () => {
+        await result.current.handleUndo();
+      });
+      // A is current, B is redoable, and nothing is undoable.
+      expect(enqueueWrite).toHaveBeenCalledTimes(3);
+      expect(result.current.writePending).toBe(false);
+      successSpy.mockClear();
+      infoSpy.mockClear();
+
+      setBusy(true);
+      expect(result.current.writePending).toBe(true);
+      await act(async () => {
+        await result.current.handleRedo();
+        await result.current.handleUndo();
+        await result.current.handleLoadPreset("p1");
+      });
+
+      // No PUT, no cursor move, no toast.
+      expect(enqueueWrite).toHaveBeenCalledTimes(3);
+      expect(result.current.history.peekRedo()).toEqual({
+        model: { name: "B" },
+      });
+      expect(successSpy).toHaveBeenCalledTimes(0);
+      expect(infoSpy).toHaveBeenCalledTimes(0);
+      expect(errorSpy).toHaveBeenCalledTimes(0);
+
+      // Once the write settles, redo works again (the committed path).
+      setBusy(false);
+      expect(result.current.writePending).toBe(false);
+      await act(async () => {
+        await result.current.handleRedo();
+      });
+      expect(enqueueWrite).toHaveBeenCalledTimes(4);
+      expect(result.current.history.peekUndo()).toEqual({
+        model: { name: "A" },
+      });
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      expect(infoSpy).toHaveBeenCalledWith("Config redone");
+
+      localStorage.removeItem("lizystudio-config-presets");
+      successSpy.mockRestore();
+      infoSpy.mockRestore();
+      errorSpy.mockRestore();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // P-0110: undo / redo move the history cursor only after the backend
+  // accepted the PUT. A refused write leaves the cursor where it was, so it
+  // never sits on a snapshot the server does not hold.
+  // -------------------------------------------------------------------------
+  describe("undo / redo refused by the backend (P-0110)", () => {
+    async function renderWithTwoEdits() {
+      vi.mocked(updateConfig)
+        .mockResolvedValueOnce({ config: {}, validation_errors: [] })
+        .mockResolvedValueOnce({ config: {}, validation_errors: [] });
+      const { wrapper, queryClient } = makeWrapper();
+      const { result } = renderHook(
+        () => useModelPanelData({ hasData: true, running: false }),
+        { wrapper },
+      );
+      await waitFor(() => expect(result.current.config).toBeDefined());
+      await act(async () => {
+        await result.current.handleConfigChange({ model: { name: "A" } });
+      });
+      await act(async () => {
+        await result.current.handleConfigChange({ model: { name: "B" } });
+      });
+      return { result, queryClient };
+    }
+
+    it("a refused undo keeps the cursor and the cache on the current snapshot", async () => {
+      const { toast } = await import("sonner");
+      const errorSpy = vi.spyOn(toast, "error");
+      const { result, queryClient } = await renderWithTwoEdits();
+      vi.mocked(updateConfig).mockRejectedValueOnce(validationProblem());
+
+      await act(async () => {
+        await result.current.handleUndo();
+      });
+
+      expect(updateConfig).toHaveBeenCalledTimes(3);
+      expect(vi.mocked(updateConfig).mock.calls[2][0]).toEqual({
+        model: { name: "A" },
+      });
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).toHaveBeenCalledWith(
+        `Undo failed: ${N_SPLITS_ERROR.message}`,
+      );
+      expect(result.current.errors).toEqual([N_SPLITS_ERROR]);
+      expect(result.current.history.peekUndo()).toEqual({
+        model: { name: "A" },
+      });
+      expect(result.current.history.peekRedo()).toBeNull();
+      expect(result.current.history.canRedo).toBe(false);
+      expect(queryClient.getQueryData(queryKeys.config())).toEqual({
+        model: { name: "B" },
+      });
+      errorSpy.mockRestore();
+    });
+
+    // Real time past the 500 ms debounce, so any validation timer started
+    // so far has fired before the next assertion.
+    async function passValidationDebounce() {
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 650));
+      });
+    }
+
+    // PR #781 round 3 + delta (owner ruling): a successful undo / redo only
+    // clears the entries a refused one stored, so Fit and Tune are not
+    // blocked by errors of a snapshot the server refused. It starts no
+    // validation of its own: a late validation result could otherwise
+    // overwrite the errors of a later refused write.
+    it.each([
+      ["undo", "handleUndo"],
+      ["redo", "handleRedo"],
+    ] as const)(
+      "a successful %s after a refused one clears the refusal errors and validates nothing",
+      async (_label, handler) => {
+        const { result } = await renderWithTwoEdits();
+        if (handler === "handleRedo") {
+          // Move to A first so B is the redo target.
+          vi.mocked(updateConfig).mockResolvedValueOnce({
+            config: {},
+            validation_errors: [],
+          });
+          await act(async () => {
+            await result.current.handleUndo();
+          });
+        }
+        // Let the two form edits' own debounced validation finish first.
+        await passValidationDebounce();
+        vi.mocked(updateConfig).mockRejectedValueOnce(validationProblem());
+        await act(async () => {
+          await result.current[handler]();
+        });
+        expect(result.current.errors).toEqual([N_SPLITS_ERROR]);
+        expect(result.current.fitEnabled).toBe(false);
+
+        vi.mocked(validateConfig).mockClear();
+        vi.mocked(updateConfig).mockResolvedValueOnce({
+          config: {},
+          validation_errors: [],
+        });
+        await act(async () => {
+          await result.current[handler]();
+        });
+        await passValidationDebounce();
+
+        expect(result.current.errors).toEqual([]);
+        expect(result.current.fitEnabled).toBe(true);
+        expect(result.current.disabledReason).toBeNull();
+        expect(validateConfig).toHaveBeenCalledTimes(0);
+      },
+    );
+
+    it("a refused redo after a successful undo keeps its refusal errors", async () => {
+      const { result } = await renderWithTwoEdits();
+      await passValidationDebounce();
+      vi.mocked(validateConfig).mockClear();
+
+      vi.mocked(updateConfig).mockResolvedValueOnce({
+        config: {},
+        validation_errors: [],
+      });
+      await act(async () => {
+        await result.current.handleUndo();
+      });
+      vi.mocked(updateConfig).mockRejectedValueOnce(validationProblem());
+      await act(async () => {
+        await result.current.handleRedo();
+      });
+      await passValidationDebounce();
+
+      // No validation started by the successful undo can overwrite them.
+      expect(result.current.errors).toEqual([N_SPLITS_ERROR]);
+      expect(result.current.fitEnabled).toBe(false);
+      expect(validateConfig).toHaveBeenCalledTimes(0);
+    });
+
+    it("a refused redo keeps the cursor and the cache on the current snapshot", async () => {
+      const { toast } = await import("sonner");
+      const { result, queryClient } = await renderWithTwoEdits();
+      vi.mocked(updateConfig).mockResolvedValueOnce({
+        config: {},
+        validation_errors: [],
+      });
+      await act(async () => {
+        await result.current.handleUndo();
+      });
+      expect(result.current.history.peekRedo()).toEqual({
+        model: { name: "B" },
+      });
+
+      const errorSpy = vi.spyOn(toast, "error");
+      const infoSpy = vi.spyOn(toast, "info");
+      vi.mocked(updateConfig).mockRejectedValueOnce(workspaceLockedProblem());
+      await act(async () => {
+        await result.current.handleRedo();
+      });
+
+      expect(updateConfig).toHaveBeenCalledTimes(4);
+      expect(vi.mocked(updateConfig).mock.calls[3][0]).toEqual({
+        model: { name: "B" },
+      });
+      expect(errorSpy).toHaveBeenCalledTimes(0);
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      expect(infoSpy).toHaveBeenCalledWith(
+        "Config is locked while a job is running",
+      );
+      infoSpy.mockRestore();
+      // Cursor still on A: B stays the redo target, nothing is undoable.
+      expect(result.current.history.peekRedo()).toEqual({
+        model: { name: "B" },
+      });
+      expect(result.current.history.peekUndo()).toBeNull();
+      expect(queryClient.getQueryData(queryKeys.config())).toEqual({
+        model: { name: "A" },
+      });
+      errorSpy.mockRestore();
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -737,7 +1037,7 @@ describe("useModelPanelData", () => {
   // When a `writeFunnel` is provided (production: via context provider in
   // WorkspacePage; tests: via the params override), handleConfigChange /
   // handleUndo / handleRedo enqueue through the funnel instead of calling
-  // updateConfig directly. The hook still owns the saved=false / 409 /
+  // updateConfig directly. The hook still owns the 422 / 409 /
   // debounce-validation observation logic — the funnel only owns the
   // network call ordering.
   // -------------------------------------------------------------------------
@@ -750,10 +1050,17 @@ describe("useModelPanelData", () => {
       }) =>
         | {
             ok: true;
-            saved: { config: Record<string, unknown>; errors: []; saved: true };
+            saved: {
+              config: Record<string, unknown>;
+              validation_errors: [];
+            };
           }
         | { ok: true; saved: unknown }
-        | { ok: false; error: "network"; details?: unknown },
+        | {
+            ok: false;
+            error: "network" | "rejected" | "locked";
+            details?: unknown;
+          },
     ) {
       const calls: { reason: string; config: Record<string, unknown> }[] = [];
       const enqueueWrite = vi.fn(async (op: unknown) => {
@@ -775,7 +1082,7 @@ describe("useModelPanelData", () => {
     it("handleConfigChange routes through funnel with reason=config-form-edit", async () => {
       const { funnel, calls } = createStubFunnel(() => ({
         ok: true,
-        saved: { config: {}, errors: [], saved: true },
+        saved: { config: {}, validation_errors: [] },
       }));
 
       const { wrapper, queryClient } = makeWrapper();
@@ -805,11 +1112,12 @@ describe("useModelPanelData", () => {
       });
     });
 
-    it("handleConfigChange observes saved=false from funnel response and surfaces errors", async () => {
+    it("handleConfigChange observes a 422 from the funnel result and surfaces errors", async () => {
       const rejectionErrors = [{ path: "data", message: "Field required" }];
       const { funnel } = createStubFunnel(() => ({
-        ok: true,
-        saved: { config: {}, errors: rejectionErrors, saved: false },
+        ok: false,
+        error: "rejected",
+        details: validationProblem(rejectionErrors),
       }));
 
       const { wrapper, queryClient } = makeWrapper();
@@ -830,30 +1138,22 @@ describe("useModelPanelData", () => {
         await result.current.handleConfigChange({ model: { name: "X" } });
       });
 
-      expect(result.current.errors).toEqual(rejectionErrors);
+      expect(result.current.errors).toEqual(rejectionErrors.map(asServedEntry));
       // Cache must NOT contain the rejected payload — invalidate forces re-fetch.
       expect(invalidateSpy).toHaveBeenCalledWith({
         queryKey: queryKeys.config(),
       });
-      // Post-#339 budget assertion — single invalidate from saved=false path.
+      // Post-#339 budget assertion — single invalidate from the 422 path.
       expect(invalidateSpy).toHaveBeenCalledTimes(1);
       // Rejected change must not have been recorded in history.
       expect(result.current.history.canUndo).toBe(false);
     });
 
     it("handleConfigChange surfaces 409 WORKSPACE_LOCKED from funnel result.details", async () => {
-      const { ApiError } = await import("@/api/client");
-      const lockErr = new ApiError(409, {
-        error: {
-          code: "WORKSPACE_LOCKED",
-          message: "Config is locked while job xyz is running",
-          details: { job_id: "xyz" },
-        },
-      });
       const { funnel } = createStubFunnel(() => ({
         ok: false,
-        error: "network",
-        details: lockErr,
+        error: "locked",
+        details: workspaceLockedProblem("xyz"),
       }));
 
       const { wrapper, queryClient } = makeWrapper();
@@ -885,7 +1185,7 @@ describe("useModelPanelData", () => {
     it("handleUndo routes through funnel with reason=undo on success", async () => {
       const { funnel, calls } = createStubFunnel(() => ({
         ok: true,
-        saved: { config: {}, errors: [], saved: true },
+        saved: { config: {}, validation_errors: [] },
       }));
 
       const { wrapper } = makeWrapper();
@@ -927,7 +1227,7 @@ describe("useModelPanelData", () => {
     it("handleRedo routes through funnel with reason=redo", async () => {
       const { funnel, calls } = createStubFunnel(() => ({
         ok: true,
-        saved: { config: {}, errors: [], saved: true },
+        saved: { config: {}, validation_errors: [] },
       }));
 
       const { wrapper } = makeWrapper();
@@ -970,7 +1270,7 @@ describe("useModelPanelData", () => {
         }
         return {
           ok: true,
-          saved: { config: {}, errors: [], saved: true },
+          saved: { config: {}, validation_errors: [] },
         };
       });
 

@@ -59,7 +59,7 @@ vi.mock("@/api/workspace", () => ({
   getConfigDownloadUrl: vi.fn().mockReturnValue("/api/config/download"),
   updateConfig: vi
     .fn()
-    .mockResolvedValue({ config: {}, errors: [], saved: true }),
+    .mockResolvedValue({ config: {}, validation_errors: [] }),
   uploadConfig: vi.fn().mockResolvedValue({ errors: [] }),
   validateConfig: vi.fn().mockResolvedValue({ errors: [] }),
 }));
@@ -159,7 +159,7 @@ describe("validate-debounce → ConfigEditorBody warning banner (Issue #405)", (
     // Wait for the trigger button to appear (initial render done).
     const trigger = await screen.findByTestId("trigger-edit");
 
-    // Trigger an edit — the PUT /config mock returns saved=true with no
+    // Trigger an edit — the PUT /config mock returns a 200 with no
     // errors, then the hook starts the 500ms debounced validate.
     await act(async () => {
       fireEvent.click(trigger);

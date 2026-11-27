@@ -12,6 +12,8 @@ import { createRef } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { queryKeys } from "@/api/queryKeys";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { ConfigWriteFunnelProvider } from "@/hooks/useConfigWriteFunnelContext";
+import { createControllableFunnel } from "@/test/fakeFunnel";
 import { renderWithQuery as render } from "@/test/helpers";
 
 const mockLoadDataFromPath = vi.fn();
@@ -765,8 +767,7 @@ describe("DataPanel — handleTargetChange", () => {
     });
     mockUpdateConfig.mockResolvedValue({
       config: {},
-      errors: [],
-      saved: true,
+      validation_errors: [],
     });
 
     render(<DataPanel onDataChanged={vi.fn()} />);
@@ -1606,5 +1607,39 @@ describe("DataPanel — regression task reaches the CV section", () => {
     expect(
       screen.queryByRole("radio", { name: "StratifiedGroup" }),
     ).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P-0110 round 2 (owner ruling: prevent the interleaving). The Target
+// selector is disabled while a config write is queued or in flight, so a
+// target change and its rollback can never interleave with another write.
+// ---------------------------------------------------------------------------
+describe("DataPanel — Target selector while a config write is pending (P-0110)", () => {
+  afterEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  it("is disabled while the funnel is busy and enabled again when it settles", async () => {
+    const { funnel, enqueueWrite, setBusy } = createControllableFunnel();
+    render(
+      <ConfigWriteFunnelProvider funnel={funnel}>
+        <DataPanel onDataChanged={vi.fn()} />
+      </ConfigWriteFunnelProvider>,
+    );
+    await loadDataViaPath();
+    const trigger = screen.getByRole("combobox");
+    expect(trigger).not.toBeDisabled();
+
+    setBusy(true);
+    expect(screen.getByRole("combobox")).toBeDisabled();
+    // A click on the disabled selector opens nothing and writes nothing.
+    await userEvent.click(screen.getByRole("combobox"));
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(enqueueWrite).toHaveBeenCalledTimes(0);
+
+    setBusy(false);
+    expect(screen.getByRole("combobox")).not.toBeDisabled();
   });
 });

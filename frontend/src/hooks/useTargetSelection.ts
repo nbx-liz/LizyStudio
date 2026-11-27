@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef, useState } from "react";
 import { toast } from "sonner";
 import { getErrorMessage } from "@/api/errors";
 import type { ColumnInfo, UiSchema } from "@/api/types";
@@ -10,6 +10,7 @@ import {
   resetCvState,
 } from "@/components/workspace/cv-state";
 import { evalMetricMap } from "@/components/workspace/metric-options";
+import { surfaceWriteFailure } from "./surfaceWriteFailure";
 import type { ConfigWriteFunnel } from "./useConfigWriteFunnel";
 import {
   buildMergedConfig,
@@ -30,13 +31,18 @@ import {
  * new target column".
  */
 interface UseTargetSelectionParams {
+  /** Current target, columns and overrides: restored when the server
+   * refuses the target-select write (P-0110). */
+  target: string | null;
+  columns: ColumnInfo[];
+  overrides: Record<string, ColumnOverride>;
   task: TaskType | null;
   cv: CvState;
   blocked: BlockedGroupKFoldState;
   dataPath: string;
   uiSchema?: UiSchema;
-  setTarget: (value: string) => void;
-  setTask: (task: TaskType) => void;
+  setTarget: (value: string | null) => void;
+  setTask: (task: TaskType | null) => void;
   setCv: (cv: CvState) => void;
   setBlocked: (blocked: BlockedGroupKFoldState) => void;
   setColumns: (columns: ColumnInfo[]) => void;
@@ -66,6 +72,9 @@ interface UseTargetSelectionParams {
 }
 
 export function useTargetSelection({
+  target,
+  columns,
+  overrides,
   task,
   cv,
   blocked,
@@ -84,8 +93,37 @@ export function useTargetSelection({
   writeFunnel,
   legacyUpdateConfig,
 }: UseTargetSelectionParams) {
+  // Owner ruling (PR #781 round 2): one target change at a time, and none
+  // while another config write is pending. A change reads the current
+  // selection, writes once, then rolls back or commits on that write's
+  // result; a second change or another writer in between would make the
+  // rollback overwrite it. `selecting` covers the whole change, including
+  // the column / defaults fetches before its write is enqueued, which the
+  // funnel's own pending flag does not.
+  const inFlightRef = useRef(false);
+  const [selecting, setSelecting] = useState(false);
+
   const handleTargetChange = useCallback(
     async (value: string) => {
+      if (inFlightRef.current || writeFunnel?.isFlushing()) return;
+      inFlightRef.current = true;
+      setSelecting(true);
+      // The selection the server holds before this change, restored when
+      // the server refuses the target-select write (P-0110). The restored
+      // selection's sync key is recorded too: the sync effect had already
+      // recorded the optimistic key while suppressed, so without this the
+      // restored state would read as a new change and send a cv-change PUT
+      // once suppression ends.
+      const restorePrior = () => {
+        setTarget(target);
+        setColumns(columns);
+        setOverrides(overrides);
+        setTask(task);
+        onTaskChanged?.(task);
+        setCv(cv);
+        setBlocked(blocked);
+        preseedSyncKey(buildSyncKey(target, task, overrides, cv, blocked));
+      };
       setSyncSuppressed(true);
       setTarget(value);
       try {
@@ -121,7 +159,7 @@ export function useTargetSelection({
           // task-keyed eval registry. Without this the merged-config PUT
           // ships `evaluation.metrics: []`, which lets MetricsChips'
           // task-change useEffect race the target-select PUT and emit a
-          // partial-body PUT that the backend rejects (saved=false).
+          // partial-body PUT that the backend rejects (422 since P-0110).
           const evaluationMetrics = evalMetricMap(uiSchema)[detectedTask] ?? [];
           const merged = buildMergedConfig({
             defaults,
@@ -147,11 +185,23 @@ export function useTargetSelection({
           // we want to migrate this writer without breaking unit
           // tests that drive it directly.
           if (writeFunnel) {
-            await writeFunnel.enqueueWrite({
+            const result = await writeFunnel.enqueueWrite({
               kind: "replace",
               config: merged,
               reason: "target-select",
             });
+            if (!result.ok) {
+              // P-0110: the server refused the write (422 / 409 / network)
+              // and still holds its previous config. Say why, put the
+              // controls back on the selection the server holds, and
+              // neither preseed the sync key nor report a data change:
+              // the rolled-back state matches the pre-change sync key, so
+              // useConfigSync has nothing to resync. An aborted write
+              // means the caller tore down; leave its state alone.
+              surfaceWriteFailure(result);
+              if (result.error !== "aborted") restorePrior();
+              return;
+            }
           } else if (legacyUpdateConfig) {
             await legacyUpdateConfig.putConfig(merged);
             legacyUpdateConfig.setQueryData(merged);
@@ -176,6 +226,8 @@ export function useTargetSelection({
       } catch (err) {
         toast.error(`Column detection failed: ${getErrorMessage(err)}`);
       } finally {
+        inFlightRef.current = false;
+        setSelecting(false);
         setSyncSuppressed(false);
         // Radix Select returns focus to the trigger on close via
         // `onCloseAutoFocus`, which runs AFTER our finally block. Defer
@@ -189,6 +241,9 @@ export function useTargetSelection({
       }
     },
     [
+      target,
+      columns,
+      overrides,
       task,
       cv,
       blocked,
@@ -209,5 +264,5 @@ export function useTargetSelection({
     ],
   );
 
-  return { handleTargetChange };
+  return { handleTargetChange, selecting };
 }

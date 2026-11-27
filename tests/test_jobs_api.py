@@ -1361,7 +1361,12 @@ def test_export_job_backend_error(
         )
 
     assert res.status_code == 500
-    assert res.json()["error"]["code"] == "EXPORT_ERROR"
+    error = res.json()["error"]
+    assert error["code"] == "EXPORT_ERROR"
+    # P-0121: the exception text is logged, never returned.
+    assert error["message"] == "Export failed (RuntimeError)"
+    assert "export failed" not in res.text
+    assert error["details"] == {}
 
 
 def test_job_config_snapshot_isolation(

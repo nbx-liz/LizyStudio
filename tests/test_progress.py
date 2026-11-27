@@ -231,7 +231,7 @@ class TestWebsocketProgressKeepalive:
                 call_count += 1
                 if call_count == 1:
                     coro.close()
-                    raise asyncio.TimeoutError
+                    raise TimeoutError
                 # Delegate to the real function captured outside the patch
                 return await real_wait_for(coro, timeout=2.0)
 
@@ -270,7 +270,7 @@ class TestWebsocketProgressKeepalive:
                 call_count += 1
                 if call_count == 1:
                     coro.close()
-                    raise asyncio.TimeoutError
+                    raise TimeoutError
                 return await real_wait_for(coro, timeout=2.0)
 
             with patch(
@@ -309,7 +309,7 @@ class TestWebsocketProgressKeepalive:
                 if timeouts_injected < 2:
                     timeouts_injected += 1
                     coro.close()
-                    raise asyncio.TimeoutError
+                    raise TimeoutError
                 return await real_wait_for(coro, timeout=2.0)
 
             with patch(

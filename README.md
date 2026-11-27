@@ -74,7 +74,7 @@ See the [Adapter Guide](docs/adapter-guide.md) for implementation details.
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.11+
 
 ## Installation
 
@@ -127,7 +127,7 @@ variables are unset.
 
 ## Development
 
-Python 3.10–3.14 (develop on 3.12) with [uv](https://docs.astral.sh/uv/),
+Python 3.11–3.14 (develop on 3.12) with [uv](https://docs.astral.sh/uv/),
 and Node.js 24 with pnpm 10.31.0 via corepack. The supported toolchain, the
 one-time setup (locked installs, git hooks, the E2E browser) and the dev
 servers are described once, in

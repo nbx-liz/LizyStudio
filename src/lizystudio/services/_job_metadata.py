@@ -24,7 +24,7 @@ import builtins
 import json
 import logging
 from dataclasses import asdict, dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
@@ -236,7 +236,7 @@ class JobMetadataStore:
             config=config,
             data_ref=data_ref,
             job_type=job_type,
-            created_at=datetime.now(timezone.utc).isoformat(),
+            created_at=datetime.now(UTC).isoformat(),
             parent_job_id=parent_job_id,
         )
         self.save_meta(job)

@@ -29,6 +29,12 @@ updates:
       # supports it; see issue #762.
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major"]
+      # msw 3 fails `tsc -b` on src/test-setup.ts with TS2353
+      # ("'onUnhandledRequest' does not exist in type ...") on the
+      # `server.listen()` call. It failed the dev-major group twice (#745,
+      # #774). Hold the major until the migration in issue #762 lands.
+      - dependency-name: "msw"
+        update-types: ["version-update:semver-major"]
     groups:
       # Keep react + react-dom + their types in lock-step.
       react-ecosystem:

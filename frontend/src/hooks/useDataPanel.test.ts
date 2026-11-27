@@ -38,6 +38,13 @@ vi.mock("sonner", () => ({
   },
 }));
 
+import { validationProblem } from "@/test/problemDetails";
+import type {
+  ConfigWriteFunnel,
+  WriteOp,
+  WriteResult,
+} from "./useConfigWriteFunnel";
+import { ConfigWriteFunnelProvider } from "./useConfigWriteFunnelContext";
 import { useDataPanel } from "./useDataPanel";
 
 const DATA_LOAD_OK = {
@@ -906,5 +913,109 @@ describe("buildMergedConfig", () => {
       overrides: {},
     });
     expect(result.data).toMatchObject({ path: undefined, target: "y" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P-0110 round 2: a refused target change rolls back WITHOUT a resync PUT.
+//
+// The real useConfigSync effect runs inside useDataPanel here. While the
+// target change is suppressed the effect records the optimistic sync key;
+// the rollback must record the restored key too, or the restored state
+// reads as a new change and the effect sends a cv-change PUT. Every write
+// is counted through the funnel.
+// ---------------------------------------------------------------------------
+describe("useDataPanel — refused target change (P-0110)", () => {
+  it("rolls back to the prior target and sends no further PUT", async () => {
+    mocks.fetchColumns.mockResolvedValue(COLS_OK);
+    mocks.fetchConfigDefaults.mockResolvedValue({
+      config_version: 1,
+      task: "binary",
+      data: { path: null, target: null },
+      features: { categorical: [], exclude: [] },
+      split: { method: "kfold", n_splits: 5 },
+      model: { name: "lgbm", params: {} },
+    });
+    mocks.fetchConfig.mockResolvedValue({
+      config_version: 1,
+      task: "binary",
+      data: { target: "a" },
+      split: { method: "kfold", n_splits: 5 },
+      model: { name: "lgbm", params: {} },
+    });
+
+    const reasons: string[] = [];
+    let targetSelects = 0;
+    // The second target-select is held open so the optimistic state
+    // renders (and the sync effect records its key) before the refusal
+    // lands, as it does in a browser between awaits.
+    let refuseSecond: () => void = () => {};
+    const funnel: ConfigWriteFunnel = {
+      enqueueWrite: vi.fn(async (op: WriteOp): Promise<WriteResult> => {
+        reasons.push(op.reason);
+        if (op.reason === "target-select") {
+          targetSelects += 1;
+          if (targetSelects === 2) {
+            return new Promise<WriteResult>((resolve) => {
+              refuseSecond = () =>
+                resolve({
+                  ok: false,
+                  error: "rejected",
+                  details: validationProblem(),
+                });
+            });
+          }
+        }
+        return { ok: true, saved: { config: {}, validation_errors: [] } };
+      }),
+      isFlushing: () => false,
+    };
+    const onDataChanged = vi.fn();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        createElement(ConfigWriteFunnelProvider, { funnel, children }),
+      );
+    const { result } = renderHook(
+      () => useDataPanel({ onDataChanged, onTaskChanged: vi.fn() }),
+      { wrapper },
+    );
+
+    await act(async () => {
+      await result.current.handleTargetChange("a");
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    expect(result.current.target).toBe("a");
+    const writesBefore = reasons.length;
+    const dataChangesBefore = onDataChanged.mock.calls.length;
+
+    let change: Promise<void> = Promise.resolve();
+    await act(async () => {
+      change = result.current.handleTargetChange("b");
+      await new Promise((r) => setTimeout(r, 30));
+    });
+    // The optimistic selection rendered while the write is pending.
+    expect(result.current.target).toBe("b");
+
+    await act(async () => {
+      refuseSecond();
+      await change;
+    });
+    // Let every effect the rollback schedules run.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    expect(result.current.target).toBe("a");
+    // Exactly one more write: the refused target-select. No cv-change.
+    expect(reasons.slice(writesBefore)).toEqual(["target-select"]);
+    expect(onDataChanged).toHaveBeenCalledTimes(dataChangesBefore);
+    expect(mocks.toastError).toHaveBeenCalledTimes(1);
   });
 });

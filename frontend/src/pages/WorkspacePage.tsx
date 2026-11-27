@@ -2,7 +2,12 @@ import { useQueryClient } from "@tanstack/react-query";
 import { BarChart3, Database, SlidersHorizontal } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { getErrorMessage } from "@/api/errors";
+import {
+  getErrorMessage,
+  getValidationErrors,
+  isWorkspaceLocked,
+  summarizeValidationErrors,
+} from "@/api/errors";
 import { useConfig, useUiSchema, useWorkspaceStatus } from "@/api/queries";
 import { queryKeys } from "@/api/queryKeys";
 import { runFit, runTune } from "@/api/workspace";
@@ -96,10 +101,10 @@ export function WorkspacePage() {
   // a stale closure capture from when the hook was registered.
   //
   // P-0092 Q-1 Phase 4: `updateConfig` returns ConfigUpdateResponse
-  // (`{config, errors, saved}`) — we must extract `.config` before
+  // (`{config, validation_errors}`) — we must extract `.config` before
   // writing to the cache. Otherwise the next funnel writer reads back
-  // the wrapper and PUTs `{config: {...}, errors: [...], saved: ...}`
-  // as the body, which the backend rejects with 500. This was a
+  // the wrapper and PUTs `{config: {...}, validation_errors: [...]}`
+  // as the body, which the backend rejects. This was a
   // latent bug from Phase 2 (only useTargetSelection's `replace`
   // ops fired through the funnel pre-Phase-4 and they happened to
   // immediately overwrite the cache via setQueryData on the test
@@ -109,14 +114,11 @@ export function WorkspacePage() {
     getCachedConfig: () =>
       queryClient.getQueryData<Record<string, unknown>>(queryKeys.config()),
     onWriteCommitted: (saved) => {
-      const wrapper = saved as {
-        config?: Record<string, unknown>;
-        saved?: boolean;
-      };
-      // Only update cache when backend confirmed the save. saved=false
-      // means the body was rejected; the consumers' invalidateQueries
-      // already re-fetches, so a no-op here is correct.
-      if (wrapper && wrapper.saved !== false && wrapper.config) {
+      // P-0110: the funnel only calls this on a 2xx, and a 2xx means
+      // the backend saved the body. A rejection is a 422 the funnel
+      // reports as `ok: false`, and its consumers re-fetch.
+      const wrapper = saved as { config?: Record<string, unknown> };
+      if (wrapper?.config) {
         queryClient.setQueryData(queryKeys.config(), wrapper.config);
       }
     },
@@ -250,15 +252,20 @@ export function WorkspacePage() {
         reason: "apply-to-fit",
       });
       if (!result.ok) {
-        toast.error("Failed to apply tune config");
-        queryClient.invalidateQueries({ queryKey: queryKeys.config() });
-        return;
-      }
-      const wrapper = result.saved as
-        | { saved?: boolean; errors?: unknown[] }
-        | undefined;
-      if (wrapper?.saved === false) {
-        toast.error("Failed to apply tune config: backend rejected the body");
+        // BLUEPRINT §6.3: a 409 WORKSPACE_LOCKED is the quiet info toast
+        // every other config writer shows.
+        if (isWorkspaceLocked(result.details)) {
+          toast.info("Config is locked while a job is running");
+          queryClient.invalidateQueries({ queryKey: queryKeys.config() });
+          return;
+        }
+        // P-0110: a validation rejection is a 422 Problem Details error.
+        const validationErrors = getValidationErrors(result.details);
+        toast.error(
+          validationErrors !== null
+            ? `Failed to apply tune config: ${summarizeValidationErrors(validationErrors)}`
+            : "Failed to apply tune config",
+        );
         queryClient.invalidateQueries({ queryKey: queryKeys.config() });
         return;
       }

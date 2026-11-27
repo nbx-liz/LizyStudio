@@ -12,6 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { surfaceWriteFailure } from "@/hooks/surfaceWriteFailure";
 import { useConfigWriteFunnelOptional } from "@/hooks/useConfigWriteFunnelContext";
 
 import { CalibrationSection } from "./CalibrationSection";
@@ -145,14 +146,16 @@ export function ConfigForm({
       // the saved snapshot via TanStack Query. We deliberately do not
       // await here — auto-reset effects are React effect callbacks,
       // and awaiting would change their scheduling semantics in ways
-      // we have not green-lit. Errors surface via the funnel's own
-      // toast/log path (Phase 5 will add it formally).
-      void funnel.enqueueWrite({
-        kind: "patch",
-        path,
-        value,
-        reason: "auto-reset",
-      });
+      // we have not green-lit. P-0110: a refused write (422 / 409) is
+      // shown through `surfaceWriteFailure` instead of being dropped.
+      void funnel
+        .enqueueWrite({
+          kind: "patch",
+          path,
+          value,
+          reason: "auto-reset",
+        })
+        .then(surfaceWriteFailure);
     },
     [funnel, handleFieldChange],
   );
@@ -165,11 +168,13 @@ export function ConfigForm({
         handleFieldsChange(patches);
         return;
       }
-      void funnel.enqueueWrite({
-        kind: "patch-many",
-        patches,
-        reason: "auto-reset",
-      });
+      void funnel
+        .enqueueWrite({
+          kind: "patch-many",
+          patches,
+          reason: "auto-reset",
+        })
+        .then(surfaceWriteFailure);
     },
     [funnel, handleFieldsChange],
   );
@@ -711,7 +716,7 @@ export function ConfigForm({
                   // PROP task while configRef still reads the old task,
                   // PUTs a body where ``task`` and ``metrics`` disagree,
                   // and the backend rejects the entire body with
-                  // saved=false (silently reverting the task switch).
+                  // 422 (pre-P-0110: a silent saved=false that reverted the task switch).
                   task={(config.task as string) || task}
                   selectedMetrics={selectedMetrics}
                   metricsByTask={evalMetricMap(uiSchema)}

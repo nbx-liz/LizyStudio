@@ -414,7 +414,7 @@ async def websocket_progress(
         while True:
             try:
                 msg = await asyncio.wait_for(queue.get(), timeout=30.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Send keepalive ping and continue the loop (H-0058 / H-0069)
                 with contextlib.suppress(Exception):
                     ping = WsPing(type="ping", job_id=job_id)

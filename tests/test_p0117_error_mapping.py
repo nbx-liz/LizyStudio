@@ -375,3 +375,56 @@ def test_an_identity_marker_holding_a_path_is_not_echoed() -> None:
     assert envelope.details["context"] == {}
     assert "/home/someone" not in envelope.message
     assert "/home/someone" not in json.dumps(envelope.details)
+
+
+# --- P-0121: the unreadable analysis_context row ----------------------------
+
+_ANALYSIS_PREFIX = "Failed to load analysis_context: "
+
+
+def _desc(
+    message: str,
+    context: dict[str, Any] | None = None,
+    code: ErrorCode = ErrorCode.DESERIALIZATION_FAILED,
+) -> LizyMLError:
+    # Hand-built: the point is a near miss no lizyml raise site produces; the
+    # real raise is asserted in tests/integration/test_p0121_*.py.
+    return LizyMLError(code, message, context=context or {"path": "/x"})
+
+
+def test_the_analysis_context_row_matches_its_exact_shape() -> None:
+    found = classify(_desc(_ANALYSIS_PREFIX + "boom"))
+
+    assert found.error_class == "artifact"
+    assert found.reason == "unreadable_analysis_context"
+    assert found.context == {}
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        _desc(_ANALYSIS_PREFIX + "x", code=ErrorCode.SERIALIZATION_FAILED),
+        _desc(_ANALYSIS_PREFIX + "x", {"path": "/x", "note": "n"}),
+        _desc(_ANALYSIS_PREFIX + "x", {"note": "n"}),
+        _desc("prefix " + _ANALYSIS_PREFIX + "x"),
+        _desc(" " + _ANALYSIS_PREFIX + "x"),
+        _desc("Failed to load analysis_context:x"),
+        _desc("failed to load analysis_context: x"),
+        _desc("Failed to load model artifacts: x"),
+    ],
+    ids=[
+        "other-code",
+        "inert-extra-key",
+        "no-path-key",
+        "literal-mid-string",
+        "leading-space",
+        "no-trailing-space",
+        "case-differs",
+        "sibling-literal",
+    ],
+)
+def test_a_near_miss_of_the_analysis_context_row_is_unclassified(
+    exc: LizyMLError,
+) -> None:
+    assert classify(exc).error_class == "unclassified"
+    assert translated(exc) is None

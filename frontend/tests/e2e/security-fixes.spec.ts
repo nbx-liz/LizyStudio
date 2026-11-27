@@ -40,7 +40,9 @@ test.describe("Security fixes — path traversal prevention", () => {
     });
     expect(res.status()).toBe(400);
     const body = await res.json();
-    expect(body.error.code).toBe("PATH_NOT_FOUND");
+    // P-0110: workspace errors are RFC 9457 Problem Details.
+    expect(res.headers()["content-type"]).toContain("application/problem+json");
+    expect(body.code).toBe("PATH_NOT_FOUND");
   });
 });
 
@@ -55,10 +57,14 @@ test.describe("Security fixes — config validation guard", () => {
     const putRes = await request.put(`${API}/workspace/config`, {
       data: { task: "binary" },
     });
-    expect(putRes.status()).toBe(200);
+    // P-0110: a blocking validation rejection is a 422, not a 200.
+    expect(putRes.status()).toBe(422);
+    expect(putRes.headers()["content-type"]).toContain(
+      "application/problem+json",
+    );
     const putBody = await putRes.json();
-    expect(putBody.saved).toBe(false);
-    expect(putBody.errors.length).toBeGreaterThan(0);
+    expect(putBody.code).toBe("VALIDATION_ERROR");
+    expect(putBody.validation_errors.length).toBeGreaterThan(0);
 
     // Verify config was NOT saved
     const getRes = await request.get(`${API}/workspace/config`);
@@ -83,8 +89,8 @@ test.describe("Security fixes — config validation guard", () => {
     });
     expect(putRes.status()).toBe(200);
     const putBody = await putRes.json();
-    expect(putBody.saved).toBe(true);
-    expect(putBody.errors).toEqual([]);
+    expect(putBody).not.toHaveProperty("saved");
+    expect(putBody.validation_errors).toEqual([]);
 
     // Verify config was saved
     const getRes = await request.get(`${API}/workspace/config`);
@@ -102,7 +108,7 @@ test.describe("Security fixes — error sanitization", () => {
     expect(res.status()).toBe(400);
     const body = await res.json();
     // Error should have code and message, not full stack traces
-    expect(body.error.code).toBeDefined();
-    expect(body.error.message).toBeDefined();
+    expect(body.code).toBeDefined();
+    expect(body.detail).toBeDefined();
   });
 });

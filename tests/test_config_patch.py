@@ -41,10 +41,11 @@ class TestNewErrorCodes:
         assert "YAML" in err.message
 
     def test_export_error(self) -> None:
-        err = ExportError("model directory not found")
+        err = ExportError(RuntimeError("secret value"))
         assert err.code == "EXPORT_ERROR"
         assert err.status_code == 500
-        assert "model" in err.message
+        assert err.message == "Export failed (RuntimeError)"
+        assert err.details == {}
 
 
 # --- H-0037: Config patch service tests ---
@@ -192,7 +193,7 @@ class TestPatchEndpoint:
             json={"ops": [{"op": "set", "path": "foo.__bar__", "value": 1}]},
         )
         assert resp.status_code == 422
-        assert resp.json()["error"]["code"] == "INVALID_PATCH"
+        assert resp.json()["code"] == "INVALID_PATCH"
 
     def test_patch_invalid_op_returns_422(self, client: Any) -> None:
         _set_valid_config(client)
@@ -201,7 +202,7 @@ class TestPatchEndpoint:
             json={"ops": [{"op": "remove", "path": "task"}]},
         )
         assert resp.status_code == 422
-        assert resp.json()["error"]["code"] == "INVALID_PATCH"
+        assert resp.json()["code"] == "INVALID_PATCH"
 
     def test_patch_on_empty_config_returns_error(self, client: Any) -> None:
         """PATCH on empty workspace should fail."""

@@ -1529,9 +1529,27 @@ HISTORY P-0119（2026-11-20 accepted, Option A; Q1 は重なりを受け入れ�
 
 ---
 
-## 採番ガイダンス（v3-27 以降）
+## Phase v3-28: P-0120 — Python の下限を 3.11 に上げる（Issue #775）
+
+HISTORY P-0120（2026-11-20 accepted）。Python 3.10（EOL 2026-10）を対応範囲から外し、lock した環境で pandas の major が分かれないようにする。pandas の下限は Studio に足さない。読めない job への 4xx は別の Issue で扱う。
+
+| サブフェーズ | 内容 | 状態 | PR |
+|---|---|---|---|
+| v3-28a | `requires-python >=3.11`・classifiers・ruff `py311`（`UP017` / `UP041` の書き換え）・PR matrix `[3.11, 3.12]`・Nightly matrix `[3.11..3.14]`・`uv.lock`・CONTRIBUTING / README / コメント・Ruleset の必須 check の差し替え | ✅ merged 2026-11-21（0.9.0 で release） | #776 |
+
+**DoD:**
+- [x] P-0120 の Acceptance Criteria を満たす（merge の後の Nightly の項目を除く。下の項目で追う）
+- [ ] merge の後で最初の、変更のある夜の Nightly で backend の全脚が緑（Nightly は main の workflow file で動くので、本 release が main に入った後でないと確かめられない）
+
+**0.9.0 の範囲（2026-11-27）:** P-0120（本 phase、#776）、P-0110（RFC 9457 Problem Details、#781、Issue #536）、P-0121（読めない保存モデルの 409 と export のエラーの sanitize、#784、Issue #777）を 0.9.0 で release する。次の 2 件は 0.9.0 に含めない（owner 2026-11-27）。
+- P-0111（#528）: PR #787 は draft に戻した。REPLACE を client の cache から seed すると、他の書き手と競合するため。
+- #734 / P-0122: Proposal の再設計が要る。`tuning` key が省かれたときの規則が、どちらの向きでも破れるため。branch は archive tag をつけて保留した。
+
+---
+
+## 採番ガイダンス（v3-28 以降）
 
 - 新規 Proposal は **P-0102** 以降を起票（P-0101 = 2026-05-05 metric-compat watchlist Decision、P-0099 = 2026-05-06 R-1 invariants）。
-- 仕様変更を伴う作業は HISTORY.md に Proposal → 本 PLAN.md にフェーズ追加（`v3-27` = P-0119、次は `v3-28`...）の順で進める。
+- 仕様変更を伴う作業は HISTORY.md に Proposal → 本 PLAN.md にフェーズ追加（`v3-27` = P-0119、`v3-28` = P-0120、次は `v3-29`...）の順で進める。
 - 詳細な未着手バックログは `docs/ROADMAP.md` を参照。
 - v0.6+ 候補: 第 2 backend (Issue #403)、Tailwind v4 (#125)、P-0087 Phase 3、LLM 統合、PyTorch backend、監査ログ・認証。

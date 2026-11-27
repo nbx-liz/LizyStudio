@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { ApiError } from "@/api/client";
-import { isStudioError } from "@/api/errors";
+import { isWorkspaceLocked } from "@/api/errors";
 import { updateConfig } from "@/api/workspace";
 
 /**
@@ -224,13 +224,13 @@ function classifyPutError(err: unknown): {
   details: unknown;
 } {
   if (err instanceof ApiError) {
-    if (
-      err.status === 409 &&
-      isStudioError(err.body) &&
-      err.body.error.code === "WORKSPACE_LOCKED"
-    ) {
+    // P-0110: PUT /config answers RFC 9457 Problem Details; the accessor
+    // reads the code from either envelope.
+    if (isWorkspaceLocked(err)) {
       return { error: "locked", details: err };
     }
+    // A blocking validation rejection is a 422 here (P-0110), so the
+    // backend not saving the body always lands on this branch.
     if (err.status >= 400 && err.status < 500) {
       return { error: "rejected", details: err };
     }
@@ -290,8 +290,15 @@ interface UseConfigWriteFunnelOptions {
  */
 export interface ConfigWriteFunnel {
   enqueueWrite: (op: WriteOp) => Promise<WriteResult>;
-  /** True while a PUT is in flight. Useful for upstream guards. */
+  /** True while a write is queued or in flight. Useful for upstream guards. */
   isFlushing: () => boolean;
+  /**
+   * Subscribe to `isFlushing()` changes (P-0110): the listener runs when
+   * the funnel goes busy or idle. Read it through `useConfigWritePending`.
+   * Optional so hand-written test stubs need not implement it; the real
+   * funnel always provides it.
+   */
+  subscribe?: (listener: () => void) => () => void;
 }
 
 export function useConfigWriteFunnel(
@@ -317,6 +324,15 @@ export function useConfigWriteFunnel(
   const resolversRef = useRef<Map<WriteOp, (result: WriteResult) => void>>(
     new Map(),
   );
+
+  // P-0110: listeners of the busy / idle transitions of `isFlushing()`,
+  // read reactively through `useConfigWritePending`. Kept in a ref so the
+  // returned funnel object keeps its identity (consumers put it in effect
+  // dependencies).
+  const listenersRef = useRef<Set<() => void>>(new Set());
+  const notifyPending = useCallback(() => {
+    for (const listener of listenersRef.current) listener();
+  }, []);
 
   const flushOne = useCallback(async (): Promise<void> => {
     const entry = stateRef.current.pending.shift();
@@ -357,7 +373,8 @@ export function useConfigWriteFunnel(
       await flushOne();
     }
     stateRef.current = { ...stateRef.current, currentFlush: null };
-  }, [flushOne]);
+    notifyPending();
+  }, [flushOne, notifyPending]);
 
   const enqueueWrite = useCallback(
     (op: WriteOp): Promise<WriteResult> => {
@@ -384,6 +401,7 @@ export function useConfigWriteFunnel(
             ...stateRef.current,
             currentFlush: flushPromise,
           };
+          notifyPending();
           // Failsafe: if drain rejects (it should not — flushOne
           // catches and converts to WriteResult), surface it as a
           // rejected promise to any pending resolver.
@@ -396,13 +414,20 @@ export function useConfigWriteFunnel(
         }
       });
     },
-    [drain],
+    [drain, notifyPending],
   );
 
   const isFlushing = useCallback(
     () => stateRef.current.currentFlush !== null,
     [],
   );
+
+  const subscribe = useCallback((listener: () => void) => {
+    listenersRef.current.add(listener);
+    return () => {
+      listenersRef.current.delete(listener);
+    };
+  }, []);
 
   // Cleanup on unmount: reject any unresolved promises so callers
   // do not hang. Phase 5 may relax this once the funnel is owned by
@@ -427,7 +452,8 @@ export function useConfigWriteFunnel(
     () => ({
       enqueueWrite,
       isFlushing,
+      subscribe,
     }),
-    [enqueueWrite, isFlushing],
+    [enqueueWrite, isFlushing, subscribe],
   );
 }

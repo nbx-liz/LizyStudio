@@ -14,7 +14,7 @@ import builtins
 import json
 import logging
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -270,7 +270,7 @@ def run_inference(
         job_id=job.job_id,
         data_ref=data_ref,
         has_ground_truth=has_ground_truth,
-        created_at=datetime.now(timezone.utc).isoformat(),
+        created_at=datetime.now(UTC).isoformat(),
         row_count=len(df),
         warnings=pred_result.warnings,
     )

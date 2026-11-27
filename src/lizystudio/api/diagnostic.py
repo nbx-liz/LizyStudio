@@ -36,7 +36,7 @@ from __future__ import annotations
 import platform
 import sys
 from dataclasses import asdict, is_dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
@@ -107,7 +107,7 @@ def diagnostic_export(
 
     return {
         "schema_version": DIAGNOSTIC_SCHEMA_VERSION,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "job": {
             "job_id": job.job_id,
             "status": job.status,

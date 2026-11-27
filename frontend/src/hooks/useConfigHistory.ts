@@ -49,5 +49,22 @@ export function useConfigHistory() {
     return JSON.parse(next) as Record<string, unknown>;
   }, []);
 
-  return { push, undo, redo, canUndo, canRedo };
+  // P-0110: read the undo / redo target without moving the cursor, so a
+  // caller can PUT it first and commit with undo() / redo() only once the
+  // backend accepted it.
+  const peekUndo = useCallback((): Record<string, unknown> | null => {
+    const top = pastRef.current.at(-1);
+    return top === undefined
+      ? null
+      : (JSON.parse(top) as Record<string, unknown>);
+  }, []);
+
+  const peekRedo = useCallback((): Record<string, unknown> | null => {
+    const top = futureRef.current.at(-1);
+    return top === undefined
+      ? null
+      : (JSON.parse(top) as Record<string, unknown>);
+  }, []);
+
+  return { push, undo, redo, peekUndo, peekRedo, canUndo, canRedo };
 }

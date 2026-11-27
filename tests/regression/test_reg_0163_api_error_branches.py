@@ -108,7 +108,7 @@ def test_data_load_path_handles_file_vanishing_mid_read(
     # PathNotFoundError maps to 400 (see api/errors.py:87).
     assert res.status_code == 400
     body = res.json()
-    assert body["error"]["code"] == "PATH_NOT_FOUND"
+    assert body["code"] == "PATH_NOT_FOUND"
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +139,7 @@ def test_data_upload_rejects_oversize_file(
     )
     assert res.status_code == 400
     body = res.json()
-    assert body["error"]["code"] == "FILE_INVALID"
+    assert body["code"] == "FILE_INVALID"
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +167,7 @@ def test_data_upload_rejects_memory_over_limit(
     )
     assert res.status_code == 400
     body = res.json()
-    assert body["error"]["code"] == "FILE_INVALID"
+    assert body["code"] == "FILE_INVALID"
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +191,7 @@ def test_config_patch_rejects_non_list_ops(client: TestClient) -> None:
     # InvalidPatchError maps to 422 (see api/errors.py:129).
     assert res.status_code == 422
     body = res.json()
-    assert body["error"]["code"] == "INVALID_PATCH"
+    assert body["code"] == "INVALID_PATCH"
 
 
 # ---------------------------------------------------------------------------
@@ -218,7 +218,7 @@ def test_config_upload_rejects_oversize_file(
     )
     assert res.status_code == 400
     body = res.json()
-    assert body["error"]["code"] == "FILE_INVALID"
+    assert body["code"] == "FILE_INVALID"
 
 
 # ---------------------------------------------------------------------------

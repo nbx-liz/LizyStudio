@@ -12,7 +12,7 @@ This section is the one canonical setup guide. `README.md` and
 
 | Tool | Version | Where it is pinned |
 |---|---|---|
-| Python | 3.10 – 3.14 are supported and tested; develop on **3.12** | `requires-python` and classifiers in `pyproject.toml`; `.python-version` selects 3.12; CI tests 3.10/3.11 on every PR and 3.10–3.14 nightly |
+| Python | 3.11 – 3.14 are supported and tested; develop on **3.12** | `requires-python` and classifiers in `pyproject.toml`; `.python-version` selects 3.12; CI tests 3.11/3.12 on every PR and 3.11–3.14 nightly (P-0120 raised the floor from 3.10) |
 | uv | 0.13 or newer | `[tool.uv] required-version` in `pyproject.toml` |
 | Node.js | **24** | `.nvmrc`, `engines.node` (pnpm only warns on an older Node) |
 | pnpm | **10.31.0** | `packageManager` in `frontend/package.json`, activated by corepack |
@@ -145,7 +145,7 @@ docs(history): add proposal H-0061 for new feature
 
 ### Python (backend)
 
-- **Formatter/Linter:** [Ruff](https://docs.astral.sh/ruff/) (line-length 88, target Python 3.10)
+- **Formatter/Linter:** [Ruff](https://docs.astral.sh/ruff/) (line-length 88, target Python 3.11)
 - **Type checker:** [mypy](https://mypy-lang.org/) (strict mode)
 - **Tests:** [pytest](https://pytest.org/) with 80%+ coverage required
 

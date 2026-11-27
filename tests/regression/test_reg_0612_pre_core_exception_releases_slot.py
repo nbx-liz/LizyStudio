@@ -361,6 +361,9 @@ def test_a_failed_terminal_write_is_counted_and_broadcast_once(
     assert refreshed.status == "failed"
     assert counted == ["failed"]
     broadcaster.send_error.assert_called_once()
+    assert broadcaster.send_error.call_args.args[0] == job.job_id
+    # #767 case 3: exactly one terminal frame, so no completed frame either.
+    broadcaster.send_completed.assert_not_called()
     assert job_store.active_job_id is None
 
 

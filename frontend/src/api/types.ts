@@ -86,20 +86,22 @@ export type ColumnInfo = components["schemas"]["ColumnInfoResponse"];
 export type ColumnsResponse = components["schemas"]["ColumnsResponseModel"];
 
 /**
- * ConfigUpdateResponse — hand-written because generated type has
- * `errors: {[key: string]: unknown}[]` whereas we use the structured
- * `ConfigError` type, and the generated type includes an index signature.
- *
- * `saved` is the backend's authoritative answer to "did this PUT
- * actually persist?" — false when validation rejected the body.
- * Callers must observe it (Issue #276); silently dropping it leads to
- * UI ↔ backend divergence.
+ * One config validation entry as the backend serves it (P-0110):
+ * generated from the `ValidationEntry` model, so `path` / `message` /
+ * `severity` / `suggested_fix` track the backend without a cast.
  */
-export interface ConfigUpdateResponse {
-  config: Record<string, unknown>;
-  errors: ConfigError[];
-  saved: boolean;
-}
+export type ValidationEntry = components["schemas"]["ValidationEntry"];
+
+/**
+ * 200 body of `PUT /config` and `POST /config/upload` (P-0110), generated.
+ *
+ * A 200 means the config was saved; there is no `saved` flag. A blocking
+ * validation rejection arrives as a thrown `ApiError` (422 Problem
+ * Details) instead — read it with `getValidationErrors`. The entries here
+ * are non-blocking advisories only (`severity` `"warning"` / `"info"`).
+ */
+export type ConfigUpdateResponse =
+  components["schemas"]["ConfigUpdateResponse"];
 
 /**
  * Validation entry returned by the workspace config validators.

@@ -2,6 +2,10 @@ import { act, cleanup, screen, waitFor } from "@testing-library/react";
 import { forwardRef, useImperativeHandle } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/test/helpers";
+import {
+  validationProblem,
+  workspaceLockedProblem,
+} from "@/test/problemDetails";
 import { WorkspacePage } from "./WorkspacePage";
 
 // --- API mocks ---
@@ -292,9 +296,11 @@ describe("WorkspacePage", () => {
     ) => Promise<void>;
     await act(async () => onApplyToFit({ model: { name: "LGBMClassifier" } }));
 
+    expect(mockUpdateConfig).toHaveBeenCalledTimes(1);
     expect(mockUpdateConfig).toHaveBeenCalledWith({
       model: { name: "LGBMClassifier" },
     });
+    expect(mockToast.success).toHaveBeenCalledTimes(1);
     expect(mockToast.success).toHaveBeenCalledWith(
       "Best params applied to Fit tab. Click Fit to run.",
     );
@@ -350,21 +356,22 @@ describe("WorkspacePage", () => {
     ) => Promise<void>;
     await act(async () => onApplyToFit({}));
 
+    expect(mockUpdateConfig).toHaveBeenCalledTimes(1);
+    expect(mockToast.error).toHaveBeenCalledTimes(1);
     expect(mockToast.error).toHaveBeenCalledWith("Failed to apply tune config");
   });
 
   // P-0092 Q-1 Phase 6 (cleanup): handleApplyToFit must route through the
   // funnel so it serialises behind any in-flight writers. The default
   // putConfig is updateConfig, so mockUpdateConfig still fires — but the
-  // funnel-specific behaviour is observable via the saved=false branch:
-  // when backend returns saved=false the toast must be the error toast,
-  // and the cache must be invalidated, NOT updated with the rejected body.
-  it("handleApplyToFit surfaces error toast when backend returns saved=false", async () => {
-    mockUpdateConfig.mockResolvedValueOnce({
-      config: {},
-      errors: [{ path: "data", message: "Field required" }],
-      saved: false,
-    });
+  // funnel-specific behaviour is observable via the rejection branch:
+  // when backend answers 422 (P-0110) the toast must be the error toast
+  // naming the blocking entry, and the cache must be invalidated, NOT
+  // updated with the rejected body.
+  it("handleApplyToFit surfaces error toast when backend answers 422", async () => {
+    mockUpdateConfig.mockRejectedValueOnce(
+      validationProblem([{ path: "data", message: "Field required" }]),
+    );
     renderWithProviders(<WorkspacePage />);
 
     const onApplyToFit = capturedResultsPanelProps.onApplyToFit as (
@@ -372,13 +379,34 @@ describe("WorkspacePage", () => {
     ) => Promise<void>;
     await act(async () => onApplyToFit({ model: { name: "X" } }));
 
+    expect(mockToast.error).toHaveBeenCalledTimes(1);
     expect(mockToast.error).toHaveBeenCalledWith(
-      "Failed to apply tune config: backend rejected the body",
+      "Failed to apply tune config: Field required",
     );
     // Tab MUST NOT have switched to fit on backend rejection.
     expect(mockToast.success).not.toHaveBeenCalledWith(
       "Best params applied to Fit tab. Click Fit to run.",
     );
+  });
+
+  // BLUEPRINT §6.3 (P-0110): a 409 WORKSPACE_LOCKED is the quiet info
+  // toast every other config writer shows, not the error toast.
+  it("handleApplyToFit shows the lock info toast when backend answers 409", async () => {
+    mockUpdateConfig.mockRejectedValueOnce(workspaceLockedProblem());
+    renderWithProviders(<WorkspacePage />);
+
+    const onApplyToFit = capturedResultsPanelProps.onApplyToFit as (
+      config: Record<string, unknown>,
+    ) => Promise<void>;
+    await act(async () => onApplyToFit({ model: { name: "X" } }));
+
+    expect(mockUpdateConfig).toHaveBeenCalledTimes(1);
+    expect(mockToast.info).toHaveBeenCalledTimes(1);
+    expect(mockToast.info).toHaveBeenCalledWith(
+      "Config is locked while a job is running",
+    );
+    expect(mockToast.error).toHaveBeenCalledTimes(0);
+    expect(mockToast.success).toHaveBeenCalledTimes(0);
   });
 
   it("updates task when onTaskChanged is called", () => {

@@ -25,7 +25,8 @@ export interface ConfigEditorBodyProps {
   // biome-ignore lint/suspicious/noExplicitAny: JSON schema shape passes straight through to ConfigForm
   schema: any | undefined;
   config: Record<string, unknown> | undefined;
-  onChange: (newConfig: Record<string, unknown>) => Promise<void> | void;
+  // May return a promise (whether the save landed); it is not read here.
+  onChange: (newConfig: Record<string, unknown>) => unknown;
   task: string | null;
   // biome-ignore lint/suspicious/noExplicitAny: UI schema shape passes straight through
   uiSchema: any | undefined;

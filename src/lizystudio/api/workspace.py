@@ -44,6 +44,7 @@ from lizystudio.api.models import (
     WorkspaceFitRequest,
     WorkspaceStatusResponse,
     WorkspaceTuneRequest,
+    problem_responses,
 )
 from lizystudio.backends.types import TuningOverrides
 from lizystudio.security import (
@@ -98,6 +99,18 @@ def _blocking_errors(errors: list[dict[str, Any]]) -> list[dict[str, Any]]:
     semantics.
     """
     return [e for e in errors if e.get("severity", "error") == "error"]
+
+
+def _raise_if_blocking(errors: list[dict[str, Any]]) -> None:
+    """Refuse a config write that has a blocking entry (P-0110).
+
+    The 422 Problem Details body carries every entry, warnings included,
+    so the client can show the whole picture; only ``severity="error"``
+    entries decide the refusal (P-0100). A 200 therefore always means
+    the config was saved (INV-API-1).
+    """
+    if _blocking_errors(errors):
+        raise ValidationError(errors)
 
 
 def require_relaunchable_config(ws: WorkspaceState, config: dict[str, Any]) -> None:
@@ -411,7 +424,11 @@ def _check_workspace_lock(job_store: JobStore) -> None:
     raise WorkspaceLockedError(holder)
 
 
-@router.put("/config", response_model=ConfigUpdateResponse)
+@router.put(
+    "/config",
+    response_model=ConfigUpdateResponse,
+    responses=problem_responses(409, 422),
+)
 def config_update(
     body: dict[str, Any],
     ws: WorkspaceState = Depends(get_workspace),
@@ -431,16 +448,15 @@ def config_update(
     """
     _check_workspace_lock(job_store)
     errors = validate_config(ws, body)
-    blocking = _blocking_errors(errors)
-    if not blocking:
-        # P-0109 PR-4b: legacy PUT /config payloads still carry the
-        # materialised ``tuning`` block (pre-PR-5 frontend). Divert it
-        # into ``ws.tuning_overrides`` so the storage rename stays
-        # consistent, then store the stripped config so the workspace
-        # never holds two copies of the same intent.
-        stripped = absorb_legacy_tuning(ws, body)
-        ws.set_config(stripped)
-    return {"config": body, "errors": errors, "saved": len(blocking) == 0}
+    _raise_if_blocking(errors)
+    # P-0109 PR-4b: legacy PUT /config payloads still carry the
+    # materialised ``tuning`` block (pre-PR-5 frontend). Divert it
+    # into ``ws.tuning_overrides`` so the storage rename stays
+    # consistent, then store the stripped config so the workspace
+    # never holds two copies of the same intent.
+    stripped = absorb_legacy_tuning(ws, body)
+    ws.set_config(stripped)
+    return {"config": body, "validation_errors": errors}
 
 
 @router.patch("/config", response_model=ConfigPatchResponse)
@@ -527,7 +543,11 @@ def config_validate(
     return {"valid": len(_blocking_errors(errors)) == 0, "errors": errors}
 
 
-@router.post("/config/upload", response_model=ConfigUpdateResponse)
+@router.post(
+    "/config/upload",
+    response_model=ConfigUpdateResponse,
+    responses=problem_responses(400, 422),
+)
 async def config_upload(
     file: UploadFile,
     ws: WorkspaceState = Depends(get_workspace),
@@ -543,10 +563,9 @@ async def config_upload(
     except Exception as exc:
         raise ConfigImportError(str(exc)) from exc
     errors = validate_config(ws, config)
-    blocking = _blocking_errors(errors)
-    if not blocking:
-        ws.set_config(config)
-    return {"config": config, "errors": errors, "saved": len(blocking) == 0}
+    _raise_if_blocking(errors)
+    ws.set_config(config)
+    return {"config": config, "validation_errors": errors}
 
 
 @router.get("/config/download")
@@ -567,7 +586,11 @@ def config_download(
 # --- Fit / Tune endpoints (BLUEPRINT §5.2 Fit/Tune) ---
 
 
-@router.post("/fit", response_model=JobStartResponse)
+@router.post(
+    "/fit",
+    response_model=JobStartResponse,
+    responses=problem_responses(400, 409, 422),
+)
 def workspace_fit(
     body: Annotated[WorkspaceFitRequest, Body()] = WorkspaceFitRequest(),
     ws: WorkspaceState = Depends(get_workspace),
@@ -650,7 +673,11 @@ def workspace_fit(
     return {"job_id": job_id}
 
 
-@router.post("/tune", response_model=JobStartResponse)
+@router.post(
+    "/tune",
+    response_model=JobStartResponse,
+    responses=problem_responses(400, 409, 422),
+)
 def workspace_tune(
     body: Annotated[WorkspaceTuneRequest, Body()] = WorkspaceTuneRequest(),
     ws: WorkspaceState = Depends(get_workspace),

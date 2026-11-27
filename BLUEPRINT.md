@@ -2461,10 +2461,10 @@ Workspace の揮発状態を管理する。
 | GET | `/api/workspace/config/schema` | Config の JSON Schema を返す |
 | GET | `/api/workspace/config/defaults` | 完全なデフォルト Config を返す（query: `task`, `target`）(H-0025) |
 | GET | `/api/workspace/config` | 現在の Config を返す（legacy compat — `tuning` block は `ws.tuning_overrides` から sparse 投影） |
-| PUT | `/api/workspace/config` | Config を更新（バリデーション付き）。body 内の `tuning` block は `absorb_legacy_tuning` 経由で `ws.tuning_overrides` に吸収される (P-0109 PR-4b 互換 shim) |
+| PUT | `/api/workspace/config` | Config を更新（バリデーション付き）。保存できたら 200 `{config, validation_errors}`（`validation_errors` は warning / info だけ）、blocking なエラーがあれば保存せず 422 Problem Details（P-0110、§6.1.1）。body 内の `tuning` block は `absorb_legacy_tuning` 経由で `ws.tuning_overrides` に吸収される (P-0109 PR-4b 互換 shim) |
 | PATCH | `/api/workspace/config` | Config を部分更新（指定キーのみマージ）（H-0037） |
 | POST | `/api/workspace/config/validate` | Config dict をバリデーションのみ行う |
-| POST | `/api/workspace/config/upload` | YAML/JSON ファイルから読み込み |
+| POST | `/api/workspace/config/upload` | YAML/JSON ファイルから読み込み。200 と 422 は `PUT /api/workspace/config` と同じ（200 = 保存済み、blocking なエラーは 422 Problem Details。P-0110）。ファイルが読めない・parse できないときは 400。running-lock の検査は無いので 409 は返さない |
 | GET | `/api/workspace/config/download` | 現在の Config を YAML でダウンロード |
 | GET | `/api/workspace/config/tuning-snapshot` | Tune タブ用の effective + defaults 同梱応答 `{tuning_effective, tuning_defaults}`（P-0109 PR-4a / SSOT 読み path） |
 | PUT | `/api/workspace/config/tuning-overrides` | sparse `TuningOverrides` を `ws.tuning_overrides` に outright replace。新 effective を echo（P-0109 PR-4a / SSOT 書き path） |
@@ -2528,7 +2528,7 @@ Workspace の `workspace_result` は完了時に自動更新される。
 
 #### Validate response envelope (P-0100 / P-0101 / Issue #394)
 
-`POST /api/workspace/config/validate` / `PUT /api/workspace/config` / `POST /api/workspace/upload` の `errors[]` 各要素は以下の envelope を返す:
+`POST /api/workspace/config/validate` の `errors[]`、`PUT /api/workspace/config` / `POST /api/workspace/config/upload` の `validation_errors[]`（200 本文と 422 Problem Details の両方。P-0110）の各要素は以下の envelope を返す。実際の key は `path` / `message` / `severity` / `suggested_fix` で、下の例の `loc` / `msg` は旧表記:
 
 ```json
 {
@@ -2546,10 +2546,10 @@ Workspace の `workspace_result` は完了時に自動更新される。
 
 | フィールド | 型 | 説明 |
 |---|---|---|
-| `severity` | `"error" \| "warning" \| "info"` (default `"error"`) | block 判定に使う。`"error"` のみ `valid=false` / `saved=false` を flip。`"warning"` / `"info"` は advisory のみ |
+| `severity` | `"error" \| "warning" \| "info"` (default `"error"`) | block 判定に使う。`"error"` のみ `valid=false` にし、`PUT /config` / `POST /config/upload` を 422 にする（P-0110。旧 `saved=false`）。`"warning"` / `"info"` は advisory のみで、200 の `validation_errors` に同居する |
 | `suggested_fix` | `str \| null` (default `null`) | 警告に対する具体的な置換アクション。Frontend では yellow banner の二行目に表示 |
 
-**Block 判定ルール (P-0100):** `_blocking_errors([entry, ...])` ヘルパが Service / API 層共通で `severity == "error"` のみを抽出し、`POST /fit` / `POST /tune` / `PUT /config` / `POST /upload` の 4xx 判定に使う。`severity` 未設定の旧 ValidationError は backward-compat のため `"error"` 扱い。
+**Block 判定ルール (P-0100 / P-0110):** `_blocking_errors([entry, ...])` ヘルパが Service / API 層共通で `severity == "error"` のみを抽出し、`POST /fit` / `POST /tune` / `PUT /config` / `POST /config/upload` の 422 判定に使う。`PUT /config` / `POST /config/upload` の 422 は warning を含む全 entry を `validation_errors` に載せる。`POST /fit` / `POST /tune` の 422 は blocking な entry だけを載せる。`severity` 未設定の旧 ValidationError は backward-compat のため `"error"` 扱い。
 
 **Metric-compat watchlist (P-0101):** `task=regression` のとき以下の組み合わせは `severity="warning"` で auto-disable される:
 
@@ -3011,7 +3011,8 @@ lizystudio_active_jobs 0.0
 | `PATH_NOT_FOUND` | 指定されたローカルパスが存在しない | 400 |
 | `BACKEND_ERROR` | バックエンドライブラリの内部エラー | 500 |
 | `BACKEND_INPUT_REJECTED` | バックエンドが利用者のデータを拒否した（P-0117 D2）。例: export-code が書けない列名、保存できないカテゴリ値。`details` は `backend_code`（lizyml の code）、`reason`、`recovery_hint`、`context`（許可した key だけ） | 400 |
-| `MODEL_ARTIFACT_INVALID` | 保存されたモデルをバックエンドが読めない（P-0117 D2）。例: 未知の `category_identity_version`、壊れた `identity_columns`。`details` は `BACKEND_INPUT_REJECTED` と同じ形。message は固定の文言で、ローカルのパスを含まない | 409 |
+| `MODEL_ARTIFACT_INVALID` | 保存されたモデルをバックエンドが読めない（P-0117 D2）。例: 未知の `category_identity_version`、壊れた `identity_columns`、unpickle できない `analysis_context.pkl`（P-0121）。`details` は `BACKEND_INPUT_REJECTED` と同じ形。message は固定の文言で、ローカルのパスを含まない | 409 |
+| `EXPORT_ERROR` | `POST /api/jobs/{id}/export`（model と report）の、分類されない失敗（P-0121）。message は固定の `Export failed (<例外の型名>)` で、例外の文字列（利用者のデータの値やパスを含みうる）を含まない。`details` は `{}`。例外と traceback は server の log に残す。分類された拒否（400 `BACKEND_INPUT_REJECTED`、409 `MODEL_ARTIFACT_INVALID` など）は今までどおりそれぞれの code で答える | 500 |
 | `INTERNAL_ERROR` | 予期しないエラー | 500 |
 | `PICKLE_PREFLIGHT_FAILED` | Tune 開始前の pickle 事前検証失敗（書き込み権限/picklable 検査）(H-0062) | 400 |
 | `PICKLE_INCOMPATIBLE` | 保存された checkpoint のバージョンが現行 runtime と非互換 (H-0062)。unpause では、継続できない study（lizyml 0.15 が書いた study など）を job の起動前に拒否する（`details.kind = "study_not_resumable"`、P-0116 D4）。study を書いた lizyml（checkpoint sidecar の `lizyml_version`）が今の lizyml と major.minor で違う job も起動前に拒否する（`details.kind = "lizyml_version_mismatch"`。sidecar が無い・読めないときは `missing_meta` / `corrupt_meta`。P-0117 D3） | 400 |
@@ -3028,16 +3029,58 @@ lizystudio_active_jobs 0.0
 
 > `LegacyFormatProtectionError`（§3.4.4 / P-0103）は専用エラーコードを持たず、`INTERNAL_ERROR` (500) として surface する。発生条件（旧 format_version の disk ファイル上書き）は通常運用では起きないため。recovery 手順は環境変数 `LIZYSTUDIO_ALLOW_LEGACY_WRITE=1`。
 
+#### 6.1.1 エラー本文の形（P-0110）
+
+`StudioError`（§6.1 のコードを持つエラー）の本文は path で 2 つに分かれる。
+
+| path | media type | 本文 |
+|---|---|---|
+| `/api/workspace` とその下（`/api/workspace/**`） | `application/problem+json` | RFC 9457 Problem Details |
+| それ以外（`/api/jobs/**`、`/api/inference/**`、`/api/files/**` など） | `application/json` | 従来の `{"error": {"code", "message", "details"}}` |
+
+`StudioError` ではない失敗は対象外で、FastAPI / Starlette の既定の本文のまま: 405（`{"detail": "Method Not Allowed"}`）や、処理されない例外の 500。未知の `/api/workspace/...` route への GET は、build 済みの frontend（`STATIC_DIR/index.html`）があるときだけ SPA の catch-all が `StudioError` の 404 `NOT_FOUND` を投げ、Problem Details になる。catch-all は GET だけなので、build があっても未知の route への POST などは 405 `{"detail": "Method Not Allowed"}` になる。build が無いとき（`pnpm build` 前の backend、CI の backend job など）は catch-all が登録されず、FastAPI の 404 `{"detail": "Not Found"}` になる。
+
+- `/api/workspace/**` が 2xx を返したら、副作用（config の保存など）は確定している（INV-API-1）。本文に `saved` は無い。
+- Problem Details の member は常にすべて送る: `type`（常に `"about:blank"`）、`title`（HTTP の reason phrase）、`status`、`detail`（旧 `message`）、`code`（§6.1 のコード）、`details`（旧 `details`。`job_id`、`recovery_hint` など）、`validation_errors`（`VALIDATION_ERROR` では entry の配列、それ以外は `null`）。OpenAPI の component は `ProblemDetails`。
+- blocking な validation（`severity == "error"` の entry が 1 つ以上）は 422 `VALIDATION_ERROR`。`PUT /api/workspace/config`、`POST /api/workspace/config/upload`、`POST /api/workspace/fit`、`POST /api/workspace/tune` が返す。warning / info だけなら 200 で、entry は 200 本文の `validation_errors` に入る（P-0100 の severity 契約は変えない）。entry の型は OpenAPI の `ValidationEntry`（`path` / `message` / `severity` / `suggested_fix`）。
+- 422 のとき保存されないことが保証されるのは `PUT /config` と `POST /config/upload` だけ。`POST /fit` / `POST /tune` は body の `config` を先に validate し、blocking な entry があれば何も保存せず 422 を返す。通れば、後の gate より前に workspace に保存する（P-0086。`tuning` block は Tune overrides に移す）。その後の拒否（400 `WORKSPACE_NO_DATA`、409 `JOB_CONFLICT`、`POST /tune` の materialize 後の config と search-space run gate の 422）は、この保存を取り消さない。
+- 409 `WORKSPACE_LOCKED` も Problem Details で、`details.job_id` を持つ。
+- request body が parse できない（FastAPI の `RequestValidationError`）422 は、`/api/workspace/**` でも従来の envelope のまま（INV-API-4 の「別途 422」）。OpenAPI では、変換した 4 route の 422 に `application/problem+json`（`ProblemDetails`）と `application/json`（`LegacyErrorEnvelope`）の両方を載せる。
+- 同じ `ValidationError` でも、job の relaunch gate（`POST /api/jobs/{id}/unpause`、retune / resume。P-0116 D5）が返すものは `/api/jobs/**` なので従来の envelope（`error.details.errors`）のまま。
+- frontend は `api/errors.ts` の accessor（`getErrorCode` / `isWorkspaceLocked` / `getValidationErrors` / `getErrorMessage`）で両方の形を読む。
+
+```json
+{
+  "type": "about:blank",
+  "title": "Unprocessable Entity",
+  "status": 422,
+  "detail": "Config validation failed",
+  "code": "VALIDATION_ERROR",
+  "details": {},
+  "validation_errors": [
+    {
+      "path": "split.n_splits",
+      "message": "n_splits=1000 is greater than the number of samples in the loaded dataset (n_rows=50). Reduce Folds to at most 50.",
+      "severity": "error",
+      "suggested_fix": "Set Folds (split.n_splits) to 50 or fewer."
+    }
+  ]
+}
+```
+
+`title` は実行中の Python の `http.HTTPStatus` の phrase（Python 3.13 以降の 422 は `"Unprocessable Content"`）。
+
 ### 6.2 バックエンドエラーの伝播
 
-バックエンドライブラリのエラー（例: LizyML の `LizyMLError`）は、adapter の 1 つの分類表（`backends/lizyml/error_mapping.py` の `RULES`）で 3 つに分ける（P-0117 D2）。表は code と `context` の形の両方で判定し、最初に合った行を使う。
+バックエンドライブラリのエラー（例: LizyML の `LizyMLError`）は、adapter の 1 つの分類表（`backends/lizyml/error_mapping.py` の `RULES`）で 3 つに分ける（P-0117 D2）。表は code と `context` の形の両方で判定し、最初に合った行を使う。`analysis_context` の行（P-0121）だけは、`user_message` が固定の literal `"Failed to load analysis_context: "` で始まることも見る（`Rule.message_prefix`。`context` が `path` だけの他の raise 箇所と形で区別できないため）。
 
 | 区分 | 条件（lizyml の code と `context`） | Studio の例外 | API | job |
 |---|---|---|---|---|
 | 入力の誤り | `SERIALIZATION_FAILED` で `surface == "export_code"`（列名）、`column` を持つ（保存できないカテゴリ値）、または `type` と `reason`/`where` を持つ（値）。`DATA_SCHEMA_INVALID` で `column` を持つ | `BackendInputError` | 400 `BACKEND_INPUT_REJECTED` | error code `BACKEND_INPUT_REJECTED` |
-| 成果物の破損 | `DESERIALIZATION_FAILED` で、lizyml 0.21.1 の実際の raise 箇所の形に合うもの: `category_identity_version` を持つ（未知の identity version）、`identity_columns` を持つ（壊れた identity_columns）、`file`・`expected`・`actual` をすべて持つ（pickle の SHA-256 が記録と違う。`persistence/loader.py` `_verify_and_read_pkl`）、`format_version`・`supported` をすべて持つ（読めない format_version。`persistence/loader.py` `load`） | `BackendArtifactError` | 409 `MODEL_ARTIFACT_INVALID` | error code `MODEL_ARTIFACT_INVALID` |
-| それ以外 | 上のどれにも合わないもの。未知の code、未知の `context` の形、`context` が `path` だけのもの（無いディレクトリ）や `file` だけのもの（pickle を読む I/O の失敗）、`MODEL_NOT_FIT`、`CONFIG_INVALID` を含む | 元の例外のまま | 500 `BACKEND_ERROR`（`details.type` だけ） | 今までどおり |
+| 成果物の破損 | `DESERIALIZATION_FAILED` で、lizyml 0.21.1 の実際の raise 箇所の形に合うもの: `category_identity_version` を持つ（未知の identity version）、`identity_columns` を持つ（壊れた identity_columns）、`file`・`expected`・`actual` をすべて持つ（pickle の SHA-256 が記録と違う。`persistence/loader.py` `_verify_and_read_pkl`）、`format_version`・`supported` をすべて持つ（読めない format_version。`persistence/loader.py` `load`）、code が `DESERIALIZATION_FAILED`・`context` の key がちょうど `{"path"}`・`user_message` が `"Failed to load analysis_context: "` で始まる（unpickle できない `analysis_context.pkl`、reason `unreadable_analysis_context`。`persistence/loader.py` `load`、P-0121） | `BackendArtifactError` | 409 `MODEL_ARTIFACT_INVALID` | error code `MODEL_ARTIFACT_INVALID` |
+| それ以外 | 上のどれにも合わないもの。未知の code、未知の `context` の形、`context` が `path` だけのもの（無いディレクトリ、無い・parse できない `metadata.json`、無い・unpickle できない `fit_result.pkl` と `refit_model.pkl`。`analysis_context` の行に合うものを除く）や `file` だけのもの（pickle を読む I/O の失敗）、`MODEL_NOT_FIT`、`CONFIG_INVALID` を含む | 元の例外のまま | 500 `BACKEND_ERROR`（`details.type` だけ） | 今までどおり |
 
+- 保存モデルを読む全経路は、`backend_error_from` か export の `except BackendRefusalError` で、この表の 409 を返す。export（model と report）の分類されない失敗は `BACKEND_ERROR` ではなく、固定の message の 500 `EXPORT_ERROR`（§6.1）になる。入力の誤りの 400 は、この保証の明示の例外で、利用者が読み込ませたデータの値を `error.details.context`（許可した key、200 文字まで）と `error.message`（lizyml の message、上限なし）で返す。
 - 入力の誤りの規則は、`context` に `path` があれば使わない（lizyml の message をそのまま渡すため）。
 - 入力の誤りの `reason` は、lizyml の `context["reason"]` が token（`[a-z][a-z0-9_]*`）ならそれを使い、そうでなければ行の既定の reason を使う。分類しなかったエラーも、adapter が code と reason を WARNING で log に残す。
 - 入力の誤りの `context` は、許可した key（列名、値、その型など）だけを渡す。値は利用者が読み込ませたデータそのものなので、同じ利用者に返してよい。文字列は 200 文字までにする。`path` と `exception` は渡さない。
@@ -3051,6 +3094,9 @@ lizystudio_active_jobs 0.0
 
 - API エラーは Toast（sonner）で画面上部に表示
 - バリデーションエラーはフォームフィールドにインラインで表示
+- config の書き込み（`PUT /api/workspace/config`、`POST /api/workspace/config/upload`）が 422 を返したら、最初の blocking な entry の message を toast に出し、config の cache は書き換えない（P-0110。旧 `saved=false` の扱いを 4xx に移した）。成功判定は HTTP status だけで行う。409 `WORKSPACE_LOCKED` は info toast にする
+- `validation_errors` を Model Panel の errors state（inline 表示と Fit / Tune の可否）に入れるのは、Model Panel 自身の書き込み（form の編集、Import、undo / redo、preset の load）だけ。Data Panel の書き込み（target の変更、CV の同期）、form の auto-reset、Apply to Fit は、toast だけで errors state に入れない。errors state は Model Panel の hook が持っていて、ほかの writer から届かないため
+- target の変更、preset の load、undo / redo は、1 回の書き込みの結果で取り消しか確定をする。そのため、config の書き込みが queue か実行中にある間（write funnel の `isFlushing()`）は、これらの control を disabled にし、handler も何もしないで戻る（PR #781 round 2 の owner 判断。書き込みが割り込まないようにする）。拒否された target の変更は、server がまだ持っている選択に control を戻す
 - WebSocket の error メッセージは Training 画面のログに表示
 
 ---

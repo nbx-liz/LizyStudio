@@ -37,6 +37,7 @@ These tests run against the real
 from __future__ import annotations
 
 import time
+from datetime import UTC
 from pathlib import Path
 from typing import Literal
 from unittest.mock import MagicMock
@@ -207,7 +208,7 @@ def test_inv6_real_subprocess_sigkill_reconciles_within_bounded_time(
         # final status must be ``failed`` with a non-empty error.
         # We inline the reconcile contract to keep the test focused
         # on INV-6 without dragging in the full progress-poll loop.
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from lizystudio.services._training_core import (
             _run_subprocess_job,  # noqa: F401  (kept as cross-link)
@@ -221,7 +222,7 @@ def test_inv6_real_subprocess_sigkill_reconciles_within_bounded_time(
 
         # Reconcile mimics services/subprocess_runner.py:255-268.
         if updated.status in ("pending", "running"):
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             if job_store.is_cancel_requested(job.job_id):
                 updated.status = "cancelled"
             else:

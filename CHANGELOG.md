@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-27
+
+An API-contract and toolchain release: the workspace endpoints answer RFC 9457 Problem Details (P-0110), Python 3.11 is the new floor (P-0120), and an unreadable saved model is refused with a reason (P-0121). The storage format does not change: `STUDIO_FORMAT_VERSION` stays at 2, and lizyml stays at `>=0.21.1,<0.22.0`. The Tune-tab write path (P-0111, #528) and the `tuning.re_tune` fix (#734) are not part of this release.
+
+### Upgrade notes
+
+- **Python 3.11 or later is required** (P-0120, #775). Python 3.10 reached its end of life in 2026-10. On Python 3.10, pip keeps installing the 0.8.x line, which continues to work there.
+  - Under Python 3.10, pandas resolves to 2.x. A past job whose model was saved under pandas 3 could then fail to open.
+- **Breaking API change for external clients of `/api/workspace/**` (P-0110, #536).** A config the server refuses is no longer answered `200 OK` with `{"saved": false}`. Update scripts that call these endpoints:
+  - `PUT /api/workspace/config` and `POST /api/workspace/config/upload` answer `422` when a `severity: "error"` entry refuses the config. Before, they answered `200` with `saved: false` and did not save it. A client that treated `200` as success silently lost those writes; it now gets an error. curl's `--fail-with-body` and other status-based checks now see the refusal.
+  - The `200` body is `{"config", "validation_errors"}`. The `saved` field is gone, and `errors` is renamed `validation_errors`. It holds only `warning` / `info` entries, which do not block the save (P-0100, unchanged).
+  - Every LizyStudio error (one with an error code) from `/api/workspace/**` is RFC 9457 Problem Details (`application/problem+json`): read `code` instead of `error.code`, `detail` instead of `error.message`, `details` instead of `error.details`, and `validation_errors` instead of `error.details.errors`. This also covers `409 WORKSPACE_LOCKED`, `400 WORKSPACE_NO_DATA` and the existing `422` of `POST /api/workspace/fit` and `/tune`.
+  - `/api/jobs/**`, `/api/inference/**` and `/api/files/**` keep the `{"error": {...}}` envelope. So does every `422` from FastAPI request validation, whether the body cannot be parsed or a query parameter is invalid (for example `rows=0` on `GET /api/workspace/data/preview`): it answers `error.code` `VALIDATION_ERROR` as `application/json`. Only a LizyStudio error raised under `/api/workspace` is Problem Details, so tell the two envelopes apart by the media type of the response (`application/problem+json` or `application/json`), not by the status. A `405` and an unhandled `500` keep the framework's default body on every path. See `docs/api.md`.
+  - The storage format does not change (`STUDIO_FORMAT_VERSION` stays 2).
+
+### Changed
+
+- **Workspace endpoints answer RFC 9457 Problem Details (P-0110, #536).** See the upgrade note above. The OpenAPI schema exports the `ProblemDetails` component under `application/problem+json` for the 4xx answers of `PUT /config`, `POST /config/upload`, `POST /fit` and `POST /tune`, and `ConfigUpdateResponse` no longer has `saved`.
+- The web UI treats a refused config write as an error everywhere it writes the config. Importing a config that fails validation now shows `Import failed: ...` instead of `Config imported`. A refused target change or form auto-reset now shows `Config not saved: ...` instead of nothing, once per refused write. A refused target change puts the Target, Task and CV controls back to the values they had before the selection (see #783 for a write that lands while the selection is being prepared). A `409` lock refusal (`WORKSPACE_LOCKED`) shows the info toast `Config is locked while a job is running` for target changes, form auto-reset, undo and redo as well. CV sync and Apply to Fit now include the first blocking validation message when the server refuses the write.
+- A refused Load Preset no longer shows `Preset "..." loaded`. A refused undo or redo does not move the history cursor, and its toast names the first blocking entry (`Undo failed: ...`).
+- The Target selector, Load Preset and Undo / Redo are disabled while a config write is queued or in flight. This does not serialize whole actions: for example, Target selection fetches columns and defaults before it queues its write, and Load Preset can proceed in that time. Import YAML is disabled only while a job runs and calls the upload endpoint directly. These remaining overlaps are tracked in #783.
+- The OpenAPI schema types each validation entry as `ValidationEntry` (`path`, `message`, `severity`, `suggested_fix`), and the 422 of the four converted routes lists both media types: `application/problem+json` (`ProblemDetails`) and `application/json` (`LegacyErrorEnvelope`, for a request body that cannot be parsed). A refused undo or redo now shows `Undo failed` / `Redo failed` instead of `Config undone` / `Config redone`.
+- The PR backend matrix is now Python 3.11 and 3.12, and the Nightly matrix is 3.11 to 3.14. The required check `backend (3.10)` is replaced by `backend (3.12)`.
+
+### Fixed
+
+- **An unreadable saved model answers 409, and the generic export failure no longer echoes exception text (P-0121, #777).** A classified model-export input refusal keeps its documented D2 behaviour: 400 `BACKEND_INPUT_REJECTED` with lizyml's own message.
+  - A model whose `analysis_context.pkl` cannot be unpickled (for example one saved under another pandas major) answers 409 `MODEL_ARTIFACT_INVALID` with `reason` `unreadable_analysis_context` and a "run a new Fit" hint on every route that reads a saved model, instead of 500 `BACKEND_ERROR` (on `POST /api/jobs/{id}/export`, instead of 500 `EXPORT_ERROR`). The other classified artifact refusals (a checksum mismatch, an unsupported format version, an unknown category identity version, malformed identity columns) answer 409 `MODEL_ARTIFACT_INVALID` on every one of these routes, export included. An unclassified load failure (for example an I/O failure or a missing file) keeps its status and code: 500 `BACKEND_ERROR` on the other routes, and 500 `EXPORT_ERROR` on export (see the next item for its message).
+  - An unclassified exception that reaches the generic catch of the export handler of `POST /api/jobs/{id}/export` (model or report) answers 500 `EXPORT_ERROR` with the fixed message `Export failed (<ExceptionType>)` and `details: {}`. The exception text, which could hold training data values or local paths, is logged on the server only. The output-path check runs before that catch and is not covered.
+
+### Internal
+
+- Regression tests pin the result-before-status order and the single terminal effects of a job (#711, #767, #780).
+- Dependency updates: the prod minor/patch group of the frontend (#778) and the storybook group (#772). The msw major is held in Dependabot until #762 (#779).
+
 ## [0.8.1] - 2026-11-20
 
 A job-lifecycle reliability release. Job status, the cancel and pause flags, and the active slot now move through one parent-side transition (P-0119, #613, #697). There is no API shape change, no dependency range change and no storage format change: `STUDIO_FORMAT_VERSION` stays at 2, and lizyml stays at `>=0.21.1,<0.22.0`.

@@ -1411,20 +1411,22 @@ export interface components {
                 [key: string]: unknown;
             };
         };
-        /** ConfigUpdateResponse */
+        /**
+         * ConfigUpdateResponse
+         * @description 200 body of ``PUT /config`` and ``POST /config/upload`` (P-0110).
+         *
+         *     A 200 means the config was saved (INV-API-1), so there is no
+         *     ``saved`` flag. ``validation_errors`` holds only non-blocking
+         *     entries (``severity`` ``"warning"`` / ``"info"``, P-0100); a blocking
+         *     entry answers 422 :class:`ProblemDetails` instead.
+         */
         ConfigUpdateResponse: {
             /** Config */
             config: {
                 [key: string]: unknown;
             };
-            /** Errors */
-            errors: {
-                [key: string]: unknown;
-            }[];
-            /** Saved */
-            saved: boolean;
-        } & {
-            [key: string]: unknown;
+            /** Validation Errors */
+            validation_errors: components["schemas"]["ValidationEntry"][];
         };
         /** DataLoadResponse */
         DataLoadResponse: {
@@ -2193,6 +2195,28 @@ export interface components {
             /** Job Id */
             job_id: string;
         };
+        /**
+         * ValidationEntry
+         * @description One config validation entry (P-0100 severity contract, P-0110).
+         *
+         *     The shape ``services.workspace.validate_config`` normalizes every
+         *     backend and workspace-aware validator to. ``severity == "error"``
+         *     blocks a save, Fit and Tune; ``"warning"`` / ``"info"`` only advise.
+         */
+        ValidationEntry: {
+            /** Path */
+            path: string;
+            /** Message */
+            message: string;
+            /**
+             * Severity
+             * @default error
+             * @enum {string}
+             */
+            severity: "error" | "warning" | "info";
+            /** Suggested Fix */
+            suggested_fix?: string | null;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -2437,6 +2461,65 @@ export interface components {
             message: string;
         };
         WsMessage: components["schemas"]["WsProgress"] | components["schemas"]["WsCompleted"] | components["schemas"]["WsError"] | components["schemas"]["WsPing"] | components["schemas"]["WsPaused"] | components["schemas"]["WsWarning"];
+        /**
+         * ProblemDetails
+         * @description RFC 9457 error body of the workspace endpoints (P-0110).
+         *
+         *     Served as ``application/problem+json``. ``type`` is always
+         *     ``about:blank`` (Decision Q2), so ``title`` is the HTTP reason
+         *     phrase; ``code`` is the LizyStudio error code (BLUEPRINT §6.1).
+         *     Every member is always sent; ``validation_errors`` is a list on
+         *     ``VALIDATION_ERROR`` and null otherwise.
+         */
+        ProblemDetails: {
+            /**
+             * Type
+             * @default about:blank
+             */
+            type: string;
+            /** Title */
+            title: string;
+            /** Status */
+            status: number;
+            /** Detail */
+            detail: string;
+            /** Code */
+            code: string;
+            /** Details */
+            details?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Validation Errors
+             * @default null
+             */
+            validation_errors: components["schemas"]["ValidationEntry"][] | null;
+        };
+        /**
+         * LegacyErrorBody
+         * @description The ``error`` member of :class:`LegacyErrorEnvelope`.
+         */
+        LegacyErrorBody: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /** Details */
+            details?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * LegacyErrorEnvelope
+         * @description The pre-P-0110 ``{"error": {code, message, details}}`` body.
+         *
+         *     Still served as ``application/json`` by every router outside
+         *     ``/api/workspace``, and on every path for a request body that fails
+         *     to parse (FastAPI ``RequestValidationError``, INV-API-4).
+         */
+        LegacyErrorEnvelope: {
+            error: components["schemas"]["LegacyErrorBody"];
+        };
     };
     responses: never;
     parameters: never;
@@ -2796,13 +2879,23 @@ export interface operations {
                     "application/json": components["schemas"]["ConfigUpdateResponse"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Conflict, e.g. WORKSPACE_LOCKED or JOB_CONFLICT (RFC 9457 Problem Details) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Blocking config validation: application/problem+json VALIDATION_ERROR with validation_errors (RFC 9457 Problem Details). A request body that fails to parse answers application/json with the legacy error envelope instead. */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                    "application/json": components["schemas"]["LegacyErrorEnvelope"];
                 };
             };
         };
@@ -2952,13 +3045,23 @@ export interface operations {
                     "application/json": components["schemas"]["ConfigUpdateResponse"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Request refused (RFC 9457 Problem Details) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Blocking config validation: application/problem+json VALIDATION_ERROR with validation_errors (RFC 9457 Problem Details). A request body that fails to parse answers application/json with the legacy error envelope instead. */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                    "application/json": components["schemas"]["LegacyErrorEnvelope"];
                 };
             };
         };
@@ -3005,13 +3108,32 @@ export interface operations {
                     "application/json": components["schemas"]["JobStartResponse"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Request refused (RFC 9457 Problem Details) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict, e.g. WORKSPACE_LOCKED or JOB_CONFLICT (RFC 9457 Problem Details) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Blocking config validation: application/problem+json VALIDATION_ERROR with validation_errors (RFC 9457 Problem Details). A request body that fails to parse answers application/json with the legacy error envelope instead. */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                    "application/json": components["schemas"]["LegacyErrorEnvelope"];
                 };
             };
         };
@@ -3038,13 +3160,32 @@ export interface operations {
                     "application/json": components["schemas"]["JobStartResponse"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Request refused (RFC 9457 Problem Details) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Conflict, e.g. WORKSPACE_LOCKED or JOB_CONFLICT (RFC 9457 Problem Details) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Blocking config validation: application/problem+json VALIDATION_ERROR with validation_errors (RFC 9457 Problem Details). A request body that fails to parse answers application/json with the legacy error envelope instead. */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                    "application/json": components["schemas"]["LegacyErrorEnvelope"];
                 };
             };
         };

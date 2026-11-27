@@ -52,7 +52,7 @@ def _load_data_and_config(client: TestClient, tmp_path: Path) -> None:
 
     config = _load_valid_config(client)
     r = client.put("/api/workspace/config", json=config)
-    assert r.status_code == 200 and r.json()["saved"] is True, r.text
+    assert r.status_code == 200, r.text
 
 
 # ---------------------------------------------------------------------------
@@ -155,20 +155,16 @@ def test_put_config_saved_false_when_n_splits_exceeds_n_rows(
     tmp_path: Path,
 ) -> None:
     """Issue #268: an over-large n_splits arriving via PUT /config must
-    flip ``saved=false`` (errors prevent the write) so the user sees the
-    state mismatch instead of a healthy-looking PUT followed by a 5-s
-    Fit failure.
+    be refused (P-0110: 422) so the user sees the state mismatch instead
+    of a healthy-looking PUT followed by a 5-s Fit failure.
     """
     _load_data_and_config(client, tmp_path)
     config = _load_valid_config(client)
     config["split"]["n_splits"] = 1000
     res = client.put("/api/workspace/config", json=config)
-    assert res.status_code == 200
-    body = res.json()
-    assert body["saved"] is False
-    assert any("n_splits" in (err.get("path") or "") for err in body["errors"]), body[
-        "errors"
-    ]
+    assert res.status_code == 422, res.text
+    errors = res.json()["validation_errors"]
+    assert any("n_splits" in (err.get("path") or "") for err in errors), errors
 
 
 def test_status_no_disk_restore(
@@ -225,7 +221,7 @@ def test_fit_returns_400_when_no_config(client: TestClient) -> None:
     """POST /fit must return 400 WORKSPACE_NO_CONFIG when config is empty."""
     res = client.post("/api/workspace/fit")
     assert res.status_code == 400
-    assert res.json()["error"]["code"] == "WORKSPACE_NO_CONFIG"
+    assert res.json()["code"] == "WORKSPACE_NO_CONFIG"
 
 
 def test_fit_returns_400_when_no_data(client: TestClient) -> None:
@@ -235,7 +231,7 @@ def test_fit_returns_400_when_no_data(client: TestClient) -> None:
 
     res = client.post("/api/workspace/fit")
     assert res.status_code == 400
-    assert res.json()["error"]["code"] == "WORKSPACE_NO_DATA"
+    assert res.json()["code"] == "WORKSPACE_NO_DATA"
 
 
 def test_fit_starts_job_when_data_and_config_present(
@@ -299,7 +295,7 @@ def test_fit_returns_409_when_job_active(
     try:
         res = client.post("/api/workspace/fit")
         assert res.status_code == 409
-        assert res.json()["error"]["code"] == "JOB_CONFLICT"
+        assert res.json()["code"] == "JOB_CONFLICT"
     finally:
         job_store.release_active(holder_id)
 
@@ -316,7 +312,7 @@ def test_tune_returns_409_when_job_active(
     try:
         res = client.post("/api/workspace/tune")
         assert res.status_code == 409
-        assert res.json()["error"]["code"] == "JOB_CONFLICT"
+        assert res.json()["code"] == "JOB_CONFLICT"
     finally:
         job_store.release_active(holder_id)
 
@@ -330,7 +326,7 @@ def test_tune_returns_400_when_no_config(client: TestClient) -> None:
     """POST /tune must return 400 WORKSPACE_NO_CONFIG when config is empty."""
     res = client.post("/api/workspace/tune")
     assert res.status_code == 400
-    assert res.json()["error"]["code"] == "WORKSPACE_NO_CONFIG"
+    assert res.json()["code"] == "WORKSPACE_NO_CONFIG"
 
 
 def test_tune_returns_400_when_no_data(client: TestClient) -> None:
@@ -340,7 +336,7 @@ def test_tune_returns_400_when_no_data(client: TestClient) -> None:
 
     res = client.post("/api/workspace/tune")
     assert res.status_code == 400
-    assert res.json()["error"]["code"] == "WORKSPACE_NO_DATA"
+    assert res.json()["code"] == "WORKSPACE_NO_DATA"
 
 
 def test_tune_injects_default_tuning_config_when_missing(
@@ -528,8 +524,8 @@ def test_tune_rejects_inverted_range_search_space(
 
     assert res.status_code == 422, res.text
     body = res.json()
-    assert body["error"]["code"] == "VALIDATION_ERROR"
-    errors = body["error"]["details"]["errors"]
+    assert body["code"] == "VALIDATION_ERROR"
+    errors = body["validation_errors"]
     paths = {err["path"] for err in errors}
     assert "tuning.optuna.space.learning_rate" in paths
     msg = next(
@@ -557,8 +553,8 @@ def test_tune_rejects_log_with_nonpositive_low(
 
     assert res.status_code == 422, res.text
     body = res.json()
-    assert body["error"]["code"] == "VALIDATION_ERROR"
-    errors = body["error"]["details"]["errors"]
+    assert body["code"] == "VALIDATION_ERROR"
+    errors = body["validation_errors"]
     paths = {err["path"] for err in errors}
     assert "tuning.optuna.space.learning_rate" in paths
     msg = next(
@@ -605,7 +601,7 @@ def test_tune_ignores_empty_categorical_choices_at_run_gate(
         _mock_start.assert_called_once()
     else:
         body = res.json()
-        errors = body["error"]["details"]["errors"]
+        errors = body["validation_errors"]
         for err in errors:
             assert (
                 "objective" not in err["path"]
@@ -628,10 +624,8 @@ def test_put_config_persists_inverted_range_for_wip_editing(
     )
 
     res = client.put("/api/workspace/config", json=bad_config)
-    assert res.status_code == 200, res.text
-    body = res.json()
-    assert body["saved"] is True, (
-        f"PUT /config must persist WIP with inverted Range; got {body!r}"
+    assert res.status_code == 200, (
+        f"PUT /config must persist WIP with inverted Range; got {res.text}"
     )
 
 
@@ -641,7 +635,7 @@ def test_put_config_persists_inverted_range_for_wip_editing(
 
 
 def test_config_upload_valid_yaml_is_saved(client: TestClient) -> None:
-    """Uploading a fully-valid config YAML must save it (saved=True, errors=[])."""
+    """Uploading a fully-valid config YAML must save it (200, no errors)."""
     # Build a valid YAML from the defaults endpoint
     config = _load_valid_config(client)
     yaml_bytes = yaml.dump(config, default_flow_style=False).encode()
@@ -653,8 +647,7 @@ def test_config_upload_valid_yaml_is_saved(client: TestClient) -> None:
 
     assert res.status_code == 200
     body = res.json()
-    assert body["saved"] is True
-    assert body["errors"] == []
+    assert body["validation_errors"] == []
     assert body["config"]["task"] == "binary"
 
 
@@ -667,11 +660,12 @@ def test_config_upload_invalid_yaml_returns_errors(client: TestClient) -> None:
         files={"file": ("partial.yaml", yaml_bytes, "application/x-yaml")},
     )
 
-    assert res.status_code == 200
+    # P-0110: a partial config is refused with 422 and is not saved.
+    assert res.status_code == 422, res.text
     body = res.json()
-    # Partial config should have validation errors and not be saved
-    assert isinstance(body["errors"], list)
-    assert body["saved"] is False
+    assert isinstance(body["validation_errors"], list)
+    assert body["validation_errors"]
+    assert client.get("/api/workspace/config").json() == {}
 
 
 def test_config_upload_malformed_yaml_returns_400(client: TestClient) -> None:
@@ -683,13 +677,11 @@ def test_config_upload_malformed_yaml_returns_400(client: TestClient) -> None:
         files={"file": ("bad.yaml", bad_bytes, "application/x-yaml")},
     )
 
-    # Either the backend raises FILE_INVALID or returns errors — both acceptable
-    # as long as the response does not contain saved=True
+    # Either the parse is refused (400) or the parsed config fails
+    # validation (422) — both acceptable; a 200 would mean it was saved.
+    assert res.status_code in (400, 422), res.text
     if res.status_code == 400:
-        assert res.json()["error"]["code"] in ("FILE_INVALID", "CONFIG_IMPORT_ERROR")
-    else:
-        assert res.status_code == 200
-        assert res.json().get("saved") is not True
+        assert res.json()["code"] in ("FILE_INVALID", "CONFIG_IMPORT_ERROR")
 
 
 def test_config_upload_json_format(client: TestClient) -> None:
@@ -750,7 +742,7 @@ def test_fit_rejects_stratified_split_on_regression(
 
     assert res.status_code == 422, res.text
     body = res.json()
-    assert body["error"]["code"] == "VALIDATION_ERROR"
-    paths = {err["path"] for err in body["error"]["details"]["errors"]}
+    assert body["code"] == "VALIDATION_ERROR"
+    paths = {err["path"] for err in body["validation_errors"]}
     assert "split.method" in paths
     mock_start.assert_not_called()

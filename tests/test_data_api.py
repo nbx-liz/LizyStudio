@@ -38,7 +38,7 @@ def test_data_load_path(client: TestClient, tmp_path: Path) -> None:
 def test_data_load_path_not_found(client: TestClient) -> None:
     res = client.post("/api/workspace/data/path", json={"path": "/nonexistent.csv"})
     assert res.status_code == 400
-    assert res.json()["error"]["code"] == "PATH_NOT_FOUND"
+    assert res.json()["code"] == "PATH_NOT_FOUND"
 
 
 def test_data_load_path_outside_root_shows_hint(client: TestClient) -> None:
@@ -46,8 +46,8 @@ def test_data_load_path_outside_root_shows_hint(client: TestClient) -> None:
     res = client.post("/api/workspace/data/path", json={"path": "/etc/passwd"})
     assert res.status_code == 400
     body = res.json()
-    assert body["error"]["code"] == "PATH_NOT_FOUND"
-    assert "allowed root" in body["error"]["message"].lower()
+    assert body["code"] == "PATH_NOT_FOUND"
+    assert "allowed root" in body["detail"].lower()
 
 
 def test_data_preview(client: TestClient, tmp_path: Path) -> None:
@@ -64,7 +64,7 @@ def test_data_preview(client: TestClient, tmp_path: Path) -> None:
 def test_data_preview_no_data(client: TestClient) -> None:
     res = client.get("/api/workspace/data/preview")
     assert res.status_code == 400
-    assert res.json()["error"]["code"] == "WORKSPACE_NO_DATA"
+    assert res.json()["code"] == "WORKSPACE_NO_DATA"
 
 
 def test_data_columns_auto_detection(client: TestClient, tmp_path: Path) -> None:
@@ -114,7 +114,7 @@ def test_data_load_invalid_parquet(client: TestClient, tmp_path: Path) -> None:
     bad_path.write_bytes(b"\x00\x01\x02random garbage")
     res = client.post("/api/workspace/data/path", json={"path": str(bad_path)})
     assert res.status_code == 400
-    assert res.json()["error"]["code"] in (
+    assert res.json()["code"] in (
         "FILE_INVALID",
         "PATH_NOT_FOUND",
     )
@@ -448,7 +448,7 @@ def test_data_upload_unsupported_extension(client: TestClient) -> None:
         files={"file": ("data.xlsx", b"fake-data", "application/octet-stream")},
     )
     assert res.status_code == 400
-    assert res.json()["error"]["code"] == "FILE_INVALID"
+    assert res.json()["code"] == "FILE_INVALID"
 
 
 def test_data_upload_corrupted_csv_binary_garbage(client: TestClient) -> None:

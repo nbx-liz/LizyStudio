@@ -57,7 +57,8 @@ test.describe("Workspace core flow", () => {
       data: defaults,
     });
     expect(putRes.status()).toBe(200);
-    expect((await putRes.json()).saved).toBe(true);
+    // P-0110: a 200 means the config was saved (no `saved` flag).
+    expect(await putRes.json()).not.toHaveProperty("saved");
 
     // 5. Validate config
     const valRes = await request.post(`${API}/workspace/config/validate`, {

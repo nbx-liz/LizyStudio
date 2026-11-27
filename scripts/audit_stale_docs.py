@@ -29,7 +29,7 @@ import subprocess
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 # Globs whose ``docs/<file>.md`` matches will be considered candidates.
@@ -89,15 +89,15 @@ def _git_last_touched(repo: Path, rel_path: str) -> datetime | None:
     if not stamp:
         return None
     # ``%cI`` is strict ISO-8601 (e.g. ``2026-05-23T12:34:56+00:00``), but
-    # git prints a UTC committer date as ``...Z``, which Python 3.10's
-    # ``fromisoformat`` rejects (3.11+ accepts it). requires-python is
-    # ">=3.10", so normalise the suffix first.
+    # git prints a UTC committer date as ``...Z``. Python 3.11+ (the
+    # requires-python floor since P-0120) accepts it, and normalising the
+    # suffix keeps the parse explicit.
     if stamp.endswith("Z"):
         stamp = stamp[:-1] + "+00:00"
     dt = datetime.fromisoformat(stamp)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 def _line_count(repo: Path, rel_path: str) -> int:
@@ -145,7 +145,7 @@ def _is_referenced(repo: Path, rel_path: str) -> bool:
 
 def audit(repo: Path, *, stale_days: int = DEFAULT_STALE_DAYS) -> list[StaleDoc]:
     """Return the list of candidate docs that are stale AND unreferenced."""
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     threshold = now - timedelta(days=stale_days)
     hits: list[StaleDoc] = []
     for rel in sorted(_iter_candidates(repo)):

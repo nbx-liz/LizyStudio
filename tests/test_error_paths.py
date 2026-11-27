@@ -24,13 +24,13 @@ class TestDataErrors:
             json={"path": "/tmp/nonexistent_e2e_file.csv"},
         )
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "PATH_NOT_FOUND"
+        assert resp.json()["code"] == "PATH_NOT_FOUND"
 
     def test_load_empty_path(self, client: TestClient) -> None:
         """POST /workspace/data/path with empty path returns PATH_NOT_FOUND."""
         resp = client.post("/api/workspace/data/path", json={"path": ""})
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "PATH_NOT_FOUND"
+        assert resp.json()["code"] == "PATH_NOT_FOUND"
 
     def test_upload_empty_file(self, client: TestClient) -> None:
         """POST /workspace/data/upload with empty file returns FILE_INVALID."""
@@ -39,7 +39,7 @@ class TestDataErrors:
             files={"file": ("empty.csv", b"", "text/csv")},
         )
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "FILE_INVALID"
+        assert resp.json()["code"] == "FILE_INVALID"
 
 
 class TestConfigErrors:
@@ -57,29 +57,29 @@ class TestConfigErrors:
         """
         resp = client.post("/api/workspace/config/validate", json={})
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "WORKSPACE_NO_CONFIG"
+        assert resp.json()["code"] == "WORKSPACE_NO_CONFIG"
 
     def test_put_config_without_data_returns_preview_not_save(
         self, client: TestClient
     ) -> None:
-        """PUT /workspace/config before loading data — non-destructive preview.
+        """PUT /workspace/config before loading data — refused, not saved.
 
-        The endpoint returns 200 with ``saved: false`` and the list of
-        schema validation errors, so the UI can show inline errors
-        without persisting a broken config. Pinning ``saved: false``
-        and requiring at least one error guarantees that a future
-        regression which silently writes an invalid config will be
-        caught by this test.
+        P-0110: the endpoint answers 422 Problem Details with the schema
+        validation errors, so the UI can show inline errors without
+        persisting a broken config. Requiring at least one entry
+        guarantees that a future regression which silently writes an
+        invalid config will be caught by this test.
         """
         resp = client.put(
             "/api/workspace/config",
             json={"model": {"name": "lgbm", "params": {}}},
         )
-        assert resp.status_code == 200
+        assert resp.status_code == 422, "an invalid config must not be persisted"
         body = resp.json()
-        assert body.get("saved") is False, "an invalid config must not be persisted"
-        assert isinstance(body.get("errors"), list)
-        assert len(body["errors"]) > 0, "invalid config must produce at least one error"
+        assert isinstance(body.get("validation_errors"), list)
+        assert len(body["validation_errors"]) > 0, (
+            "invalid config must produce at least one error"
+        )
 
         # Confirm the preview did not mutate server state.
         get_resp = client.get("/api/workspace/config")
@@ -94,7 +94,7 @@ class TestFitErrors:
         """POST /workspace/fit without loading data returns a specific error."""
         resp = client.post("/api/workspace/fit")
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] in {
+        assert resp.json()["code"] in {
             "WORKSPACE_NO_CONFIG",
             "WORKSPACE_NO_DATA",
         }
@@ -103,7 +103,7 @@ class TestFitErrors:
         """POST /workspace/tune without loading data returns a specific error."""
         resp = client.post("/api/workspace/tune")
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] in {
+        assert resp.json()["code"] in {
             "WORKSPACE_NO_CONFIG",
             "WORKSPACE_NO_DATA",
         }

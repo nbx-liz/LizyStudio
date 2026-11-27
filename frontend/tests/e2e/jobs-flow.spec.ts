@@ -45,7 +45,8 @@ async function setupAndFit(
     data: config,
   });
   expect(putRes.status()).toBe(200);
-  expect((await putRes.json()).saved).toBe(true);
+  // P-0110: a 200 means the config was saved (no `saved` flag).
+  expect(await putRes.json()).not.toHaveProperty("saved");
 
   // Start fit
   const fitRes = await request.post(`${API}/workspace/fit`);

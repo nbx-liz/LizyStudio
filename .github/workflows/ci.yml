@@ -58,7 +58,7 @@ jobs:
               - 'scripts/**'
               - '.github/workflows/**'
 
-  # Phase 2 of the path-filter rollout. `backend (3.10)` / `backend (3.11)`
+  # Phase 2 of the path-filter rollout. `backend (3.11)` / `backend (3.12)`
   # are REQUIRED status checks, so the job itself must always run and
   # report — a skipped job never reports its context and would block the
   # PR forever. Only the expensive STEPS are gated, which drops a
@@ -85,7 +85,7 @@ jobs:
       # their results are the evidence for the Python floor (plan v4 step 5).
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11"]
+        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
@@ -96,7 +96,7 @@ jobs:
       - run: uv sync --locked
         if: needs.changes.outputs.backend != 'false'
       # Lint / format / type-check are Python-version-independent. Run them
-      # only on the 3.11 matrix leg so the 3.10 leg does not duplicate
+      # only on the 3.11 matrix leg so the 3.12 leg does not duplicate
       # ~18s of work. `backend (3.11)` stays the required check that
       # gates them in the branch-protection ruleset.
       - run: uv run ruff check .
@@ -155,7 +155,7 @@ jobs:
   # Issue #346 Phase C). Real LizyMLAdapter is exercised end-to-end
   # against the captured fixture configs so shape-evolution bugs of
   # the Issue #345 class are caught before merge. Runs in its own job
-  # so the ~14s suite parallelises with `backend (3.10)/(3.11)` and
+  # so the ~14s suite parallelises with `backend (3.11)/(3.12)` and
   # does not inflate their wall time. Required check (configure in
   # GitHub branch protection alongside backend / frontend / e2e).
   #

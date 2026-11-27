@@ -6,7 +6,7 @@ import contextlib
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from pickle import PicklingError
 from typing import Any
@@ -152,7 +152,7 @@ class CheckpointMixin:
         try:
             meta_payload: dict[str, Any] = {
                 "pickle_schema": PICKLE_SCHEMA_VERSION,
-                "saved_at": datetime.now(timezone.utc).isoformat(),
+                "saved_at": datetime.now(UTC).isoformat(),
                 **collect_pickle_versions(),
             }
             meta_tmp.write_text(

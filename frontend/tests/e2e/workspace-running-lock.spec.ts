@@ -150,7 +150,7 @@ test.describe("Workspace running-lock UI mapping (G-3 / Issue #279)", () => {
       "PUT /config while tune is running must be rejected with 409",
     ).toBe(409);
     const lockedBody = await lockedPut.json();
-    expect(lockedBody.error?.code).toBe("WORKSPACE_LOCKED");
+    expect(lockedBody.code).toBe("WORKSPACE_LOCKED");
 
     // INV-3 (no mutation): the saved config still carries the seeded
     // n_splits=5, not the rejected n_splits=8.

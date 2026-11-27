@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from lizystudio.services._job_active_slot import ActiveJobSlot
@@ -54,7 +54,7 @@ _logger = logging.getLogger(__name__)
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 class JobLifecycle(LifecycleOps):

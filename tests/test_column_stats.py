@@ -84,4 +84,4 @@ def test_column_stats_not_found(client: TestClient, tmp_path: Path) -> None:
 def test_column_stats_no_data(client: TestClient) -> None:
     res = client.get("/api/workspace/data/column-stats/city")
     assert res.status_code == 400
-    assert res.json()["error"]["code"] == "WORKSPACE_NO_DATA"
+    assert res.json()["code"] == "WORKSPACE_NO_DATA"

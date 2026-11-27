@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -25,7 +25,7 @@ def _git(repo: Path, *args: str, env: dict[str, str] | None = None) -> None:
 
 def _commit_at(repo: Path, *, days_ago: int, message: str) -> None:
     """Stage everything and commit with author/committer date ``days_ago``."""
-    stamp = (datetime.now(tz=timezone.utc) - timedelta(days=days_ago)).strftime(
+    stamp = (datetime.now(tz=UTC) - timedelta(days=days_ago)).strftime(
         "%Y-%m-%dT%H:%M:%S+0000"
     )
     import os

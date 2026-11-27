@@ -372,6 +372,7 @@ def _install_ws_message_schema(application: FastAPI) -> None:
     from fastapi.openapi.utils import get_openapi
     from pydantic import TypeAdapter
 
+    from lizystudio.api.models import LegacyErrorEnvelope, ProblemDetails
     from lizystudio.ws.messages import (
         WsCompleted,
         WsError,
@@ -417,6 +418,18 @@ def _install_ws_message_schema(application: FastAPI) -> None:
                 schemas[name] = model.model_json_schema(
                     ref_template="#/components/schemas/{model}",
                 )
+        # P-0110: the workspace routes reference ``ProblemDetails`` and
+        # ``LegacyErrorEnvelope`` by ``$ref`` (see
+        # ``api.models.problem_responses``); register both here, lifting
+        # their nested models (``ValidationEntry``, ``LegacyErrorBody``)
+        # into ``components.schemas`` like the WS union above.
+        for error_model in (ProblemDetails, LegacyErrorEnvelope):
+            body = error_model.model_json_schema(
+                ref_template="#/components/schemas/{model}",
+            )
+            for name, nested in body.pop("$defs", {}).items():
+                schemas.setdefault(name, nested)
+            schemas[error_model.__name__] = body
         application.openapi_schema = schema
         return schema
 
