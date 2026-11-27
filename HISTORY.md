@@ -4345,6 +4345,7 @@ Decision 時に M-1 または M-2 のいずれかを確定する。frontend は�
     - frontend: 拒否された target 変更は選択を元に戻し、sync key の preseed と `onDataChanged` を行わない。Load Preset の成功 toast は保存を待つ。undo / redo は保存が通ってから history の cursor を動かす。coalesce された 1 つの PUT の拒否は toast 1 回。
   - **review round 2（PR #781）の owner 判断: 割り込みを防ぐ**（token による再検証はしない）。target の変更、preset の load、undo / redo は、config の書き込みが queue か実行中にある間（write funnel の `isFlushing()`。reactive には新しい `subscribe` と `useConfigWritePending`）disabled にし、handler も何もしないで戻る。target の変更は、書き込みを enqueue する前の fetch の間も 1 回ずつに限る（`selecting`）。拒否された target 変更の取り消しは、戻した選択の sync key も記録し、cv-change の PUT を出さない（test: `useDataPanel — refused target change (P-0110)`）。undo / redo の失敗と CV 同期の失敗の toast は、最初の blocking な entry を出す。errors state に入れるのは Model Panel 自身の書き込みだけ（Data Panel の書き込み、auto-reset、Apply to Fit は toast だけ）。
   - test: `tests/test_p0110_problem_details.py`、`frontend/src/api/errors.test.ts`、`frontend/src/hooks/useTargetSelection.test.ts`（funnel write result）ほか。
+- **2026-11-27 shipped in 0.9.0**: PR #781（develop `fda735b`）。v0.9.0 で release。Issue #536 は close 済み。
 
 ### P-0111: Tune-tab write path の sparse-overrides 経路 — `TuningOverrides` schema 拡張 vs 2-path 許容（P-0109 follow-up）
 
@@ -4444,6 +4445,7 @@ Option B は v0.7+ で `STUDIO_FORMAT_VERSION` 2 → 3 bump タイミングで�
   - **Q2 → 1 つの effect で gate**: row-mode toggle 末端で「両 mutation が `onSettled` 完了」を一括カウントし、その後に 1 回だけ `useTuningSnapshot.invalidate()` を trigger。badge は flicker しない。`useConfigWriteFunnel` 側に `onAllSettled` (両 reason の queue が drain した時点で 1 度発火) フックを追加する。両 mutation の `onSettled` 個別 invalidate は採用しない（同 frame で 2 度走ると stale state が一瞬見える）。
   - **Q3 → 別 reason として並列に enqueue**: `useConfigWriteFunnel.coalesceByReason` の key 集合に `legacy_config` / `tuning_overrides` を追加し、同 funnel 内で 2 本の queue を並走させる。flush タイミングは両者共通 (同 frame バッチ)。既存 funnel の `isFlushing` gate ロジック + v0.6.2 で導入した `kind: "patch-many"` merge を reuse 可能。別 funnel instance は採用しない（flush タイミング同期 + cache invalidation 順序保証の追加コストが大きい）。
 - 実装 PR は `refactor(frontend): route Tune-tab tuning-field writes through PUT /config/tuning-overrides (P-0111)` で起票し、acceptance criteria に従って TDD 実装。実装着手の優先度は v0.6.x patch サイクル後の v0.7 準備期間、または v0.7.0 (P-0110 RFC 9457) と同一 release window で同時着地候補。
+- **2026-11-27 deferred**（owner）: 0.9.0 に含めない。PR #787 は draft に戻した。REPLACE を client の cache から seed すると、他の書き手と競合するため。再設計の後に、改めて release window を決める。
 
 ### P-0112: 開発・CI・配布ビルドの Node baseline を 20 → 24 に引き上げる（Change Gate: ビルド・配布方式の変更）
 
@@ -5217,6 +5219,7 @@ lock を上げると、fixture の鮮度テストが落ちる（`tests/test_lizy
 
 - 版: P-0117 を 0.8.0 として出す。版は git tag から決まる（hatch-vcs）ので版ファイルは変えない。
 - v0.8.0 の milestone にあった #536（P-0110）、#528（P-0111）、#734 は v0.9.0 に移す。P-0110 + P-0111 の release window は v0.9.0 になる。
+- 2026-11-27: 上の計画のうち、#528（P-0111）と #734 は 0.9.0 に入らなかった（owner）。P-0111 は PR #787 を draft に戻し、#734 は Proposal の再設計が要る。0.9.0 に入ったのは P-0110 だけである。
 - 手順は前例どおり: develop への chore PR（CHANGELOG の header と HISTORY の acceptance の tick）、次に develop から main への release PR を `--merge` で、そして tag。PyPI への publish は取り消せないので、main への merge の直前に owner がもう一度確かめる。
 - visual-qa が見つけた既存の 2 件は、別の Issue に起票した（milestone `backlog`）。
   - #753: Jobs ページが tablet と mobile の幅で崩れる。
@@ -5511,6 +5514,7 @@ Gate-category: none
   - pandas の下限は Studio に足さない。pandas の範囲は lizyml が決める。
   - pandas の major の違いで読めない job への答えを理由つきの 4xx にする件は、別の Issue で扱う。P-0120 には含めない。
   - Ruleset の必須 check の差し替えは、この PR の merge の直前に、Claude が `gh api` で行う。変更前と変更後の一覧を PR に記録し、ほかの設定は変えない。
+- **2026-11-27 shipped in 0.9.0**: PR #776（2026-11-21 に develop `4f41f00`）。v0.9.0 で release。
 
 ### P-0121: 読めない保存モデルを理由つきの 409 で拒否し、export の答えから例外の文字列を外す（Change Gate: API のエラー契約、Issue #777）
 
@@ -5618,3 +5622,4 @@ develop `77f8eda`、lizyml 0.21.1（`uv.lock:593`）での観察。再現は Pyt
 
 - 2026-11-26 **Accepted — (A)**（owner）。判別は code `DESERIALIZATION_FAILED` + `context` の key がちょうど `{"path"}` + `user_message` の固定の前方一致で、`analysis_context` の unpickle の失敗だけを 409 にする。(B) は採らない。上流 LizyML に構造の判別子を依頼する Issue（(D)）を実装と同時に起こす。Codex critique: 3 round（`lizystudio-p0121-critique-20261126`）+ 1 round の delta check（`lizystudio-p0121-delta-20261126`）で APPROVE。
 - 2026-11-27 実装: `error_mapping.py` の `Rule.message_prefix` と `unreadable_analysis_context` の行、`ExportError` の固定文言（`api/jobs.py` の export handler）、BLUEPRINT §6.1 / §6.2、`docs/api.md`、CHANGELOG、`tests/integration/test_p0121_unreadable_analysis_context.py` と `tests/test_p0117_error_mapping.py`。上流 LizyML への構造の判別子の Issue（(D)）は nbx-liz/LizyML#435 として起票済み。lizyml の対応版が出たら、本行を `context` の判別に置き換える（その lizyml の bump の PR で行う）。
+- **2026-11-27 shipped in 0.9.0**: PR #784（develop `4d5296a`）。v0.9.0 で release。Issue #777 は close 済み。
