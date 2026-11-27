@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - While a config write is saving, the Target selector, Load Preset and Undo / Redo are disabled, so these one-write actions cannot interleave with another write.
 - The OpenAPI schema types each validation entry as `ValidationEntry` (`path`, `message`, `severity`, `suggested_fix`), and the 422 of the four converted routes lists both media types: `application/problem+json` (`ProblemDetails`) and `application/json` (`LegacyErrorEnvelope`, for a request body that cannot be parsed). A refused undo or redo now shows `Undo failed` / `Redo failed` instead of `Config undone` / `Config redone`.
 - CI tests Python 3.11 and 3.12 on every PR, and 3.11 to 3.14 nightly. The required check `backend (3.10)` is replaced by `backend (3.12)`.
+- The Tune tab saves its tuning fields (trials, timeout, metrics and search space) through `PUT /api/workspace/config/tuning-overrides` instead of the whole-config `PUT /api/workspace/config` (P-0111, #528). Fixed values (`model.params`), the inner validation split and the Re-tune settings still use `PUT /api/workspace/config`. Each write is built from the latest saved config, so one path never undoes the other. The "Modified" badge of the search space now updates once after each burst of writes.
 
 ## [0.8.1] - 2026-11-20
 

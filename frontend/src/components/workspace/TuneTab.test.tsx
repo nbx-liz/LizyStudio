@@ -1208,4 +1208,118 @@ describe("TuneTab", () => {
       expect(mutatedInnerValid).toHaveLength(0);
     });
   });
+
+  // P-0111 Q1: with a routed writer, each Tune-tab edit is sent on one of
+  // two paths, as patches — never as a whole config through `onChange`.
+  describe("write routing (P-0111)", () => {
+    const routedConfig = {
+      model: { name: "lgbm", params: {} },
+      tuning: {
+        evaluation: { metrics: ["auc"] },
+        optuna: { params: { n_trials: 50 }, space: {} },
+      },
+    };
+    const metricSchema = {
+      option_sets: { eval_metric: { binary: ["auc", "f1"] } },
+      metric_direction: { binary: { auc: "maximize", f1: "maximize" } },
+    } as unknown as UiSchema;
+
+    function renderRouted() {
+      const onChange = vi.fn();
+      const onTuneWrite = vi.fn();
+      render(
+        <TuneTab
+          config={routedConfig}
+          onChange={onChange}
+          onTuneWrite={onTuneWrite}
+          task="binary"
+          uiSchema={metricSchema}
+        />,
+      );
+      return { onChange, onTuneWrite };
+    }
+
+    it("routes a search-space edit as a tuning_overrides patch", () => {
+      const { onChange, onTuneWrite } = renderRouted();
+      fireEvent.click(screen.getByTestId("trigger-space-change"));
+      expect(onChange).not.toHaveBeenCalled();
+      expect(onTuneWrite).toHaveBeenCalledTimes(1);
+      expect(onTuneWrite).toHaveBeenCalledWith(
+        [
+          {
+            path: ["tuning", "optuna", "space"],
+            value: { new_param: { type: "float", low: 0, high: 1 } },
+          },
+        ],
+        "tuning_overrides",
+      );
+    });
+
+    it("routes an n_trials edit as a tuning_overrides patch of optuna.params", () => {
+      const { onChange, onTuneWrite } = renderRouted();
+      fireEvent.click(screen.getByRole("button", { name: "100" }));
+      expect(onChange).not.toHaveBeenCalled();
+      expect(onTuneWrite).toHaveBeenCalledTimes(1);
+      const [patches, reason] = onTuneWrite.mock.calls[0];
+      expect(reason).toBe("tuning_overrides");
+      expect(patches).toEqual([
+        { path: ["tuning", "optuna", "params"], value: { n_trials: 100 } },
+      ]);
+    });
+
+    it("routes an optimization-metric change as tuning_overrides patches of evaluation and params", () => {
+      const { onChange, onTuneWrite } = renderRouted();
+      const f1Buttons = screen.getAllByText("f1");
+      fireEvent.click(f1Buttons[0].closest("button") ?? f1Buttons[0]);
+      expect(onChange).not.toHaveBeenCalled();
+      expect(onTuneWrite).toHaveBeenCalledTimes(1);
+      const [patches, reason] = onTuneWrite.mock.calls[0];
+      expect(reason).toBe("tuning_overrides");
+      expect(patches).toEqual([
+        { path: ["tuning", "evaluation"], value: { metrics: ["f1"] } },
+        { path: ["tuning", "optuna", "params"], value: { n_trials: 50 } },
+      ]);
+    });
+
+    it("routes a Fixed model.params edit as a legacy_config patch", () => {
+      const { onChange, onTuneWrite } = renderRouted();
+      fireEvent.click(screen.getByTestId("trigger-model-param-change"));
+      expect(onChange).not.toHaveBeenCalled();
+      expect(onTuneWrite).toHaveBeenCalledTimes(1);
+      expect(onTuneWrite).toHaveBeenCalledWith(
+        [{ path: ["model", "params", "max_depth"], value: 5 }],
+        "legacy_config",
+      );
+    });
+
+    it("routes an inner_valid pick and its explicit marker as ONE legacy_config write", () => {
+      const { onTuneWrite } = renderRouted();
+      fireEvent.click(screen.getByTestId("trigger-inner-valid-change"));
+      expect(onTuneWrite).toHaveBeenCalledTimes(1);
+      expect(onTuneWrite).toHaveBeenCalledWith(
+        [
+          { path: ["model", "params", "inner_valid"], value: "time_holdout" },
+          {
+            path: ["training", "early_stopping", "inner_valid_explicit"],
+            value: true,
+          },
+        ],
+        "legacy_config",
+      );
+    });
+
+    it("routes a Re-tune toggle as a legacy_config patch of tuning.re_tune", () => {
+      const { onChange, onTuneWrite } = renderRouted();
+      fireEvent.click(
+        screen.getByRole("switch", { name: "Enable Re-tune (multi-round)" }),
+      );
+      expect(onChange).not.toHaveBeenCalled();
+      expect(onTuneWrite).toHaveBeenCalledTimes(1);
+      const [patches, reason] = onTuneWrite.mock.calls[0];
+      expect(reason).toBe("legacy_config");
+      expect(patches).toHaveLength(1);
+      expect(patches[0].path).toEqual(["tuning", "re_tune"]);
+      expect(patches[0].value).toMatchObject({ n_rounds: 3 });
+    });
+  });
 });

@@ -74,6 +74,13 @@ test.describe("Tune tab first-mount (P-0109 PR-5 regression)", () => {
     const offendingPuts: string[] = [];
     page.on("request", (req) => {
       if (req.method() !== "PUT") return;
+      // P-0111: Tune-tab tuning writes now go to the overrides endpoint,
+      // so a resurrected mount-time write would land there instead. Any
+      // overrides PUT on first mount is offending.
+      if (req.url().endsWith("/api/workspace/config/tuning-overrides")) {
+        offendingPuts.push(`tuning-overrides: ${req.postData() ?? ""}`);
+        return;
+      }
       if (!req.url().endsWith("/api/workspace/config")) return;
       let body: Record<string, unknown> | null = null;
       try {

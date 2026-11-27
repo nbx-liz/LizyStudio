@@ -122,6 +122,13 @@ export function WorkspacePage() {
         queryClient.setQueryData(queryKeys.config(), wrapper.config);
       }
     },
+    // P-0111 Q2: refresh the Tune snapshot (the "Modified" badge's
+    // `user_set_paths`) once per drained burst, after both write paths
+    // settled, rather than once per write. Legacy writes change the stored
+    // intent too (the absorb shim), so every drain refreshes it.
+    onAllSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.tuningSnapshot() });
+    },
   });
 
   // P-0102 v3-24b: warn the user before reload / tab-close while a

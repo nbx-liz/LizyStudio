@@ -4444,6 +4444,14 @@ Option B は v0.7+ で `STUDIO_FORMAT_VERSION` 2 → 3 bump タイミングで�
   - **Q2 → 1 つの effect で gate**: row-mode toggle 末端で「両 mutation が `onSettled` 完了」を一括カウントし、その後に 1 回だけ `useTuningSnapshot.invalidate()` を trigger。badge は flicker しない。`useConfigWriteFunnel` 側に `onAllSettled` (両 reason の queue が drain した時点で 1 度発火) フックを追加する。両 mutation の `onSettled` 個別 invalidate は採用しない（同 frame で 2 度走ると stale state が一瞬見える）。
   - **Q3 → 別 reason として並列に enqueue**: `useConfigWriteFunnel.coalesceByReason` の key 集合に `legacy_config` / `tuning_overrides` を追加し、同 funnel 内で 2 本の queue を並走させる。flush タイミングは両者共通 (同 frame バッチ)。既存 funnel の `isFlushing` gate ロジック + v0.6.2 で導入した `kind: "patch-many"` merge を reuse 可能。別 funnel instance は採用しない（flush タイミング同期 + cache invalidation 順序保証の追加コストが大きい）。
 - 実装 PR は `refactor(frontend): route Tune-tab tuning-field writes through PUT /config/tuning-overrides (P-0111)` で起票し、acceptance criteria に従って TDD 実装。実装着手の優先度は v0.6.x patch サイクル後の v0.7 準備期間、または v0.7.0 (P-0110 RFC 9457) と同一 release window で同時着地候補。
+- 2026-11-27 **実装**（branch `feat/p0111-tune-overrides-write-path`）。
+  - **Q1**: Tune タブの各編集は、どちらか一方の経路に送る path/value の patch になった（`TuneTab` の `onTuneWrite`、`useModelPanelData.handleConfigPatch`）。`tuning.optuna.params`、`tuning.optuna.space`、`tuning.evaluation` の編集は reason `tuning_overrides` で `PUT /config/tuning-overrides` に送る。`model.params`、内側分割の explicit marker、`tuning.re_tune` の編集は reason `legacy_config` で `PUT /config` に送る。
+  - **REPLACE の body**: funnel が flush 時に、最新の config cache に patch を当てる。その `tuning` block を `extract_overrides_from_legacy_tuning` と同じ規則で射影し、意図の全体を送る（`tuningOverridesFromConfig`）。seed は snapshot の `tuning_overrides` ではなく config cache である。どちらの経路の commit でも同期的に更新されるのは config cache だけだからである。snapshot は `model_dump` なので、未設定の field も `null` で返ってくる。
+  - **成功時の cache**: overrides の書き込みが成功すると、`{config}` 形で config cache に反映する。後続の legacy の書き込みが古い `tuning` block を送り、absorb shim がそれを overrides に戻すこと（DC8）は、これで起きない。
+  - **Q2**: funnel に `onAllSettled` を追加した。queue が 1 回 drain するごとに 1 度だけ呼ばれ、`WorkspacePage` はそこで `tuningSnapshot` を invalidate する。
+  - **Q3**: `WriteReason` に `legacy_config` と `tuning_overrides` を追加した。両者は同じ funnel の同じ queue に入り、drain を共有して直列に送られる。同時に送られることはない。同じ reason の patch は `patch-many` に coalesce する。
+  - **acceptance の実測**: row-mode toggle（`handleModeChange`）は `space` しか書かない。そのため、実際に送られるのは overrides の PUT 1 件で、legacy の PUT は 0 件である。新しい e2e spec `workspace-tune-write-routing.spec.ts` はこの実測値を固定し、予算 2 を上限として残した。`workspace-tune-firstmount.spec.ts` は、mount 時の overrides PUT も検出するようにした。
+  - **shim**: `absorb_legacy_tuning` と `get_legacy_config_view` は、この変更では触っていない。
 
 ### P-0112: 開発・CI・配布ビルドの Node baseline を 20 → 24 に引き上げる（Change Gate: ビルド・配布方式の変更）
 

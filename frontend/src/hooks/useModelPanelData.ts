@@ -28,13 +28,22 @@ import {
 } from "@/api/queries";
 import { queryKeys } from "@/api/queryKeys";
 import { type ConfigError, isBlockingError } from "@/api/types";
-import { updateConfig, uploadConfig, validateConfig } from "@/api/workspace";
+import {
+  updateConfig,
+  updateTuningOverrides,
+  uploadConfig,
+  validateConfig,
+} from "@/api/workspace";
 import { findEmptyChoiceKeys } from "@/components/workspace/search-space-utils";
+import { tuningOverridesFromConfig } from "@/hooks/tuningOverridesBody";
 import { useConfigHistory } from "@/hooks/useConfigHistory";
 import { useConfigPresets } from "@/hooks/useConfigPresets";
-import type {
-  ConfigWriteFunnel,
-  WriteReason,
+import {
+  type ConfigWriteFunnel,
+  materializeOp,
+  type PatchEntry,
+  type TuneWriteReason,
+  type WriteReason,
 } from "@/hooks/useConfigWriteFunnel";
 import { useConfigWriteFunnelOptional } from "@/hooks/useConfigWriteFunnelContext";
 import { useConfigWritePending } from "@/hooks/useConfigWritePending";
@@ -129,6 +138,58 @@ export function useModelPanelData({
     return () => clearTimeout(validateTimer.current);
   }, []);
 
+  // INV-A1/A2/A3 (Issue #276) + P-0110: a blocking validation rejection is
+  // a 422 Problem Details error, never a 200. The backend kept the prior
+  // config, so the cache, history, and errors state must reflect that —
+  // not the rejected payload.
+  const rejectWrite = useCallback(
+    (err: unknown): void => {
+      // P-0089 / Issue #279: 409 WORKSPACE_LOCKED means a fit/tune
+      // job is running and the config is intentionally immutable.
+      // Surface a quiet info toast (the section-level disabled
+      // controls already explain the lock) and re-fetch so the form
+      // resyncs to the locked-in config.
+      if (isWorkspaceLocked(err)) {
+        toast.info("Config is locked while a job is running");
+        queryClient.invalidateQueries({ queryKey: queryKeys.config() });
+        return;
+      }
+      const validationErrors = getValidationErrors(err);
+      if (validationErrors !== null) {
+        setErrors(validationErrors);
+        toast.error(
+          `Config not saved: ${summarizeValidationErrors(validationErrors)}`,
+        );
+        // Re-fetch the actual backend state so the UI reflects truth,
+        // not the rejected payload the caller tried to apply.
+        queryClient.invalidateQueries({ queryKey: queryKeys.config() });
+        return;
+      }
+      toast.error("Failed to update config");
+    },
+    [queryClient],
+  );
+
+  // A saved write records history, clears prior rejection errors and
+  // schedules the debounced advisory validation of what was saved.
+  const recordSaved = useCallback(
+    (saved: Record<string, unknown>): void => {
+      history.push(saved);
+      setErrors([]);
+      clearTimeout(validateTimer.current);
+      validateTimer.current = setTimeout(async () => {
+        try {
+          const result = await validateConfig(saved);
+          setErrors(result.errors);
+        } catch {
+          // silent — validation failures are surfaced via the errors
+          // state on the next successful call
+        }
+      }, VALIDATION_DEBOUNCE_MS);
+    },
+    [history.push],
+  );
+
   // Resolves `true` when the backend holds `newConfig` afterwards (saved
   // now, or already equal to the cached server config) and `false` when it
   // does not (refused, failed, or skipped while a job runs), so callers
@@ -142,40 +203,11 @@ export function useModelPanelData({
       if (cached && equal(cached, newConfig)) {
         return true;
       }
-      // INV-A1/A2/A3 (Issue #276) + P-0110: a blocking validation
-      // rejection is a 422 Problem Details error, never a 200. The
-      // backend kept the prior config, so the cache, history, and errors
-      // state must reflect that — not the rejected payload.
-      //
       // P-0092 Q-1 Phase 4: route through the write funnel when one is
       // mounted so this user-edit PUT serialises behind any in-flight
       // target-select / cv-change writer. The funnel's WriteResult
       // carries the original error in `details` on failure, so the
-      // 422 / 409 observation logic stays right here.
-      const rejectWrite = (err: unknown): void => {
-        // P-0089 / Issue #279: 409 WORKSPACE_LOCKED means a fit/tune
-        // job is running and the config is intentionally immutable.
-        // Surface a quiet info toast (the section-level disabled
-        // controls already explain the lock) and re-fetch so the form
-        // resyncs to the locked-in config.
-        if (isWorkspaceLocked(err)) {
-          toast.info("Config is locked while a job is running");
-          queryClient.invalidateQueries({ queryKey: queryKeys.config() });
-          return;
-        }
-        const validationErrors = getValidationErrors(err);
-        if (validationErrors !== null) {
-          setErrors(validationErrors);
-          toast.error(
-            `Config not saved: ${summarizeValidationErrors(validationErrors)}`,
-          );
-          // Re-fetch the actual backend state so the UI reflects truth,
-          // not the rejected payload the caller tried to apply.
-          queryClient.invalidateQueries({ queryKey: queryKeys.config() });
-          return;
-        }
-        toast.error("Failed to update config");
-      };
+      // 422 / 409 observation logic stays in `rejectWrite`.
       try {
         if (writeFunnel) {
           const result = await writeFunnel.enqueueWrite({
@@ -196,23 +228,72 @@ export function useModelPanelData({
         return false;
       }
       queryClient.setQueryData(queryKeys.config(), newConfig);
-      history.push(newConfig);
-      // Successful save clears any prior rejection errors.
-      setErrors([]);
-
-      clearTimeout(validateTimer.current);
-      validateTimer.current = setTimeout(async () => {
-        try {
-          const result = await validateConfig(newConfig);
-          setErrors(result.errors);
-        } catch {
-          // silent — validation failures are surfaced via the errors
-          // state on the next successful call
-        }
-      }, VALIDATION_DEBOUNCE_MS);
+      recordSaved(newConfig);
       return true;
     },
-    [queryClient, running, history.push, writeFunnel],
+    [queryClient, running, writeFunnel, rejectWrite, recordSaved],
+  );
+
+  // P-0111: the Tune tab's write path. Each edit is a set of path/value
+  // patches with the endpoint it belongs to: `tuning_overrides` for the
+  // five tuning fields (`PUT /config/tuning-overrides`), `legacy_config`
+  // for `model.params`, the inner split marker and `tuning.re_tune`
+  // (`PUT /config`). Patches, not a full config captured at render time:
+  // the funnel applies them to the freshest cached config at flush time,
+  // so neither path's body can carry a stale copy of the other path's
+  // fields (DC8). Nothing is written to the cache before the backend
+  // accepts the write, so a refused write leaves the server's state shown.
+  // Resolves like `handleConfigChange`.
+  const handleConfigPatch = useCallback(
+    async (
+      patches: readonly PatchEntry[],
+      reason: TuneWriteReason,
+    ): Promise<boolean> => {
+      if (running) return false;
+      if (patches.length === 0) return true;
+      const op = { kind: "patch-many", patches, reason } as const;
+      const cached = queryClient.getQueryData<Record<string, unknown>>(
+        queryKeys.config(),
+      );
+      const next = materializeOp(op, cached);
+      if (cached && equal(cached, next)) {
+        return true;
+      }
+      if (writeFunnel) {
+        const result = await writeFunnel.enqueueWrite(op);
+        if (!result.ok) {
+          // An aborted write means the funnel tore down: not a refusal.
+          if (result.error === "aborted") return false;
+          rejectWrite(result.details);
+          // The outcome of a write that failed in transit is unknown;
+          // re-read the server's config rather than keep a guess.
+          if (result.error === "network") {
+            queryClient.invalidateQueries({ queryKey: queryKeys.config() });
+          }
+          return false;
+        }
+        // The funnel's onWriteCommitted already cached the saved config;
+        // both paths report it as `{config}`.
+        const saved =
+          (result.saved as { config?: Record<string, unknown> }).config ?? next;
+        recordSaved(saved);
+        return true;
+      }
+      try {
+        if (reason === "tuning_overrides") {
+          await updateTuningOverrides(tuningOverridesFromConfig(next));
+        } else {
+          await updateConfig(next);
+        }
+      } catch (err) {
+        rejectWrite(err);
+        return false;
+      }
+      queryClient.setQueryData(queryKeys.config(), next);
+      recordSaved(next);
+      return true;
+    },
+    [queryClient, running, writeFunnel, rejectWrite, recordSaved],
   );
 
   // --------------------------------------------------------------------
@@ -466,6 +547,7 @@ export function useModelPanelData({
     tuneEnabled,
     disabledReason,
     handleConfigChange,
+    handleConfigPatch,
     handleImport,
     handleUndo,
     handleRedo,

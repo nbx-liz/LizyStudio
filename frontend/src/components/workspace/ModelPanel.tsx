@@ -47,6 +47,7 @@ export function ModelPanel({
     tuneEnabled,
     disabledReason,
     handleConfigChange,
+    handleConfigPatch,
     handleImport,
     handleUndo,
     handleRedo,
@@ -80,6 +81,7 @@ export function ModelPanel({
         schema={schema}
         config={config}
         onChange={handleConfigChange}
+        onTuneWrite={handleConfigPatch}
         task={task}
         uiSchema={uiSchema}
         columns={nonExcludedColumns}
