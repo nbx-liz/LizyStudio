@@ -5219,6 +5219,7 @@ lock を上げると、fixture の鮮度テストが落ちる（`tests/test_lizy
 
 - 版: P-0117 を 0.8.0 として出す。版は git tag から決まる（hatch-vcs）ので版ファイルは変えない。
 - v0.8.0 の milestone にあった #536（P-0110）、#528（P-0111）、#734 は v0.9.0 に移す。P-0110 + P-0111 の release window は v0.9.0 になる。
+- 2026-11-27: 上の計画のうち、#528（P-0111）と #734 は 0.9.0 に入らなかった（owner）。P-0111 は PR #787 を draft に戻し、#734 は Proposal の再設計が要る。0.9.0 に入ったのは P-0110 だけである。
 - 手順は前例どおり: develop への chore PR（CHANGELOG の header と HISTORY の acceptance の tick）、次に develop から main への release PR を `--merge` で、そして tag。PyPI への publish は取り消せないので、main への merge の直前に owner がもう一度確かめる。
 - visual-qa が見つけた既存の 2 件は、別の Issue に起票した（milestone `backlog`）。
   - #753: Jobs ページが tablet と mobile の幅で崩れる。
