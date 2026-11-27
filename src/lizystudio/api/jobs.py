@@ -684,7 +684,7 @@ def export_job(
     except BackendRefusalError as exc:
         raise backend_error_from(exc) from exc
     except Exception as exc:
-        raise ExportError(str(exc)) from exc
+        raise ExportError(exc) from exc
 
 
 @router.get("/{job_id}/export-code", response_model=ExportCodeResponse)

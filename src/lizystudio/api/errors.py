@@ -260,10 +260,21 @@ class ConfigImportError(StudioError):
 
 
 class ExportError(StudioError):
-    """Model or report export failure (H-0041)."""
+    """Unclassified model or report export failure (H-0041, P-0121).
 
-    def __init__(self, reason: str) -> None:
-        super().__init__("EXPORT_ERROR", f"Export failed: {reason}", 500)
+    The message carries only the exception type name; the exception's own
+    text can hold the user's data values or local paths, so it is logged on
+    the server instead.
+    """
+
+    def __init__(self, original: Exception) -> None:
+        _backend_logger.exception("Export failed", exc_info=original)
+        super().__init__(
+            "EXPORT_ERROR",
+            f"Export failed ({type(original).__name__})",
+            500,
+            details={},
+        )
 
 
 class InvalidPatchError(StudioError):

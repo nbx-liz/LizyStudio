@@ -246,7 +246,8 @@ still answers `422` with the legacy envelope below, on every path.
 | `PATH_NOT_FOUND` | Path does not exist | 400 |
 | `BACKEND_ERROR` | ML backend library error | 500 |
 | `BACKEND_INPUT_REJECTED` | The backend refused the user's data, e.g. a column name an export-code project cannot hold or a category value a saved model cannot hold (P-0117 D2). `details`: `backend_code` (lizyml's code), `reason`, `recovery_hint`, `context` (an allowlisted subset). Also the WebSocket `error.code` of a Fit or Tune job that fails this way | 400 |
-| `MODEL_ARTIFACT_INVALID` | The backend cannot read a stored model, in a shape lizyml names: an unknown `category_identity_version`, a corrupted `identity_columns`, a pickle whose checksum differs from the recorded one, or a `format_version` it does not read (P-0117 D2). An I/O failure reading the model stays `BACKEND_ERROR`. `details` as for `BACKEND_INPUT_REJECTED`; the message is fixed text and holds no local path | 409 |
+| `MODEL_ARTIFACT_INVALID` | The backend cannot read a stored model, in a shape lizyml names: an unknown `category_identity_version`, a corrupted `identity_columns`, a pickle whose checksum differs from the recorded one, a `format_version` it does not read (P-0117 D2), or an `analysis_context.pkl` that cannot be unpickled (`reason` `unreadable_analysis_context`, P-0121). Any other load failure (an I/O failure, a missing or unparsable file) stays `BACKEND_ERROR`. `details` as for `BACKEND_INPUT_REJECTED`; the message is fixed text and holds no local path | 409 |
+| `EXPORT_ERROR` | An unclassified failure of `POST /api/jobs/{job_id}/export` (model or report) (P-0121). The message is fixed text, `Export failed (<ExceptionType>)`, and never carries the exception's own text; `details` is `{}`. The exception and its traceback are logged on the server. Classified refusals keep their own codes | 500 |
 | `INTERNAL_ERROR` | Unexpected server error | 500 |
 
 ## TypeScript type generation

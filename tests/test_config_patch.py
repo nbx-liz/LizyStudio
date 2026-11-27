@@ -41,10 +41,11 @@ class TestNewErrorCodes:
         assert "YAML" in err.message
 
     def test_export_error(self) -> None:
-        err = ExportError("model directory not found")
+        err = ExportError(RuntimeError("secret value"))
         assert err.code == "EXPORT_ERROR"
         assert err.status_code == 500
-        assert "model" in err.message
+        assert err.message == "Export failed (RuntimeError)"
+        assert err.details == {}
 
 
 # --- H-0037: Config patch service tests ---

@@ -5511,3 +5511,110 @@ Gate-category: none
   - pandas の下限は Studio に足さない。pandas の範囲は lizyml が決める。
   - pandas の major の違いで読めない job への答えを理由つきの 4xx にする件は、別の Issue で扱う。P-0120 には含めない。
   - Ruleset の必須 check の差し替えは、この PR の merge の直前に、Claude が `gh api` で行う。変更前と変更後の一覧を PR に記録し、ほかの設定は変えない。
+
+### P-0121: 読めない保存モデルを理由つきの 409 で拒否し、export の答えから例外の文字列を外す（Change Gate: API のエラー契約、Issue #777）
+
+- **Date:** 2026-11-26 起票（Draft）。
+- **Issue:** #777
+- **Related:** P-0117 D2（lizyml の拒否の分類表、BLUEPRINT §6.2）、P-0120（Python の下限、#775）、`backends/lizyml/error_mapping.py`、`api/jobs.py`、`api/errors.py`、`api/inference.py`、`docs/api.md`
+
+Gate-category: none
+
+#### Motivation
+
+develop `77f8eda`、lizyml 0.21.1（`uv.lock:593`）での観察。再現は Python 3.10 と pandas 2.3.3（#775 の調査、HISTORY P-0120）。
+
+- 保存モデルの `analysis_context.pkl` が unpickle できないとき、lizyml 0.21.1 は `persistence/loader.py` の `analysis_context` の読み込み（`joblib.load` を包む `except Exception`）で `DESERIALIZATION_FAILED` を投げる。`context` は `{"path": <成果物のディレクトリ>}` だけで、`user_message` は `"Failed to load analysis_context: {exc}"`、`cause` に元の例外が入る。
+- D2 の表（BLUEPRINT §6.2、`error_mapping.py` `RULES`）は、`context` が `path` だけの形を意図して分類しない（無いディレクトリなど）。そのため今の答えは route で 2 通りに分かれる。
+  - `backend_error_from` を通る 10 の case（下の一覧の Results の 7 route、export-code、推論の 2 route）は 500 `BACKEND_ERROR`（`details.type` だけ）で、利用者に理由も対処も届かない。
+  - `POST /api/jobs/{id}/export`（model と report の両方）は、load が handler の同じ `try` の中にあり、分類されない例外を `ExportError(str(exc))`（`api/jobs.py:684-687`、`api/errors.py:253-257`）で包んで 500 `EXPORT_ERROR` を返す。message の `str(exc)` には lizyml の `user_message` がそのまま入る。Nightly run 44636596516 では、unpickle の失敗の文言に含まれた `CategoricalDtype(categories=['female', 'male'], ...)` と `int8` の code の配列、つまり学習データの値が答えに出た。今の status と code は `tests/test_jobs_api.py:1342-1364` が、理由が message に入ることは `tests/test_config_patch.py:43-47` が固定している。
+- pandas の major の分裂は P-0120 で開発と CI からは外れたが、pip で入れた利用者の環境（`uv.lock` に従わない）や、将来の依存の非互換で同じ失敗は起こりうる。
+
+根本の原因は 2 つある。(1) 分類表が、unpickle の失敗と「無いディレクトリ」を `context` の形だけでは区別できない。(2) export の handler が、分類されない例外の文字列をそのまま答えに入れる。本案は (1) を下の対応する形に限って止め、(2) を export の 2 つの mode で止める。
+
+#### 変更
+
+1. **分類表に 1 行足す（`error_mapping.py`）。**
+   - **判定に例外を渡す。** 今の `Rule.matches` は `context` だけを受け取る（`error_mapping.py:189-198`、`classify` は `:306-320`）。本行のために、`Rule` に省略可能な `message_prefix: str | None` を足し、`classify` が `user_message` をその固定の literal で前方一致させる。既存の行は `None` で、振る舞いは変わらない。
+   - **対応する形（閉じた定義）:** code が `DESERIALIZATION_FAILED`、`context` の key の集合がちょうど `{"path"}`、`user_message` が `"Failed to load analysis_context: "` で始まる。この 3 つだけを見る。`cause` の型は見ない（unpickle の失敗の型は開いた集合で、`LizyMLError` を除く理由も元のコードに無い。除けば DC7 の取りこぼしになる）。
+   - **各条件の根拠（0.21.1 の raise 箇所から）:** lizyml 0.21.1 の中で `context={"path": str(...)}` だけを持つ `DESERIALIZATION_FAILED` の raise 箇所は 8 つある。`persistence/loader.py` の「Export directory not found」「metadata.json not found」「Failed to parse metadata.json」「Required artifact not found」「Failed to load model artifacts」「Failed to load analysis_context」と、`core/_model_persistence.py` の「Stored tuning best_smart_params must be an object.」「Stored tuning fixed_params must be an object.」である。前方一致の literal は、このうち「Failed to load analysis_context」の 1 つにだけ合う。
+   - 区分は成果物の破損（`BackendArtifactError` → 409 `MODEL_ARTIFACT_INVALID`）。reason は `unreadable_analysis_context` に固定。対処は既存の `_REFIT`（`"run a new Fit"`、`error_mapping.py:104`）を使う文言。
+   - `context` は渡さない（`_no_context`）。message は成果物の破損の行と同じく、既知の code と固定の reason から組み立て（`error_mapping.py:344-366`）、lizyml の `user_message`（`{exc}` の文言とパスを含む）を渡さない。BLUEPRINT §6.2 の既存の約束のとおりである。
+   - adapter の `load_model` はすでに `@maps_lizyml_refusals` を通る（`evaluation_mixin.py:240`）。保存モデルを読む全経路は、`backend_error_from`（`api/errors.py:168` からの定義、成果物の破損の振り分けは `:182`）か、export の `except BackendRefusalError`（`api/jobs.py:684`）で 409 になる。
+2. **export の分類されない失敗の答えを固定する（`api/jobs.py` の export handler、`api/errors.py` `ExportError`）。**
+   - 分類されない例外は、status 500・code `EXPORT_ERROR` のまま、message を固定の文言（`"Export failed (<ExceptionType>)"`。例外の型名だけを含む）にし、`details` は空の `{}` にする（`StudioError` の envelope は `details` を常に持つ。`api/errors.py:39`、`:386`）。元の例外と traceback は server の log に `logger.exception` で残す。model と report の両 mode で同じ。対象は、handler の汎用の `except` に届く例外である。load の失敗のほか、report の生成や書き込みから漏れた例外も含む。report の個々の plot の生成の失敗は、`services/export.py:66-71` が log に残して report を続けるので、handler には届かない。
+   - `ExportError` の constructor は理由の文字列を受け取らない形に変える。`tests/test_config_patch.py:43-47` の期待もそれに合わせて直す。
+   - 分類された拒否（`BackendRefusalError`）は今までどおり `backend_error_from` を通る。このうち入力の誤り（400 `BACKEND_INPUT_REJECTED`）は、D2 が意図して、利用者が読み込ませたデータの値を返す。model export も `@maps_lizyml_refusals` を通る（`evaluation_mixin.py:211-214`）ので、保存できない値の拒否はこの 400 で返る。この 400 は 2 つの欄で値を返す。
+     - `error.details.context`: 許可した key だけで、文字列は 200 文字まで（`error_mapping.py:136-158`、BLUEPRINT §6.2「入力の誤りの `context`」）。
+     - `error.message`: lizyml の `user_message` をそのまま、長さの上限なしで渡す（`error_mapping.py:351-358`、`api/errors.py:138-144`。BLUEPRINT §6.2「入力の誤りの規則は … lizyml の message をそのまま渡すため」）。
+
+     この 2 つを、本案の漏洩の保証の**明示の例外**として据え置く。値は同じ利用者が読み込ませたデータで、その利用者に返す。lizyml が入力の誤りとして分類した拒否に限られる。本案が止めるのは、分類されず、許可も上限も無い `str(exc)` の経路である。入力の誤りの `error.message` に上限を設けるかは、本案の外とする（D2 の変更になる）。
+3. **文書。**
+   - BLUEPRINT §6.1: `EXPORT_ERROR` の行が無いので足す（500、固定の文言、例外の文字列を含まない、log に traceback）。
+   - BLUEPRINT §6.2: 冒頭の「code と `context` の形で判定する」に、本行だけが `user_message` の固定の前方一致も見ることを足す。「成果物の破損」の行に本行を足し、「それ以外」の行の `path` だけの例から `analysis_context` の unpickle の失敗を外す。export の分類されない失敗が `BACKEND_ERROR` でなく固定の `EXPORT_ERROR` になることを書く。
+   - `docs/api.md:150-152` を同じ内容に揃える。CHANGELOG の `Unreleased`。
+
+**保存モデルを読む HTTP route（コードから列挙、11 route・12 case）。**
+
+| route | load の経路 | 今の答え | 本案の後 |
+|---|---|---|---|
+| `GET /api/jobs/{id}/metrics` | `ModelCache.load`（`job_results.py:64`） | 500 `BACKEND_ERROR`（`api/jobs.py:424`） | 409 |
+| `GET /api/jobs/{id}/split-summary` | 同上 | 同上（`:439`） | 409 |
+| `GET /api/jobs/{id}/importance` | 同上 | 同上（`:469`） | 409 |
+| `GET /api/jobs/{id}/importance-kinds` | 同上 | 同上（`:516`） | 409 |
+| `GET /api/jobs/{id}/learning-curve/metrics` | 同上 | 同上（`:536`） | 409 |
+| `GET /api/jobs/{id}/plot/{plot_type}` | 同上 | 同上（`:601`） | 409 |
+| `GET /api/jobs/{id}/plots` | 同上 | 同上（`:616`） | 409 |
+| `POST /api/jobs/{id}/export`（model） | `export.py:40` | 500 `EXPORT_ERROR`、`str(exc)` 入り | 409 |
+| `POST /api/jobs/{id}/export`（report） | `export.py:59` | 同上 | 409 |
+| `GET /api/jobs/{id}/export-code` | `export.py:103` | 500 `BACKEND_ERROR`（`:708`） | 409 |
+| `POST /api/inference/run` | `inference.py:236` | 500 `BACKEND_ERROR`（`api/inference.py:135`） | 409 |
+| `GET /api/inference/{inf_id}/plot/{plot_type}` | `inference.py:426` | 同上（`:260`） | 409 |
+
+`services/jobs.py:118` の `load_model` の wrapper は本番の呼び出し元が無い。retune は `load_checkpoint`（`training_retune.py:90`）で読むので本案の外である。
+
+#### 範囲外（Decision の論点）
+
+- **(B) `path` だけで `cause` を持つ load の失敗をまとめて分類する:** 0.21.1 で `DESERIALIZATION_FAILED`・`context` が `path` だけ・`cause` を持つ raise 箇所は、loader の 3 つ（「Failed to parse metadata.json」、`fit_result.pkl` / `refit_model.pkl` の「Failed to load model artifacts」、「Failed to load analysis_context」）である。判別は「`cause` を持つ」で、文言に依存しない。対処はどれも「新しく Fit する」で、pandas の非互換は `fit_result.pkl` でも起こりうる。ただし、`cause` を持つことは、lizyml の将来の版でこの 3 か所に限られる保証にはならず、D2 の「`path` だけは分類しない」方針を意図して広げる。各 case の区分は次のとおりで、受入条件の負の test もこれに合わせる。
+  - (B) で 409 に移る: parse できない `metadata.json`、unpickle できない `fit_result.pkl`、unpickle できない `refit_model.pkl`、unpickle できない `analysis_context.pkl`。
+  - (B) でも 500 のまま: 無いディレクトリ、無い `metadata.json`、無い `fit_result.pkl`、無い `refit_model.pkl`（どちらも「Required artifact not found」、`cause` 無し）、`file` だけの I/O の失敗の形（`tests/integration/test_p0117_lizyml_refusals.py:473-497`）。
+
+  本案の既定は (A)（`analysis_context` だけ）で、#777 の受入条件（他の `path` だけの形は今のまま）に合う。(B) を採るかを owner が決める。
+- **export のダイアログの表示:** `ExportDialog.tsx:49-55` は server の答えを捨てて「Export failed」を出す。reason と recovery hint は API の利用者には届くが、画面には出ない。表示の改善は別の Issue にする。
+- **他の handler の例外文字列:** `api/workspace.py:215, 247`（`FileInvalidError`）、`:544`（`ConfigImportError`）。#777 の follow-up として別に監査する。
+- **P-0110 との関係:** P-0110（RFC 9457）は workspace の endpoint の envelope を変える。本案の job と inference の endpoint の envelope は今の `StudioError` の形のままで、P-0110 の範囲（HISTORY.md P-0110 の範囲の記述）とは重ならない。
+
+#### Alternatives
+
+- **(C) `cause` の型で判別する:** unpickle の失敗の型は開いた集合で、閉じた一覧を作れない。型を見ない「`cause` の有無」なら (B) になる。
+- **(D) lizyml に構造の判別子（例: `context["file"] = "analysis_context.pkl"`）を足してもらう:** 判別が構造になり最も堅いが、lizyml の minor を待つ。上流の Issue を本案の実装と同時に起こし、届いたら本行を `context` の判別に置き換える（その lizyml の bump の PR で行う）。
+- **(E) export だけ直し、分類は変えない:** 漏洩は止まるが、`backend_error_from` を通る 10 の case は 500 のまま理由が届かない。
+
+#### Compatibility
+
+- **API:** 上の表の 12 case の答えが、409 `MODEL_ARTIFACT_INVALID`（`details.backend_code = "DESERIALIZATION_FAILED"`、`details.reason = "unreadable_analysis_context"`、recovery hint、空の `context`）に変わる。今の 500 は、10 case（Results の 7 route、export-code、推論の 2 route）が `BACKEND_ERROR`、export の 2 case が `EXPORT_ERROR` である。reason と recovery hint は API の利用者に届く。frontend は `StudioError` の message を汎用に表示できる（`frontend/src/api/errors.ts:21-25`）が、export のダイアログは表示しない（上の範囲外）。
+- **export:** 分類されない失敗は 500 `EXPORT_ERROR` のまま、message が固定の文言になり、例外の文字列を含まない。`details` は今と同じく `{}`。`tests/test_jobs_api.py:1342-1364` と `tests/test_config_patch.py:43-47` の期待を新しい契約に直す。
+- **保存形式・job の行:** 変更なし。
+- **lizyml の文言への依存:** 本行は lizyml 0.21.1 の `user_message` の前方の文言に依存する。実物の test（受入条件の 1 つ目）は、インストールされた版でこの形が出ることを確かめる。lizyml の bump で、この誘発した失敗の形（code、`context` の key、前方の文言）が変われば、生の `Model.load` の assert で落ちる。生の例外の assert を満たしたまま答えが変われば（たとえば Studio の側の表の変更で、別の行が先に合って reason が違う）、route の assert が status・code・reason のどれかで落ちる。文言の後半（`{exc}` の部分）の変化は判別に関係しない。ただし、この test が確かめるのは、誘発した 1 つの形とその答えだけで、bump で起こるすべての失敗の形の変化を捕まえるものではない。構造の判別は (D) で置き換える。
+
+本行は、エラーをどの区分で答えるかを選ぶ分類（必要な振る舞いの分岐の選択）で、load を走らせるかどうかや、どう走らせるかを変えない。change-gate の 6 つの目的（skip / shorten / cache / select / allow / conditionally-activate）のどれにもあたらないため、`Firing rate:` の行は置かない。行が実際の失敗に合うこと（DC6・DC7）は、受入条件の 1 つ目の実物の test で確かめる。
+
+#### Acceptance Criteria
+
+- [ ] **上流の形（実物）:** インストールされた lizyml で保存した、読めるモデル（fixture `tests/fixtures/lizyml/binary_no_cal` と同じ手順）から始め、`analysis_context.pkl` を unpickle で sentinel を含む例外を出す pickle に差し替え、`metadata.json` の `checksums.files["analysis_context.pkl"]` を新しい bytes の SHA-256 に直す（`tests/integration/test_p0117_lizyml_refusals.py:291-310` の手順）。生の `Model.load` が、code `DESERIALIZATION_FAILED`、`context` の key がちょうど `{"path"}`、`user_message` が前方の literal で始まり sentinel を含み、`cause` を持つことを assert する（checksum の拒否と区別するため、code だけでは足りない）。
+- [ ] **分類（12 case）:** 同じ成果物で、上の表の 12 case がそれぞれ 409 `MODEL_ARTIFACT_INVALID` を返し、`details.backend_code`、`details.reason == "unreadable_analysis_context"`、recovery hint、空の `context` を assert する。`ModelCache` は空の状態から、request の path は有効なものを使い、推論の plot には既存の推論の記録を用意する。
+- [ ] **漏洩なし（12 case）:** 各 case の答えの本文に sentinel も成果物のパスも出ない。
+- [ ] **D2 の境界（負の test）:** 無いディレクトリ、無い `metadata.json`、parse できない `metadata.json`、無い `fit_result.pkl`、無い `refit_model.pkl`、unpickle できない `fit_result.pkl`、unpickle できない `refit_model.pkl` の 7 つを、実物の成果物で作る。
+  - **狙った分岐に届いたことを先に確かめる:** 各 case で、まず生の `Model.load` が、code `DESERIALIZATION_FAILED`、`context` の key がちょうど `{"path"}`、その分岐の `user_message` の前方の文言（「Export directory not found」「metadata.json not found」「Failed to parse metadata.json」「Required artifact not found」「Failed to load model artifacts」）を返すことを assert する。`cause` の有無も assert する（parse と 2 つの unpickle の失敗は `cause` あり、無いものは `cause` なし。(B) はこれに依る）。
+  - **checksum を直す:** unpickle できない `fit_result.pkl` と `refit_model.pkl` は、差し替えた bytes の SHA-256 を `metadata.json` の `checksums.files` に書き直す。直さないと、unpickle の前に既存の `checksum_mismatch` の行（`tests/integration/test_p0117_lizyml_refusals.py:378-412` の手順）に届いてしまう。
+  - そのうえで、7 つとも `classify` で分類されない。route では、`backend_error_from` を通る route は 500 `BACKEND_ERROR`、export の 2 mode は新しい固定の 500 `EXPORT_ERROR` になる。
+  - (B) を採ったときは、このうち parse できない `metadata.json`、unpickle できない `fit_result.pkl`、unpickle できない `refit_model.pkl` の 3 つを 409 の側に移す（(B) の 4 つ目の `analysis_context.pkl` は (A) でも正の case である）。
+- [ ] **前方一致の近い外れ（`classify` の単体 test）:** 前方の literal を保ったまま (a) code を変える、(b) `context` に、既存のどの行の判定にも使われない key（例: `"note"`）を 1 つ足す、の 2 つは分類されない（(b) に `category_identity_version` のような既存の行の key を使うと、その行の 409 に合ってしまうので使わない）。`path` だけの `DESERIALIZATION_FAILED` で、literal を文字列の途中に含むもの、literal の前に空白を足したものも分類されない。
+- [ ] **export の sanitize（分類と独立）:** model export と report export を、sentinel を文字列に含む分類されない例外で駆動し、status 500、code `EXPORT_ERROR`、固定の message（例外の型名だけ）、`error.details == {}` を assert し、答えの本文に sentinel が出ず、server の log に例外と traceback が残ることを確かめる。分類された入力の誤り（400 `BACKEND_INPUT_REJECTED`）は、model export で、adapter の既存の分類（`error_mapping.py`）を通る lizyml の拒否で 1 つ駆動する（明示の例外の固定）。その `context` には、許可されない key、200 文字を超える許可された key の値を入れ、`user_message` には 200 文字を超える空でない文言を入れる。答えで、許可されない key が `error.details.context` に無いこと、長い値が 200 文字に切られていること、`error.message` が `user_message` とちょうど同じであること（D2 のとおり上限なしで渡す。本案は上限を設けない）を assert する。
+- [ ] BLUEPRINT §6.1 / §6.2、`docs/api.md:150-152` と CHANGELOG が上の変更と一致する。
+- [x] 上流の Issue（(D)、構造の判別子の依頼）を起こし、本案の HISTORY の行から参照する。nbx-liz/LizyML#435（2026-11-27 起票）。
+
+#### Decision
+
+- 2026-11-26 **Accepted — (A)**（owner）。判別は code `DESERIALIZATION_FAILED` + `context` の key がちょうど `{"path"}` + `user_message` の固定の前方一致で、`analysis_context` の unpickle の失敗だけを 409 にする。(B) は採らない。上流 LizyML に構造の判別子を依頼する Issue（(D)）を実装と同時に起こす。Codex critique: 3 round（`lizystudio-p0121-critique-20261126`）+ 1 round の delta check（`lizystudio-p0121-delta-20261126`）で APPROVE。
+- 2026-11-27 実装: `error_mapping.py` の `Rule.message_prefix` と `unreadable_analysis_context` の行、`ExportError` の固定文言（`api/jobs.py` の export handler）、BLUEPRINT §6.1 / §6.2、`docs/api.md`、CHANGELOG、`tests/integration/test_p0121_unreadable_analysis_context.py` と `tests/test_p0117_error_mapping.py`。上流 LizyML への構造の判別子の Issue（(D)）は nbx-liz/LizyML#435 として起票済み。lizyml の対応版が出たら、本行を `context` の判別に置き換える（その lizyml の bump の PR で行う）。

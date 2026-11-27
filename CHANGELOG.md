@@ -41,6 +41,9 @@ A job-lifecycle reliability release. Job status, the cancel and pause flags, and
 
 ### Fixed
 
+- **An unreadable saved model answers 409, and export no longer echoes exception text (P-0121, #777).**
+  - A model whose `analysis_context.pkl` cannot be unpickled (for example one saved under another pandas major) answers 409 `MODEL_ARTIFACT_INVALID` with `reason` `unreadable_analysis_context` and a "run a new Fit" hint on every route that reads a saved model, instead of 500 `BACKEND_ERROR`. Other load failures are unchanged.
+  - An unclassified failure of `POST /api/jobs/{id}/export` (model or report) answers 500 `EXPORT_ERROR` with the fixed message `Export failed (<ExceptionType>)` and `details: {}`. The exception text, which could hold training data values or local paths, is logged on the server only.
 - **Unpause, cancel and reset races (#613).** These could double-start a worker or bring a cancelled job back:
   - Two concurrent `POST /jobs/{id}/unpause` requests start exactly one worker.
   - A cancel of a paused job that races its unpause is no longer lost, and a cancelled job is never written back to `running`.
