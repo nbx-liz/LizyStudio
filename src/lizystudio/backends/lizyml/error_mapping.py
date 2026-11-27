@@ -11,7 +11,10 @@ wins:
 * **artifact** -- a stored model cannot be read, in one of the shapes the
   table names from a real lizyml raise site: an unknown or malformed
   category identity marker, a pickle whose checksum is not the recorded
-  one, a ``format_version`` lizyml does not read.  Raised as
+  one, a ``format_version`` lizyml does not read, an ``analysis_context.pkl``
+  that cannot be unpickled (P-0121; the one row that also matches the fixed
+  prefix of ``user_message``, because its ``{"path"}`` context is the same as
+  its siblings').  Raised as
   :class:`BackendArtifactError`; the API answers 409.  Any other load
   failure (an I/O error naming only the ``file``, a missing directory, a
   shape the table does not know) stays in the last class.
@@ -133,6 +136,10 @@ def _value_refusal(context: Context) -> bool:
     return "type" in context and ("reason" in context or "where" in context)
 
 
+def _is_path_only(context: Context) -> bool:
+    return set(context) == {"path"}
+
+
 def _json_safe(value: Any, depth: int = 0) -> Any:
     if value is None or isinstance(value, (str, bool, int)):
         return value[:_MAX_TEXT] if isinstance(value, str) else value
@@ -196,6 +203,10 @@ class Rule:
     reason: str
     remedy: str
     context: Callable[[Context], dict[str, Any]]
+    # P-0121: when set, the error's ``user_message`` must start with this
+    # fixed literal.  Only for a raise site that no context shape tells
+    # apart from its siblings; every other row leaves it ``None``.
+    message_prefix: str | None = None
 
 
 #: The classification table (P-0117 D2).  First match wins; anything that
@@ -276,6 +287,19 @@ RULES: tuple[Rule, ...] = (
         f"This version cannot read the saved model's format; {_REFIT}",
         _format_context,
     ),
+    # persistence/loader.py load: ``joblib.load`` of analysis_context.pkl
+    # failed ({path}, with the cause).  Its context is the same bare
+    # ``{"path"}`` as a missing directory, so the row also pins the key set
+    # and the fixed message prefix (P-0121).
+    Rule(
+        "DESERIALIZATION_FAILED",
+        _is_path_only,
+        "artifact",
+        "unreadable_analysis_context",
+        f"The saved model's analysis data cannot be read; {_REFIT}",
+        _no_context,
+        message_prefix="Failed to load analysis_context: ",
+    ),
 )
 
 
@@ -312,10 +336,16 @@ def classify(exc: Any) -> Classification:
     code = _code_of(exc)
     raw = getattr(exc, "context", None)
     context: Context = raw if isinstance(raw, Mapping) else {}
+    text = getattr(exc, "user_message", None)
+    message = text if isinstance(text, str) else ""
     for rule in RULES:
         # An input refusal passes lizyml's message on, so one whose context
         # locates a file (an I/O failure) is never an input refusal.
         if rule.error_class == "input" and "path" in context:
+            continue
+        if rule.message_prefix is not None and not message.startswith(
+            rule.message_prefix
+        ):
             continue
         if rule.code == code and rule.matches(context):
             # An artifact refusal keeps its rule's own reason: lizyml's

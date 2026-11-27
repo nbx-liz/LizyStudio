@@ -3011,7 +3011,8 @@ lizystudio_active_jobs 0.0
 | `PATH_NOT_FOUND` | 指定されたローカルパスが存在しない | 400 |
 | `BACKEND_ERROR` | バックエンドライブラリの内部エラー | 500 |
 | `BACKEND_INPUT_REJECTED` | バックエンドが利用者のデータを拒否した（P-0117 D2）。例: export-code が書けない列名、保存できないカテゴリ値。`details` は `backend_code`（lizyml の code）、`reason`、`recovery_hint`、`context`（許可した key だけ） | 400 |
-| `MODEL_ARTIFACT_INVALID` | 保存されたモデルをバックエンドが読めない（P-0117 D2）。例: 未知の `category_identity_version`、壊れた `identity_columns`。`details` は `BACKEND_INPUT_REJECTED` と同じ形。message は固定の文言で、ローカルのパスを含まない | 409 |
+| `MODEL_ARTIFACT_INVALID` | 保存されたモデルをバックエンドが読めない（P-0117 D2）。例: 未知の `category_identity_version`、壊れた `identity_columns`、unpickle できない `analysis_context.pkl`（P-0121）。`details` は `BACKEND_INPUT_REJECTED` と同じ形。message は固定の文言で、ローカルのパスを含まない | 409 |
+| `EXPORT_ERROR` | `POST /api/jobs/{id}/export`（model と report）の、分類されない失敗（P-0121）。message は固定の `Export failed (<例外の型名>)` で、例外の文字列（利用者のデータの値やパスを含みうる）を含まない。`details` は `{}`。例外と traceback は server の log に残す。分類された拒否（400 `BACKEND_INPUT_REJECTED`、409 `MODEL_ARTIFACT_INVALID` など）は今までどおりそれぞれの code で答える | 500 |
 | `INTERNAL_ERROR` | 予期しないエラー | 500 |
 | `PICKLE_PREFLIGHT_FAILED` | Tune 開始前の pickle 事前検証失敗（書き込み権限/picklable 検査）(H-0062) | 400 |
 | `PICKLE_INCOMPATIBLE` | 保存された checkpoint のバージョンが現行 runtime と非互換 (H-0062)。unpause では、継続できない study（lizyml 0.15 が書いた study など）を job の起動前に拒否する（`details.kind = "study_not_resumable"`、P-0116 D4）。study を書いた lizyml（checkpoint sidecar の `lizyml_version`）が今の lizyml と major.minor で違う job も起動前に拒否する（`details.kind = "lizyml_version_mismatch"`。sidecar が無い・読めないときは `missing_meta` / `corrupt_meta`。P-0117 D3） | 400 |
@@ -3071,14 +3072,15 @@ lizystudio_active_jobs 0.0
 
 ### 6.2 バックエンドエラーの伝播
 
-バックエンドライブラリのエラー（例: LizyML の `LizyMLError`）は、adapter の 1 つの分類表（`backends/lizyml/error_mapping.py` の `RULES`）で 3 つに分ける（P-0117 D2）。表は code と `context` の形の両方で判定し、最初に合った行を使う。
+バックエンドライブラリのエラー（例: LizyML の `LizyMLError`）は、adapter の 1 つの分類表（`backends/lizyml/error_mapping.py` の `RULES`）で 3 つに分ける（P-0117 D2）。表は code と `context` の形の両方で判定し、最初に合った行を使う。`analysis_context` の行（P-0121）だけは、`user_message` が固定の literal `"Failed to load analysis_context: "` で始まることも見る（`Rule.message_prefix`。`context` が `path` だけの他の raise 箇所と形で区別できないため）。
 
 | 区分 | 条件（lizyml の code と `context`） | Studio の例外 | API | job |
 |---|---|---|---|---|
 | 入力の誤り | `SERIALIZATION_FAILED` で `surface == "export_code"`（列名）、`column` を持つ（保存できないカテゴリ値）、または `type` と `reason`/`where` を持つ（値）。`DATA_SCHEMA_INVALID` で `column` を持つ | `BackendInputError` | 400 `BACKEND_INPUT_REJECTED` | error code `BACKEND_INPUT_REJECTED` |
-| 成果物の破損 | `DESERIALIZATION_FAILED` で、lizyml 0.21.1 の実際の raise 箇所の形に合うもの: `category_identity_version` を持つ（未知の identity version）、`identity_columns` を持つ（壊れた identity_columns）、`file`・`expected`・`actual` をすべて持つ（pickle の SHA-256 が記録と違う。`persistence/loader.py` `_verify_and_read_pkl`）、`format_version`・`supported` をすべて持つ（読めない format_version。`persistence/loader.py` `load`） | `BackendArtifactError` | 409 `MODEL_ARTIFACT_INVALID` | error code `MODEL_ARTIFACT_INVALID` |
-| それ以外 | 上のどれにも合わないもの。未知の code、未知の `context` の形、`context` が `path` だけのもの（無いディレクトリ）や `file` だけのもの（pickle を読む I/O の失敗）、`MODEL_NOT_FIT`、`CONFIG_INVALID` を含む | 元の例外のまま | 500 `BACKEND_ERROR`（`details.type` だけ） | 今までどおり |
+| 成果物の破損 | `DESERIALIZATION_FAILED` で、lizyml 0.21.1 の実際の raise 箇所の形に合うもの: `category_identity_version` を持つ（未知の identity version）、`identity_columns` を持つ（壊れた identity_columns）、`file`・`expected`・`actual` をすべて持つ（pickle の SHA-256 が記録と違う。`persistence/loader.py` `_verify_and_read_pkl`）、`format_version`・`supported` をすべて持つ（読めない format_version。`persistence/loader.py` `load`）、code が `DESERIALIZATION_FAILED`・`context` の key がちょうど `{"path"}`・`user_message` が `"Failed to load analysis_context: "` で始まる（unpickle できない `analysis_context.pkl`、reason `unreadable_analysis_context`。`persistence/loader.py` `load`、P-0121） | `BackendArtifactError` | 409 `MODEL_ARTIFACT_INVALID` | error code `MODEL_ARTIFACT_INVALID` |
+| それ以外 | 上のどれにも合わないもの。未知の code、未知の `context` の形、`context` が `path` だけのもの（無いディレクトリ、無い・parse できない `metadata.json`、無い・unpickle できない `fit_result.pkl` と `refit_model.pkl`。`analysis_context` の行に合うものを除く）や `file` だけのもの（pickle を読む I/O の失敗）、`MODEL_NOT_FIT`、`CONFIG_INVALID` を含む | 元の例外のまま | 500 `BACKEND_ERROR`（`details.type` だけ） | 今までどおり |
 
+- 保存モデルを読む全経路は、`backend_error_from` か export の `except BackendRefusalError` で、この表の 409 を返す。export（model と report）の分類されない失敗は `BACKEND_ERROR` ではなく、固定の message の 500 `EXPORT_ERROR`（§6.1）になる。入力の誤りの 400 は、この保証の明示の例外で、利用者が読み込ませたデータの値を `error.details.context`（許可した key、200 文字まで）と `error.message`（lizyml の message、上限なし）で返す。
 - 入力の誤りの規則は、`context` に `path` があれば使わない（lizyml の message をそのまま渡すため）。
 - 入力の誤りの `reason` は、lizyml の `context["reason"]` が token（`[a-z][a-z0-9_]*`）ならそれを使い、そうでなければ行の既定の reason を使う。分類しなかったエラーも、adapter が code と reason を WARNING で log に残す。
 - 入力の誤りの `context` は、許可した key（列名、値、その型など）だけを渡す。値は利用者が読み込ませたデータそのものなので、同じ利用者に返してよい。文字列は 200 文字までにする。`path` と `exception` は渡さない。
