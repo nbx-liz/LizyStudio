@@ -8,6 +8,13 @@ interface SegmentedControlProps {
   onChange: (v: number | null) => void;
   allowCustom?: boolean;
   customLabel?: string;
+  /**
+   * Accessible name of the custom-value input. P-0111: also lets tests and
+   * E2E specs reach it by role.
+   */
+  customAriaLabel?: string;
+  /** Passed to the custom-value `NumberInput` (see its `paramType`). */
+  paramType?: "number" | "integer";
 }
 
 export function SegmentedControl({
@@ -16,6 +23,8 @@ export function SegmentedControl({
   onChange,
   allowCustom = false,
   customLabel = "Custom",
+  customAriaLabel,
+  paramType = "number",
 }: SegmentedControlProps) {
   const isPreset = presets.some((p) => p.value === value);
   // Derive custom mode from prop — no stale internal state
@@ -76,6 +85,8 @@ export function SegmentedControl({
             onChange={handleCustomChange}
             min={0}
             placeholder="Value"
+            paramType={paramType}
+            ariaLabel={customAriaLabel}
           />
         </div>
       )}

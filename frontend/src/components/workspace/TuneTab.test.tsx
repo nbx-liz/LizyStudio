@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UiSchema } from "@/api/types";
 import { renderWithQuery } from "@/test/helpers";
@@ -1242,7 +1242,7 @@ describe("TuneTab", () => {
     it("routes a search-space edit as a tuning_overrides patch", () => {
       const { onChange, onTuneWrite } = renderRouted();
       fireEvent.click(screen.getByTestId("trigger-space-change"));
-      expect(onChange).not.toHaveBeenCalled();
+      expect(onChange).toHaveBeenCalledTimes(0);
       expect(onTuneWrite).toHaveBeenCalledTimes(1);
       expect(onTuneWrite).toHaveBeenCalledWith(
         [
@@ -1258,33 +1258,82 @@ describe("TuneTab", () => {
     it("routes an n_trials edit as a tuning_overrides patch of optuna.params", () => {
       const { onChange, onTuneWrite } = renderRouted();
       fireEvent.click(screen.getByRole("button", { name: "100" }));
-      expect(onChange).not.toHaveBeenCalled();
+      expect(onChange).toHaveBeenCalledTimes(0);
       expect(onTuneWrite).toHaveBeenCalledTimes(1);
       const [patches, reason] = onTuneWrite.mock.calls[0];
       expect(reason).toBe("tuning_overrides");
+      // Per key: a whole-object patch would overwrite siblings the
+      // server holds but the rendered config may lag behind.
       expect(patches).toEqual([
-        { path: ["tuning", "optuna", "params"], value: { n_trials: 100 } },
+        { path: ["tuning", "optuna", "params", "n_trials"], value: 100 },
       ]);
     });
 
-    it("routes an optimization-metric change as tuning_overrides patches of evaluation and params", () => {
+    it("routes an optimization-metric change as a tuning_overrides patch of evaluation", () => {
       const { onChange, onTuneWrite } = renderRouted();
       const f1Buttons = screen.getAllByText("f1");
       fireEvent.click(f1Buttons[0].closest("button") ?? f1Buttons[0]);
-      expect(onChange).not.toHaveBeenCalled();
+      expect(onChange).toHaveBeenCalledTimes(0);
       expect(onTuneWrite).toHaveBeenCalledTimes(1);
       const [patches, reason] = onTuneWrite.mock.calls[0];
       expect(reason).toBe("tuning_overrides");
+      // optuna.params did not change (no direction to drop), so only the
+      // evaluation block is patched.
       expect(patches).toEqual([
         { path: ["tuning", "evaluation"], value: { metrics: ["f1"] } },
-        { path: ["tuning", "optuna", "params"], value: { n_trials: 50 } },
       ]);
+    });
+
+    // Round 1 finding 5: a refused write must not stay visible.
+    describe("a refused custom trials value", () => {
+      const customConfig = {
+        model: { name: "lgbm", params: {} },
+        tuning: { optuna: { params: { n_trials: 37 } } },
+      };
+
+      function renderRefusing() {
+        const onTuneWrite = vi.fn(async () => false);
+        render(
+          <TuneTab
+            config={customConfig}
+            onChange={vi.fn()}
+            onTuneWrite={onTuneWrite}
+            task="binary"
+          />,
+        );
+        const input = () =>
+          screen.getByRole("textbox", { name: "Custom number of trials" });
+        return { onTuneWrite, input };
+      }
+
+      it("puts the saved value back in the input", async () => {
+        const { onTuneWrite, input } = renderRefusing();
+        expect(input()).toHaveValue("37");
+        fireEvent.change(input(), { target: { value: "42" } });
+        expect(onTuneWrite).toHaveBeenCalledTimes(1);
+        await waitFor(() => expect(input()).toHaveValue("37"));
+      });
+
+      it("never sends a decimal: 10.5 is flagged, rounded on blur, and a refusal of that restores the saved value", async () => {
+        const { onTuneWrite, input } = renderRefusing();
+        fireEvent.change(input(), { target: { value: "10.5" } });
+        // Integer field: a decimal is flagged, not sent.
+        expect(onTuneWrite).toHaveBeenCalledTimes(0);
+        expect(screen.getByText("Integer values only")).toBeInTheDocument();
+        fireEvent.blur(input());
+        expect(onTuneWrite).toHaveBeenCalledTimes(1);
+        expect(onTuneWrite).toHaveBeenCalledWith(
+          [{ path: ["tuning", "optuna", "params", "n_trials"], value: 11 }],
+          "tuning_overrides",
+        );
+        await waitFor(() => expect(input()).toHaveValue("37"));
+      });
     });
 
     it("routes a Fixed model.params edit as a legacy_config patch", () => {
       const { onChange, onTuneWrite } = renderRouted();
       fireEvent.click(screen.getByTestId("trigger-model-param-change"));
-      expect(onChange).not.toHaveBeenCalled();
+      expect(onChange).toHaveBeenCalledTimes(0);
       expect(onTuneWrite).toHaveBeenCalledTimes(1);
       expect(onTuneWrite).toHaveBeenCalledWith(
         [{ path: ["model", "params", "max_depth"], value: 5 }],
@@ -1313,7 +1362,7 @@ describe("TuneTab", () => {
       fireEvent.click(
         screen.getByRole("switch", { name: "Enable Re-tune (multi-round)" }),
       );
-      expect(onChange).not.toHaveBeenCalled();
+      expect(onChange).toHaveBeenCalledTimes(0);
       expect(onTuneWrite).toHaveBeenCalledTimes(1);
       const [patches, reason] = onTuneWrite.mock.calls[0];
       expect(reason).toBe("legacy_config");

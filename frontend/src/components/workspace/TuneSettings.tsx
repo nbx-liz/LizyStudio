@@ -59,6 +59,8 @@ export function TuneSettings({
               onChange={handleNTrialsChange}
               allowCustom
               customLabel="Custom"
+              customAriaLabel="Custom number of trials"
+              paramType="integer"
             />
           </div>
 
@@ -73,6 +75,8 @@ export function TuneSettings({
               onChange={handleTimeoutChange}
               allowCustom
               customLabel="Custom"
+              customAriaLabel="Custom timeout in seconds"
+              paramType="integer"
             />
           </div>
         </div>

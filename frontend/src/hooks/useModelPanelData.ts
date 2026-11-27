@@ -256,7 +256,10 @@ export function useModelPanelData({
         queryKeys.config(),
       );
       const next = materializeOp(op, cached);
-      if (cached && equal(cached, next)) {
+      // Skip a no-op only when nothing is pending: while a write is queued
+      // or in flight, the cache is not what the server will hold, and an
+      // edit back to the cached value must still be sent to undo it.
+      if (cached && equal(cached, next) && !writeFunnel?.isFlushing()) {
         return true;
       }
       if (writeFunnel) {

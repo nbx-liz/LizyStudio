@@ -47,7 +47,11 @@ async function openTuneTab(page: Page): Promise<void> {
 
 function rowFor(page: Page, key: string) {
   return page
-    .locator("span.font-mono", { hasText: new RegExp(`^${key}$`) })
+    // The row's "Modified" badge renders inside this span once the
+    // snapshot refreshes after a write (Q2), so allow its text.
+    .locator("span.font-mono", {
+      hasText: new RegExp(`^${key}\\s*(Modified)?$`),
+    })
     .locator("xpath=ancestor::div[contains(@class, 'border-b')][1]");
 }
 
@@ -119,6 +123,74 @@ test.describe("Tune tab write routing (P-0111)", () => {
       await request.get("/api/workspace/config/tuning-snapshot")
     ).json();
     expect(snapshot.tuning_overrides.space.objective.type).toBe("categorical");
+  });
+
+  test("Fixed -> Range -> Fixed toggles write space through the overrides endpoint only; the Fixed value it reveals goes through PUT /config", async ({
+    page,
+    request,
+  }, testInfo) => {
+    test.setTimeout(60_000);
+    const recorder = installFetchRecorder(page);
+    await seedUiWorkspace(page, testInfo, { csvPath: CSV_PATH });
+    await openTuneTab(page);
+
+    const sinceOverrides = recorder.snapshot({
+      method: "PUT",
+      urlPattern: OVERRIDES_URL,
+    });
+    const sinceLegacy = recorder.snapshot({
+      method: "PUT",
+      urlPattern: LEGACY_URL,
+    });
+
+    // ``num_leaves`` is the catalog row that is Fixed by default and can
+    // go to Range; it shows only once ``auto_num_leaves`` is False, a Fixed
+    // value (model.params) written through the legacy path.
+    const autoRow = rowFor(page, "auto_num_leaves");
+    await expect(autoRow).toBeVisible({ timeout: 15_000 });
+    await autoRow.getByRole("button", { name: "False", exact: true }).click();
+    await page.waitForTimeout(SETTLE_MS);
+    const autoLegacy = sinceLegacy();
+    expect(autoLegacy.length).toBe(1);
+    const autoParams = (autoLegacy[0].bodyJson?.model as Record<string, unknown>)
+      ?.params as Record<string, unknown> | undefined;
+    expect(autoParams?.auto_num_leaves).toBe(false);
+    expect(sinceOverrides().length).toBe(0);
+
+    const numLeavesRow = rowFor(page, "num_leaves");
+    await expect(numLeavesRow).toBeVisible({ timeout: 10_000 });
+
+    // Fixed -> Range: one overrides PUT carrying space.num_leaves.
+    await numLeavesRow.getByRole("radio", { name: "Range" }).click();
+    await page.waitForTimeout(SETTLE_MS);
+    const toRange = sinceOverrides();
+    expect(toRange.length).toBe(1);
+    expect(
+      (toRange[0].bodyJson?.space as Record<string, unknown> | undefined)
+        ?.num_leaves,
+    ).toBeTruthy();
+    expect(sinceLegacy().length).toBe(1);
+    expect(toRange.length + sinceLegacy().length - 1).toBeLessThanOrEqual(
+      TOGGLE_WRITE_BUDGET,
+    );
+
+    // Range -> Fixed: one more overrides PUT, without space.num_leaves.
+    await rowFor(page, "num_leaves")
+      .getByRole("radio", { name: "Fixed" })
+      .click();
+    await page.waitForTimeout(SETTLE_MS);
+    const both = sinceOverrides();
+    expect(both.length).toBe(2);
+    expect(
+      (both[1].bodyJson?.space as Record<string, unknown> | undefined)
+        ?.num_leaves,
+    ).toBeUndefined();
+    expect(sinceLegacy().length).toBe(1);
+
+    const snapshot = await (
+      await request.get("/api/workspace/config/tuning-snapshot")
+    ).json();
+    expect(snapshot.tuning_overrides.space.num_leaves).toBeUndefined();
   });
 
   test("an n_trials edit goes to PUT /config/tuning-overrides and a Re-tune edit to PUT /config, without reverting each other", async ({

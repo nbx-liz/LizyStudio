@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTuningSnapshot } from "@/api/queries/useWorkspace";
 import type { MetricEntry } from "@/api/types";
 import { RetuneSettingsSection } from "@/components/retune";
@@ -24,6 +24,32 @@ import { groupToCategory, SearchSpaceTable } from "./SearchSpaceTable";
 import { TuneEvaluationSection } from "./TuneEvaluationSection";
 import { TuneSettings } from "./TuneSettings";
 import { extractOptunaField, extractTuningField } from "./tune-config-utils";
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+/**
+ * One patch per `optuna.params` key whose value changed (a removed key is
+ * patched to `undefined`, which the JSON body omits). Per key, not the
+ * whole object: the rendered params can lag the server after a legacy
+ * write, and a whole-object patch would then overwrite a sibling the
+ * server still holds (e.g. `n_trials` when only `timeout` was edited).
+ */
+function paramPatches(
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+): PatchEntry[] {
+  const patches: PatchEntry[] = [];
+  for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    if (before[key] !== after[key]) {
+      patches.push({ path: [...OPTUNA_PARAMS_PATH, key], value: after[key] });
+    }
+  }
+  return patches;
+}
 
 /** Value at `path` in a config tree, or `undefined` when absent. */
 function valueAt(
@@ -84,11 +110,17 @@ export function TuneTab({
   // P-0111: every Tune-tab edit is a set of patches on one write path.
   // Without a routed writer the patches are applied to the rendered
   // config and handed to `onChange` as before.
+  // P-0111: a refused write must not stay on screen. Inputs that keep
+  // their own text (NumberInput) would still show the refused value, so a
+  // refusal remounts the tab's controls, which re-read the saved config.
+  const [refusals, setRefusals] = useState(0);
   const write = useCallback(
     (patches: readonly PatchEntry[], reason: TuneWriteReason) => {
       if (patches.length === 0) return;
       if (onTuneWrite) {
-        onTuneWrite(patches, reason);
+        void Promise.resolve(onTuneWrite(patches, reason)).then((saved) => {
+          if (saved === false) setRefusals((n) => n + 1);
+        });
         return;
       }
       onChange(materializeOp({ kind: "patch-many", patches, reason }, config));
@@ -101,10 +133,16 @@ export function TuneTab({
   const handleEvaluationChange = useCallback(
     (next: Record<string, unknown>) => {
       const patches: PatchEntry[] = [];
-      for (const path of [EVALUATION_PATH, OPTUNA_PARAMS_PATH]) {
-        const value = valueAt(next, path);
-        if (value !== valueAt(config, path)) patches.push({ path, value });
+      const evaluation = valueAt(next, EVALUATION_PATH);
+      if (evaluation !== valueAt(config, EVALUATION_PATH)) {
+        patches.push({ path: EVALUATION_PATH, value: evaluation });
       }
+      patches.push(
+        ...paramPatches(
+          asRecord(valueAt(config, OPTUNA_PARAMS_PATH)),
+          asRecord(valueAt(next, OPTUNA_PARAMS_PATH)),
+        ),
+      );
       write(patches, "tuning_overrides");
     },
     [config, write],
@@ -255,7 +293,7 @@ export function TuneTab({
   }, [tuningSnapshot]);
 
   const handleParamsChange = (params: Record<string, unknown>) => {
-    write([{ path: OPTUNA_PARAMS_PATH, value: params }], "tuning_overrides");
+    write(paramPatches(tuningParams, params), "tuning_overrides");
   };
 
   const handleSpaceChange = (space: Record<string, unknown>) => {
@@ -322,6 +360,7 @@ export function TuneTab({
 
   return (
     <Accordion
+      key={refusals}
       type="multiple"
       defaultValue={["settings", "search-space", "evaluation", "retune"]}
     >

@@ -4446,7 +4446,13 @@ Option B は v0.7+ で `STUDIO_FORMAT_VERSION` 2 → 3 bump タイミングで�
 - 実装 PR は `refactor(frontend): route Tune-tab tuning-field writes through PUT /config/tuning-overrides (P-0111)` で起票し、acceptance criteria に従って TDD 実装。実装着手の優先度は v0.6.x patch サイクル後の v0.7 準備期間、または v0.7.0 (P-0110 RFC 9457) と同一 release window で同時着地候補。
 - 2026-11-27 **実装**（branch `feat/p0111-tune-overrides-routing`）。
   - **Q1**: Tune タブの各編集は、どちらか一方の経路に送る path/value の patch になった（`TuneTab` の `onTuneWrite`、`useModelPanelData.handleConfigPatch`）。`tuning.optuna.params`、`tuning.optuna.space`、`tuning.evaluation` の編集は reason `tuning_overrides` で `PUT /config/tuning-overrides` に送る。Q1 で legacy 経路に残すと決めた 3 field（`model.params` と内側分割の explicit marker を含む）の編集は、reason `legacy_config` で `PUT /config` に送る。
-  - **REPLACE の body**: funnel が flush 時に、最新の config cache に patch を当てる。その `tuning` block を `extract_overrides_from_legacy_tuning` と同じ規則で射影し、意図の全体を送る（`tuningOverridesFromConfig`）。seed は snapshot の `tuning_overrides` ではなく config cache である。どちらの経路の commit でも同期的に更新されるのは config cache だけだからである。snapshot は `model_dump` なので、未設定の field も `null` で返ってくる。
+  - **REPLACE の body**: funnel が flush 時に、server が保存している config に patch を当てる。その `tuning` block を `extract_overrides_from_legacy_tuning` と同じ規則で射影し、意図の全体を送る（`tuningOverridesFromConfig`）。
+    - seed は通常、config cache である。overrides の commit で同期的に更新され、`GET /config` の legacy view と一致しているからである。snapshot の `tuning_overrides` は `model_dump` なので、未設定の field も `null` で返ってくる。そのため seed にしない。
+    - ただし legacy の `PUT /config` が commit した後は、cache は request body の echo になっており、server の保存内容ではない。`tuning` のない body なら absorb shim は保存済みの overrides を残すし、metric から導かれる `direction` は捨てる。そこで、その後の最初の `tuning_overrides` op は、flush 前に `GET /config` を読み直して seed にする（`readServerConfig`、Codex round 1 の指摘 2）。
+    - `optuna.params` の編集は key ごとの patch にした。表示が server より遅れていても、編集していない key（たとえば `n_trials`）を上書きしない。
+    - `optuna.space` は、表示中の space 全体を 1 つの patch で送るままにした（space の書き方は #788 の範囲）。そのため、legacy の書き込みの後、表示が server の内容に追いつく前に space を編集すると、server にある他の space override を上書きしうる。
+  - **送信の省略**: 値が cache と同じ編集を送らずに済ませるのは、funnel に未送信の書き込みがないときだけである（指摘 1a）。
+  - **拒否された値**: 書き込みが拒否されたら、Tune タブの control を mount し直し、保存済みの値に戻す。試行数と timeout の custom 入力は整数だけを受け付ける（指摘 5）。
   - **成功時の cache**: overrides の書き込みが成功すると、`{config}` 形で config cache に反映する。後続の legacy の書き込みが古い `tuning` block を送り、absorb shim がそれを overrides に戻すこと（DC8）は、これで起きない。
   - **Q2**: funnel に `onAllSettled` を追加した。queue が 1 回 drain するごとに 1 度だけ呼ばれ、`WorkspacePage` はそこで `tuningSnapshot` を invalidate する。
   - **Q3**: `WriteReason` に `legacy_config` と `tuning_overrides` を追加した。両者は同じ funnel の同じ queue に入り、drain を共有して直列に送られる。同時に送られることはない。同じ reason の patch は `patch-many` に coalesce する。

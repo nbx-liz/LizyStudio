@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { ApiError } from "@/api/client";
 import { isWorkspaceLocked } from "@/api/errors";
 import {
+  fetchConfig,
   type TuningOverridesBody,
   updateConfig,
   updateTuningOverrides,
@@ -129,6 +130,12 @@ function setNestedImmutable(
         ? value
         : setNestedImmutable(result[index] ?? {}, rest, value);
     return result as unknown as ConfigSnapshot;
+  }
+  if (rest.length === 0 && value === undefined) {
+    // P-0111: `undefined` removes the key. The JSON body would omit it
+    // anyway; removing it keeps the cached config equal to what was sent.
+    const { [head]: _removed, ...without } = base;
+    return without;
   }
   const child = (base[head] ?? {}) as ConfigSnapshot;
   return {
@@ -304,6 +311,17 @@ interface UseConfigWriteFunnelOptions {
    */
   putTuningOverrides?: (body: TuningOverridesBody) => Promise<unknown>;
   /**
+   * P-0111: reads the server's config view (`GET /config`). A legacy
+   * `PUT /config` answers with the request body, not with what the server
+   * stored: its absorb shim keeps the stored overrides when the body has no
+   * `tuning` block, and drops a metric-derived `direction`. So after a
+   * legacy write commits, the cached `tuning` block is no longer a faithful
+   * seed for the overrides endpoint's REPLACE, and the next
+   * `tuning_overrides` op re-reads the view first. Defaulted to
+   * `fetchConfig`; injectable like `putConfig`.
+   */
+  readServerConfig?: () => Promise<ConfigSnapshot>;
+  /**
    * P-0111 Q2: called once each time the queue drains, after the last
    * write of the drain settled (committed or refused). WorkspacePage
    * invalidates the Tune snapshot here, once, instead of once per write.
@@ -333,6 +351,7 @@ export interface ConfigWriteFunnel {
 // mocks `@/api/workspace` without this export only fails if it sends one.
 const defaultPutTuningOverrides = (body: TuningOverridesBody) =>
   updateTuningOverrides(body);
+const defaultReadServerConfig = () => fetchConfig();
 
 export function useConfigWriteFunnel(
   options: UseConfigWriteFunnelOptions,
@@ -342,8 +361,13 @@ export function useConfigWriteFunnel(
     onWriteCommitted,
     putConfig = updateConfig,
     putTuningOverrides = defaultPutTuningOverrides,
+    readServerConfig = defaultReadServerConfig,
     onAllSettled,
   } = options;
+
+  // True after a legacy PUT committed: the cache then holds that request's
+  // echo, not the server's view, until a `tuning_overrides` op re-reads it.
+  const seedStaleRef = useRef(false);
 
   // Held in a ref so an inline callback does not change `drain`'s, and so
   // the returned funnel's, identity on every render.
@@ -378,22 +402,30 @@ export function useConfigWriteFunnel(
     const entry = stateRef.current.pending.shift();
     if (entry === undefined) return;
 
-    const body = materializeOp(entry.op, getCachedConfig());
     let result: WriteResult;
     try {
       let saved: ConfigSnapshot;
       if (entry.op.reason === "tuning_overrides") {
-        // P-0111: the edit was applied to the cached config at flush time,
-        // so the body is the whole sparse intent the endpoint's REPLACE
-        // needs. The endpoint answers only the effective config; the saved
-        // config is the materialised body, reported in the same
-        // `{config}` shape as a legacy PUT so `onWriteCommitted` updates
-        // the cache before the next queued op reads it (a legacy op that
-        // read a stale `tuning` block would revert this write).
+        // P-0111: the edit is applied at flush time to the server's
+        // config, so the body is the whole sparse intent the endpoint's
+        // REPLACE needs. The cache is that config unless a legacy write
+        // committed since (see `readServerConfig`); then it is re-read.
+        // The endpoint answers only the effective config; the saved
+        // config is the materialised body, reported in the same `{config}`
+        // shape as a legacy PUT so `onWriteCommitted` updates the cache
+        // before the next queued op reads it (a legacy op that read a
+        // stale `tuning` block would revert this write).
+        const base = seedStaleRef.current
+          ? await readServerConfig()
+          : getCachedConfig();
+        const body = materializeOp(entry.op, base);
         await putTuningOverrides(tuningOverridesFromConfig(body));
+        seedStaleRef.current = false;
         saved = { config: body };
       } else {
+        const body = materializeOp(entry.op, getCachedConfig());
         saved = (await putConfig(body)) as ConfigSnapshot;
+        seedStaleRef.current = true;
       }
       onWriteCommitted?.(saved);
       result = { ok: true, saved };
@@ -412,7 +444,13 @@ export function useConfigWriteFunnel(
         resolversRef.current.delete(source);
       }
     }
-  }, [getCachedConfig, onWriteCommitted, putConfig, putTuningOverrides]);
+  }, [
+    getCachedConfig,
+    onWriteCommitted,
+    putConfig,
+    putTuningOverrides,
+    readServerConfig,
+  ]);
 
   const drain = useCallback(async (): Promise<void> => {
     // Yield once before the first flush so any synchronous state

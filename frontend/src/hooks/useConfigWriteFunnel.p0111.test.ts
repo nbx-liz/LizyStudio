@@ -1,9 +1,11 @@
 import { renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import type { TuningOverridesBody } from "@/api/workspace";
 import {
   validationProblem,
   workspaceLockedProblem,
 } from "@/test/problemDetails";
+import { tuningOverridesFromConfig } from "./tuningOverridesBody";
 import {
   type ConfigSnapshot,
   useConfigWriteFunnel,
@@ -39,6 +41,52 @@ const BASE: ConfigSnapshot = {
  * A cache the funnel reads at flush time and `onWriteCommitted` updates,
  * as WorkspacePage wires it to the TanStack config entry.
  */
+/**
+ * A request-level stand-in for the backend's two config stores: the config
+ * without `tuning`, and the sparse overrides. `PUT /config` follows
+ * `absorb_legacy_tuning` (a body with `tuning` replaces the overrides, a
+ * body without it leaves them) and echoes the request body, as
+ * `api/workspace.py` does; `GET /config` follows `get_legacy_config_view`.
+ */
+function makeServer(config: ConfigSnapshot, overrides: TuningOverridesBody) {
+  const state = { config, overrides };
+  const view = (): ConfigSnapshot => {
+    const o = state.overrides;
+    const params: Record<string, unknown> = {};
+    for (const key of ["n_trials", "timeout", "direction"] as const) {
+      if (key in o) params[key] = o[key];
+    }
+    const optuna: Record<string, unknown> = {};
+    if (Object.keys(params).length > 0) optuna.params = params;
+    if (o.space && Object.keys(o.space).length > 0) optuna.space = o.space;
+    const tuning: Record<string, unknown> = {};
+    if (Object.keys(optuna).length > 0) tuning.optuna = optuna;
+    if (o.evaluation_metrics != null) {
+      tuning.evaluation = { metrics: o.evaluation_metrics };
+    }
+    return Object.keys(tuning).length > 0
+      ? { ...state.config, tuning }
+      : { ...state.config };
+  };
+  return {
+    state,
+    view,
+    putConfig: vi.fn(async (body: ConfigSnapshot) => {
+      const { tuning, ...rest } = body;
+      if (tuning !== undefined) {
+        state.overrides = tuningOverridesFromConfig({ tuning });
+      }
+      state.config = rest;
+      return { config: body, validation_errors: [] };
+    }),
+    putTuningOverrides: vi.fn(async (body: TuningOverridesBody) => {
+      state.overrides = body;
+      return { tuning_effective: {} };
+    }),
+    readServerConfig: vi.fn(async () => view()),
+  };
+}
+
 function makeCache(initial: ConfigSnapshot) {
   let current = initial;
   return {
@@ -75,7 +123,7 @@ describe("useConfigWriteFunnel — P-0111 tuning_overrides routing", () => {
     });
 
     expect(res.ok).toBe(true);
-    expect(putConfig).not.toHaveBeenCalled();
+    expect(putConfig).toHaveBeenCalledTimes(0);
     expect(putTuningOverrides).toHaveBeenCalledTimes(1);
     // REPLACE: the untouched space and metrics ride along with the edit.
     expect(putTuningOverrides).toHaveBeenCalledWith({
@@ -120,7 +168,7 @@ describe("useConfigWriteFunnel — P-0111 tuning_overrides routing", () => {
       reason: "legacy_config",
     });
 
-    expect(putTuningOverrides).not.toHaveBeenCalled();
+    expect(putTuningOverrides).toHaveBeenCalledTimes(0);
     expect(putConfig).toHaveBeenCalledTimes(1);
     expect((putConfig.mock.calls[0][0].model as ConfigSnapshot).params).toEqual(
       { num_leaves: 63 },
@@ -194,18 +242,20 @@ describe("useConfigWriteFunnel — P-0111 tuning_overrides routing", () => {
     expect(onAllSettled).toHaveBeenCalledTimes(1);
   });
 
-  it("an overrides write queued behind a legacy write seeds its body from the config the legacy write committed", async () => {
+  it("an overrides write queued behind a legacy write seeds its body from the server's view after that write", async () => {
     const cache = makeCache(BASE);
-    const putTuningOverrides = vi.fn().mockResolvedValue({});
-    const putConfig = vi.fn(async (body: ConfigSnapshot) => ({
-      config: body,
-      validation_errors: [],
-    }));
+    const { tuning: _baseTuning, ...baseWithoutTuning } = BASE;
+    const server = makeServer(
+      baseWithoutTuning,
+      tuningOverridesFromConfig(BASE),
+    );
+    const { putConfig, putTuningOverrides, readServerConfig } = server;
     const { result } = renderHook(() =>
       useConfigWriteFunnel({
         getCachedConfig: cache.get,
         putConfig,
         putTuningOverrides,
+        readServerConfig,
         onWriteCommitted: cache.commit,
       }),
     );
@@ -237,6 +287,135 @@ describe("useConfigWriteFunnel — P-0111 tuning_overrides routing", () => {
       n_trials: 5,
       evaluation_metrics: ["logloss"],
     });
+    // The legacy write left the cache holding its echo, so the seed was
+    // re-read once from the server.
+    expect(readServerConfig).toHaveBeenCalledTimes(1);
+    expect(server.state.overrides).toEqual({
+      n_trials: 5,
+      evaluation_metrics: ["logloss"],
+    });
+  });
+
+  it("an override survives a tuning-less legacy write: preset saved before any Tune edit, n_trials 200, preset load, timeout edit (round 1 finding 2)", async () => {
+    // The preset was saved before any Tune edit, so it has no `tuning`.
+    const preset: ConfigSnapshot = {
+      task: "binary",
+      model: { params: { num_leaves: 31 } },
+    };
+    const cache = makeCache(preset);
+    const server = makeServer(preset, {});
+    const { putConfig, putTuningOverrides, readServerConfig } = server;
+    const { result } = renderHook(() =>
+      useConfigWriteFunnel({
+        getCachedConfig: cache.get,
+        putConfig,
+        putTuningOverrides,
+        readServerConfig,
+        onWriteCommitted: cache.commit,
+      }),
+    );
+
+    await result.current.enqueueWrite({
+      kind: "patch",
+      path: ["tuning", "optuna", "params", "n_trials"],
+      value: 200,
+      reason: "tuning_overrides",
+    });
+    expect(server.state.overrides).toEqual({ n_trials: 200 });
+
+    // Load the preset: a legacy PUT without `tuning`. The server keeps the
+    // override; the echo cached by the funnel has no `tuning` at all.
+    await result.current.enqueueWrite({
+      kind: "replace",
+      config: preset,
+      reason: "preset-load",
+    });
+    expect(server.state.overrides).toEqual({ n_trials: 200 });
+    expect(cache.get().tuning).toBeUndefined();
+
+    await result.current.enqueueWrite({
+      kind: "patch",
+      path: ["tuning", "optuna", "params", "timeout"],
+      value: 300,
+      reason: "tuning_overrides",
+    });
+
+    expect(putTuningOverrides).toHaveBeenCalledTimes(2);
+    expect(putTuningOverrides).toHaveBeenLastCalledWith({
+      n_trials: 200,
+      timeout: 300,
+    });
+    expect(server.state.overrides).toEqual({ n_trials: 200, timeout: 300 });
+    // The cache now holds the server's tuning again.
+    expect(
+      ((cache.get().tuning as ConfigSnapshot).optuna as ConfigSnapshot).params,
+    ).toEqual({ n_trials: 200, timeout: 300 });
+  });
+
+  it("an overrides write does not re-read the server when no legacy write committed before it", async () => {
+    const cache = makeCache(BASE);
+    const readServerConfig = vi.fn(async () => BASE);
+    const { result } = renderHook(() =>
+      useConfigWriteFunnel({
+        getCachedConfig: cache.get,
+        putConfig: vi.fn(),
+        putTuningOverrides: vi.fn().mockResolvedValue({}),
+        readServerConfig,
+        onWriteCommitted: cache.commit,
+      }),
+    );
+
+    await result.current.enqueueWrite({
+      kind: "patch",
+      path: ["tuning", "optuna", "params", "n_trials"],
+      value: 7,
+      reason: "tuning_overrides",
+    });
+    expect(readServerConfig).toHaveBeenCalledTimes(0);
+  });
+
+  it("onAllSettled waits for a later write still in flight after an earlier one failed", async () => {
+    let releaseSecond: () => void = () => {};
+    const putConfig = vi.fn(
+      () =>
+        new Promise<ConfigSnapshot>((res) => {
+          releaseSecond = () => res({ config: BASE });
+        }),
+    );
+    const onAllSettled = vi.fn();
+    const { result } = renderHook(() =>
+      useConfigWriteFunnel({
+        getCachedConfig: () => BASE,
+        putConfig,
+        putTuningOverrides: vi.fn().mockRejectedValue(validationProblem()),
+        onAllSettled,
+      }),
+    );
+
+    const pFailed = result.current.enqueueWrite({
+      kind: "patch",
+      path: ["tuning", "optuna", "params", "n_trials"],
+      value: 8,
+      reason: "tuning_overrides",
+    });
+    const pHeld = result.current.enqueueWrite({
+      kind: "patch",
+      path: ["model", "params", "num_leaves"],
+      value: 9,
+      reason: "legacy_config",
+    });
+
+    expect(await pFailed).toMatchObject({ ok: false, error: "rejected" });
+    await flushMicrotasks();
+    // The first write settled (refused); the second is still open.
+    expect(putConfig).toHaveBeenCalledTimes(1);
+    expect(onAllSettled).toHaveBeenCalledTimes(0);
+    expect(result.current.isFlushing()).toBe(true);
+
+    releaseSecond();
+    expect((await pHeld).ok).toBe(true);
+    await flushMicrotasks();
+    expect(onAllSettled).toHaveBeenCalledTimes(1);
   });
 
   it("coalesces same-frame tuning_overrides patches into one PUT carrying both edits", async () => {
@@ -297,7 +476,7 @@ describe("useConfigWriteFunnel — P-0111 tuning_overrides routing", () => {
     });
 
     expect(res).toMatchObject({ ok: false, error: "rejected" });
-    expect(onWriteCommitted).not.toHaveBeenCalled();
+    expect(onWriteCommitted).toHaveBeenCalledTimes(0);
     expect(cache.get()).toBe(BASE);
     await flushMicrotasks();
     expect(onAllSettled).toHaveBeenCalledTimes(1);
