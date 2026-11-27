@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 pytestmark = pytest.mark.integration
@@ -184,5 +185,49 @@ def test_fit_still_validates_with_a_stored_re_tune(
 
     r = client.post("/api/workspace/fit")
     assert r.status_code == 200, r.text
-    job = _wait_terminal(client, r.json()["job_id"])
+    job_id = r.json()["job_id"]
+    job = _wait_terminal(client, job_id)
     assert job["status"] == "completed", job.get("error")
+    # The fit job's persisted config holds ``tuning: {re_tune}`` with no
+    # ``optuna`` block; code export must still read it.
+    assert _job_config(client, job_id)["tuning"] == {"re_tune": RE_TUNE}
+    export = client.get(f"/api/jobs/{job_id}/export-code")
+    assert export.status_code == 200, export.text
+
+
+def test_yaml_import_round_trips_through_the_legacy_shims(
+    client: TestClient, tmp_path: Path
+) -> None:
+    """#528 criterion 3: a YAML import keeps working through both shims.
+
+    Upload stores the YAML's ``tuning`` block as is. The Web UI then reads
+    ``GET /config`` (``get_legacy_config_view``) and writes it back through
+    ``PUT /config`` (``absorb_legacy_tuning``) on its next save; the
+    overrides fields and ``re_tune`` survive both and reach the tune job.
+    """
+    _load_data(client, tmp_path)
+    cfg = _tune_tab_config(client, RE_TUNE)
+    r = client.post(
+        "/api/workspace/config/upload",
+        files={"file": ("config.yaml", yaml.dump(cfg).encode(), "application/x-yaml")},
+    )
+    assert r.status_code == 200, r.text
+
+    view = client.get("/api/workspace/config").json()
+    assert view["tuning"]["re_tune"] == RE_TUNE
+    assert view["tuning"]["optuna"]["params"]["n_trials"] == 2
+
+    _put(client, view)
+    view = client.get("/api/workspace/config").json()
+    assert view["tuning"]["re_tune"] == RE_TUNE
+    assert view["tuning"]["optuna"]["params"]["n_trials"] == 2
+    snapshot = client.get("/api/workspace/config/tuning-snapshot").json()
+    assert snapshot["tuning_overrides"]["n_trials"] == 2
+
+    r = client.post("/api/workspace/tune", json={"config": view})
+    assert r.status_code == 200, r.text
+    job_id = r.json()["job_id"]
+    tuning = _job_config(client, job_id)["tuning"]
+    assert tuning["re_tune"] == RE_TUNE
+    assert tuning["optuna"]["params"]["n_trials"] == 2
+    _wait_terminal(client, job_id)
