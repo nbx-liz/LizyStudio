@@ -1535,11 +1535,15 @@ HISTORY P-0120（2026-11-20 accepted）。Python 3.10（EOL 2026-10）を対応�
 
 | サブフェーズ | 内容 | 状態 | PR |
 |---|---|---|---|
-| v3-28a | `requires-python >=3.11`・classifiers・ruff `py311`（`UP017` / `UP041` の書き換え）・PR matrix `[3.11, 3.12]`・Nightly matrix `[3.11..3.14]`・`uv.lock`・CONTRIBUTING / README / コメント・Ruleset の必須 check の差し替え | 🟡 実装中 | — |
+| v3-28a | `requires-python >=3.11`・classifiers・ruff `py311`（`UP017` / `UP041` の書き換え）・PR matrix `[3.11, 3.12]`・Nightly matrix `[3.11..3.14]`・`uv.lock`・CONTRIBUTING / README / コメント・Ruleset の必須 check の差し替え | ✅ merged 2026-11-21（0.9.0 で release） | #776 |
 
 **DoD:**
-- [ ] P-0120 の Acceptance Criteria をすべて満たす
+- [x] P-0120 の Acceptance Criteria をすべて満たす
 - [ ] merge の後で最初の、変更のある夜の Nightly で backend の全脚が緑
+
+**0.9.0 の範囲（2026-11-27）:** P-0120（本 phase、#776）、P-0110（RFC 9457 Problem Details、#781、Issue #536）、P-0121（読めない保存モデルの 409 と export のエラーの sanitize、#784、Issue #777）を 0.9.0 で release する。次の 2 件は 0.9.0 に含めない（owner 2026-11-27）。
+- P-0111（#528）: PR #787 は draft に戻した。REPLACE を client の cache から seed すると、他の書き手と競合するため。
+- #734 / P-0122: Proposal の再設計が要る。`tuning` key が省かれたときの規則が、どちらの向きでも破れるため。branch は archive tag をつけて保留した。
 
 ---
 

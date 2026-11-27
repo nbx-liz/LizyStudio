@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-27
+
+An API-contract and toolchain release: the workspace endpoints answer RFC 9457 Problem Details (P-0110), Python 3.11 is the new floor (P-0120), and an unreadable saved model is refused with a reason (P-0121). The storage format does not change: `STUDIO_FORMAT_VERSION` stays at 2, and lizyml stays at `>=0.21.1,<0.22.0`. The Tune-tab write path (P-0111, #528) and the `tuning.re_tune` fix (#734) are not part of this release.
+
 ### Upgrade notes
 
 - **Python 3.11 or later is required** (P-0120, #775). Python 3.10 reached its end of life in 2026-10. On Python 3.10, pip keeps installing the 0.8.x line, which continues to work there.
@@ -27,6 +31,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The OpenAPI schema types each validation entry as `ValidationEntry` (`path`, `message`, `severity`, `suggested_fix`), and the 422 of the four converted routes lists both media types: `application/problem+json` (`ProblemDetails`) and `application/json` (`LegacyErrorEnvelope`, for a request body that cannot be parsed). A refused undo or redo now shows `Undo failed` / `Redo failed` instead of `Config undone` / `Config redone`.
 - CI tests Python 3.11 and 3.12 on every PR, and 3.11 to 3.14 nightly. The required check `backend (3.10)` is replaced by `backend (3.12)`.
 
+### Fixed
+
+- **An unreadable saved model answers 409, and export no longer echoes exception text (P-0121, #777).**
+  - A model whose `analysis_context.pkl` cannot be unpickled (for example one saved under another pandas major) answers 409 `MODEL_ARTIFACT_INVALID` with `reason` `unreadable_analysis_context` and a "run a new Fit" hint on every route that reads a saved model, instead of 500 `BACKEND_ERROR` (on `POST /api/jobs/{id}/export`, instead of 500 `EXPORT_ERROR`). Any other load failure keeps its status and code: 500 `BACKEND_ERROR` on the other routes, and 500 `EXPORT_ERROR` on export (see the next item for its message).
+  - An unclassified failure of `POST /api/jobs/{id}/export` (model or report) answers 500 `EXPORT_ERROR` with the fixed message `Export failed (<ExceptionType>)` and `details: {}`. The exception text, which could hold training data values or local paths, is logged on the server only.
+
+### Internal
+
+- Regression tests pin the result-before-status order and the single terminal effects of a job (#711, #767, #780).
+- Dependency updates: the prod minor/patch group of the frontend (#778) and the storybook group (#772). The msw major is held in Dependabot until #762 (#779).
+
 ## [0.8.1] - 2026-11-20
 
 A job-lifecycle reliability release. Job status, the cancel and pause flags, and the active slot now move through one parent-side transition (P-0119, #613, #697). There is no API shape change, no dependency range change and no storage format change: `STUDIO_FORMAT_VERSION` stays at 2, and lizyml stays at `>=0.21.1,<0.22.0`.
@@ -41,9 +56,6 @@ A job-lifecycle reliability release. Job status, the cancel and pause flags, and
 
 ### Fixed
 
-- **An unreadable saved model answers 409, and export no longer echoes exception text (P-0121, #777).**
-  - A model whose `analysis_context.pkl` cannot be unpickled (for example one saved under another pandas major) answers 409 `MODEL_ARTIFACT_INVALID` with `reason` `unreadable_analysis_context` and a "run a new Fit" hint on every route that reads a saved model, instead of 500 `BACKEND_ERROR`. Other load failures are unchanged.
-  - An unclassified failure of `POST /api/jobs/{id}/export` (model or report) answers 500 `EXPORT_ERROR` with the fixed message `Export failed (<ExceptionType>)` and `details: {}`. The exception text, which could hold training data values or local paths, is logged on the server only.
 - **Unpause, cancel and reset races (#613).** These could double-start a worker or bring a cancelled job back:
   - Two concurrent `POST /jobs/{id}/unpause` requests start exactly one worker.
   - A cancel of a paused job that races its unpause is no longer lost, and a cancelled job is never written back to `running`.
