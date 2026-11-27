@@ -35,13 +35,17 @@ from lizystudio.services._job_metadata import (
 from lizystudio.services.jobs import JobStore
 
 WAIT = 10.0
+# A real child process must spawn, import and run before it reaches a gate;
+# under CPU load that takes far longer than an in-process thread (#786).
+CHILD_WAIT = 60.0
 TERMINAL = ("completed", "failed", "cancelled")
 
 
 class Gate:
     """A barrier: the actor calls :meth:`hold`; the test waits and releases."""
 
-    def __init__(self, *, once: bool = True) -> None:
+    def __init__(self, *, once: bool = True, timeout: float = WAIT) -> None:
+        self.timeout = timeout
         self.reached = threading.Event()
         self.release = threading.Event()
         self._once = once
@@ -55,10 +59,10 @@ class Gate:
         if self._once and not first:
             return
         self.reached.set()
-        assert self.release.wait(WAIT), "the test never released the gate"
+        assert self.release.wait(self.timeout), "the test never released the gate"
 
     def wait_reached(self) -> None:
-        assert self.reached.wait(WAIT), "the actor never reached the gate"
+        assert self.reached.wait(self.timeout), "the actor never reached the gate"
 
     def wrap(self, fn: Callable[..., Any]) -> Callable[..., Any]:
         """*fn* with this gate held before the first call (later calls pass)."""
@@ -287,12 +291,12 @@ def app_parts(client: TestClient) -> tuple[Any, JobStore, Any]:
     return state.workspace, state.job_store, state.broadcaster
 
 
-def join_worker(client: TestClient) -> None:
+def join_worker(client: TestClient, timeout: float = WAIT) -> None:
     """Join the latest registered worker thread, with a timeout."""
     ws, _, _ = app_parts(client)
     thread = ws.previous_job_thread()
     if thread is not None:
-        thread.join(WAIT)
+        thread.join(timeout)
         assert not thread.is_alive(), "the worker thread did not finish"
 
 
