@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,7 @@ from lizystudio.services._job_outcome_file import write_outcome
 from lizystudio.services.jobs import JobStore
 from tests.regression import test_reg_0613_restart_and_fence as fence
 from tests.regression.p0119_harness import (
+    CHILD_WAIT,
     Env,
     Gate,
     env,
@@ -72,7 +74,7 @@ def test_cancel_after_the_child_outcome_emits_one_cancelled_frame(
 ) -> None:
     """通知: the child finished and wrote ``completed``; the cancel lands
     before the parent's commit. One terminal frame, ``JOB_CANCELLED``."""
-    gate = Gate()
+    gate = cenv.gate()
     monkeypatch.setattr(
         subprocess_runner,
         "_reconcile_subprocess_result",
@@ -83,7 +85,7 @@ def test_cancel_after_the_child_outcome_emits_one_cancelled_frame(
     assert cenv.store.path_for(job_id, "outcome").exists()
     assert cenv.post(f"/api/jobs/{job_id}/cancel").status_code == 200
     gate.release.set()
-    join_worker(cenv.client)
+    cenv.join()
     assert cenv.rec.terminal_frames(job_id) == ["error:JOB_CANCELLED"]
     assert cenv.status(job_id) == "cancelled"
     assert metric(cenv.client, "tune", "cancelled") == 1
@@ -149,7 +151,7 @@ class _HeldChildren:
         self._lock = threading.Lock()
 
     def __call__(self, *, job: Any, job_store: Any, args_path: str, **_: Any) -> int:
-        gate = Gate()
+        gate = Gate(timeout=CHILD_WAIT)
         with self._lock:
             self.gates.append(gate)
         gate.hold()
@@ -164,7 +166,8 @@ class _HeldChildren:
         return 0
 
     def gate(self, index: int) -> Gate:
-        for _ in range(200):
+        deadline = time.monotonic() + CHILD_WAIT
+        while time.monotonic() < deadline:
             with self._lock:
                 if len(self.gates) > index:
                     return self.gates[index]
@@ -197,7 +200,7 @@ def test_window3_subprocess_a_force_released_childs_outcome_is_dropped(
         if thread is not env.ws.previous_job_thread() and "start_tune_async" in str(
             getattr(thread, "_target", "")
         ):
-            thread.join(10)
+            thread.join(CHILD_WAIT)
     assert env.status(old_id) == "cancelled"
     assert env.rec.writes_of(old_id, "cancelled") == 1
     assert env.rec.writes_of(old_id, "completed") == 0
