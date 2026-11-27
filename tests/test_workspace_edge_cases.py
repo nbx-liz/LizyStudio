@@ -39,7 +39,7 @@ def _load_data_and_config(client: TestClient, tmp_path: Path) -> None:
     assert r.status_code == 200
     config = _load_valid_config(client)
     r = client.put("/api/workspace/config", json=config)
-    assert r.status_code == 200 and r.json()["saved"] is True
+    assert r.status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +60,7 @@ def test_fit_returns_400_on_validation_error(
     ):
         res = client.post("/api/workspace/fit")
     assert res.status_code in (400, 422)
-    assert res.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert res.json()["code"] == "VALIDATION_ERROR"
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +80,7 @@ def test_tune_returns_400_on_validation_error(
     ):
         res = client.post("/api/workspace/tune")
     assert res.status_code in (400, 422)
-    assert res.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert res.json()["code"] == "VALIDATION_ERROR"
 
 
 # ---------------------------------------------------------------------------
@@ -96,7 +96,7 @@ def test_config_upload_non_dict_yaml(client: TestClient) -> None:
         files={"file": ("config.yaml", yaml_bytes, "application/x-yaml")},
     )
     assert res.status_code == 400
-    assert res.json()["error"]["code"] in ("FILE_INVALID", "CONFIG_IMPORT_ERROR")
+    assert res.json()["code"] in ("FILE_INVALID", "CONFIG_IMPORT_ERROR")
 
 
 def test_config_upload_empty_file(client: TestClient) -> None:
@@ -116,7 +116,7 @@ def test_config_upload_json_malformed(client: TestClient) -> None:
         files={"file": ("config.json", b"{broken json", "application/json")},
     )
     assert res.status_code == 400
-    assert res.json()["error"]["code"] in ("FILE_INVALID", "CONFIG_IMPORT_ERROR")
+    assert res.json()["code"] in ("FILE_INVALID", "CONFIG_IMPORT_ERROR")
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +128,7 @@ def test_config_validate_no_body_no_config(client: TestClient) -> None:
     """POST /config/validate with no body and no stored config → WORKSPACE_NO_CONFIG."""
     res = client.post("/api/workspace/config/validate")
     assert res.status_code == 400
-    assert res.json()["error"]["code"] == "WORKSPACE_NO_CONFIG"
+    assert res.json()["code"] == "WORKSPACE_NO_CONFIG"
 
 
 def test_config_validate_with_stored_config(client: TestClient) -> None:
@@ -151,7 +151,7 @@ def test_config_download_no_config(client: TestClient) -> None:
     """GET /config/download with no config returns WORKSPACE_NO_CONFIG."""
     res = client.get("/api/workspace/config/download")
     assert res.status_code == 400
-    assert res.json()["error"]["code"] == "WORKSPACE_NO_CONFIG"
+    assert res.json()["code"] == "WORKSPACE_NO_CONFIG"
 
 
 def test_config_download_returns_yaml(client: TestClient) -> None:
@@ -177,11 +177,11 @@ def test_data_describe_no_data(client: TestClient) -> None:
     """GET /data/describe with no loaded data returns WORKSPACE_NO_DATA."""
     res = client.get("/api/workspace/data/describe")
     assert res.status_code == 400
-    assert res.json()["error"]["code"] == "WORKSPACE_NO_DATA"
+    assert res.json()["code"] == "WORKSPACE_NO_DATA"
 
 
 def test_data_columns_no_data(client: TestClient) -> None:
     """GET /data/columns with no loaded data returns WORKSPACE_NO_DATA."""
     res = client.get("/api/workspace/data/columns")
     assert res.status_code == 400
-    assert res.json()["error"]["code"] == "WORKSPACE_NO_DATA"
+    assert res.json()["code"] == "WORKSPACE_NO_DATA"

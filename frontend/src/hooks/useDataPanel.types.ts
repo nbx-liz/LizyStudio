@@ -62,7 +62,7 @@ export function buildMergedConfig({
    * `evaluation.metrics: []`, which lets `MetricsChips`'s task-change
    * useEffect race the target-select PUT and emit a partial-body PUT
    * (`{evaluation:{metrics:[...]}}`) that the backend rejects with
-   * `saved=false, blocking=5`. Pass `[]` to preserve legacy behaviour.
+   * 422 (`blocking=5`; before P-0110 a silent `saved=false`). Pass `[]` to preserve legacy behaviour.
    */
   evaluationMetrics?: readonly string[];
 }): Record<string, unknown> {

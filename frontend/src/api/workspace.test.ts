@@ -2,6 +2,13 @@ import { HttpResponse, http } from "msw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { server } from "../test/mocks/server";
 import {
+  N_SPLITS_ERROR,
+  validationProblemBody,
+  workspaceLockedProblem,
+} from "../test/problemDetails";
+import { ApiError } from "./client";
+import { getValidationErrors, isWorkspaceLocked } from "./errors";
+import {
   fetchBackends,
   fetchColumnStats,
   fetchColumns,
@@ -263,7 +270,7 @@ describe("updateConfig", () => {
       http.put("/api/workspace/config", async ({ request }) => {
         capturedMethod = request.method;
         capturedBody = await request.json();
-        return HttpResponse.json({ config, errors: [] });
+        return HttpResponse.json({ config, validation_errors: [] });
       }),
     );
     const result = await updateConfig(config);
@@ -277,12 +284,47 @@ describe("updateConfig", () => {
     controller.abort();
     server.use(
       http.put("/api/workspace/config", () =>
-        HttpResponse.json({ config: {}, errors: [] }),
+        HttpResponse.json({ config: {}, validation_errors: [] }),
       ),
     );
     await expect(
       updateConfig({ task: "x" }, { signal: controller.signal }),
     ).rejects.toThrow();
+  });
+
+  // P-0110: the real wire shape — a 422 application/problem+json body —
+  // goes through apiClient's throwOnError middleware and comes out as an
+  // ApiError whose validation_errors the accessor can read.
+  it("rejects a 422 Problem Details answer with its validation_errors", async () => {
+    server.use(
+      http.put(
+        "/api/workspace/config",
+        () =>
+          new HttpResponse(JSON.stringify(validationProblemBody()), {
+            status: 422,
+            headers: { "Content-Type": "application/problem+json" },
+          }),
+      ),
+    );
+    const err = await updateConfig({ task: "x" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(422);
+    expect(getValidationErrors(err)).toEqual([N_SPLITS_ERROR]);
+  });
+
+  it("rejects a 409 WORKSPACE_LOCKED Problem Details answer", async () => {
+    server.use(
+      http.put(
+        "/api/workspace/config",
+        () =>
+          new HttpResponse(JSON.stringify(workspaceLockedProblem().body), {
+            status: 409,
+            headers: { "Content-Type": "application/problem+json" },
+          }),
+      ),
+    );
+    const err = await updateConfig({ task: "x" }).catch((e: unknown) => e);
+    expect(isWorkspaceLocked(err)).toBe(true);
   });
 });
 
@@ -323,13 +365,32 @@ describe("uploadConfig", () => {
         if (f instanceof File) {
           capturedFile = f;
         }
-        return HttpResponse.json({ config: {}, errors: [] });
+        return HttpResponse.json({ config: {}, validation_errors: [] });
       }),
     );
     await uploadConfig(file);
     expect(capturedContentType).toMatch(/^multipart\/form-data;/);
     expect(capturedFile).not.toBeNull();
     expect((capturedFile as unknown as File).name).toBe("config.yaml");
+  });
+
+  it("rejects a 422 Problem Details answer with its validation_errors (P-0110)", async () => {
+    server.use(
+      http.post(
+        "/api/workspace/config/upload",
+        () =>
+          new HttpResponse(JSON.stringify(validationProblemBody()), {
+            status: 422,
+            headers: { "Content-Type": "application/problem+json" },
+          }),
+      ),
+    );
+    const file = new File(["{}"], "config.yaml", {
+      type: "application/x-yaml",
+    });
+    const err = await uploadConfig(file).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(getValidationErrors(err)).toEqual([N_SPLITS_ERROR]);
   });
 });
 

@@ -18,12 +18,20 @@ import {
   type CvState,
   INITIAL_CV_STATE,
 } from "@/components/workspace/cv-state";
+import {
+  N_SPLITS_ERROR,
+  validationProblem,
+  workspaceLockedProblem,
+} from "@/test/problemDetails";
+import type { WriteResult } from "./useConfigWriteFunnel";
+import { buildSyncKey, type ColumnOverride } from "./useDataPanel.types";
 
 const mocks = vi.hoisted(() => ({
   fetchColumns: vi.fn(),
   fetchConfigDefaults: vi.fn(),
   updateConfig: vi.fn(),
   toastError: vi.fn(),
+  toastInfo: vi.fn(),
 }));
 
 vi.mock("@/api/workspace", () => ({
@@ -36,7 +44,7 @@ vi.mock("sonner", () => ({
   toast: {
     error: mocks.toastError,
     success: vi.fn(),
-    info: vi.fn(),
+    info: mocks.toastInfo,
     warning: vi.fn(),
   },
 }));
@@ -81,8 +89,8 @@ function fn<A extends unknown[] = never[]>(): Fn<A> {
 interface HookDeps {
   uiSchema?: UiSchema;
   blocked?: BlockedGroupKFoldState;
-  setTarget: Fn<[string]>;
-  setTask: Fn<[string]>;
+  setTarget: Fn<[string | null]>;
+  setTask: Fn<[string | null]>;
   setCv: Fn<[CvState]>;
   setBlocked: Fn<[BlockedGroupKFoldState]>;
   setColumns: Fn<[ColumnInfo[]]>;
@@ -110,6 +118,9 @@ function setupHook(overrides: Partial<HookDeps> = {}) {
   const { result } = renderHook(
     () =>
       useTargetSelection({
+        target: null,
+        columns: [],
+        overrides: {},
         task: null,
         cv: INITIAL_CV_STATE,
         blocked: deps.blocked ?? INITIAL_BLOCKED_STATE,
@@ -272,6 +283,238 @@ describe("useTargetSelection", () => {
       });
 
       expect(deps.setBlocked).not.toHaveBeenCalled();
+    });
+  });
+
+  // P-0110: the target-select PUT goes through the write funnel. A refused
+  // write (422 / 409) used to arrive as a 200 with saved=false that this
+  // hook never read; it is now a failed WriteResult. The hook must say why
+  // AND put the controls back on the selection the server still holds,
+  // without preseeding the sync key or reporting a data change.
+  describe("funnel write result (P-0110)", () => {
+    const PRIOR_COLUMNS: ColumnInfo[] = [
+      {
+        name: "old_target",
+        dtype: "float64",
+        unique_count: 40,
+        suggested_type: "numeric",
+        suggested_excluded: false,
+        exclude_reason: null,
+      } as ColumnInfo,
+    ];
+    const PRIOR_OVERRIDES = {
+      a: { type: "numeric", excluded: false },
+    } as unknown as Record<string, ColumnOverride>;
+    const PRIOR_CV: CvState = {
+      ...INITIAL_CV_STATE,
+      strategy: "kfold",
+      folds: 7,
+    };
+
+    function renderWithFunnel(
+      result: WriteResult | (() => Promise<WriteResult>),
+      isFlushing: () => boolean = () => false,
+    ) {
+      const enqueueWrite = vi.fn(async () =>
+        typeof result === "function" ? result() : result,
+      );
+      const deps = {
+        setTarget: fn<[string | null]>(),
+        setTask: fn<[string | null]>(),
+        setCv: fn<[CvState]>(),
+        setBlocked: fn<[BlockedGroupKFoldState]>(),
+        setColumns: fn<[ColumnInfo[]]>(),
+        setOverrides: fn<[Record<string, unknown>]>(),
+        preseedSyncKey: fn<[string]>(),
+        onDataChanged: fn<[]>(),
+        onTaskChanged: fn<[string | null]>(),
+      };
+      const { result: hook } = renderHook(
+        () =>
+          useTargetSelection({
+            target: "old_target",
+            columns: PRIOR_COLUMNS,
+            overrides: PRIOR_OVERRIDES,
+            task: "regression",
+            cv: PRIOR_CV,
+            blocked: INITIAL_BLOCKED_STATE,
+            dataPath: "/data/x.csv",
+            uiSchema: undefined,
+            setSyncSuppressed: fn(),
+            ...deps,
+            writeFunnel: { enqueueWrite, isFlushing },
+          }),
+        { wrapper: createWrapper() },
+      );
+      return { hook, enqueueWrite, deps };
+    }
+
+    function expectRolledBack(
+      deps: ReturnType<typeof renderWithFunnel>["deps"],
+    ) {
+      // Each setter ran twice: the optimistic change, then the rollback.
+      expect(deps.setTarget).toHaveBeenCalledTimes(2);
+      expect(deps.setTarget).toHaveBeenNthCalledWith(1, "a");
+      expect(deps.setTarget).toHaveBeenLastCalledWith("old_target");
+      expect(deps.setColumns).toHaveBeenCalledTimes(2);
+      expect(deps.setColumns).toHaveBeenLastCalledWith(PRIOR_COLUMNS);
+      expect(deps.setOverrides).toHaveBeenCalledTimes(2);
+      expect(deps.setOverrides).toHaveBeenLastCalledWith(PRIOR_OVERRIDES);
+      expect(deps.setTask).toHaveBeenCalledTimes(2);
+      expect(deps.setTask).toHaveBeenNthCalledWith(1, "binary");
+      expect(deps.setTask).toHaveBeenLastCalledWith("regression");
+      expect(deps.onTaskChanged).toHaveBeenCalledTimes(2);
+      expect(deps.onTaskChanged).toHaveBeenLastCalledWith("regression");
+      expect(deps.setCv).toHaveBeenCalledTimes(2);
+      expect(deps.setCv).toHaveBeenLastCalledWith(PRIOR_CV);
+      // The restored selection's key is recorded once, so the sync
+      // effect sees no change and sends no PUT; no data change is
+      // reported.
+      expect(deps.preseedSyncKey).toHaveBeenCalledTimes(1);
+      expect(deps.preseedSyncKey).toHaveBeenCalledWith(
+        buildSyncKey(
+          "old_target",
+          "regression",
+          PRIOR_OVERRIDES,
+          PRIOR_CV,
+          INITIAL_BLOCKED_STATE,
+        ),
+      );
+      expect(deps.onDataChanged).toHaveBeenCalledTimes(0);
+    }
+
+    beforeEach(() => {
+      mocks.fetchColumns.mockResolvedValue(COLS_OK);
+      mocks.fetchConfigDefaults.mockResolvedValue({
+        config_version: 1,
+        task: "binary",
+        data: {},
+        features: {},
+        split: { method: "kfold", n_splits: 5 },
+        model: { name: "lgbm", params: {} },
+      });
+    });
+
+    it("a 422 refusal shows one error toast and restores the prior selection", async () => {
+      const { hook, enqueueWrite, deps } = renderWithFunnel({
+        ok: false,
+        error: "rejected",
+        details: validationProblem(),
+      });
+
+      await act(async () => {
+        await hook.current.handleTargetChange("a");
+      });
+
+      expect(enqueueWrite).toHaveBeenCalledTimes(1);
+      expect(mocks.toastError).toHaveBeenCalledTimes(1);
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        `Config not saved: ${N_SPLITS_ERROR.message}`,
+      );
+      expectRolledBack(deps);
+    });
+
+    it("a 409 lock shows the quiet info toast and restores the prior selection", async () => {
+      const { hook, deps } = renderWithFunnel({
+        ok: false,
+        error: "locked",
+        details: workspaceLockedProblem(),
+      });
+
+      await act(async () => {
+        await hook.current.handleTargetChange("a");
+      });
+
+      expect(mocks.toastInfo).toHaveBeenCalledTimes(1);
+      expect(mocks.toastInfo).toHaveBeenCalledWith(
+        "Config is locked while a job is running",
+      );
+      expect(mocks.toastError).toHaveBeenCalledTimes(0);
+      expectRolledBack(deps);
+    });
+
+    it("an aborted write neither toasts nor rolls back nor reports", async () => {
+      const { hook, enqueueWrite, deps } = renderWithFunnel({
+        ok: false,
+        error: "aborted",
+      });
+
+      await act(async () => {
+        await hook.current.handleTargetChange("a");
+      });
+
+      expect(enqueueWrite).toHaveBeenCalledTimes(1);
+      expect(mocks.toastError).toHaveBeenCalledTimes(0);
+      expect(deps.setTarget).toHaveBeenCalledTimes(1);
+      expect(deps.preseedSyncKey).toHaveBeenCalledTimes(0);
+      expect(deps.onDataChanged).toHaveBeenCalledTimes(0);
+    });
+
+    // Owner ruling (PR #781 round 2): no target change while another
+    // config write is pending, and one target change at a time.
+    it("is a no-op while another config write is pending", async () => {
+      const { hook, enqueueWrite, deps } = renderWithFunnel(
+        { ok: true, saved: { config: {}, validation_errors: [] } },
+        () => true,
+      );
+
+      await act(async () => {
+        await hook.current.handleTargetChange("a");
+      });
+
+      expect(enqueueWrite).toHaveBeenCalledTimes(0);
+      expect(mocks.fetchColumns).toHaveBeenCalledTimes(0);
+      expect(deps.setTarget).toHaveBeenCalledTimes(0);
+      expect(deps.preseedSyncKey).toHaveBeenCalledTimes(0);
+      expect(mocks.toastError).toHaveBeenCalledTimes(0);
+    });
+
+    it("ignores a second change while the first is still in progress", async () => {
+      let settle: (r: WriteResult) => void = () => {};
+      const { hook, enqueueWrite, deps } = renderWithFunnel(
+        () =>
+          new Promise<WriteResult>((resolve) => {
+            settle = resolve;
+          }),
+      );
+
+      let first: Promise<void> = Promise.resolve();
+      await act(async () => {
+        first = hook.current.handleTargetChange("a");
+        await new Promise((r) => setTimeout(r, 10));
+      });
+      expect(hook.current.selecting).toBe(true);
+      await act(async () => {
+        await hook.current.handleTargetChange("c");
+      });
+      await act(async () => {
+        settle({ ok: true, saved: { config: {}, validation_errors: [] } });
+        await first;
+      });
+
+      expect(enqueueWrite).toHaveBeenCalledTimes(1);
+      expect(mocks.fetchColumns).toHaveBeenCalledTimes(1);
+      expect(deps.setTarget).toHaveBeenCalledTimes(1);
+      expect(deps.setTarget).toHaveBeenCalledWith("a");
+      expect(hook.current.selecting).toBe(false);
+    });
+
+    it("a committed write preseeds the sync key and reports the change once", async () => {
+      const { hook, enqueueWrite, deps } = renderWithFunnel({
+        ok: true,
+        saved: { config: {}, validation_errors: [] },
+      });
+
+      await act(async () => {
+        await hook.current.handleTargetChange("a");
+      });
+
+      expect(enqueueWrite).toHaveBeenCalledTimes(1);
+      expect(mocks.toastError).toHaveBeenCalledTimes(0);
+      expect(deps.setTarget).toHaveBeenCalledTimes(1);
+      expect(deps.setTarget).toHaveBeenCalledWith("a");
+      expect(deps.preseedSyncKey).toHaveBeenCalledTimes(1);
+      expect(deps.onDataChanged).toHaveBeenCalledTimes(1);
     });
   });
 });

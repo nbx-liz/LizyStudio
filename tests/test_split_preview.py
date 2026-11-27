@@ -204,7 +204,7 @@ def test_split_preview_time_series(client: TestClient, tmp_path: Path) -> None:
 def test_split_preview_no_data(client: TestClient) -> None:
     res = client.get("/api/workspace/data/split-preview")
     assert res.status_code == 400
-    assert res.json()["error"]["code"] == "WORKSPACE_NO_DATA"
+    assert res.json()["code"] == "WORKSPACE_NO_DATA"
 
 
 def test_split_preview_no_config(client: TestClient, tmp_path: Path) -> None:
@@ -212,7 +212,7 @@ def test_split_preview_no_config(client: TestClient, tmp_path: Path) -> None:
     client.post("/api/workspace/data/path", json={"path": csv_path})
     res = client.get("/api/workspace/data/split-preview")
     assert res.status_code == 400
-    assert res.json()["error"]["code"] == "WORKSPACE_NO_CONFIG"
+    assert res.json()["code"] == "WORKSPACE_NO_CONFIG"
 
 
 def test_split_preview_blocked_group_returns_empty(

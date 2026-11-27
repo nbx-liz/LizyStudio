@@ -11,9 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Python 3.11 or later is required** (P-0120, #775). Python 3.10 reached its end of life in 2026-10. On Python 3.10, pip keeps installing the 0.8.x line, which continues to work there.
   - Under Python 3.10, pandas resolves to 2.x. A past job whose model was saved under pandas 3 could then fail to open.
+- **Breaking API change for external clients of `/api/workspace/**` (P-0110, #536).** A config the server refuses is no longer answered `200 OK` with `{"saved": false}`. Update scripts that call these endpoints:
+  - `PUT /api/workspace/config` and `POST /api/workspace/config/upload` answer `422` when a `severity: "error"` entry refuses the config. Before, they answered `200` with `saved: false` and did not save it. A client that treated `200` as success silently lost those writes; it now gets an error. curl's `--fail-with-body` and other status-based checks now see the refusal.
+  - The `200` body is `{"config", "validation_errors"}`. The `saved` field is gone, and `errors` is renamed `validation_errors`. It holds only `warning` / `info` entries, which do not block the save (P-0100, unchanged).
+  - Every LizyStudio error (one with an error code) from `/api/workspace/**` is RFC 9457 Problem Details (`application/problem+json`): read `code` instead of `error.code`, `detail` instead of `error.message`, `details` instead of `error.details`, and `validation_errors` instead of `error.details.errors`. This also covers `409 WORKSPACE_LOCKED`, `400 WORKSPACE_NO_DATA` and the existing `422` of `POST /api/workspace/fit` and `/tune`.
+  - `/api/jobs/**`, `/api/inference/**` and `/api/files/**` keep the `{"error": {...}}` envelope. So does a `422` for a request body that cannot be parsed. A `405` and an unhandled `500` keep the framework's default body on every path. See `docs/api.md`.
+  - The storage format does not change (`STUDIO_FORMAT_VERSION` stays 2).
 
 ### Changed
 
+- **Workspace endpoints answer RFC 9457 Problem Details (P-0110, #536).** See the upgrade note above. The OpenAPI schema exports the `ProblemDetails` component under `application/problem+json` for the 4xx answers of `PUT /config`, `POST /config/upload`, `POST /fit` and `POST /tune`, and `ConfigUpdateResponse` no longer has `saved`.
+- The web UI treats a refused config write as an error everywhere it writes the config. Importing a config that fails validation now shows `Import failed: ...` instead of `Config imported`. A refused target change or form auto-reset now shows `Config not saved: ...` instead of nothing, once per refused write. A refused target change also puts the Target, Task and CV controls back on the selection the server still holds.
+- A refused Load Preset no longer shows `Preset "..." loaded`. A refused undo or redo leaves the undo history where it was, so the next undo targets what the server holds, and its toast names the first blocking entry (`Undo failed: ...`).
+- While a config write is saving, the Target selector, Load Preset and Undo / Redo are disabled, so these one-write actions cannot interleave with another write.
+- The OpenAPI schema types each validation entry as `ValidationEntry` (`path`, `message`, `severity`, `suggested_fix`), and the 422 of the four converted routes lists both media types: `application/problem+json` (`ProblemDetails`) and `application/json` (`LegacyErrorEnvelope`, for a request body that cannot be parsed). A refused undo or redo now shows `Undo failed` / `Redo failed` instead of `Config undone` / `Config redone`.
 - CI tests Python 3.11 and 3.12 on every PR, and 3.11 to 3.14 nightly. The required check `backend (3.10)` is replaced by `backend (3.12)`.
 
 ## [0.8.1] - 2026-11-20

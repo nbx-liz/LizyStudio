@@ -1,6 +1,10 @@
 import { renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
+  validationProblem,
+  workspaceLockedProblem,
+} from "@/test/problemDetails";
+import {
   type ConfigSnapshot,
   coalesceByReason,
   materializeOp,
@@ -427,6 +431,7 @@ describe("useConfigWriteFunnel", () => {
       reason: "cv-change",
     });
 
+    expect(onWriteCommitted).toHaveBeenCalledTimes(1);
     expect(onWriteCommitted).toHaveBeenCalledWith({
       task: "binary",
       split: { method: "kfold" },
@@ -591,14 +596,7 @@ describe("useConfigWriteFunnel", () => {
   });
 
   it("resolves ops enqueued while a same-reason PUT is in flight with their own PUT's result, not the in-flight one (#614)", async () => {
-    const { ApiError } = await import("@/api/client");
-    const locked = new ApiError(409, {
-      error: {
-        code: "WORKSPACE_LOCKED",
-        message: "Config is locked while job xyz is running",
-        details: { job_id: "xyz" },
-      },
-    });
+    const locked = workspaceLockedProblem("xyz");
     let resolveFirst: (v: ConfigSnapshot) => void = () => {};
     const putConfig = vi.fn().mockImplementation(() => {
       if (putConfig.mock.calls.length === 1) {
@@ -918,14 +916,8 @@ describe("useConfigWriteFunnel", () => {
   // ----------------------------------------------------------------------
   describe("error classification (G-6)", () => {
     it("classifies 409 WORKSPACE_LOCKED as error=locked", async () => {
-      const { ApiError } = await import("@/api/client");
-      const err = new ApiError(409, {
-        error: {
-          code: "WORKSPACE_LOCKED",
-          message: "Config is locked while job xyz is running",
-          details: { job_id: "xyz" },
-        },
-      });
+      // P-0110: the real PUT /config answers RFC 9457 Problem Details.
+      const err = workspaceLockedProblem("xyz");
       const putConfig = vi.fn().mockRejectedValue(err);
       const { result } = renderHook(() =>
         useConfigWriteFunnel({
@@ -1022,18 +1014,17 @@ describe("useConfigWriteFunnel", () => {
   // G-8 — ConfigUpdateResponse wrapper passes through onWriteCommitted.
   //
   // Production putConfig is `updateConfig` from @/api/workspace, which
-  // returns `{config, errors, saved}` (not just the flat config). The
+  // returns `{config, validation_errors}` (not just the flat config). The
   // funnel must NOT unwrap that itself — the wrapper stays the truth that
-  // WorkspacePage's onWriteCommitted reads from to set the cache and
-  // observe `saved=false`. Earlier wrapper-leak bugs (Phase 4 follow-up)
-  // came from a writer assuming the funnel flattened the body.
+  // WorkspacePage's onWriteCommitted reads from to set the cache. Earlier
+  // wrapper-leak bugs (Phase 4 follow-up) came from a writer assuming the
+  // funnel flattened the body.
   // ----------------------------------------------------------------------
   describe("response shape pass-through (G-8)", () => {
     it("forwards the full ConfigUpdateResponse wrapper to onWriteCommitted", async () => {
       const wrapper = {
         config: { task: "binary", split: { method: "kfold" } },
-        errors: [],
-        saved: true,
+        validation_errors: [],
       };
       const putConfig = vi.fn().mockResolvedValue(wrapper);
       const onWriteCommitted = vi.fn();
@@ -1052,23 +1043,51 @@ describe("useConfigWriteFunnel", () => {
         reason: "target-select",
       });
 
-      // The funnel must NOT flatten or peek inside `saved` — the
-      // wrapper goes through verbatim so the Page-level callback owns
-      // the saved=false branching.
+      // The funnel must NOT flatten or peek inside the wrapper — it goes
+      // through verbatim so the Page-level callback owns the cache write.
       expect(res.ok).toBe(true);
       if (res.ok) expect(res.saved).toBe(wrapper);
       expect(onWriteCommitted).toHaveBeenCalledTimes(1);
       expect(onWriteCommitted).toHaveBeenCalledWith(wrapper);
     });
 
-    it("forwards a saved=false wrapper without throwing", async () => {
-      // Even a backend-rejected wrapper is still "ok" at the funnel
-      // layer (the HTTP call succeeded). The hook caller observes
-      // `saved=false` and surfaces the toast itself.
+    // P-0110 (DC1 guard): a backend-rejected body is a 422, so the funnel
+    // must report it as a failure and must NOT treat it as committed.
+    // Before P-0110 the rejection was a 200 with saved=false and the
+    // funnel resolved it as ok.
+    it("reports a 422 Problem Details rejection as rejected, never committed", async () => {
+      const problem = validationProblem([
+        { path: "data", message: "Field required" },
+      ]);
+      const putConfig = vi.fn().mockRejectedValue(problem);
+      const onWriteCommitted = vi.fn();
+
+      const { result } = renderHook(() =>
+        useConfigWriteFunnel({
+          getCachedConfig: () => undefined,
+          putConfig,
+          onWriteCommitted,
+        }),
+      );
+
+      const res = await result.current.enqueueWrite({
+        kind: "replace",
+        config: { task: "binary" },
+        reason: "config-form-edit",
+      });
+      expect(res).toEqual({ ok: false, error: "rejected", details: problem });
+      expect(putConfig).toHaveBeenCalledTimes(1);
+      expect(onWriteCommitted).not.toHaveBeenCalled();
+    });
+
+    it("forwards a warning-only 200 wrapper as committed", async () => {
+      // severity="warning" entries ride a 200 (P-0100): the body was
+      // saved, so the funnel commits it.
       const wrapper = {
         config: { task: "binary" },
-        errors: [{ path: "data", message: "Field required" }],
-        saved: false,
+        validation_errors: [
+          { path: "evaluation.metrics", message: "MAPE", severity: "warning" },
+        ],
       };
       const putConfig = vi.fn().mockResolvedValue(wrapper);
       const onWriteCommitted = vi.fn();
@@ -1088,6 +1107,8 @@ describe("useConfigWriteFunnel", () => {
       });
       expect(res.ok).toBe(true);
       if (res.ok) expect(res.saved).toBe(wrapper);
+      expect(putConfig).toHaveBeenCalledTimes(1);
+      expect(onWriteCommitted).toHaveBeenCalledTimes(1);
       expect(onWriteCommitted).toHaveBeenCalledWith(wrapper);
     });
   });

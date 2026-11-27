@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Any
 
 from fastapi import Request
@@ -102,6 +103,13 @@ class WorkspaceLockedError(StudioError):
 
 
 class ValidationError(StudioError):
+    """Blocking config validation (422).
+
+    Under ``/api/workspace/**`` the entries travel as the RFC 9457
+    ``validation_errors`` extension member (P-0110); elsewhere they stay
+    in the legacy ``error.details.errors``.
+    """
+
     def __init__(self, errors: list[dict[str, Any]]) -> None:
         super().__init__(
             "VALIDATION_ERROR",
@@ -109,6 +117,7 @@ class ValidationError(StudioError):
             422,
             details={"errors": errors},
         )
+        self.validation_errors = list(errors)
 
 
 class FileInvalidError(StudioError):
@@ -358,17 +367,79 @@ class ParentHasActiveChildrenError(StudioError):
         )
 
 
+# --- RFC 9457 Problem Details (P-0110) ---
+
+PROBLEM_JSON_MEDIA_TYPE = "application/problem+json"
+
+# P-0110 scope: only the workspace router answers with Problem Details.
+# The jobs / inference / files routers keep the legacy ``{"error": {...}}``
+# envelope until a later Proposal moves them.
+_PROBLEM_DETAILS_PREFIX = "/api/workspace"
+
+
+def wants_problem_details(path: str) -> bool:
+    """True when *path* is ``/api/workspace`` or below it.
+
+    The prefix is anchored at a path-segment boundary so that a sibling
+    such as ``/api/workspaces`` does not match.
+    """
+    return path == _PROBLEM_DETAILS_PREFIX or path.startswith(
+        _PROBLEM_DETAILS_PREFIX + "/"
+    )
+
+
+def _status_phrase(status_code: int) -> str:
+    """The HTTP reason phrase RFC 9457 asks for when ``type`` is about:blank."""
+    try:
+        return HTTPStatus(status_code).phrase
+    except ValueError:
+        # A non-standard status has no registered phrase; RFC 9457 only
+        # says SHOULD, so fall back to a neutral title instead of a 500.
+        return "Error"
+
+
+def problem_details_body(exc: StudioError) -> dict[str, Any]:
+    """Serialize *exc* as an RFC 9457 Problem Details object (P-0110).
+
+    ``type`` is ``about:blank`` (Decision Q2), so ``title`` is the HTTP
+    reason phrase and the problem is identified by the ``code``
+    extension member. ``details`` keeps the existing structured payload
+    (``job_id``, ``recovery_hint``...). A :class:`ValidationError` moves
+    its entries to the ``validation_errors`` member (Decision Q3).
+    """
+    details = dict(exc.details)
+    validation_errors: list[dict[str, Any]] | None = None
+    if isinstance(exc, ValidationError):
+        details.pop("errors", None)
+        validation_errors = list(exc.validation_errors)
+    # Every member is always present (``validation_errors`` is null on a
+    # non-validation problem) so the body matches the ``ProblemDetails``
+    # OpenAPI schema field for field.
+    return {
+        "type": "about:blank",
+        "title": _status_phrase(exc.status_code),
+        "status": exc.status_code,
+        "detail": exc.message,
+        "code": exc.code,
+        "details": details,
+        "validation_errors": validation_errors,
+    }
+
+
 # --- FastAPI exception handlers ---
 
 
 async def studio_error_handler(request: Request, exc: StudioError) -> JSONResponse:
-    """Convert StudioError to the standard JSON envelope.
+    """Convert StudioError to its HTTP error body.
+
+    Under ``/api/workspace/**`` the body is RFC 9457 Problem Details
+    (``application/problem+json``, P-0110); every other router keeps the
+    legacy ``{"error": {code, message, details}}`` envelope.
 
     Also emits a WARNING-level log line (Issue #513) so 4xx domain
     errors are visible to operators after the fact. ``details`` is
     deliberately excluded from the WARNING channel because it can
-    carry user-supplied input (paths, validation snippets); the
-    envelope shape itself is unchanged.
+    carry user-supplied input (paths, validation snippets).
     """
     _backend_logger.warning(
         "StudioError %s (%d) at %s %s",
@@ -377,6 +448,12 @@ async def studio_error_handler(request: Request, exc: StudioError) -> JSONRespon
         request.method,
         request.url.path,
     )
+    if wants_problem_details(request.url.path):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=problem_details_body(exc),
+            media_type=PROBLEM_JSON_MEDIA_TYPE,
+        )
     return JSONResponse(
         status_code=exc.status_code,
         content={

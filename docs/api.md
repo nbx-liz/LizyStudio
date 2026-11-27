@@ -15,16 +15,113 @@ When the server is running, visit:
 
 - **Base path:** `/api`
 - **Content-Type:** `application/json` (except file uploads)
-- **Error format:**
-  ```json
-  {
-    "error": {
-      "code": "JOB_NOT_FOUND",
-      "message": "Job not found: job_042",
-      "details": {}
+- **Success means committed:** a `2xx` from `/api/workspace/**` means the side
+  effect happened (P-0110). There is no `saved` flag to check.
+- **Error format** of a LizyStudio error (one with a code from
+  [Error codes](#error-codes)) depends on the path (P-0110):
+
+  | Path | Media type | Body |
+  |------|------------|------|
+  | `/api/workspace` and below | `application/problem+json` | RFC 9457 Problem Details |
+  | Every other path (`/api/jobs/**`, `/api/inference/**`, `/api/files/**`, ...) | `application/json` | Legacy `{"error": {...}}` envelope |
+
+  Failures that are not LizyStudio errors keep the framework's default body
+  on every path: a `405` (`{"detail": "Method Not Allowed"}`) and an
+  unhandled `500`. A `GET` of an unknown `/api/workspace/...` route depends
+  on whether the server serves the built frontend: with the build present,
+  the SPA catch-all answers a LizyStudio `404 NOT_FOUND` (Problem Details);
+  without it (for example a backend run before `pnpm build`), FastAPI
+  answers its own `404` `{"detail": "Not Found"}`. The catch-all is
+  `GET`-only, so with the build present any other method on an unknown
+  route answers `405` `{"detail": "Method Not Allowed"}`.
+
+### Problem Details (`/api/workspace/**`)
+
+Every member is always present. `type` is always `"about:blank"`, so `title`
+is the HTTP reason phrase of `status`; the problem is identified by `code`
+(see [Error codes](#error-codes)). `detail` is the human-readable message,
+`details` carries the structured payload (`job_id`, `recovery_hint`, ...), and
+`validation_errors` is the list of validation entries on `VALIDATION_ERROR`
+and `null` otherwise. The OpenAPI component is `ProblemDetails`.
+
+`422` — blocking config validation (`PUT /config`, `POST /config/upload`,
+`POST /fit`, `POST /tune`). On `PUT /config` and `POST /config/upload` the
+config was **not** saved. On `POST /fit` and `POST /tune` see the ordering
+note below:
+
+```json
+{
+  "type": "about:blank",
+  "title": "Unprocessable Entity",
+  "status": 422,
+  "detail": "Config validation failed",
+  "code": "VALIDATION_ERROR",
+  "details": {},
+  "validation_errors": [
+    {
+      "path": "split.n_splits",
+      "message": "n_splits=1000 is greater than the number of samples in the loaded dataset (n_rows=50). Reduce Folds to at most 50.",
+      "severity": "error",
+      "suggested_fix": "Set Folds (split.n_splits) to 50 or fewer."
     }
+  ]
+}
+```
+
+On `PUT /config` and `POST /config/upload`, `validation_errors` carries every
+entry, warnings included; only `severity: "error"` entries cause the 422.
+`POST /fit` and `POST /tune` list the blocking entries only.
+
+**Ordering on `POST /fit` and `POST /tune`.** An inline `{"config": ...}`
+body is validated first; when it has a blocking entry the answer is `422`
+and nothing is saved. When it passes, it **is saved** to the workspace
+(P-0086, with its `tuning` block moved to the Tune overrides) before the
+later gates run, and a later refusal does not undo that save:
+`400 WORKSPACE_NO_DATA`, `409 JOB_CONFLICT`, and on `POST /tune` the `422`
+of the materialized Tune config and of the search-space run gate (an
+inverted Range or a log Range with `low <= 0`). The search-space gate runs
+only at Tune time, so the same config is saved without complaint by
+`PUT /config`.
+
+A `422` on these four routes can also be the legacy envelope under
+`application/json`: a request body that cannot be parsed (FastAPI request
+validation). The OpenAPI schema lists both media types for those 422s.
+
+`409` — a config write while a job is running:
+
+```json
+{
+  "type": "about:blank",
+  "title": "Conflict",
+  "status": 409,
+  "detail": "Config is locked while job job_042 is running",
+  "code": "WORKSPACE_LOCKED",
+  "details": { "job_id": "job_042" },
+  "validation_errors": null
+}
+```
+
+Other workspace errors (`WORKSPACE_NO_DATA`, `PATH_NOT_FOUND`, `FILE_INVALID`,
+...) use the same shape with their own `status` and `code`.
+
+`title` is the reason phrase of the running Python's `http.HTTPStatus`; for
+422 it is `"Unprocessable Content"` on Python 3.13 and later. Match on
+`status` and `code`, not on `title`.
+
+A request body that cannot be parsed at all (FastAPI's request validation)
+still answers `422` with the legacy envelope below, on every path.
+
+### Legacy envelope (every other path)
+
+```json
+{
+  "error": {
+    "code": "JOB_NOT_FOUND",
+    "message": "Job not found: job_042",
+    "details": {}
   }
-  ```
+}
+```
 
 ## Endpoints
 
@@ -44,10 +141,10 @@ When the server is running, visit:
 | GET | `/api/workspace/config/schema` | JSON Schema for config form |
 | GET | `/api/workspace/config/defaults` | Default config (query: `task`, `target`) |
 | GET | `/api/workspace/config` | Current config |
-| PUT | `/api/workspace/config` | Replace config |
+| PUT | `/api/workspace/config` | Replace config. `200 {config, validation_errors}` when saved (`validation_errors` holds warnings only); `422` Problem Details when a blocking entry refuses it; `409 WORKSPACE_LOCKED` while a job runs |
 | PATCH | `/api/workspace/config` | Partial config update |
 | POST | `/api/workspace/config/validate` | Validate config (dry run) |
-| POST | `/api/workspace/config/upload` | Load config from YAML/JSON file |
+| POST | `/api/workspace/config/upload` | Load config from YAML/JSON file. `200` and `422` as for `PUT /api/workspace/config`; `400` when the file cannot be read or parsed. It has no running-job lock check, so it never answers `409` |
 | GET | `/api/workspace/config/download` | Download config as YAML |
 
 ### Workspace — Data

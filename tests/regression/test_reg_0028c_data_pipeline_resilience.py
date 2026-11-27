@@ -85,10 +85,9 @@ def test_load_path_after_delete_returns_path_not_found(
     r = client.post("/api/workspace/data/path", json={"path": str(csv_path)})
     assert r.status_code == 400
     body = r.json()
-    # The project's StudioError envelope: {detail: {error: {code, message}}}.
-    error = body.get("detail", body).get("error", {})
-    assert error.get("code") == "PATH_NOT_FOUND", body
-    assert "not found" in error.get("message", "").lower()
+    # P-0110: workspace errors are RFC 9457 Problem Details.
+    assert body.get("code") == "PATH_NOT_FOUND", body
+    assert "not found" in body.get("detail", "").lower()
 
 
 def test_reset_unlinks_tracked_upload_tempfile(

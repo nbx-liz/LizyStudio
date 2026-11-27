@@ -26,7 +26,7 @@ interface MetricsChipsProps {
    * otherwise it routes an `onChange([...defaults])` through the
    * parent's `handleFieldChange`, which reads an empty `configRef` and
    * emits a partial-body PUT (`{evaluation:{metrics:[...]}}`) that the
-   * backend rejects with `saved=false`. Defaults to `true` so existing
+   * backend rejects with 422 (P-0110; formerly `saved=false`). Defaults to `true` so existing
    * test/story renders (which pre-seed `selectedMetrics`) keep working.
    */
   configSeeded?: boolean;

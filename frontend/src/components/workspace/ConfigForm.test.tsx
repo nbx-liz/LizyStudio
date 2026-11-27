@@ -11,6 +11,7 @@ import type { UiSchema } from "@/api/types";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ConfigWriteFunnel } from "@/hooks/useConfigWriteFunnel";
 import { ConfigWriteFunnelProvider } from "@/hooks/useConfigWriteFunnelContext";
+import { N_SPLITS_ERROR, validationProblem } from "@/test/problemDetails";
 import { ConfigForm } from "./ConfigForm";
 
 // Mock DynParam which needs TooltipProvider.
@@ -1491,6 +1492,60 @@ describe("ConfigForm — inner_valid_options (Inner Validation select)", () => {
         value: false,
       },
     ]);
+  });
+
+  // P-0110 (DC1): a refused auto-reset write is a failed WriteResult (422)
+  // and must reach the user once, not be dropped by the fire-and-forget.
+  it("surfaces a 422-refused auto-reset write in exactly one error toast", async () => {
+    const { toast } = await import("sonner");
+    const errorSpy = vi.spyOn(toast, "error");
+    const funnel: ConfigWriteFunnel = {
+      enqueueWrite: vi.fn(async () => ({
+        ok: false as const,
+        error: "rejected" as const,
+        details: validationProblem(),
+      })) as ConfigWriteFunnel["enqueueWrite"],
+      isFlushing: () => false,
+    };
+
+    render(
+      <TooltipProvider>
+        <ConfigWriteFunnelProvider funnel={funnel}>
+          <ConfigForm
+            schema={schemaWithTraining}
+            config={{
+              config_version: 1,
+              model: { name: "lgbm", params: {} },
+              training: {
+                early_stopping: {
+                  enabled: true,
+                  inner_valid_explicit: true,
+                  inner_valid: { method: "cv", ratio: 0.2 },
+                },
+              },
+            }}
+            onChange={vi.fn()}
+            uiSchema={
+              {
+                inner_valid_options: [
+                  "holdout",
+                  "group_holdout",
+                  "time_holdout",
+                ],
+              } as unknown as UiSchema
+            }
+          />
+        </ConfigWriteFunnelProvider>
+      </TooltipProvider>,
+    );
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(funnel.enqueueWrite).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalledWith(
+      `Config not saved: ${N_SPLITS_ERROR.message}`,
+    );
+    errorSpy.mockRestore();
   });
 });
 

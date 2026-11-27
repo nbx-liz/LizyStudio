@@ -1,8 +1,11 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
-import { ApiError } from "@/api/client";
-import { isStudioError } from "@/api/errors";
+import {
+  getValidationErrors,
+  isWorkspaceLocked,
+  summarizeValidationErrors,
+} from "@/api/errors";
 import { queryKeys } from "@/api/queryKeys";
 import type { UiSchema } from "@/api/types";
 import {
@@ -109,7 +112,8 @@ export function useConfigSync({
       // auto-switch was writing to ``training.inner_valid`` (top-level).
       // The Pydantic schema accepts inner_valid at
       // ``training.early_stopping.inner_valid`` only, so the PUT
-      // returned ``saved=false`` with "Extra inputs are not permitted".
+      // was rejected (then ``saved=false``, a 422 since P-0110) with
+      // "Extra inputs are not permitted".
       // The user's task change therefore never landed even though
       // useConfigSync emitted the correct ``task`` field — the whole
       // body was rejected. Move the inner_valid mutation under
@@ -122,7 +126,7 @@ export function useConfigSync({
       // A strategy change is pending while the persisted config (``base``,
       // just read from the server) still has another split method.  Reading
       // the server instead of a client-side ref means a failed, rejected
-      // (saved=false), aborted or coalesced save re-applies this
+      // (422), aborted or coalesced save re-applies this
       // re-derivation on the next sync, and a save that landed never
       // re-applies it over the user's later explicit pick (P-0116 child 5b).
       const baseSplit = (base as Record<string, unknown>).split as
@@ -206,16 +210,17 @@ export function useConfigSync({
       if (putError) {
         if (putError instanceof DOMException && putError.name === "AbortError")
           return;
-        if (
-          putError instanceof ApiError &&
-          putError.status === 409 &&
-          isStudioError(putError.body) &&
-          putError.body.error.code === "WORKSPACE_LOCKED"
-        ) {
+        if (isWorkspaceLocked(putError)) {
           toast.info("Config is locked while a job is running");
           return;
         }
-        toast.error("Config sync failed — changes may not be saved");
+        // BLUEPRINT §6.3 (P-0110): a 422 names its first blocking entry.
+        const validationErrors = getValidationErrors(putError);
+        toast.error(
+          validationErrors !== null
+            ? `Config sync failed: ${summarizeValidationErrors(validationErrors)}`
+            : "Config sync failed — changes may not be saved",
+        );
         return;
       }
       onDataChanged();
@@ -231,12 +236,7 @@ export function useConfigSync({
       // explain the lock to the user; emit a quiet info toast
       // instead of the generic error so the user is not alarmed by
       // their own locked-state behaving correctly.
-      if (
-        err instanceof ApiError &&
-        err.status === 409 &&
-        isStudioError(err.body) &&
-        err.body.error.code === "WORKSPACE_LOCKED"
-      ) {
+      if (isWorkspaceLocked(err)) {
         toast.info("Config is locked while a job is running");
         return;
       }

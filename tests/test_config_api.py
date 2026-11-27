@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 pytestmark = pytest.mark.integration
@@ -29,15 +30,15 @@ def test_config_get_empty(client: TestClient) -> None:
 
 
 def test_config_put_invalid_not_saved(client: TestClient) -> None:
-    """Partial config with validation errors should NOT be saved."""
+    """Partial config with validation errors should NOT be saved (P-0110: 422)."""
     config = {"task": "binary", "model": {"name": "lightgbm"}}
     res = client.put("/api/workspace/config", json=config)
-    assert res.status_code == 200
+    assert res.status_code == 422, res.text
     body = res.json()
-    assert body["config"]["task"] == "binary"
-    assert isinstance(body["errors"], list)
-    assert len(body["errors"]) > 0
-    assert body["saved"] is False
+    assert body["code"] == "VALIDATION_ERROR"
+    assert isinstance(body["validation_errors"], list)
+    assert len(body["validation_errors"]) > 0
+    assert "saved" not in body
     # Config should still be empty
     res2 = client.get("/api/workspace/config")
     assert res2.json() == {}
@@ -49,8 +50,8 @@ def test_config_put_valid_saved(client: TestClient) -> None:
     res = client.put("/api/workspace/config", json=config)
     assert res.status_code == 200
     body = res.json()
-    assert body["saved"] is True
-    assert body["errors"] == []
+    assert "saved" not in body
+    assert body["validation_errors"] == []
 
 
 def test_config_get_after_put(client: TestClient) -> None:
@@ -65,7 +66,7 @@ def test_config_validate_empty_body(client: TestClient) -> None:
     """Empty dict body is treated as 'no config' since it has no fields."""
     res = client.post("/api/workspace/config/validate", json={})
     assert res.status_code == 400
-    assert res.json()["error"]["code"] == "WORKSPACE_NO_CONFIG"
+    assert res.json()["code"] == "WORKSPACE_NO_CONFIG"
 
 
 def test_config_validate_invalid_config(client: TestClient) -> None:
@@ -80,15 +81,27 @@ def test_config_validate_invalid_config(client: TestClient) -> None:
     assert len(body["errors"]) > 0
 
 
-def test_config_upload_yaml(client: TestClient) -> None:
+def test_config_upload_partial_yaml_is_rejected_with_422(client: TestClient) -> None:
+    """P-0110: an incomplete uploaded config is refused, not a silent 200."""
     yaml_content = b"task: binary\nmodel:\n  name: lightgbm"
     res = client.post(
         "/api/workspace/config/upload",
         files={"file": ("config.yaml", yaml_content, "application/x-yaml")},
     )
-    assert res.status_code == 200
-    body = res.json()
-    assert body["config"]["task"] == "binary"
+    assert res.status_code == 422, res.text
+    assert res.headers["content-type"].startswith("application/problem+json")
+    assert res.json()["validation_errors"]
+    assert client.get("/api/workspace/config").json() == {}
+
+
+def test_config_upload_valid_yaml(client: TestClient) -> None:
+    yaml_content = yaml.dump(_get_valid_config(client)).encode()
+    res = client.post(
+        "/api/workspace/config/upload",
+        files={"file": ("config.yaml", yaml_content, "application/x-yaml")},
+    )
+    assert res.status_code == 200, res.text
+    assert res.json()["config"]["task"] == "binary"
 
 
 def test_config_download(client: TestClient) -> None:
@@ -103,7 +116,7 @@ def test_config_download(client: TestClient) -> None:
 def test_config_download_empty(client: TestClient) -> None:
     res = client.get("/api/workspace/config/download")
     assert res.status_code == 400
-    assert res.json()["error"]["code"] == "WORKSPACE_NO_CONFIG"
+    assert res.json()["code"] == "WORKSPACE_NO_CONFIG"
 
 
 # --- Default config (H-0025) ---
@@ -170,7 +183,7 @@ def test_config_validate_no_body_no_config(client: TestClient) -> None:
     """No-body validate with no config set returns error."""
     res = client.post("/api/workspace/config/validate")
     assert res.status_code == 400
-    assert res.json()["error"]["code"] == "WORKSPACE_NO_CONFIG"
+    assert res.json()["code"] == "WORKSPACE_NO_CONFIG"
 
 
 def test_config_defaults_missing_params(client: TestClient) -> None:

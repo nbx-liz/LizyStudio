@@ -13,7 +13,7 @@ import { expectBudget, installFetchRecorder } from "./helpers/request-budget";
  *     `MetricsChips`'s task-change `useEffect` emitted while
  *     `ConfigForm`'s `configRef.current` was still empty.
  *   - The backend silently rejected these with
- *     `saved=false, blocking=5` (validation errors: `config_version`,
+ *     `saved=false, blocking=5` (a 422 since P-0110; validation errors: `config_version`,
  *     `task`, `split`, etc. missing).
  *   - During the empty-`ws.config` window, `GET /data/split-preview`
  *     could fire and correctly return **400 WORKSPACE_NO_CONFIG**.
@@ -134,7 +134,7 @@ test.describe("Target selection — no partial PUT, no split-preview 400 (Issue 
       `Issue #529 regression — partial-body PUT(s) observed.
 ` +
         `These bodies lack config_version/task/split and the backend ` +
-        `rejects them with saved=false, blocking=5. Captured:
+        `rejects them with 422 VALIDATION_ERROR. Captured:
 ` +
         partials
           .map(

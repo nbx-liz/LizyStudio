@@ -49,9 +49,9 @@ export function buildSyncedConfig(params: {
   // Task radio), the inherited base config still carries the previous
   // task's ``model.params.objective`` and ``model.params.metric``. The
   // backend ``task_params_compat_errors`` validator rejects the PUT
-  // with ``saved=false`` because objective='binary' is not allowed for
-  // task='regression'. The PUT looks 200-OK but the server silently
-  // keeps the previous task — which is exactly the silent UI/config
+  // because objective='binary' is not allowed for task='regression'
+  // (a 422 since P-0110). Before P-0110 it answered 200 + ``saved=false``
+  // and the server kept the previous task — which is exactly the silent UI/config
   // divergence #272 reports. Drop those task-coupled fields here so
   // the PUT lands cleanly; ConfigForm's auto-select effect repopulates
   // defaults on the next render.
@@ -76,7 +76,7 @@ export function buildSyncedConfig(params: {
   // can race against this PUT. Drop it here so the same write that
   // changes ``task`` also drops the now-invalid calibration. The
   // backend ``task_calibration_mismatch`` rule would otherwise fail
-  // saved=false the same way as the objective mismatch above.
+  // with 422 the same way as the objective mismatch above.
   const calibrationOut =
     taskChanged && effectiveTask !== "binary"
       ? null

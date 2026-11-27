@@ -86,7 +86,8 @@ test.describe("Workspace Fit Flow", () => {
       data: defaults,
     });
     expect(putRes.status()).toBe(200);
-    expect((await putRes.json()).saved).toBe(true);
+    // P-0110: a 200 means the config was saved (no `saved` flag).
+    expect(await putRes.json()).not.toHaveProperty("saved");
 
     // 6. Verify workspace status is ready for fit
     const statusRes = await request.get(`${API}/workspace/status`);

@@ -89,7 +89,7 @@ def test_post_fit_succeeds_when_only_warnings_present(
     _assert_warning_only(client, config)
 
     res = client.put("/api/workspace/config", json=config)
-    assert res.json()["saved"] is True, res.json()
+    assert res.status_code == 200, res.text
 
     res = client.post("/api/workspace/fit")
     assert res.status_code == 200, res.text
@@ -179,7 +179,7 @@ def test_post_tune_succeeds_when_only_warnings_present(
     _assert_warning_only(client, config)
 
     res = client.put("/api/workspace/config", json=config)
-    assert res.json()["saved"] is True, res.json()
+    assert res.status_code == 200, res.text
 
     res = client.post("/api/workspace/tune")
     assert res.status_code == 200, res.text

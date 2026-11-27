@@ -65,7 +65,7 @@ def _load_data_and_binary_config(client: TestClient, tmp_path: Path) -> None:
     r = client.post("/api/workspace/data/path", json={"path": _create_csv(tmp_path)})
     assert r.status_code == 200, r.text
     r = client.put("/api/workspace/config", json=_load_default_binary_config(client))
-    assert r.status_code == 200 and r.json()["saved"] is True, r.text
+    assert r.status_code == 200, r.text
 
 
 # ---------------------------------------------------------------------------

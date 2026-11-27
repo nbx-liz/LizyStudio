@@ -110,7 +110,7 @@ def test_status_reflects_config_after_put(client: TestClient, tmp_path: Path) ->
 
     config = _valid_config(client)
     r = client.put("/api/workspace/config", json=config)
-    assert r.status_code == 200 and r.json()["saved"] is True
+    assert r.status_code == 200
 
     after = client.get("/api/workspace/status").json()
     assert after["has_config"] is True

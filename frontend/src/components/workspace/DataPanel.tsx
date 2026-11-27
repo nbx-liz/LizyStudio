@@ -95,6 +95,7 @@ export const DataPanel = forwardRef<DataPanelHandle, DataPanelProps>(
       handleLoadPathByValue,
       handleUpload,
       handleTargetChange,
+      targetChangeBlocked,
       handleTaskChange,
       handleExcludeToggle,
       handleTypeChange,
@@ -185,7 +186,13 @@ export const DataPanel = forwardRef<DataPanelHandle, DataPanelProps>(
                         onChange={handleTargetChange}
                         placeholder="Select target column"
                         ariaLabel="Target column"
-                        disabled={allColumnNames.length === 0 || running}
+                        // P-0110: also while a config write is pending
+                        // or a target change is in progress.
+                        disabled={
+                          allColumnNames.length === 0 ||
+                          running ||
+                          targetChangeBlocked
+                        }
                         emptyMessage="No matching columns."
                       />
                     </div>

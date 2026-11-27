@@ -42,6 +42,13 @@ export interface ModelPanelActionsProps {
   onRedo: () => Promise<void> | void;
   onOpenSavePreset: () => void;
   onLoadPreset: (name: string) => void;
+  /**
+   * True while a config write is queued or in flight (P-0110). Undo,
+   * redo and Load Preset each write once and then roll back or commit on
+   * that write's result, so they are disabled until it settles (owner
+   * ruling, PR #781 round 2).
+   */
+  writePending?: boolean;
 }
 
 export function ModelPanelActions({
@@ -55,6 +62,7 @@ export function ModelPanelActions({
   onRedo,
   onOpenSavePreset,
   onLoadPreset,
+  writePending = false,
 }: ModelPanelActionsProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -106,7 +114,7 @@ export function ModelPanelActions({
               variant="outline"
               size="sm"
               onClick={onUndo}
-              disabled={!canUndo}
+              disabled={!canUndo || writePending}
               aria-label="Undo"
             >
               <Undo2 className="h-3 w-3" />
@@ -120,7 +128,7 @@ export function ModelPanelActions({
               variant="outline"
               size="sm"
               onClick={onRedo}
-              disabled={!canRedo}
+              disabled={!canRedo || writePending}
               aria-label="Redo"
             >
               <Redo2 className="h-3 w-3" />
@@ -141,7 +149,11 @@ export function ModelPanelActions({
           Save Preset
         </Button>
         {presets.length > 0 && (
-          <LoadPresetMenu presets={presets} onLoadPreset={onLoadPreset} />
+          <LoadPresetMenu
+            presets={presets}
+            onLoadPreset={onLoadPreset}
+            disabled={writePending}
+          />
         )}
         <RawConfigDialog
           config={config}
@@ -170,17 +182,20 @@ export function ModelPanelActions({
 function LoadPresetMenu({
   presets,
   onLoadPreset,
+  disabled = false,
 }: {
   presets: ConfigPreset[];
   onLoadPreset: (name: string) => void;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open && !disabled} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"
           size="sm"
+          disabled={disabled}
           aria-label="Load preset"
           aria-haspopup="menu"
           className="h-8 w-36 justify-between text-xs"
@@ -195,6 +210,7 @@ function LoadPresetMenu({
             key={p.name}
             type="button"
             role="menuitem"
+            disabled={disabled}
             className="w-full rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
             onClick={() => {
               onLoadPreset(p.name);

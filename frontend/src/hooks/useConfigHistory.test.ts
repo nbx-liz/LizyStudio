@@ -88,4 +88,34 @@ describe("useConfigHistory", () => {
     });
     expect(next).toBeNull();
   });
+
+  // P-0110: undo/redo send a PUT first; the cursor must not move before
+  // the backend accepts it, so callers read the target with peek* and
+  // commit with undo()/redo() only on success.
+  it("peekUndo / peekRedo return the target without moving the cursor", () => {
+    const { result } = renderHook(() => useConfigHistory());
+    act(() => {
+      result.current.push({ v: 1 });
+      result.current.push({ v: 2 });
+    });
+
+    expect(result.current.peekUndo()).toEqual({ v: 1 });
+    expect(result.current.peekUndo()).toEqual({ v: 1 });
+    expect(result.current.peekRedo()).toBeNull();
+    expect(result.current.canUndo).toBe(true);
+    expect(result.current.canRedo).toBe(false);
+
+    act(() => {
+      result.current.undo();
+    });
+    expect(result.current.peekRedo()).toEqual({ v: 2 });
+    expect(result.current.peekUndo()).toBeNull();
+    expect(result.current.canRedo).toBe(true);
+  });
+
+  it("peekUndo returns null on an empty history", () => {
+    const { result } = renderHook(() => useConfigHistory());
+    expect(result.current.peekUndo()).toBeNull();
+    expect(result.current.peekRedo()).toBeNull();
+  });
 });

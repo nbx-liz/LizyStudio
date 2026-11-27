@@ -104,7 +104,8 @@ test.describe("Workspace tune flow", () => {
       data: configWithTuning,
     });
     expect(putRes.status()).toBe(200);
-    expect((await putRes.json()).saved).toBe(true);
+    // P-0110: a 200 means the config was saved (no `saved` flag).
+    expect(await putRes.json()).not.toHaveProperty("saved");
 
     // 6. Start tune job
     const tuneRes = await request.post(`${API}/workspace/tune`);

@@ -192,7 +192,7 @@ class TestPatchEndpoint:
             json={"ops": [{"op": "set", "path": "foo.__bar__", "value": 1}]},
         )
         assert resp.status_code == 422
-        assert resp.json()["error"]["code"] == "INVALID_PATCH"
+        assert resp.json()["code"] == "INVALID_PATCH"
 
     def test_patch_invalid_op_returns_422(self, client: Any) -> None:
         _set_valid_config(client)
@@ -201,7 +201,7 @@ class TestPatchEndpoint:
             json={"ops": [{"op": "remove", "path": "task"}]},
         )
         assert resp.status_code == 422
-        assert resp.json()["error"]["code"] == "INVALID_PATCH"
+        assert resp.json()["code"] == "INVALID_PATCH"
 
     def test_patch_on_empty_config_returns_error(self, client: Any) -> None:
         """PATCH on empty workspace should fail."""

@@ -13,8 +13,12 @@ import { useQueryClient } from "@tanstack/react-query";
 import equal from "fast-deep-equal";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { ApiError } from "@/api/client";
-import { getErrorMessage, isStudioError } from "@/api/errors";
+import {
+  getErrorMessage,
+  getValidationErrors,
+  isWorkspaceLocked,
+  summarizeValidationErrors,
+} from "@/api/errors";
 import {
   useBackends,
   useColumns,
@@ -33,6 +37,7 @@ import type {
   WriteReason,
 } from "@/hooks/useConfigWriteFunnel";
 import { useConfigWriteFunnelOptional } from "@/hooks/useConfigWriteFunnelContext";
+import { useConfigWritePending } from "@/hooks/useConfigWritePending";
 
 const VALIDATION_DEBOUNCE_MS = 500;
 
@@ -63,13 +68,16 @@ export function useModelPanelData({
   // P-0092 Q-1 Phase 4: pull the optional write funnel from the
   // Workspace-level provider so handleConfigChange / handleUndo /
   // handleRedo serialise behind in-flight target-select / cv-change
-  // writers. The hook still owns the saved=false / 409 / debounce
+  // writers. The hook still owns the 422 / 409 / debounce
   // observation logic — the funnel only owns the network call ordering.
   // Tests inject `writeFunnel` directly via params; production reads
   // from context.
   const contextFunnel = useConfigWriteFunnelOptional();
   const writeFunnel =
     writeFunnelOverride !== undefined ? writeFunnelOverride : contextFunnel;
+  // P-0110: true while a config write is queued or in flight; undo / redo
+  // and preset load are disabled then (owner ruling, PR #781 round 2).
+  const writePending = useConfigWritePending(writeFunnel);
 
   // --------------------------------------------------------------------
   // Data
@@ -121,27 +129,53 @@ export function useModelPanelData({
     return () => clearTimeout(validateTimer.current);
   }, []);
 
+  // Resolves `true` when the backend holds `newConfig` afterwards (saved
+  // now, or already equal to the cached server config) and `false` when it
+  // does not (refused, failed, or skipped while a job runs), so callers
+  // such as `handleLoadPreset` can gate their own success feedback.
   const handleConfigChange = useCallback(
-    async (newConfig: Record<string, unknown>) => {
-      if (running) return;
+    async (newConfig: Record<string, unknown>): Promise<boolean> => {
+      if (running) return false;
       const cached = queryClient.getQueryData<Record<string, unknown>>(
         queryKeys.config(),
       );
       if (cached && equal(cached, newConfig)) {
-        return;
+        return true;
       }
-      // INV-A1/A2/A3 (Issue #276): observe `saved` from PUT /config and
-      // do not silently swallow validation rejections. When saved=false
-      // the backend kept the prior config, so the cache, history, and
-      // errors state must reflect that — not the rejected payload.
+      // INV-A1/A2/A3 (Issue #276) + P-0110: a blocking validation
+      // rejection is a 422 Problem Details error, never a 200. The
+      // backend kept the prior config, so the cache, history, and errors
+      // state must reflect that — not the rejected payload.
       //
       // P-0092 Q-1 Phase 4: route through the write funnel when one is
       // mounted so this user-edit PUT serialises behind any in-flight
       // target-select / cv-change writer. The funnel's WriteResult
-      // carries the raw `ConfigUpdateResponse` in `saved` (success) or
-      // the original error in `details` (failure), so the existing
-      // saved=false / 409 observation logic stays right here.
-      let response: Awaited<ReturnType<typeof updateConfig>>;
+      // carries the original error in `details` on failure, so the
+      // 422 / 409 observation logic stays right here.
+      const rejectWrite = (err: unknown): void => {
+        // P-0089 / Issue #279: 409 WORKSPACE_LOCKED means a fit/tune
+        // job is running and the config is intentionally immutable.
+        // Surface a quiet info toast (the section-level disabled
+        // controls already explain the lock) and re-fetch so the form
+        // resyncs to the locked-in config.
+        if (isWorkspaceLocked(err)) {
+          toast.info("Config is locked while a job is running");
+          queryClient.invalidateQueries({ queryKey: queryKeys.config() });
+          return;
+        }
+        const validationErrors = getValidationErrors(err);
+        if (validationErrors !== null) {
+          setErrors(validationErrors);
+          toast.error(
+            `Config not saved: ${summarizeValidationErrors(validationErrors)}`,
+          );
+          // Re-fetch the actual backend state so the UI reflects truth,
+          // not the rejected payload the caller tried to apply.
+          queryClient.invalidateQueries({ queryKey: queryKeys.config() });
+          return;
+        }
+        toast.error("Failed to update config");
+      };
       try {
         if (writeFunnel) {
           const result = await writeFunnel.enqueueWrite({
@@ -150,55 +184,16 @@ export function useModelPanelData({
             reason: "config-form-edit",
           });
           if (!result.ok) {
-            const err = result.details;
-            if (
-              err instanceof ApiError &&
-              err.status === 409 &&
-              isStudioError(err.body) &&
-              err.body.error.code === "WORKSPACE_LOCKED"
-            ) {
-              toast.info("Config is locked while a job is running");
-              queryClient.invalidateQueries({ queryKey: queryKeys.config() });
-              return;
-            }
-            toast.error("Failed to update config");
-            return;
+            // An aborted write means the funnel tore down: not a refusal.
+            if (result.error !== "aborted") rejectWrite(result.details);
+            return false;
           }
-          response = result.saved as unknown as Awaited<
-            ReturnType<typeof updateConfig>
-          >;
         } else {
-          response = await updateConfig(newConfig);
+          await updateConfig(newConfig);
         }
       } catch (err) {
-        // P-0089 / Issue #279: 409 WORKSPACE_LOCKED means a fit/tune
-        // job is running and the config is intentionally immutable.
-        // Surface a quiet info toast (the section-level disabled
-        // controls already explain the lock) and re-fetch so the form
-        // resyncs to the locked-in config.
-        if (
-          err instanceof ApiError &&
-          err.status === 409 &&
-          isStudioError(err.body) &&
-          err.body.error.code === "WORKSPACE_LOCKED"
-        ) {
-          toast.info("Config is locked while a job is running");
-          queryClient.invalidateQueries({ queryKey: queryKeys.config() });
-          return;
-        }
-        toast.error("Failed to update config");
-        return;
-      }
-      if (response?.saved === false) {
-        const errs = response.errors ?? [];
-        setErrors(errs);
-        const summary =
-          errs[0]?.message ?? "Config rejected by backend validation";
-        toast.error(`Config not saved: ${summary}`);
-        // Re-fetch the actual backend state so the UI reflects truth,
-        // not the rejected payload the caller tried to apply.
-        queryClient.invalidateQueries({ queryKey: queryKeys.config() });
-        return;
+        rejectWrite(err);
+        return false;
       }
       queryClient.setQueryData(queryKeys.config(), newConfig);
       history.push(newConfig);
@@ -215,6 +210,7 @@ export function useModelPanelData({
           // state on the next successful call
         }
       }, VALIDATION_DEBOUNCE_MS);
+      return true;
     },
     [queryClient, running, history.push, writeFunnel],
   );
@@ -226,10 +222,20 @@ export function useModelPanelData({
     async (file: File) => {
       try {
         const result = await uploadConfig(file);
-        setErrors(result.errors);
+        setErrors(result.validation_errors);
         queryClient.invalidateQueries({ queryKey: queryKeys.config() });
         toast.success("Config imported");
       } catch (err) {
+        // P-0110: a config that fails validation is a 422, not a 200
+        // with saved=false — show why, and keep the prior config.
+        const validationErrors = getValidationErrors(err);
+        if (validationErrors !== null) {
+          setErrors(validationErrors);
+          toast.error(
+            `Import failed: ${summarizeValidationErrors(validationErrors)}`,
+          );
+          return;
+        }
         toast.error(`Import failed: ${getErrorMessage(err)}`);
       }
     },
@@ -255,52 +261,110 @@ export function useModelPanelData({
     async (
       body: Record<string, unknown>,
       reason: WriteReason,
-    ): Promise<{ ok: boolean; viaFunnel: boolean }> => {
+    ): Promise<{ ok: boolean; viaFunnel: boolean; error?: unknown }> => {
       if (writeFunnel) {
         const result = await writeFunnel.enqueueWrite({
           kind: "replace",
           config: body,
           reason,
         });
-        return { ok: result.ok, viaFunnel: true };
+        return result.ok
+          ? { ok: true, viaFunnel: true }
+          : { ok: false, viaFunnel: true, error: result.details };
       }
       try {
         await updateConfig(body);
         return { ok: true, viaFunnel: false };
-      } catch {
-        return { ok: false, viaFunnel: false };
+      } catch (err) {
+        return { ok: false, viaFunnel: false, error: err };
       }
     },
     [writeFunnel],
   );
 
-  const handleUndo = useCallback(async () => {
-    const prev = history.undo();
-    if (!prev) return;
-    const { ok, viaFunnel } = await sendThroughFunnelOrLegacy(prev, "undo");
-    if (ok) {
-      if (!viaFunnel) {
-        queryClient.setQueryData(queryKeys.config(), prev);
+  // P-0110 (BLUEPRINT §6.3): a refused undo / redo shows why. A lock is
+  // the quiet info toast; a 422 fills the errors state and names the
+  // first blocking entry; anything else keeps the generic message.
+  const reportHistoryFailure = useCallback(
+    (label: "Undo" | "Redo", err: unknown) => {
+      if (isWorkspaceLocked(err)) {
+        toast.info("Config is locked while a job is running");
+        return;
       }
-      toast.info("Config undone");
-    } else {
-      toast.error("Undo failed");
+      const validationErrors = getValidationErrors(err);
+      if (validationErrors !== null) {
+        setErrors(validationErrors);
+        toast.error(
+          `${label} failed: ${summarizeValidationErrors(validationErrors)}`,
+        );
+        return;
+      }
+      toast.error(`${label} failed`);
+    },
+    [],
+  );
+
+  // P-0110: the cursor moves only after the backend accepted the PUT, so
+  // a refused undo / redo (422 / 409) leaves the history where it was.
+  // Owner ruling (PR #781 round 2): undo / redo are disabled while a
+  // config write is pending (`writePending`), and the handlers return
+  // early if called then, so no other write can interleave between the
+  // snapshot read and this commit.
+  const handleUndo = useCallback(async () => {
+    if (writeFunnel?.isFlushing()) return;
+    const prev = history.peekUndo();
+    if (!prev) return;
+    const { ok, viaFunnel, error } = await sendThroughFunnelOrLegacy(
+      prev,
+      "undo",
+    );
+    if (!ok) {
+      reportHistoryFailure("Undo", error);
+      return;
     }
-  }, [history, queryClient, sendThroughFunnelOrLegacy]);
+    history.undo();
+    if (!viaFunnel) {
+      queryClient.setQueryData(queryKeys.config(), prev);
+    }
+    // Owner ruling (PR #781 delta check): only clear the entries a refused
+    // undo / redo stored. No validation is started here, so no late result
+    // can overwrite the errors of a later refused write.
+    setErrors([]);
+    toast.info("Config undone");
+  }, [
+    history,
+    queryClient,
+    sendThroughFunnelOrLegacy,
+    reportHistoryFailure,
+    writeFunnel,
+  ]);
 
   const handleRedo = useCallback(async () => {
-    const next = history.redo();
+    if (writeFunnel?.isFlushing()) return;
+    const next = history.peekRedo();
     if (!next) return;
-    const { ok, viaFunnel } = await sendThroughFunnelOrLegacy(next, "redo");
-    if (ok) {
-      if (!viaFunnel) {
-        queryClient.setQueryData(queryKeys.config(), next);
-      }
-      toast.info("Config redone");
-    } else {
-      toast.error("Redo failed");
+    const { ok, viaFunnel, error } = await sendThroughFunnelOrLegacy(
+      next,
+      "redo",
+    );
+    if (!ok) {
+      reportHistoryFailure("Redo", error);
+      return;
     }
-  }, [history, queryClient, sendThroughFunnelOrLegacy]);
+    history.redo();
+    if (!viaFunnel) {
+      queryClient.setQueryData(queryKeys.config(), next);
+    }
+    // Same as undo: clear the refusal errors, start no validation.
+    setErrors([]);
+    toast.info("Config redone");
+  }, [
+    history,
+    queryClient,
+    sendThroughFunnelOrLegacy,
+    reportHistoryFailure,
+    writeFunnel,
+  ]);
 
   // --------------------------------------------------------------------
   // Preset handlers
@@ -315,7 +379,11 @@ export function useModelPanelData({
   );
 
   const handleLoadPreset = useCallback(
-    (name: string) => {
+    async (name: string) => {
+      // Owner ruling (PR #781 round 2): no preset load while a config
+      // write is pending, so its single write cannot coalesce with or
+      // queue behind another one; the menu is disabled then too.
+      if (writeFunnel?.isFlushing()) return;
       const preset = loadPreset(name);
       if (!preset) return;
       // Issue #276: presets intentionally omit data-bound fields (path,
@@ -333,10 +401,12 @@ export function useModelPanelData({
       if (current?.output_dir && merged.output_dir === undefined) {
         merged.output_dir = current.output_dir;
       }
-      handleConfigChange(merged);
-      toast.success(`Preset "${name}" loaded`);
+      // P-0110: claim success only once the backend saved the preset. A
+      // refused write already shows its own toast in handleConfigChange.
+      const saved = await handleConfigChange(merged);
+      if (saved) toast.success(`Preset "${name}" loaded`);
     },
-    [loadPreset, handleConfigChange, queryClient],
+    [loadPreset, handleConfigChange, queryClient, writeFunnel],
   );
 
   // --------------------------------------------------------------------
@@ -401,6 +471,7 @@ export function useModelPanelData({
     handleRedo,
     confirmSavePreset,
     handleLoadPreset,
+    writePending,
   };
 }
 

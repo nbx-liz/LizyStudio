@@ -52,6 +52,7 @@ export function ModelPanel({
     handleRedo,
     confirmSavePreset,
     handleLoadPreset,
+    writePending,
   } = data;
 
   const backendLabel = backend ? `${backend.name} v${backend.version}` : null;
@@ -95,6 +96,7 @@ export function ModelPanel({
         onRedo={handleRedo}
         onOpenSavePreset={() => setSavePresetOpen(true)}
         onLoadPreset={handleLoadPreset}
+        writePending={writePending}
       />
 
       <SavePresetDialog

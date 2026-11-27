@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   fetchConfigDefaults: vi.fn(),
   updateConfig: vi.fn(),
   toastError: vi.fn(),
+  toastInfo: vi.fn(),
 }));
 
 vi.mock("@/api/workspace", () => ({
@@ -25,7 +26,7 @@ vi.mock("sonner", () => ({
   toast: {
     error: mocks.toastError,
     success: vi.fn(),
-    info: vi.fn(),
+    info: mocks.toastInfo,
     warning: vi.fn(),
   },
 }));
@@ -33,6 +34,11 @@ vi.mock("sonner", () => ({
 import { queryKeys } from "@/api/queryKeys";
 import { INITIAL_BLOCKED_STATE } from "@/components/workspace/BlockedGroupKFoldEditor";
 import { INITIAL_CV_STATE } from "@/components/workspace/cv-state";
+import {
+  N_SPLITS_ERROR,
+  validationProblem,
+  workspaceLockedProblem,
+} from "@/test/problemDetails";
 import { useConfigSync } from "./useConfigSync";
 import type { ColumnOverride, TaskType } from "./useDataPanel.types";
 
@@ -229,6 +235,7 @@ describe("useConfigSync", () => {
         "Config sync failed — changes may not be saved",
       ),
     );
+    expect(mocks.toastError).toHaveBeenCalledTimes(1);
   });
 
   it("swallows AbortError silently (no toast)", async () => {
@@ -311,10 +318,10 @@ describe("useConfigSync", () => {
     expect(retried.split.n_splits).toBe(7);
   });
 
-  // Review r2: a validation rejection is an HTTP 200 with saved=false, so it
-  // must not count as the strategy having been persisted either.  The
-  // decision now reads the persisted base (GET), not a client-side ref.
-  it("a saved=false strategy change re-applies the automatic marker on the next sync", async () => {
+  // Review r2: a validation rejection (a 422 since P-0110) must not count
+  // as the strategy having been persisted either.  The decision reads the
+  // persisted base (GET), not a client-side ref.
+  it("a 422-rejected strategy change re-applies the automatic marker on the next sync", async () => {
     mocks.fetchConfig.mockResolvedValue({
       ...baseConfig,
       training: {
@@ -332,11 +339,9 @@ describe("useConfigSync", () => {
     );
     await waitFor(() => expect(mocks.updateConfig).toHaveBeenCalledTimes(1));
 
-    mocks.updateConfig.mockResolvedValueOnce({
-      config: {},
-      errors: [{ path: "x" }],
-      saved: false,
-    });
+    mocks.updateConfig.mockRejectedValueOnce(
+      validationProblem([{ path: "x", message: "rejected" }]),
+    );
     const kfold = { ...INITIAL_CV_STATE, strategy: "kfold" };
     rerender({ cv: kfold });
     await waitFor(() => expect(mocks.updateConfig).toHaveBeenCalledTimes(2));
@@ -412,6 +417,7 @@ describe("useConfigSync", () => {
           "Config sync failed — changes may not be saved",
         ),
       );
+      expect(mocks.toastError).toHaveBeenCalledTimes(1);
       // No setQueryData on failure — cache must remain untouched.
       expect(queryClient.getQueryData(queryKeys.config())).toBeUndefined();
     });
@@ -448,13 +454,14 @@ describe("useConfigSync", () => {
         return (
           stub?.(replace) ?? {
             ok: true as const,
-            saved: { config: replace.config, errors: [], saved: true },
+            saved: { config: replace.config, validation_errors: [] },
           }
         );
       });
       return {
         funnel: { enqueueWrite, isFlushing: () => false },
         calls,
+        enqueueWrite,
       };
     }
 
@@ -522,6 +529,32 @@ describe("useConfigSync", () => {
       await waitFor(() => expect(onDataChanged).toHaveBeenCalledTimes(1));
     });
 
+    // BLUEPRINT §6.3 (P-0110): a 422 names its first blocking entry.
+    it("names the first blocking entry when the funnel write is refused with 422", async () => {
+      const { funnel, enqueueWrite } = createStubFunnel(() => ({
+        ok: false,
+        error: "rejected",
+        details: validationProblem(),
+      }));
+      const { wrapper } = testWrapper;
+      renderHook(
+        () =>
+          useConfigSync(
+            defaultParams({
+              // biome-ignore lint/suspicious/noExplicitAny: stub funnel
+              writeFunnel: funnel as any,
+            }),
+          ),
+        { wrapper },
+      );
+
+      await waitFor(() => expect(mocks.toastError).toHaveBeenCalledTimes(1));
+      expect(mocks.toastError).toHaveBeenCalledWith(
+        `Config sync failed: ${N_SPLITS_ERROR.message}`,
+      );
+      expect(enqueueWrite).toHaveBeenCalledTimes(1);
+    });
+
     it("surfaces error toast when funnel returns ok=false (network/other)", async () => {
       const { funnel } = createStubFunnel(() => ({
         ok: false,
@@ -545,21 +578,14 @@ describe("useConfigSync", () => {
           "Config sync failed — changes may not be saved",
         ),
       );
+      expect(mocks.toastError).toHaveBeenCalledTimes(1);
     });
 
     it("surfaces info toast (not error) when funnel returns 409 WORKSPACE_LOCKED via details", async () => {
-      const { ApiError } = await import("@/api/client");
-      const lockErr = new ApiError(409, {
-        error: {
-          code: "WORKSPACE_LOCKED",
-          message: "Config is locked while job xyz is running",
-          details: { job_id: "xyz" },
-        },
-      });
-      const { funnel } = createStubFunnel(() => ({
+      const { funnel, enqueueWrite } = createStubFunnel(() => ({
         ok: false,
         error: "network",
-        details: lockErr,
+        details: workspaceLockedProblem("xyz"),
       }));
       const { wrapper } = testWrapper;
       renderHook(
@@ -573,11 +599,14 @@ describe("useConfigSync", () => {
         { wrapper },
       );
 
-      // The hook must NOT show the generic error toast for the lock case.
-      await new Promise((r) => setTimeout(r, 30));
-      expect(mocks.toastError).not.toHaveBeenCalledWith(
-        "Config sync failed — changes may not be saved",
+      // The write ran, and its 409 shows the quiet lock toast exactly
+      // once instead of the generic error toast.
+      await waitFor(() => expect(mocks.toastInfo).toHaveBeenCalledTimes(1));
+      expect(mocks.toastInfo).toHaveBeenCalledWith(
+        "Config is locked while a job is running",
       );
+      expect(enqueueWrite).toHaveBeenCalledTimes(1);
+      expect(mocks.toastError).toHaveBeenCalledTimes(0);
     });
 
     it("does not call onDataChanged when funnel returns ok=false with error=aborted", async () => {

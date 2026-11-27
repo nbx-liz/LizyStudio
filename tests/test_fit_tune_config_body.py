@@ -51,7 +51,7 @@ def _get_defaults(client: TestClient) -> dict[str, Any]:
 def _put_config(client: TestClient, cfg: dict[str, Any]) -> None:
     r = client.put("/api/workspace/config", json=cfg)
     assert r.status_code == 200
-    assert r.json()["saved"] is True
+    assert r.status_code == 200, r.text
 
 
 # ---------------------------------------------------------------------------

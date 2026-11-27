@@ -146,4 +146,4 @@ class TestDataLoadMemoryCheck:
         monkeypatch.setenv("LIZYSTUDIO_MAX_DF_MEMORY", "1")
         resp = client.post("/api/workspace/data/path", json={"path": str(p)})
         assert resp.status_code == 400
-        assert resp.json()["error"]["code"] == "FILE_INVALID"
+        assert resp.json()["code"] == "FILE_INVALID"

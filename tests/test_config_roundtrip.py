@@ -45,15 +45,11 @@ class TestConfigRoundTrip:
         assert defaults["task"] == "binary"
 
         # 3. PUT config (this is the step that fails in E2E)
+        # P-0110: a 200 means the config was saved; a rejection is 422 and
+        # its validation_errors say why.
         put_res = client.put("/api/workspace/config", json=defaults)
-        assert put_res.status_code == 200
-        body = put_res.json()
-
-        # Diagnose: print errors if save failed
-        if not body.get("saved"):
-            pytest.fail(f"Config save failed with errors: {body.get('errors')}")
-
-        assert body["saved"] is True
+        assert put_res.status_code == 200, put_res.text
+        assert put_res.json()["validation_errors"] == []
 
     def test_defaults_config_with_data_path_saves(
         self, client: TestClient, test_csv: Path
@@ -75,12 +71,7 @@ class TestConfigRoundTrip:
 
         # 4. PUT config
         put_res = client.put("/api/workspace/config", json=defaults)
-        body = put_res.json()
-
-        if not body.get("saved"):
-            pytest.fail(f"Config save failed with errors: {body.get('errors')}")
-
-        assert body["saved"] is True
+        assert put_res.status_code == 200, put_res.text
 
     def test_workspace_has_config_after_successful_save(
         self, client: TestClient, test_csv: Path
@@ -92,15 +83,9 @@ class TestConfigRoundTrip:
         ).json()
 
         put_res = client.put("/api/workspace/config", json=defaults)
-        body = put_res.json()
-
-        # If save succeeded, check status
-        if body.get("saved"):
-            status = client.get("/api/workspace/status").json()
-            assert status["has_config"] is True
-        else:
-            # If save fails, the test should tell us why
-            pytest.fail(f"Config save failed: {body.get('errors')}")
+        assert put_res.status_code == 200, put_res.text
+        status = client.get("/api/workspace/status").json()
+        assert status["has_config"] is True
 
     def test_validate_config_is_data_independent(
         self, client: TestClient, test_csv: Path
@@ -145,6 +130,5 @@ class TestConfigRoundTrip:
 
         defaults["data"]["target"] = "column_that_does_not_exist"
         put_res = client.put("/api/workspace/config", json=defaults)
-        body = put_res.json()
         # Document: save succeeds even with invalid column reference
-        assert body["saved"] is True
+        assert put_res.status_code == 200, put_res.text
