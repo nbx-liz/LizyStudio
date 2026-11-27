@@ -42,6 +42,15 @@ export interface ConfigFieldSpec<TValue> {
   uiLocator: (page: Page) => Locator;
   /** Action that writes `testValue` into the UI control. */
   uiAction: (locator: Locator, value: TValue) => Promise<void>;
+  /**
+   * P-0111: the Tune tab's tuning fields are written through
+   * `PUT /api/workspace/config/tuning-overrides`, whose body is the flat
+   * `TuningOverrides` shape. Set this to that endpoint's body path (e.g.
+   * "n_trials") for such a field; the saved-config check (step 4) still
+   * reads `configPath` from `GET /config`. Unset: the field is written
+   * through `PUT /api/workspace/config` at `configPath`.
+   */
+  tuningOverridesPath?: string;
 }
 
 /**
@@ -131,10 +140,11 @@ export function deepGet(
 export async function nextPutConfigBody(
   page: Page,
   bodyPredicate?: (body: Record<string, unknown>) => boolean,
+  urlSuffix = "/api/workspace/config",
 ): Promise<Record<string, unknown>> {
   const req = await page.waitForRequest((r: Request) => {
     if (r.method() !== "PUT") return false;
-    if (!r.url().endsWith("/api/workspace/config")) return false;
+    if (!r.url().endsWith(urlSuffix)) return false;
     if (bodyPredicate === undefined) return true;
     let parsed: Record<string, unknown>;
     try {
@@ -195,16 +205,19 @@ export async function assertConfigReflection<TValue>(
   const locator = spec.uiLocator(page);
   await expect(locator).toBeVisible();
   const expectedValueJson = JSON.stringify(spec.testValue);
+  const wirePath = spec.tuningOverridesPath ?? spec.configPath;
   const putPromise = nextPutConfigBody(
     page,
-    (body) =>
-      JSON.stringify(deepGet(body, spec.configPath)) === expectedValueJson,
+    (body) => JSON.stringify(deepGet(body, wirePath)) === expectedValueJson,
+    spec.tuningOverridesPath !== undefined
+      ? "/api/workspace/config/tuning-overrides"
+      : "/api/workspace/config",
   );
   await spec.uiAction(locator, spec.testValue);
   const putBody = await putPromise;
   expect(
-    deepGet(putBody, spec.configPath),
-    `PUT body mismatch at ${spec.configPath}`,
+    deepGet(putBody, wirePath),
+    `PUT body mismatch at ${wirePath}`,
   ).toEqual(spec.testValue);
 
   // (4) confirm the saved config reflects the new value. useConfigSync

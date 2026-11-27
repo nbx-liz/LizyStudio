@@ -275,6 +275,8 @@ const tuningNTrials: FixtureEntry = {
     uiAction: async (locator) => {
       await locator.click();
     },
+    // P-0111: a tuning field, written through PUT /config/tuning-overrides.
+    tuningOverridesPath: "n_trials",
   } as ConfigFieldSpec<unknown>,
   precondition: async (page) => {
     // Switch from Fit (default) to Tune so the SegmentedControl
@@ -341,6 +343,8 @@ const tuningTimeout: FixtureEntry = {
     uiAction: async (locator) => {
       await locator.click();
     },
+    // P-0111: a tuning field, written through PUT /config/tuning-overrides.
+    tuningOverridesPath: "timeout",
   } as ConfigFieldSpec<unknown>,
   precondition: async (page) => {
     await page.getByRole("tab", { name: "Tune", exact: true }).click();
