@@ -5612,9 +5612,9 @@ develop `77f8eda`、lizyml 0.21.1（`uv.lock:593`）での観察。再現は Pyt
 - [ ] **前方一致の近い外れ（`classify` の単体 test）:** 前方の literal を保ったまま (a) code を変える、(b) `context` に、既存のどの行の判定にも使われない key（例: `"note"`）を 1 つ足す、の 2 つは分類されない（(b) に `category_identity_version` のような既存の行の key を使うと、その行の 409 に合ってしまうので使わない）。`path` だけの `DESERIALIZATION_FAILED` で、literal を文字列の途中に含むもの、literal の前に空白を足したものも分類されない。
 - [ ] **export の sanitize（分類と独立）:** model export と report export を、sentinel を文字列に含む分類されない例外で駆動し、status 500、code `EXPORT_ERROR`、固定の message（例外の型名だけ）、`error.details == {}` を assert し、答えの本文に sentinel が出ず、server の log に例外と traceback が残ることを確かめる。分類された入力の誤り（400 `BACKEND_INPUT_REJECTED`）は、model export で、adapter の既存の分類（`error_mapping.py`）を通る lizyml の拒否で 1 つ駆動する（明示の例外の固定）。その `context` には、許可されない key、200 文字を超える許可された key の値を入れ、`user_message` には 200 文字を超える空でない文言を入れる。答えで、許可されない key が `error.details.context` に無いこと、長い値が 200 文字に切られていること、`error.message` が `user_message` とちょうど同じであること（D2 のとおり上限なしで渡す。本案は上限を設けない）を assert する。
 - [ ] BLUEPRINT §6.1 / §6.2、`docs/api.md:150-152` と CHANGELOG が上の変更と一致する。
-- [ ] 上流の Issue（(D)、構造の判別子の依頼）を起こし、本案の HISTORY の行から参照する。
+- [x] 上流の Issue（(D)、構造の判別子の依頼）を起こし、本案の HISTORY の行から参照する。nbx-liz/LizyML#435（2026-11-27 起票）。
 
 #### Decision
 
 - 2026-11-26 **Accepted — (A)**（owner）。判別は code `DESERIALIZATION_FAILED` + `context` の key がちょうど `{"path"}` + `user_message` の固定の前方一致で、`analysis_context` の unpickle の失敗だけを 409 にする。(B) は採らない。上流 LizyML に構造の判別子を依頼する Issue（(D)）を実装と同時に起こす。Codex critique: 3 round（`lizystudio-p0121-critique-20261126`）+ 1 round の delta check（`lizystudio-p0121-delta-20261126`）で APPROVE。
-- 2026-11-27 実装: `error_mapping.py` の `Rule.message_prefix` と `unreadable_analysis_context` の行、`ExportError` の固定文言（`api/jobs.py` の export handler）、BLUEPRINT §6.1 / §6.2、`docs/api.md`、CHANGELOG、`tests/integration/test_p0121_unreadable_analysis_context.py` と `tests/test_p0117_error_mapping.py`。上流 LizyML への構造の判別子の Issue（(D)）は main context が起こす。
+- 2026-11-27 実装: `error_mapping.py` の `Rule.message_prefix` と `unreadable_analysis_context` の行、`ExportError` の固定文言（`api/jobs.py` の export handler）、BLUEPRINT §6.1 / §6.2、`docs/api.md`、CHANGELOG、`tests/integration/test_p0121_unreadable_analysis_context.py` と `tests/test_p0117_error_mapping.py`。上流 LizyML への構造の判別子の Issue（(D)）は nbx-liz/LizyML#435 として起票済み。lizyml の対応版が出たら、本行を `context` の判別に置き換える（その lizyml の bump の PR で行う）。
