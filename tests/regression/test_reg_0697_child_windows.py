@@ -16,8 +16,8 @@ event gates; every wait is bounded by a timeout.
 
 from __future__ import annotations
 
+import contextlib
 import subprocess
-import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -30,16 +30,14 @@ from lizystudio.api import workspace as ws_api
 from lizystudio.services import subprocess_runner, training
 from lizystudio.services._child_barrier import ENV_VAR
 from tests.regression.p0119_harness import (
-    _GATES,
     CHILD_WAIT,
-    Budget,
     Call,
     Gate,
+    Reaper,
     Recorder,
     app_parts,
     join_worker,
     metric,
-    reap,
     seed_workspace,
 )
 
@@ -51,10 +49,7 @@ _POINTS = ("setup", "core_entry")
 class ChildBarrier:
     """The test side of the child's file barrier (one directory per phase)."""
 
-    def __init__(
-        self, root: Path, monkeypatch: pytest.MonkeyPatch, budget: Budget
-    ) -> None:
-        self._budget = budget
+    def __init__(self, root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         self._root = root
         self._monkeypatch = monkeypatch
         self._n = 0
@@ -75,7 +70,7 @@ class ChildBarrier:
         self._monkeypatch.delenv(ENV_VAR, raising=False)
 
     def wait_reached(self, point: str) -> None:
-        deadline = time.monotonic() + self._budget.left(CHILD_WAIT)
+        deadline = time.monotonic() + CHILD_WAIT
         while not (self.dir / f"{point}.reached").exists():
             assert time.monotonic() < deadline, f"child never reached {point}"
             time.sleep(0.02)
@@ -97,8 +92,7 @@ class ChildEnv:
         self.ws, self.store, self.broadcaster = app_parts(client)
         self.rec = Recorder()
         self.rec.install(monkeypatch, self.broadcaster, self.store._slot)
-        self.budget = Budget()
-        self.barrier = ChildBarrier(tmp_path / "barrier", monkeypatch, self.budget)
+        self.barrier = ChildBarrier(tmp_path / "barrier", monkeypatch)
         self.children: list[subprocess.Popen[bytes]] = []
         self._spy_popen(monkeypatch)
         self.tmp_path = tmp_path
@@ -126,11 +120,11 @@ class ChildEnv:
         return self.client.post(url, **kwargs)
 
     def gate(self) -> Gate:
-        """A gate whose waits draw from this test's shared child budget."""
-        return Gate(timeout=CHILD_WAIT, budget=self.budget)
+        """A gate that bounds a real child's spawn, import and run."""
+        return Gate(timeout=CHILD_WAIT)
 
     def join(self) -> None:
-        join_worker(self.client, self.budget.left(CHILD_WAIT))
+        join_worker(self.client, CHILD_WAIT)
 
     def status(self, job_id: str) -> str:
         job = self.store.get(job_id)
@@ -152,16 +146,26 @@ class ChildEnv:
         return job_id
 
 
-@pytest.fixture()
-def cenv(
+@contextlib.contextmanager
+def child_env_scope(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> Iterator[ChildEnv]:
-    gate_mark, baseline = len(_GATES), set(threading.enumerate())
+    """A :class:`ChildEnv` whose exit, on any path, reaps its gates, workers
+    and children and raises if one survives (#786)."""
+    reaper = Reaper()
     child_env = ChildEnv(client, tmp_path, monkeypatch)
     try:
         yield child_env
     finally:
-        reap(gate_mark=gate_mark, baseline=baseline, children=child_env.children)
+        reaper.close(child_env.children)
+
+
+@pytest.fixture()
+def cenv(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[ChildEnv]:
+    with child_env_scope(client, tmp_path, monkeypatch) as child_env:
+        yield child_env
 
 
 def test_697_window1a_reset_during_child_setup_cancels_without_force_release(
@@ -244,7 +248,7 @@ def test_race_a_subprocess_second_unpause_is_refused(
     second = cenv.post(f"/api/jobs/{job_id}/unpause")
     assert second.status_code == 400, second.text
     gate.release.set()
-    assert first.result().status_code == 200
+    assert first.result(CHILD_WAIT).status_code == 200
     cenv.join()
     assert len(cenv.children) - spawned == 1
     assert cenv.status(job_id) == "completed"
@@ -280,7 +284,7 @@ def test_race_b_subprocess_cancel_before_admission_spawns_nothing(
     assert job_id is not None
     assert cenv.post(f"/api/jobs/{job_id}/cancel").status_code == 200
     gate.release.set()
-    assert tune.result().status_code == 409
+    assert tune.result(CHILD_WAIT).status_code == 409
     assert cenv.children == []
     assert cenv.status(job_id) == "cancelled"
 
@@ -337,7 +341,7 @@ def test_window4_cancel_inside_the_reconcile_waits_and_is_400(
     cancel = Call(lambda: cenv.post(f"/api/jobs/{job_id}/cancel"))
     assert cancel.finished_within(0.3) is False, "cancel did not wait for the lock"
     lock_gate.release.set()
-    assert cancel.result().status_code == 400
+    assert cancel.result(CHILD_WAIT).status_code == 400
     cenv.join()
     assert cenv.status(job_id) == "failed"
     assert cenv.rec.writes_of(job_id, "failed") == 1

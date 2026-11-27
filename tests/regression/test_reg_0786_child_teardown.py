@@ -1,55 +1,69 @@
-"""Issue #786: a failed child-gate wait leaves nothing running (teardown).
+"""Issue #786: the child-test teardown reaps what a failed test leaves running.
 
-A real-child test that fails on a gate timeout must not leave the child
-process or the worker thread alive into the next test. The harness reaps
-both on every exit path; this test drives the failing path on purpose and
-asserts the process and thread counts.
+``child_env_scope`` is the context manager behind the ``cenv`` fixture, so
+driving its exit drives the fixture's own teardown. The child is held alive at
+the file barrier; the exit must stop it and its worker thread, and must raise
+when a survivor remains (the counts are never discarded).
 """
 
 from __future__ import annotations
 
+import subprocess
 import threading
+from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
-from lizystudio.services import subprocess_runner
-from tests.regression.p0119_harness import (
-    _GATES,
-    Gate,
-    live_job_threads,
-    reap,
+from tests.regression.p0119_harness import live_job_threads
+from tests.regression.test_reg_0697_child_windows import (
+    ChildEnv,
+    child_env_scope,
 )
-from tests.regression.test_reg_0697_child_windows import ChildEnv, cenv
-
-__all__ = ["cenv"]
 
 pytestmark = pytest.mark.integration
 
 
-def test_a_missed_child_gate_leaves_no_child_process_or_worker_thread(
-    cenv: ChildEnv, monkeypatch: pytest.MonkeyPatch
+def _start_held_child(child_env: ChildEnv) -> None:
+    child_env.barrier.arm("core_entry")
+    assert child_env.post("/api/workspace/tune").status_code == 200
+    child_env.barrier.wait_reached("core_entry")
+    assert len(child_env.children) == 1
+    assert child_env.children[0].poll() is None
+
+
+def test_exit_stops_a_held_child_and_its_worker(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    gate_mark, baseline = len(_GATES), set(threading.enumerate())
-    gate = Gate(timeout=0.2)
-    monkeypatch.setattr(
-        subprocess_runner,
-        "_reconcile_subprocess_result",
-        gate.wrap(subprocess_runner._reconcile_subprocess_result),
-    )
-    assert cenv.post("/api/workspace/tune").status_code == 200
-    # The real child cannot finish within 0.2 s, so the wait fails like a
-    # gate that expired under load.
-    with pytest.raises(AssertionError, match="never reached the gate"):
-        gate.wait_reached()
-    assert len(cenv.children) == 1
-    assert cenv.children[0].poll() is None, "the child should still be running"
-    assert live_job_threads(baseline), "the worker thread should still be running"
+    baseline = set(threading.enumerate())
+    with child_env_scope(client, tmp_path, monkeypatch) as child_env:
+        _start_held_child(child_env)
+        children = list(child_env.children)
+        assert live_job_threads(baseline), "the worker should be running"
+    assert all(proc.poll() is not None for proc in children)
+    assert live_job_threads(baseline) == []
 
-    alive_children, alive_threads = reap(
-        gate_mark=gate_mark, baseline=baseline, children=cenv.children
-    )
 
-    assert alive_children == 0
-    assert alive_threads == 0
-    assert all(proc.poll() is not None for proc in cenv.children)
+def test_exit_raises_when_a_child_survives(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    baseline = set(threading.enumerate())
+    survivors: list[subprocess.Popen[bytes]] = []
+    with (
+        pytest.raises(AssertionError, match="teardown left"),
+        pytest.MonkeyPatch.context() as stop_off,
+        child_env_scope(client, tmp_path, monkeypatch) as child_env,
+    ):
+        _start_held_child(child_env)
+        survivors.extend(child_env.children)
+        # The spy replaces ``subprocess.Popen``, so patch the live class.
+        popen_cls = type(survivors[0])
+        stop_off.setattr(popen_cls, "terminate", lambda self: None)
+        stop_off.setattr(popen_cls, "kill", lambda self: None)
+    # The patch is undone: really stop what the failed teardown left.
+    for proc in survivors:
+        proc.kill()
+        proc.wait(10)
+    for thread in live_job_threads(baseline):
+        thread.join(15)
     assert live_job_threads(baseline) == []

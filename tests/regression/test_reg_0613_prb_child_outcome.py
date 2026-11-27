@@ -85,9 +85,7 @@ def _act_when_visible(
         gate.release.set()
         return response
     gate.release.set()
-    assert _poll_until(cenv, job_id, status, cenv.budget.left(CHILD_WAIT)), (
-        f"never read {status}"
-    )
+    assert _poll_until(cenv, job_id, status, CHILD_WAIT), f"never read {status}"
     return act()
 
 

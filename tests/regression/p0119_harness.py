@@ -13,6 +13,7 @@ tests ran RED against develop (``4b19421`` + the Proposal) before it existed.
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import subprocess
 import threading
@@ -40,31 +41,15 @@ WAIT = 10.0
 # A real child process must spawn, import and run before it reaches a gate;
 # under CPU load that takes far longer than an in-process thread (#786).
 CHILD_WAIT = 60.0
-# One shared deadline per real-child test: every child-scale wait draws from
-# it, so a persistently failing test ends in about this long, not per wait.
-CHILD_TEST_BUDGET = 100.0
 _REAP_WAIT = 15.0
 TERMINAL = ("completed", "failed", "cancelled")
-
-
-class Budget:
-    """A shared deadline: each wait takes at most what is left of it."""
-
-    def __init__(self, total: float = CHILD_TEST_BUDGET) -> None:
-        self._deadline = time.monotonic() + total
-
-    def left(self, cap: float = CHILD_WAIT) -> float:
-        return max(1.0, min(cap, self._deadline - time.monotonic()))
 
 
 class Gate:
     """A barrier: the actor calls :meth:`hold`; the test waits and releases."""
 
-    def __init__(
-        self, *, once: bool = True, timeout: float = WAIT, budget: Budget | None = None
-    ) -> None:
+    def __init__(self, *, once: bool = True, timeout: float = WAIT) -> None:
         self.timeout = timeout
-        self.budget = budget
         _GATES.append(self)
         self.reached = threading.Event()
         self.release = threading.Event()
@@ -79,15 +64,10 @@ class Gate:
         if self._once and not first:
             return
         self.reached.set()
-        assert self.release.wait(self._wait()), "the test never released the gate"
-
-    def _wait(self) -> float:
-        if self.budget is None:
-            return self.timeout
-        return min(self.timeout, self.budget.left(self.timeout))
+        assert self.release.wait(self.timeout), "the test never released the gate"
 
     def wait_reached(self) -> None:
-        assert self.reached.wait(self._wait()), "the actor never reached the gate"
+        assert self.reached.wait(self.timeout), "the actor never reached the gate"
 
     def wrap(self, fn: Callable[..., Any]) -> Callable[..., Any]:
         """*fn* with this gate held before the first call (later calls pass)."""
@@ -345,8 +325,8 @@ class Call:
         self._thread.join(seconds)
         return not self._thread.is_alive()
 
-    def result(self) -> Any:
-        self._thread.join(WAIT * 3)
+    def result(self, timeout: float = WAIT * 3) -> Any:
+        self._thread.join(timeout)
         assert not self._thread.is_alive(), "the background call did not return"
         if self.error is not None:
             raise self.error
@@ -469,40 +449,78 @@ def live_job_threads(baseline: set[threading.Thread]) -> list[threading.Thread]:
     ]
 
 
+def _join_workers(baseline: set[threading.Thread], seconds: float) -> None:
+    deadline = time.monotonic() + seconds
+    for thread in live_job_threads(baseline):
+        thread.join(max(0.1, deadline - time.monotonic()))
+
+
+def _stop_children(children: Sequence[subprocess.Popen[bytes]]) -> None:
+    """Terminate, then kill, then wait for each recorded child that is alive.
+
+    Only the direct child is signalled: the production launcher creates no
+    process group, so grandchildren are out of scope. ``poll()`` runs before
+    each signal, and a process that is already gone is not an error."""
+    for proc in list(children):
+        if proc.poll() is None:
+            with contextlib.suppress(ProcessLookupError):
+                proc.terminate()
+    for proc in list(children):
+        try:
+            proc.wait(5)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.wait(5)
+
+
 def reap(
     *,
     gate_mark: int,
     baseline: set[threading.Thread],
     children: Sequence[subprocess.Popen[bytes]] = (),
 ) -> tuple[int, int]:
-    """Teardown for any exit path: release held gates, stop and reap child
-    processes, join worker threads (bounded). Returns the counts still alive
-    as ``(processes, threads)``."""
+    """Teardown for any exit path. Release the held gates, join the worker
+    threads, stop the recorded children, join again and stop again, so a child
+    launched while the workers wound down is caught. Returns the counts still
+    alive as ``(processes, threads)``."""
     release_gates(gate_mark)
-    for proc in children:
-        if proc.poll() is None:
-            proc.terminate()
-    for proc in children:
-        try:
-            proc.wait(5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(5)
-    deadline = time.monotonic() + _REAP_WAIT
-    for thread in live_job_threads(baseline):
-        thread.join(max(0.1, deadline - time.monotonic()))
+    # A worker still waiting on a live child cannot finish before the child is
+    # stopped, so the first join is short; the second has the full allowance.
+    _join_workers(baseline, 3.0)
+    _stop_children(children)
+    _join_workers(baseline, _REAP_WAIT)
+    _stop_children(children)
     return (
         sum(proc.poll() is None for proc in children),
         len(live_job_threads(baseline)),
     )
 
 
+class Reaper:
+    """Marks the start of a test; :meth:`close` reaps and fails on a survivor."""
+
+    def __init__(self) -> None:
+        self._gate_mark = len(_GATES)
+        self._baseline = set(threading.enumerate())
+
+    def close(self, children: Sequence[subprocess.Popen[bytes]] = ()) -> None:
+        procs, threads = reap(
+            gate_mark=self._gate_mark, baseline=self._baseline, children=children
+        )
+        assert (procs, threads) == (0, 0), (
+            f"teardown left {procs} child process(es) and {threads} worker "
+            "thread(s) alive"
+        )
+
+
 @pytest.fixture()
 def env(
     client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> Iterator[Env]:
-    gate_mark, baseline = len(_GATES), set(threading.enumerate())
+    reaper = Reaper()
     try:
         yield Env(client, tmp_path, monkeypatch)
     finally:
-        reap(gate_mark=gate_mark, baseline=baseline)
+        reaper.close()
