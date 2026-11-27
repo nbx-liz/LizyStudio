@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { ApiError } from "@/api/client";
 import { isWorkspaceLocked } from "@/api/errors";
-import { updateConfig } from "@/api/workspace";
+import {
+  type TuningOverridesBody,
+  updateConfig,
+  updateTuningOverrides,
+} from "@/api/workspace";
+import { tuningOverridesFromConfig } from "./tuningOverridesBody";
 
 /**
  * Write funnel for `PUT /api/workspace/config` (P-0092 Phase 1).
@@ -49,7 +54,19 @@ export type WriteReason =
   | "redo"
   | "apply-to-fit"
   | "preset-load"
-  | "auto-reset";
+  | "auto-reset"
+  // P-0111: the Tune tab's two write paths. `tuning_overrides` ops are
+  // sent to `PUT /config/tuning-overrides`; `legacy_config` ops carry the
+  // Tune-tab fields that endpoint cannot hold (`model.params`, the inner
+  // split marker, `tuning.re_tune`) to the legacy `PUT /config`.
+  | "legacy_config"
+  | "tuning_overrides";
+
+/** The two P-0111 Tune-tab write paths. */
+export type TuneWriteReason = Extract<
+  WriteReason,
+  "legacy_config" | "tuning_overrides"
+>;
 
 export type ConfigSnapshot = Record<string, unknown>;
 
@@ -281,6 +298,17 @@ interface UseConfigWriteFunnelOptions {
    * but injectable so unit tests can stub it without `vi.mock`.
    */
   putConfig?: (body: ConfigSnapshot) => Promise<unknown>;
+  /**
+   * P-0111: network call for `tuning_overrides` ops. Defaulted to
+   * `updateTuningOverrides`; injectable like `putConfig`.
+   */
+  putTuningOverrides?: (body: TuningOverridesBody) => Promise<unknown>;
+  /**
+   * P-0111 Q2: called once each time the queue drains, after the last
+   * write of the drain settled (committed or refused). WorkspacePage
+   * invalidates the Tune snapshot here, once, instead of once per write.
+   */
+  onAllSettled?: () => void;
 }
 
 /**
@@ -301,6 +329,11 @@ export interface ConfigWriteFunnel {
   subscribe?: (listener: () => void) => () => void;
 }
 
+// Module-level (stable identity) and resolved at call time, so a test that
+// mocks `@/api/workspace` without this export only fails if it sends one.
+const defaultPutTuningOverrides = (body: TuningOverridesBody) =>
+  updateTuningOverrides(body);
+
 export function useConfigWriteFunnel(
   options: UseConfigWriteFunnelOptions,
 ): ConfigWriteFunnel {
@@ -308,7 +341,14 @@ export function useConfigWriteFunnel(
     getCachedConfig,
     onWriteCommitted,
     putConfig = updateConfig,
+    putTuningOverrides = defaultPutTuningOverrides,
+    onAllSettled,
   } = options;
+
+  // Held in a ref so an inline callback does not change `drain`'s, and so
+  // the returned funnel's, identity on every render.
+  const onAllSettledRef = useRef(onAllSettled);
+  onAllSettledRef.current = onAllSettled;
 
   // The state lives in a ref so updates from inside the async flush
   // loop do not trigger re-renders. The hook does not own any visible
@@ -341,7 +381,20 @@ export function useConfigWriteFunnel(
     const body = materializeOp(entry.op, getCachedConfig());
     let result: WriteResult;
     try {
-      const saved = (await putConfig(body)) as ConfigSnapshot;
+      let saved: ConfigSnapshot;
+      if (entry.op.reason === "tuning_overrides") {
+        // P-0111: the edit was applied to the cached config at flush time,
+        // so the body is the whole sparse intent the endpoint's REPLACE
+        // needs. The endpoint answers only the effective config; the saved
+        // config is the materialised body, reported in the same
+        // `{config}` shape as a legacy PUT so `onWriteCommitted` updates
+        // the cache before the next queued op reads it (a legacy op that
+        // read a stale `tuning` block would revert this write).
+        await putTuningOverrides(tuningOverridesFromConfig(body));
+        saved = { config: body };
+      } else {
+        saved = (await putConfig(body)) as ConfigSnapshot;
+      }
       onWriteCommitted?.(saved);
       result = { ok: true, saved };
     } catch (err) {
@@ -359,7 +412,7 @@ export function useConfigWriteFunnel(
         resolversRef.current.delete(source);
       }
     }
-  }, [getCachedConfig, onWriteCommitted, putConfig]);
+  }, [getCachedConfig, onWriteCommitted, putConfig, putTuningOverrides]);
 
   const drain = useCallback(async (): Promise<void> => {
     // Yield once before the first flush so any synchronous state
@@ -374,6 +427,8 @@ export function useConfigWriteFunnel(
     }
     stateRef.current = { ...stateRef.current, currentFlush: null };
     notifyPending();
+    // P-0111 Q2: one notification per drain, after both write paths settled.
+    onAllSettledRef.current?.();
   }, [flushOne, notifyPending]);
 
   const enqueueWrite = useCallback(

@@ -8,6 +8,11 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
+import {
+  materializeOp,
+  type PatchEntry,
+  type TuneWriteReason,
+} from "@/hooks/useConfigWriteFunnel";
 import { filterInnerValidOptions, recommendedInnerValid } from "./cv-state";
 import {
   evalMetricOptionsFor,
@@ -18,11 +23,20 @@ import {
 import { groupToCategory, SearchSpaceTable } from "./SearchSpaceTable";
 import { TuneEvaluationSection } from "./TuneEvaluationSection";
 import { TuneSettings } from "./TuneSettings";
-import {
-  extractOptunaField,
-  extractTuningField,
-  updateOptunaField,
-} from "./tune-config-utils";
+import { extractOptunaField, extractTuningField } from "./tune-config-utils";
+
+/** Value at `path` in a config tree, or `undefined` when absent. */
+function valueAt(
+  config: Record<string, unknown>,
+  path: readonly string[],
+): unknown {
+  let node: unknown = config;
+  for (const key of path) {
+    if (node === null || typeof node !== "object") return undefined;
+    node = (node as Record<string, unknown>)[key];
+  }
+  return node;
+}
 
 /** Model params that make up the Tune-side inner split. */
 const INNER_SPLIT_KEYS: ReadonlySet<string> = new Set([
@@ -30,9 +44,30 @@ const INNER_SPLIT_KEYS: ReadonlySet<string> = new Set([
   "validation_ratio",
 ]);
 
+/**
+ * P-0111: the Tune tab's routed write path. `tuning_overrides` patches
+ * (the five tuning fields) go to `PUT /config/tuning-overrides`;
+ * `legacy_config` patches (`model.params`, the inner split marker,
+ * `tuning.re_tune`) go to the legacy `PUT /config`.
+ */
+export type TuneWriteHandler = (
+  patches: readonly PatchEntry[],
+  reason: TuneWriteReason,
+) => unknown;
+
+const OPTUNA_PARAMS_PATH = ["tuning", "optuna", "params"] as const;
+const OPTUNA_SPACE_PATH = ["tuning", "optuna", "space"] as const;
+const EVALUATION_PATH = ["tuning", "evaluation"] as const;
+const RE_TUNE_PATH = ["tuning", "re_tune"] as const;
+
 interface TuneTabProps {
   config: Record<string, unknown>;
+  /**
+   * Full-config writer. Used for every edit only when `onTuneWrite` is
+   * absent (isolated renders); the patches are then applied to `config`.
+   */
   onChange: (config: Record<string, unknown>) => void;
+  onTuneWrite?: TuneWriteHandler;
   task: string | null;
   uiSchema?: import("@/api/types").UiSchema;
   columns?: string[];
@@ -41,10 +76,50 @@ interface TuneTabProps {
 export function TuneTab({
   config,
   onChange,
+  onTuneWrite,
   task,
   uiSchema,
   columns,
 }: TuneTabProps) {
+  // P-0111: every Tune-tab edit is a set of patches on one write path.
+  // Without a routed writer the patches are applied to the rendered
+  // config and handed to `onChange` as before.
+  const write = useCallback(
+    (patches: readonly PatchEntry[], reason: TuneWriteReason) => {
+      if (patches.length === 0) return;
+      if (onTuneWrite) {
+        onTuneWrite(patches, reason);
+        return;
+      }
+      onChange(materializeOp({ kind: "patch-many", patches, reason }, config));
+    },
+    [config, onChange, onTuneWrite],
+  );
+
+  // Child sections that still emit a whole next config: route only the
+  // tuning paths they changed, as `tuning_overrides` patches.
+  const handleEvaluationChange = useCallback(
+    (next: Record<string, unknown>) => {
+      const patches: PatchEntry[] = [];
+      for (const path of [EVALUATION_PATH, OPTUNA_PARAMS_PATH]) {
+        const value = valueAt(next, path);
+        if (value !== valueAt(config, path)) patches.push({ path, value });
+      }
+      write(patches, "tuning_overrides");
+    },
+    [config, write],
+  );
+
+  const handleRetuneChange = useCallback(
+    (next: Record<string, unknown>) => {
+      write(
+        [{ path: RE_TUNE_PATH, value: valueAt(next, RE_TUNE_PATH) }],
+        "legacy_config",
+      );
+    },
+    [write],
+  );
+
   const tuningParams = extractOptunaField<{
     n_trials?: number;
     timeout?: number | null;
@@ -180,41 +255,32 @@ export function TuneTab({
   }, [tuningSnapshot]);
 
   const handleParamsChange = (params: Record<string, unknown>) => {
-    onChange(updateOptunaField(config, "params", params));
+    write([{ path: OPTUNA_PARAMS_PATH, value: params }], "tuning_overrides");
   };
 
   const handleSpaceChange = (space: Record<string, unknown>) => {
-    onChange(updateOptunaField(config, "space", space));
+    write([{ path: OPTUNA_SPACE_PATH, value: space }], "tuning_overrides");
   };
 
   // P-0116 child 5b: a Tune-side split pick (``inner_valid`` /
   // ``validation_ratio``) lives in ``model.params`` but the backend reads
   // the "user chose it" marker from ``training.early_stopping``. Both paths
-  // are written in ONE ``onChange`` so the PUT budget stays at one write.
+  // are written in ONE write so the PUT budget stays at one write.
   // ``source`` is "user" for picks and "auto" for the CV-change recommend.
+  // P-0111: ``model.params`` has no ``TuningOverrides`` field, so this is a
+  // ``legacy_config`` write.
   const handleModelParamChange = useCallback(
     (key: string, value: unknown, source: "user" | "auto" = "user") => {
-      const newParams = { ...modelParams, [key]: value };
-      const model = (config.model as Record<string, unknown>) ?? {};
-      const next: Record<string, unknown> = {
-        ...config,
-        model: { ...model, params: newParams },
-      };
+      const patches: PatchEntry[] = [{ path: ["model", "params", key], value }];
       if (INNER_SPLIT_KEYS.has(key)) {
-        const training = (config.training as Record<string, unknown>) ?? {};
-        const earlyStopping =
-          (training.early_stopping as Record<string, unknown>) ?? {};
-        next.training = {
-          ...training,
-          early_stopping: {
-            ...earlyStopping,
-            inner_valid_explicit: source === "user",
-          },
-        };
+        patches.push({
+          path: ["training", "early_stopping", "inner_valid_explicit"],
+          value: source === "user",
+        });
       }
-      onChange(next);
+      write(patches, "legacy_config");
     },
-    [config, modelParams, onChange],
+    [write],
   );
 
   // P-0104 Wave 2.3 / Issue #459 — inner_valid auto-reset on CV strategy
@@ -304,7 +370,7 @@ export function TuneTab({
         <AccordionContent>
           <TuneEvaluationSection
             config={config}
-            onChange={onChange}
+            onChange={handleEvaluationChange}
             task={task}
             metricOptions={evalMetricOptions}
             metricDirection={metricDirection}
@@ -314,7 +380,7 @@ export function TuneTab({
           />
         </AccordionContent>
       </AccordionItem>
-      <RetuneSettingsSection config={config} onChange={onChange} />
+      <RetuneSettingsSection config={config} onChange={handleRetuneChange} />
     </Accordion>
   );
 }

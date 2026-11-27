@@ -9,7 +9,7 @@
 import { AlertTriangle, Info } from "lucide-react";
 import { type ConfigError, isBlockingError } from "@/api/types";
 import { ConfigForm } from "./ConfigForm";
-import { TuneTab } from "./TuneTab";
+import { TuneTab, type TuneWriteHandler } from "./TuneTab";
 
 export interface ConfigEditorBodyProps {
   activeTab: "fit" | "tune";
@@ -27,6 +27,8 @@ export interface ConfigEditorBodyProps {
   config: Record<string, unknown> | undefined;
   // May return a promise (whether the save landed); it is not read here.
   onChange: (newConfig: Record<string, unknown>) => unknown;
+  /** P-0111: the Tune tab's routed write path (see `TuneTab`). */
+  onTuneWrite?: TuneWriteHandler;
   task: string | null;
   // biome-ignore lint/suspicious/noExplicitAny: UI schema shape passes straight through
   uiSchema: any | undefined;
@@ -42,6 +44,7 @@ export function ConfigEditorBody({
   schema,
   config,
   onChange,
+  onTuneWrite,
   task,
   uiSchema,
   columns,
@@ -162,6 +165,7 @@ export function ConfigEditorBody({
           <TuneTab
             config={config}
             onChange={onChange}
+            onTuneWrite={onTuneWrite}
             task={task}
             uiSchema={uiSchema}
             columns={columns}

@@ -156,6 +156,22 @@ export async function updateConfig(
   ) as unknown as ConfigUpdateResponse;
 }
 
+// P-0111: the Tune tab's tuning fields (``n_trials`` / ``timeout`` /
+// ``direction`` / ``evaluation_metrics`` / ``space``) are written here, not
+// through the legacy ``PUT /config``. The endpoint REPLACES the stored sparse
+// intent with the body, so the body must carry the whole intent.
+export type TuningOverridesBody = components["schemas"]["TuningOverrides"];
+
+export async function updateTuningOverrides(
+  body: TuningOverridesBody,
+): Promise<components["schemas"]["TuningOverridesUpdateResponse"]> {
+  const { data } = await apiClient.PUT(
+    "/api/workspace/config/tuning-overrides",
+    { body },
+  );
+  return unwrap(data, "/api/workspace/config/tuning-overrides (PUT)");
+}
+
 export async function validateConfig(
   config: Record<string, unknown>,
 ): Promise<{ valid: boolean; errors: ConfigError[] }> {
