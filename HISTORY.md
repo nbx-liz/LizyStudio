@@ -4452,6 +4452,13 @@ Option B は v0.7+ で `STUDIO_FORMAT_VERSION` 2 → 3 bump タイミングで�
   - **Q3**: `WriteReason` に `legacy_config` と `tuning_overrides` を追加した。両者は同じ funnel の同じ queue に入り、drain を共有して直列に送られる。同時に送られることはない。同じ reason の patch は `patch-many` に coalesce する。
   - **acceptance の実測**: row-mode toggle（`handleModeChange`）は `space` しか書かない。そのため、実際に送られるのは overrides の PUT 1 件で、legacy の PUT は 0 件である。新しい e2e spec `workspace-tune-write-routing.spec.ts` はこの実測値を固定し、予算 2 を上限として残した。`workspace-tune-firstmount.spec.ts` は、mount 時の overrides PUT も検出するようにした。
   - **shim**: `absorb_legacy_tuning` と `get_legacy_config_view` は、この変更では触っていない。
+- 2026-11-27 **関連修正: Issue #734**（同じ branch の別 commit）。Tune タブの Re-tune 設定（`tuning.re_tune`）が Tune job に届かなかった。
+  - **原因**: `absorb_legacy_tuning` が `tuning` block 全体を config から外していた。`TuningOverrides` には `re_tune` がないため、`re_tune` は捨てられていた。
+  - **修正 1（absorb）**: `absorb_legacy_tuning` は、dict の `re_tune` だけを、保存する config に `{"tuning": {"re_tune": ...}}` として残す。`tuning` に dict の `re_tune` がなければ消す（OFF は `null`）。body に `tuning` key がなければ、保存済みの値を残す（overrides と同じ扱い）。
+  - **修正 2（view）**: `get_legacy_config_view` は、合成した block の横に `re_tune` を出す。
+  - **job config への伝搬**: `materialize_tuning_for_job` は、もともと `ws.config["tuning"]` から `re_tune` を引き継ぐ。そのため、job config と `_extract_re_tune` に届く。
+  - **Change Gate**: 対象外と判断した。`TuningOverrides`、OpenAPI schema、`STUDIO_FORMAT_VERSION` はいずれも変えていない。workspace の状態は volatile で、disk には保存されない。job config の `tuning.re_tune` は、`PATCH /config` と config upload の経路が以前から作っている既存の形である。`materialize_overrides_into_legacy_tuning` の docstring が「`tuning.re_tune` も保持する」と書いている設計意図を、実装で回復したことになる。ただし Issue #734 の本文は、workspace の tuning data flow の変更を理由に「Proposal が要る」としている。この判断は owner の確認を要する。
+  - **テスト**: `tests/regression/test_reg_734_retune_reaches_tune_job.py`（API）と `frontend/tests/e2e/workspace-tune-retune-settings.spec.ts`（Tune タブから 3 round が実際に走ることを確認）。P-0116 child 6 で起案した、多 round の unpause の E2E variant はまだ追加していない。
 
 ### P-0112: 開発・CI・配布ビルドの Node baseline を 20 → 24 に引き上げる（Change Gate: ビルド・配布方式の変更）
 

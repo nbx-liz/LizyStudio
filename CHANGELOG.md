@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI tests Python 3.11 and 3.12 on every PR, and 3.11 to 3.14 nightly. The required check `backend (3.10)` is replaced by `backend (3.12)`.
 - The Tune tab saves its tuning fields (trials, timeout, metrics and search space) through `PUT /api/workspace/config/tuning-overrides` instead of the whole-config `PUT /api/workspace/config` (P-0111, #528). Fixed values (`model.params`), the inner validation split and the Re-tune settings still use `PUT /api/workspace/config`. Each write is built from the latest saved config, so one path never undoes the other. The "Modified" badge of the search space now updates once after each burst of writes.
 
+### Fixed
+
+- The Tune tab's Re-tune settings (rounds, per-round trials and boundary expansion) now reach the Tune job (#734). Before, `PUT /api/workspace/config` and `POST /api/workspace/tune` with a body config dropped `tuning.re_tune`, so a Tune started from the Tune tab always ran one round. `GET /api/workspace/config` now returns the saved `tuning.re_tune`, and switching Re-tune off removes it from the next job.
+
 ## [0.8.1] - 2026-11-20
 
 A job-lifecycle reliability release. Job status, the cancel and pause flags, and the active slot now move through one parent-side transition (P-0119, #613, #697). There is no API shape change, no dependency range change and no storage format change: `STUDIO_FORMAT_VERSION` stays at 2, and lizyml stays at `>=0.21.1,<0.22.0`.

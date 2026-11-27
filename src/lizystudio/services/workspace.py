@@ -771,8 +771,26 @@ def get_legacy_config_view(ws: WorkspaceState) -> dict[str, Any]:
     if "evaluation_metrics" in fields_set and overrides.evaluation_metrics is not None:
         tuning["evaluation"] = {"metrics": list(overrides.evaluation_metrics)}
     if tuning:
+        # Issue #734: ``re_tune`` is not a ``TuningOverrides`` field, so
+        # :func:`absorb_legacy_tuning` keeps it in ``ws.config["tuning"]``.
+        # Show it beside the synthesised block so a round-trip through
+        # ``GET /config`` (presets, the Tune button's body, cv-change
+        # re-syncs) keeps it. With nothing synthesised, ``out`` already
+        # holds the stored block unchanged.
+        re_tune = _stored_re_tune(ws.config)
+        if re_tune is not None:
+            tuning["re_tune"] = re_tune
         out["tuning"] = tuning
     return out
+
+
+def _stored_re_tune(config: dict[str, Any]) -> dict[str, Any] | None:
+    """Return ``config["tuning"]["re_tune"]`` when it is a dict, else ``None``."""
+    tuning = config.get("tuning")
+    if not isinstance(tuning, dict):
+        return None
+    re_tune = tuning.get("re_tune")
+    return re_tune if isinstance(re_tune, dict) else None
 
 
 def absorb_legacy_tuning(ws: WorkspaceState, config: dict[str, Any]) -> dict[str, Any]:
@@ -785,12 +803,27 @@ def absorb_legacy_tuning(ws: WorkspaceState, config: dict[str, Any]) -> dict[str
     storage rename stays consistent. PUT /config flows that omit
     ``tuning`` leave ``ws.tuning_overrides`` unchanged.
 
+    Issue #734: ``tuning.re_tune`` has no ``TuningOverrides`` field, so it
+    stays in the returned config as ``{"tuning": {"re_tune": ...}}`` when it
+    is a dict. ``materialize_tuning_for_job`` carries it into the job config
+    and :func:`get_legacy_config_view` shows it. A ``tuning`` block without
+    a dict ``re_tune`` (``null`` when the user switched Re-tune off) clears
+    it; a body with no ``tuning`` key keeps the stored one, as it keeps
+    the overrides. Only ``re_tune`` is kept: other non-overrides keys would be mined
+    by ``materialize_overrides_into_legacy_tuning`` and resurrected.
+
     Returns a fresh dict (input is not mutated).
     """
     if not isinstance(config, dict):
         return {}
     if "tuning" not in config:
-        return dict(config)
+        # Like the overrides, a stored ``re_tune`` survives a body that
+        # does not mention ``tuning`` at all.
+        kept = dict(config)
+        stored = _stored_re_tune(ws.config) if isinstance(ws.config, dict) else None
+        if stored is not None:
+            kept["tuning"] = {"re_tune": copy.deepcopy(stored)}
+        return kept
     tuning = config["tuning"]
     task = config.get("task") if "task" in config else _current_task(ws)
     overrides = _drop_derived_direction(
@@ -801,6 +834,9 @@ def absorb_legacy_tuning(ws: WorkspaceState, config: dict[str, Any]) -> dict[str
     # for "never touched" (post-reset, fresh workspace).
     ws.set_tuning_overrides(overrides)
     stripped = {k: v for k, v in config.items() if k != "tuning"}
+    re_tune = _stored_re_tune(config)
+    if re_tune is not None:
+        stripped["tuning"] = {"re_tune": copy.deepcopy(re_tune)}
     return stripped
 
 
