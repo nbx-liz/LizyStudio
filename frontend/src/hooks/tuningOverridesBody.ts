@@ -14,8 +14,14 @@ import type { TuningOverridesBody } from "@/api/workspace";
  * to it as a funnel patch.
  *
  * The mapping mirrors the backend's ``extract_overrides_from_legacy_tuning``
- * field for field, so the stored intent is exactly what the legacy
- * ``PUT /config`` absorb shim stored for the same config:
+ * field for field, so the stored intent is what the legacy ``PUT /config``
+ * absorb shim stores for the same config, with one difference: the shim
+ * also drops a ``direction`` that only repeats the first metric's
+ * (``_drop_derived_direction``, P-0116 D5), and the overrides endpoint
+ * does not. The Tune tab itself never writes ``direction`` (a metric
+ * change removes it), so a derived one reaches this body only from a
+ * cached config that carried it, e.g. an old preset; it is then stored
+ * as an explicit override with the same effective direction.
  *
  * - ``optuna.params.{n_trials,timeout,direction}`` when the key is present
  *   (an explicit ``null`` is kept: it is an explicit intent);

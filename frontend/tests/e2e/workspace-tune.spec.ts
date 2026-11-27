@@ -484,7 +484,9 @@ test.describe("Workspace tune flow", () => {
     // row — is also inside the locator subtree. The narrower
     // ancestor::div[radiogroup] xpath misses the ChoiceInput chips.
     const objectiveKey = page.locator("span.font-mono", {
-      hasText: /^objective$/,
+      // P-0111 Q2: the row's "Modified" badge renders inside this span once
+      // the Tune snapshot refreshes after the write, so allow its text.
+      hasText: /^objective\s*(Modified)?$/,
     });
     const objectiveRow = objectiveKey
       .locator("xpath=ancestor::div[contains(@class, 'border-b')][1]");
