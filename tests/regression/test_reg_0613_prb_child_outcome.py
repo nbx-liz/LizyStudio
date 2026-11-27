@@ -35,10 +35,9 @@ from lizystudio.services import subprocess_runner
 from lizystudio.services._job_metadata import JobMetadataStore
 from lizystudio.services.jobs import JobStore
 from tests.regression.p0119_harness import (
-    WAIT,
+    CHILD_WAIT,
     Gate,
     Recorder,
-    join_worker,
     metric,
     short_reset_wait,
 )
@@ -65,8 +64,8 @@ def _poll_until(cenv: ChildEnv, job_id: str, status: str, seconds: float) -> boo
     return False
 
 
-def _hold_reconcile(monkeypatch: pytest.MonkeyPatch) -> Gate:
-    gate = Gate()
+def _hold_reconcile(cenv: ChildEnv, monkeypatch: pytest.MonkeyPatch) -> Gate:
+    gate = cenv.gate()
     monkeypatch.setattr(
         subprocess_runner,
         "_reconcile_subprocess_result",
@@ -86,7 +85,9 @@ def _act_when_visible(
         gate.release.set()
         return response
     gate.release.set()
-    assert _poll_until(cenv, job_id, status, WAIT * 3), f"never read {status}"
+    assert _poll_until(cenv, job_id, status, cenv.budget.left(CHILD_WAIT)), (
+        f"never read {status}"
+    )
     return act()
 
 
@@ -98,7 +99,7 @@ def test_a1_unpause_as_soon_as_paused_is_visible(
     cenv.barrier.arm("core_entry")
     job_id = cenv.post("/api/workspace/tune").json()["job_id"]
     cenv.barrier.wait_reached("core_entry")
-    gate = _hold_reconcile(monkeypatch)
+    gate = _hold_reconcile(cenv, monkeypatch)
     assert cenv.post(f"/api/jobs/{job_id}/pause").status_code == 200
     cenv.barrier.release("core_entry")
     cenv.barrier.disarm()
@@ -106,7 +107,7 @@ def test_a1_unpause_as_soon_as_paused_is_visible(
         cenv, gate, job_id, "paused", lambda: cenv.post(f"/api/jobs/{job_id}/unpause")
     )
     assert response.status_code == 200, response.text
-    join_worker(cenv.client)
+    cenv.join()
     assert cenv.status(job_id) == "completed"
 
 
@@ -115,7 +116,7 @@ def test_a2_retune_as_soon_as_completed_is_visible(
 ) -> None:
     """A2: ``completed`` becomes visible only with the parent's commit, which
     also released the slot, so a retune sent at once is accepted (200)."""
-    gate = _hold_reconcile(monkeypatch)
+    gate = _hold_reconcile(cenv, monkeypatch)
     job_id = cenv.post("/api/workspace/tune").json()["job_id"]
     response = _act_when_visible(
         cenv,
@@ -125,7 +126,7 @@ def test_a2_retune_as_soon_as_completed_is_visible(
         lambda: cenv.post(f"/api/jobs/{job_id}/retune", json={"n_trials": 1}),
     )
     assert response.status_code == 200, response.text
-    join_worker(cenv.client)
+    cenv.join()
     assert cenv.status(response.json()["job_id"]) == "completed"
 
 
@@ -135,13 +136,13 @@ def test_force_release_before_the_reconcile_counts_the_terminal_once(
     """Codex r1-2: the child has finished; reset force-releases the run while
     the parent's reconcile is held. Exactly one terminal is published and
     counted, and the later reconcile is dropped."""
-    gate = _hold_reconcile(monkeypatch)
+    gate = _hold_reconcile(cenv, monkeypatch)
     job_id = cenv.post("/api/workspace/tune").json()["job_id"]
     gate.wait_reached()
     with short_reset_wait(monkeypatch, 0.3):
         assert cenv.post("/api/workspace/reset").status_code == 200
     gate.release.set()
-    join_worker(cenv.client)
+    cenv.join()
     counted = sum(
         metric(cenv.client, "tune", s) for s in ("completed", "failed", "cancelled")
     )

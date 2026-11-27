@@ -14,9 +14,11 @@ tests ran RED against develop (``4b19421`` + the Proposal) before it existed.
 from __future__ import annotations
 
 import csv
+import subprocess
 import threading
+import time
 from collections import defaultdict
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -38,14 +40,32 @@ WAIT = 10.0
 # A real child process must spawn, import and run before it reaches a gate;
 # under CPU load that takes far longer than an in-process thread (#786).
 CHILD_WAIT = 60.0
+# One shared deadline per real-child test: every child-scale wait draws from
+# it, so a persistently failing test ends in about this long, not per wait.
+CHILD_TEST_BUDGET = 100.0
+_REAP_WAIT = 15.0
 TERMINAL = ("completed", "failed", "cancelled")
+
+
+class Budget:
+    """A shared deadline: each wait takes at most what is left of it."""
+
+    def __init__(self, total: float = CHILD_TEST_BUDGET) -> None:
+        self._deadline = time.monotonic() + total
+
+    def left(self, cap: float = CHILD_WAIT) -> float:
+        return max(1.0, min(cap, self._deadline - time.monotonic()))
 
 
 class Gate:
     """A barrier: the actor calls :meth:`hold`; the test waits and releases."""
 
-    def __init__(self, *, once: bool = True, timeout: float = WAIT) -> None:
+    def __init__(
+        self, *, once: bool = True, timeout: float = WAIT, budget: Budget | None = None
+    ) -> None:
         self.timeout = timeout
+        self.budget = budget
+        _GATES.append(self)
         self.reached = threading.Event()
         self.release = threading.Event()
         self._once = once
@@ -59,10 +79,15 @@ class Gate:
         if self._once and not first:
             return
         self.reached.set()
-        assert self.release.wait(self.timeout), "the test never released the gate"
+        assert self.release.wait(self._wait()), "the test never released the gate"
+
+    def _wait(self) -> float:
+        if self.budget is None:
+            return self.timeout
+        return min(self.timeout, self.budget.left(self.timeout))
 
     def wait_reached(self) -> None:
-        assert self.reached.wait(self.timeout), "the actor never reached the gate"
+        assert self.reached.wait(self._wait()), "the actor never reached the gate"
 
     def wrap(self, fn: Callable[..., Any]) -> Callable[..., Any]:
         """*fn* with this gate held before the first call (later calls pass)."""
@@ -422,6 +447,62 @@ class Env:
         return r
 
 
+_GATES: list[Gate] = []
+_POOL_THREAD_PREFIXES = ("AnyIO", "asyncio-portal", "ThreadPoolExecutor")
+
+
+def release_gates(since: int = 0) -> None:
+    """Release every gate created after index *since* (teardown, any outcome)."""
+    for gate in _GATES[since:]:
+        gate.release.set()
+
+
+def live_job_threads(baseline: set[threading.Thread]) -> list[threading.Thread]:
+    """Worker threads started since *baseline*, still alive. Idle pool threads
+    of the test client (AnyIO, the asyncio portal) are not workers."""
+    return [
+        t
+        for t in threading.enumerate()
+        if t not in baseline
+        and t.is_alive()
+        and not t.name.startswith(_POOL_THREAD_PREFIXES)
+    ]
+
+
+def reap(
+    *,
+    gate_mark: int,
+    baseline: set[threading.Thread],
+    children: Sequence[subprocess.Popen[bytes]] = (),
+) -> tuple[int, int]:
+    """Teardown for any exit path: release held gates, stop and reap child
+    processes, join worker threads (bounded). Returns the counts still alive
+    as ``(processes, threads)``."""
+    release_gates(gate_mark)
+    for proc in children:
+        if proc.poll() is None:
+            proc.terminate()
+    for proc in children:
+        try:
+            proc.wait(5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(5)
+    deadline = time.monotonic() + _REAP_WAIT
+    for thread in live_job_threads(baseline):
+        thread.join(max(0.1, deadline - time.monotonic()))
+    return (
+        sum(proc.poll() is None for proc in children),
+        len(live_job_threads(baseline)),
+    )
+
+
 @pytest.fixture()
-def env(client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Env:
-    return Env(client, tmp_path, monkeypatch)
+def env(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[Env]:
+    gate_mark, baseline = len(_GATES), set(threading.enumerate())
+    try:
+        yield Env(client, tmp_path, monkeypatch)
+    finally:
+        reap(gate_mark=gate_mark, baseline=baseline)

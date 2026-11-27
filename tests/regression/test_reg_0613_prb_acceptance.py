@@ -74,7 +74,7 @@ def test_cancel_after_the_child_outcome_emits_one_cancelled_frame(
 ) -> None:
     """通知: the child finished and wrote ``completed``; the cancel lands
     before the parent's commit. One terminal frame, ``JOB_CANCELLED``."""
-    gate = Gate(timeout=CHILD_WAIT)
+    gate = cenv.gate()
     monkeypatch.setattr(
         subprocess_runner,
         "_reconcile_subprocess_result",
@@ -85,7 +85,7 @@ def test_cancel_after_the_child_outcome_emits_one_cancelled_frame(
     assert cenv.store.path_for(job_id, "outcome").exists()
     assert cenv.post(f"/api/jobs/{job_id}/cancel").status_code == 200
     gate.release.set()
-    join_worker(cenv.client, CHILD_WAIT)
+    cenv.join()
     assert cenv.rec.terminal_frames(job_id) == ["error:JOB_CANCELLED"]
     assert cenv.status(job_id) == "cancelled"
     assert metric(cenv.client, "tune", "cancelled") == 1
