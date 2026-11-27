@@ -49,21 +49,25 @@ def test_exit_raises_when_a_child_survives(
 ) -> None:
     baseline = set(threading.enumerate())
     survivors: list[subprocess.Popen[bytes]] = []
-    with (
-        pytest.raises(AssertionError, match="teardown left"),
-        pytest.MonkeyPatch.context() as stop_off,
-        child_env_scope(client, tmp_path, monkeypatch) as child_env,
-    ):
-        _start_held_child(child_env)
-        survivors.extend(child_env.children)
-        # The spy replaces ``subprocess.Popen``, so patch the live class.
-        popen_cls = type(survivors[0])
-        stop_off.setattr(popen_cls, "terminate", lambda self: None)
-        stop_off.setattr(popen_cls, "kill", lambda self: None)
-    # The patch is undone: really stop what the failed teardown left.
-    for proc in survivors:
-        proc.kill()
-        proc.wait(10)
-    for thread in live_job_threads(baseline):
-        thread.join(15)
+    try:
+        with (
+            pytest.raises(AssertionError, match=r"teardown left 1 child process"),
+            pytest.MonkeyPatch.context() as stop_off,
+            child_env_scope(client, tmp_path, monkeypatch) as child_env,
+        ):
+            _start_held_child(child_env)
+            survivors.extend(child_env.children)
+            # The spy replaces ``subprocess.Popen``, so patch the live class.
+            popen_cls = type(survivors[0])
+            stop_off.setattr(popen_cls, "terminate", lambda self: None)
+            stop_off.setattr(popen_cls, "kill", lambda self: None)
+    finally:
+        # The patches are undone by now. Really stop what the teardown left,
+        # also when it failed to raise.
+        for proc in survivors:
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait(10)
+        for thread in live_job_threads(baseline):
+            thread.join(15)
     assert live_job_threads(baseline) == []
