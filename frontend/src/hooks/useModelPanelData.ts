@@ -129,27 +129,6 @@ export function useModelPanelData({
     return () => clearTimeout(validateTimer.current);
   }, []);
 
-  // After any successful save (form edit, undo, redo): clear the entries a
-  // refused write stored, so Fit / Tune are not blocked by errors of a
-  // snapshot the server refused, then validate the saved config after the
-  // debounce to show its own warnings (PR #781 round 3).
-  const settleErrorsAfterSave = useCallback(
-    (saved: Record<string, unknown>) => {
-      setErrors([]);
-      clearTimeout(validateTimer.current);
-      validateTimer.current = setTimeout(async () => {
-        try {
-          const result = await validateConfig(saved);
-          setErrors(result.errors);
-        } catch {
-          // silent — validation failures are surfaced via the errors
-          // state on the next successful call
-        }
-      }, VALIDATION_DEBOUNCE_MS);
-    },
-    [],
-  );
-
   // Resolves `true` when the backend holds `newConfig` afterwards (saved
   // now, or already equal to the cached server config) and `false` when it
   // does not (refused, failed, or skipped while a job runs), so callers
@@ -218,10 +197,22 @@ export function useModelPanelData({
       }
       queryClient.setQueryData(queryKeys.config(), newConfig);
       history.push(newConfig);
-      settleErrorsAfterSave(newConfig);
+      // Successful save clears any prior rejection errors.
+      setErrors([]);
+
+      clearTimeout(validateTimer.current);
+      validateTimer.current = setTimeout(async () => {
+        try {
+          const result = await validateConfig(newConfig);
+          setErrors(result.errors);
+        } catch {
+          // silent — validation failures are surfaced via the errors
+          // state on the next successful call
+        }
+      }, VALIDATION_DEBOUNCE_MS);
       return true;
     },
-    [queryClient, running, history.push, writeFunnel, settleErrorsAfterSave],
+    [queryClient, running, history.push, writeFunnel],
   );
 
   // --------------------------------------------------------------------
@@ -335,14 +326,16 @@ export function useModelPanelData({
     if (!viaFunnel) {
       queryClient.setQueryData(queryKeys.config(), prev);
     }
-    settleErrorsAfterSave(prev);
+    // Owner ruling (PR #781 delta check): only clear the entries a refused
+    // undo / redo stored. No validation is started here, so no late result
+    // can overwrite the errors of a later refused write.
+    setErrors([]);
     toast.info("Config undone");
   }, [
     history,
     queryClient,
     sendThroughFunnelOrLegacy,
     reportHistoryFailure,
-    settleErrorsAfterSave,
     writeFunnel,
   ]);
 
@@ -362,14 +355,14 @@ export function useModelPanelData({
     if (!viaFunnel) {
       queryClient.setQueryData(queryKeys.config(), next);
     }
-    settleErrorsAfterSave(next);
+    // Same as undo: clear the refusal errors, start no validation.
+    setErrors([]);
     toast.info("Config redone");
   }, [
     history,
     queryClient,
     sendThroughFunnelOrLegacy,
     reportHistoryFailure,
-    settleErrorsAfterSave,
     writeFunnel,
   ]);
 

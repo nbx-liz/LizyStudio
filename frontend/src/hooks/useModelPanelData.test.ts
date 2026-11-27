@@ -908,16 +908,25 @@ describe("useModelPanelData", () => {
       errorSpy.mockRestore();
     });
 
-    // PR #781 round 3: a successful undo / redo clears the entries a
-    // refused one stored, like a successful form edit does, so Fit and
-    // Tune are not blocked by errors of a snapshot the server refused.
-    // The saved snapshot is then validated as after any save.
+    // Real time past the 500 ms debounce, so any validation timer started
+    // so far has fired before the next assertion.
+    async function passValidationDebounce() {
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 650));
+      });
+    }
+
+    // PR #781 round 3 + delta (owner ruling): a successful undo / redo only
+    // clears the entries a refused one stored, so Fit and Tune are not
+    // blocked by errors of a snapshot the server refused. It starts no
+    // validation of its own: a late validation result could otherwise
+    // overwrite the errors of a later refused write.
     it.each([
-      ["undo", "handleUndo", { model: { name: "A" } }],
-      ["redo", "handleRedo", { model: { name: "B" } }],
+      ["undo", "handleUndo"],
+      ["redo", "handleRedo"],
     ] as const)(
-      "a successful %s after a refused one clears the refusal errors",
-      async (_label, handler, savedSnapshot) => {
+      "a successful %s after a refused one clears the refusal errors and validates nothing",
+      async (_label, handler) => {
         const { result } = await renderWithTwoEdits();
         if (handler === "handleRedo") {
           // Move to A first so B is the redo target.
@@ -929,11 +938,11 @@ describe("useModelPanelData", () => {
             await result.current.handleUndo();
           });
         }
+        // Let the two form edits' own debounced validation finish first.
+        await passValidationDebounce();
         vi.mocked(updateConfig).mockRejectedValueOnce(validationProblem());
         await act(async () => {
-          await result.current[
-            handler === "handleRedo" ? "handleRedo" : "handleUndo"
-          ]();
+          await result.current[handler]();
         });
         expect(result.current.errors).toEqual([N_SPLITS_ERROR]);
         expect(result.current.fitEnabled).toBe(false);
@@ -946,16 +955,38 @@ describe("useModelPanelData", () => {
         await act(async () => {
           await result.current[handler]();
         });
+        await passValidationDebounce();
 
         expect(result.current.errors).toEqual([]);
         expect(result.current.fitEnabled).toBe(true);
         expect(result.current.disabledReason).toBeNull();
-        await waitFor(() => expect(validateConfig).toHaveBeenCalledTimes(1), {
-          timeout: 2000,
-        });
-        expect(validateConfig).toHaveBeenCalledWith(savedSnapshot);
+        expect(validateConfig).toHaveBeenCalledTimes(0);
       },
     );
+
+    it("a refused redo after a successful undo keeps its refusal errors", async () => {
+      const { result } = await renderWithTwoEdits();
+      await passValidationDebounce();
+      vi.mocked(validateConfig).mockClear();
+
+      vi.mocked(updateConfig).mockResolvedValueOnce({
+        config: {},
+        validation_errors: [],
+      });
+      await act(async () => {
+        await result.current.handleUndo();
+      });
+      vi.mocked(updateConfig).mockRejectedValueOnce(validationProblem());
+      await act(async () => {
+        await result.current.handleRedo();
+      });
+      await passValidationDebounce();
+
+      // No validation started by the successful undo can overwrite them.
+      expect(result.current.errors).toEqual([N_SPLITS_ERROR]);
+      expect(result.current.fitEnabled).toBe(false);
+      expect(validateConfig).toHaveBeenCalledTimes(0);
+    });
 
     it("a refused redo keeps the cursor and the cache on the current snapshot", async () => {
       const { toast } = await import("sonner");
