@@ -113,7 +113,10 @@
     --muted-foreground: 215.4 16.3% 40%;
     --accent: 210 50% 92%;
     --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84.2% 60.2%;
+    /* Issue #754: lowered from 60.2% -> 48% lightness so white text on
+       --destructive (the Failed badge) meets WCAG AA contrast (4.5:1,
+       4.86:1 here). */
+    --destructive: 0 84.2% 48%;
     --destructive-foreground: 210 40% 98%;
     --border: 214.3 31.8% 91.4%;
     --input: 214.3 31.8% 91.4%;

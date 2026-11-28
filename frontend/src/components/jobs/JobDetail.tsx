@@ -492,7 +492,9 @@ function RunningView({
 
   return (
     <div>
-      <h4 className="mb-2 text-sm font-medium">Progress</h4>
+      <h4 id="job-progress-heading" className="mb-2 text-sm font-medium">
+        Progress
+      </h4>
       {isTune && progress && progress.total > 0 && (
         <p className="mb-1 text-sm">
           Trial {progress.current} / {progress.total}
@@ -500,6 +502,7 @@ function RunningView({
       )}
       <Progress
         value={indeterminate ? undefined : pct}
+        aria-labelledby="job-progress-heading"
         className={`mb-2${indeterminate ? " animate-pulse" : ""}`}
       />
       {!isTune && (
